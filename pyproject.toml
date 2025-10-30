@@ -34,7 +34,6 @@ dev = [
 cpu = ["jax"]
 cuda12 = ["jax[cuda12]"]
 cuda13 = ["jax[cuda13]"]
-dev = ["ruff>=0.5", "pytest>=8", "mypy>=1.10"]
 
 [tool.setuptools]
 packages = ["skewerjax"]
