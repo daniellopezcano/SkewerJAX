@@ -1,0 +1,8 @@
+# Global runtime configuration (placeholder)
+dtype: float32
+seed: 12345
+jax:
+  enable_x64: false
+  platform: "cpu"   # "cpu" | "gpu" (let JAX auto-detect if unset)
+paths:
+  cache_dir: ".jax_cache"

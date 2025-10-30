@@ -1,0 +1,8 @@
+# Survey/instrument placeholder (DESI-like), values are illustrative
+resolution_kms: 13.0
+pixel_dv_kms: 11.0
+wavelength_range:
+  min: 3600.0
+  max: 9800.0
+noise:
+  model: "none"   # placeholder
