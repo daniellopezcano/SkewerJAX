@@ -1,114 +1,167 @@
 #!/usr/bin/env python
 """
-SkewerJAX install verifier:
-- Prints Python, NumPy, JAX, jaxlib versions
-- Shows available JAX devices
-- If a CUDA GPU is present, runs a tiny JIT on the GPU
-- Otherwise, runs on CPU
-Exits 0 on success, 1 on error.
+verify_stack.py — SkewerJAX environment smoke tests
 """
-import sys, platform, subprocess
-from importlib import metadata as ilmd
+from __future__ import annotations
+import os, sys, time, math, tempfile, platform
+from dataclasses import dataclass
 
-def v(pkg):
+def header(t): print("\n" + "="*len(t) + f"\n{t}\n" + "="*len(t))
+
+def status(ok: bool, msg: str):
+    tag = "[OK]" if ok else "[FAIL]"
+    print(f"{tag} {msg}")
+
+def try_import(name: str):
     try:
-        return ilmd.version(pkg)
-    except ilmd.PackageNotFoundError:
-        return None
-
-def print_kv(k, v):
-    print(f"{k:<26} {v}")
+        mod = __import__(name)
+        return True, mod, ""
+    except Exception as e:
+        return False, None, f"{type(e).__name__}: {e}"
 
 def main():
-    ok = True
+    header("Environment")
+    print(f"Python    : {platform.python_version()}")
+    print(f"Platform  : {platform.platform()}")
+    print(f"Executable: {sys.executable}")
+    print(f"CUDA env  : XLA_PYTHON_CLIENT_PREALLOCATE={os.getenv('XLA_PYTHON_CLIENT_PREALLOCATE')} "
+          f"| XLA_PYTHON_CLIENT_MEM_FRACTION={os.getenv('XLA_PYTHON_CLIENT_MEM_FRACTION')}")
 
-    print("=== Environment ===")
-    print_kv("Python", sys.version.split()[0])
-    print_kv("Platform", platform.platform())
-
-    # Core packages
-    npv = v("numpy")
-    jaxv = v("jax")
-    jlv  = v("jaxlib")
-    print("\n=== Packages ===")
-    print_kv("NumPy", npv or "<missing>")
-    print_kv("JAX", jaxv or "<missing>")
-    print_kv("jaxlib", jlv or "<missing>")
-
-    # CUDA extras (printed if present)
-    print_kv("jax-cuda13-plugin", v("jax-cuda13-plugin") or "-")
-    print_kv("jax-cuda12-plugin", v("jax-cuda12-plugin") or "-")
-    print_kv("jax-cuda12-pjrt",  v("jax-cuda12-pjrt")  or "-")
-    print_kv("nvidia-cudnn-cu12", v("nvidia-cudnn-cu12") or "-")
-    print_kv("nvidia-nccl-cu12",  v("nvidia-nccl-cu12")  or "-")
-
-    # Import JAX and query devices
-    try:
-        import jax, jax.numpy as jnp  # type: ignore
-    except Exception as e:
-        ok = False
-        print("\n[ERROR] Failed to import JAX:", e)
-        sys.exit(1)
-
-    print("\n=== JAX Runtime ===")
-    print_kv("JAX default backend", getattr(jax, "default_backend", lambda: "?")())
-    devs = jax.devices()
-    print_kv("Devices found", len(devs))
-    for i, d in enumerate(devs):
-        # device.platform is typically "cpu", "cuda", or "gpu"
-        print(f"  - [{i}] {d.platform} {getattr(d, 'device_kind', getattr(d, 'kind', '?'))}")
-
-    # Prefer CUDA if present (supports both 'cuda' and legacy 'gpu')
-    cuda_devs = []
-    for name in ("cuda","gpu"):
+    # JAX
+    header("JAX")
+    ok, jax, err = try_import("jax")
+    if not ok:
+        status(False, f"import jax -> {err}")
+        print("Tip: pip install -U jax  (or jax[cuda13]/jax[cuda12] on Linux+NVIDIA)")
+    else:
+        import jax.numpy as jnp
+        print(f"JAX       : {jax.__version__}")
         try:
-            cuda_devs = jax.devices(name)
-            if cuda_devs:
-                break
+            backend = getattr(jax, "default_backend", lambda: "?")()
         except Exception:
-            pass
-
-    print("\n=== JIT Sanity Test ===")
-    try:
-        if cuda_devs:
-            target = cuda_devs[0]
-            print_kv("Target", f"CUDA on {getattr(target, 'device_kind', getattr(target, 'kind','GPU'))}")
-            a = jax.device_put(jnp.ones((1024,1024), dtype=jnp.float32), device=target)
-            b = jax.device_put(jnp.ones((1024,1024), dtype=jnp.float32), device=target)
-
+            backend = "?"
+        print(f"Backend   : {backend}")
+        print(f"Devices   : {jax.devices()}")
+        try:
+            key = jax.random.key(0)
+            a = jax.random.normal(key, (512, 512), dtype=jnp.float32)
+            b = jax.random.normal(key, (512, 512), dtype=jnp.float32)
             @jax.jit
-            def f(x, y):
-                return x @ y + 1.0
+            def mm(x, y): return x @ y
+            _ = mm(a, b).block_until_ready()  # compile+warmup
+            t0 = time.time()
+            c = mm(a, b).block_until_ready()
+            dt = (time.time() - t0) * 1e3
+            dev = getattr(c, "device", None)
+            status(True, f"JIT matmul on {dev.platform.upper() if dev else 'unknown'} in {dt:.1f} ms")
+        except Exception as e:
+            status(False, f"JAX JIT test -> {type(e).__name__}: {e}")
 
-            out = f(a, b).block_until_ready()
-            print_kv("Result shape", str(out.shape))
-            print("[OK] JIT matmul ran on GPU (CUDA).")
-        else:
-            print_kv("Target", "CPU")
-            a = jnp.ones((1024,1024), dtype=jnp.float32)
-            b = jnp.ones((1024,1024), dtype=jnp.float32)
+    # NumPy
+    header("NumPy")
+    ok, np, err = try_import("numpy")
+    if not ok:
+        status(False, f"import numpy -> {err}")
+    else:
+        print(f"NumPy     : {np.__version__}")
+        try:
+            x = np.arange(10, dtype=np.float64)
+            y = np.sin(x)
+            status(np.isfinite(y).all(), "np.sin computed finite values")
+        except Exception as e:
+            status(False, f"NumPy ops -> {type(e).__name__}: {e}")
 
-            @jax.jit
-            def f(x, y):
-                return x @ y + 1.0
+    # SciPy
+    header("SciPy")
+    ok, scipy, err = try_import("scipy")
+    if not ok:
+        status(False, f"import scipy -> {err}")
+    else:
+        print(f"SciPy     : {scipy.__version__}")
+        try:
+            from scipy import integrate
+            val, err_est = integrate.quad(lambda t: math.sin(t), 0.0, math.pi)
+            status(abs(val - 2.0) < 1e-8, f"integrate.quad sin(0..π)≈2 => {val:.12f}")
+        except Exception as e:
+            status(False, f"SciPy test -> {type(e).__name__}: {e}")
 
-            out = f(a, b).block_until_ready()
-            print_kv("Result shape", str(out.shape))
-            print("[OK] JIT matmul ran on CPU.")
-    except Exception as e:
-        ok = False
-        print("[ERROR] JIT test failed:", e)
+    # h5py
+    header("h5py")
+    ok, h5py, err = try_import("h5py")
+    if not ok:
+        status(False, f"import h5py -> {err}")
+    else:
+        print(f"h5py      : {h5py.__version__}")
+        try:
+            import numpy as _np
+            fd, path = tempfile.mkstemp(prefix="skewerjax_", suffix=".h5")
+            os.close(fd)
+            with h5py.File(path, "w") as f:
+                f["dset"] = _np.arange(5, dtype=_np.int32)
+            with h5py.File(path, "r") as f:
+                data = f["dset"][...]
+            os.remove(path)
+            status((data == _np.arange(5, dtype=_np.int32)).all(), "HDF5 write/read round-trip")
+        except Exception as e:
+            status(False, f"h5py test -> {type(e).__name__}: {e}")
 
-    # Optional: print nvidia-smi for visibility if available
-    try:
-        smi = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, check=False)
-        if smi.returncode == 0 and smi.stdout.strip():
-            print("\n=== nvidia-smi (devices) ===")
-            print(smi.stdout.strip())
-    except Exception:
-        pass
+    # matplotlib
+    header("matplotlib")
+    ok, mpl, err = try_import("matplotlib")
+    if not ok:
+        status(False, f"import matplotlib -> {err}")
+    else:
+        print(f"matplotlib: {mpl.__version__}")
+        try:
+            mpl.use("Agg")
+            import matplotlib.pyplot as plt
+            import numpy as _np
+            fig = plt.figure()
+            plt.plot(_np.linspace(0, 1, 5), _np.linspace(0, 1, 5)**2)
+            plt.close(fig)
+            status(os.path.exists(out), f"Saved plot: ./{out}")
+        except Exception as e:
+            status(False, f"matplotlib test -> {type(e).__name__}: {e}")
 
-    sys.exit(0 if ok else 1)
+    # iminuit
+    header("iminuit")
+    ok, _iminuit, err = try_import("iminuit")
+    if not ok:
+        status(False, f"import iminuit -> {err}")
+    else:
+        from iminuit import Minuit
+        print(f"iminuit   : {_iminuit.__version__}")
+        try:
+            import numpy as _np
+            rng = _np.random.default_rng(0)
+            x = _np.linspace(-1, 1, 50)
+            m_true, c_true, sigma = 2.5, -0.4, 0.05
+            y = m_true * x + c_true + rng.normal(0, sigma, size=x.size)
+
+            def chi2(m, c):
+                y_model = m * x + c
+                return _np.sum(((y - y_model) / sigma) ** 2)
+
+            m = Minuit(chi2, m=1.0, c=0.0)
+            m.errordef = Minuit.LEAST_SQUARES
+            m.migrad(); m.hesse()
+            m_fit, c_fit = m.values["m"], m.values["c"]
+            status(abs(m_fit - m_true) < 0.1 and abs(c_fit - c_true) < 0.1,
+                   f"Linear fit recovered m≈{m_fit:.3f}, c≈{c_fit:.3f}")
+        except Exception as e:
+            status(False, f"iminuit test -> {type(e).__name__}: {e}")
+
+    # diffrax (optional)
+    header("diffrax (optional)")
+    ok, diffrax, err = try_import("diffrax")
+    if not ok:
+        status(False, f"import diffrax -> {err}")
+        print("Tip: pip install diffrax  (ensure compatibility with your JAX version)")
+    else:
+        print(f"diffrax   : {getattr(diffrax, '__version__', 'unknown')}")
+
+    print("\nAll checks done.")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

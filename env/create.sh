@@ -40,6 +40,10 @@ else
   conda run -n "${ENV_NAME}" python -m pip install -U jax
 fi
 
+# Install diffrax
+echo "[INFO] Installing diffrax…"
+conda run -n "${ENV_NAME}" python -m pip install -U diffrax
+
 # ---------------------------------------------------------------------------
 # 3) Sanity check
 # ---------------------------------------------------------------------------
@@ -54,4 +58,4 @@ echo
 echo "Done. Next steps:"
 echo "  - conda activate ${ENV_NAME}"
 echo "  - Register a Jupyter kernel (see README):"
-echo "      python -m ipykernel install --user --name skewerjax --display-name 'SkewerJAX'"
+echo "      python -m ipykernel install --user --name skewerjax --display-name 'SkewerJAX (CUDA)'"
