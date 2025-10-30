@@ -3,4 +3,14 @@ channels:
   - conda-forge
 dependencies:
   - python=3.11
+  # scientific stack
+  - numpy>=1.26
+  - scipy>=1.11
+  - h5py>=3.10
+  - matplotlib>=3.7
+  - iminuit>=2.27
+  - ipdb>=0.13
+  - ipykernel>=6.29
   - pip
+  - pip:
+      - "-e ..[dev]"   # IMPORTANT: repo root, not env/

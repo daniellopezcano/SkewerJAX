@@ -5,106 +5,92 @@ and metal-line skewers and compute survey-facing statistics (e.g., P1D).
 
 ---
 
-## Installation
+## Installation (simple)
 
-You have two paths. The recommended one creates a fresh conda env and auto-installs **GPU JAX if supported** (else CPU). The second installs into your already-activated env.
+You can use either **conda/mamba** or **pip**. In both paths, we install the package normally and then install **JAX** with GPU support when available.
 
-### Option A — One command (Conda/Mamba; auto-detects GPU)
+### Option A — Conda/Mamba
 ```bash
 # from the repo root
-bash env/create.sh            # creates env (Python 3.11), installs package, installs JAX GPU/CPU
+bash env/create.sh         # creates/updates env & installs JAX (GPU on Linux+NVIDIA, else CPU)
 conda activate skewerjax
 ```
 
-What it does:
-- Creates/updates the `skewerjax` conda env from `env/environment.yml` (**Python 3.11**).
-- `pip install -e .[dev]` (editable install + dev tools).
-- Runs `env/install_jax_auto.py`:
-  - On Linux with a recent NVIDIA driver → installs `jax[cuda12]` or `jax[cuda13]` automatically.
-  - Otherwise → installs CPU JAX.
-
-### Option B — Use your current virtual environment (pip)
+### Option B — Pip (your current venv)
 ```bash
-# activate your venv/conda env first
 python -m pip install --upgrade pip
 pip install -e .[dev]
 
-# auto-pick the right JAX wheel (GPU if supported, else CPU)
-python env/install_jax_auto.py
+# JAX install:
+# Linux + NVIDIA (CUDA 13 preferred; fallback to CUDA 12)
+if command -v nvidia-smi >/dev/null 2>&1 && [ "$(uname -s)" = "Linux" ]; then
+  pip install -U "jax[cuda13]" || pip install -U "jax[cuda12]"
+else
+  # macOS (CPU/Metal) or Windows → regular JAX
+  pip install -U jax
+fi
 ```
 
-#### Manual override (optional)
-If you *know* what you want:
-```bash
-# choose exactly one:
-pip install -e .[cuda13]
-pip install -e .[cuda12]
-pip install -e .[cpu]
-```
-
-> Notes
-> - NVIDIA GPU wheels are Linux-only. On macOS or Windows (without WSL+CUDA), you’ll get CPU JAX.
-> - If you expected GPU but see CPU, check `nvidia-smi` and your driver version, or see **Notebook setup** below.
+> Notes: CUDA GPU wheels are **Linux-only**; macOS/Windows will use CPU by default. Apple Silicon users may get Metal support via the regular `jax` package depending on local setup.
 
 ---
 
-## Notebook setup (VS Code / Jupyter)
+## Jupyter kernel (manual step)
 
-To ensure notebooks find the **pip-provided CUDA libraries** and avoid huge VRAM preallocation, create a dedicated kernel:
-
+Register a kernel after installing (environment activated):
 ```bash
-# inside the activated 'skewerjax' env
-python -m pip install -U ipykernel
-python scripts/setup_vscode_kernel.py
-```
-
-This creates a kernel named **`skewerjax (GPU)`** with:
-- `JAX_PLATFORMS=cuda,cpu` (prefer CUDA, fall back to CPU),
-- `XLA_PYTHON_CLIENT_PREALLOCATE=false` and `XLA_PYTHON_CLIENT_MEM_FRACTION=0.50` (friendlier GPU memory behavior),
-- `LD_LIBRARY_PATH` pointing to the CUDA libs bundled with the JAX wheels (so cuSPARSE/cuDNN/NCCL are found).
-
-**In VS Code:** open your notebook → kernel picker (top-right) → select **`skewerjax (GPU)`**.
-
-*(CLI convenience)* If you run Python/Jupyter from a shell and want the same behavior, use:
-```bash
-scripts/with_jax_gpu.sh python -c "import jax; print(jax.devices())"
-scripts/with_jax_gpu.sh jupyter lab
+python -m ipykernel install --user --name skewerjax --display-name "SkewerJAX (CUDA)"
 ```
 
 ---
 
 ## Quick check
-
 ```bash
 python - <<'PY'
-import skewerjax as m, jax
+import jax, skewerjax as m
 print("SkewerJAX:", getattr(m, "__version__", "unknown"))
 print("JAX:", jax.__version__)
 print("Devices:", jax.devices())
-if not any(d.platform in ("gpu","cuda") for d in jax.devices()):
-    print("NOTE: running on CPU. In notebooks, pick the 'skewerjax (GPU)' kernel.")
 PY
 ```
 
-In a notebook (first cells):
-```python
-import os
-print("JAX_PLATFORMS =", os.environ.get("JAX_PLATFORMS"))
-print("XLA_PYTHON_CLIENT_PREALLOCATE =", os.environ.get("XLA_PYTHON_CLIENT_PREALLOCATE"))
-print("XLA_PYTHON_CLIENT_MEM_FRACTION =", os.environ.get("XLA_PYTHON_CLIENT_MEM_FRACTION"))
+---
 
-import jax, jax.numpy as jnp
-print("JAX:", jax.__version__)
-print("Devices:", jax.devices())
+## CUDA drivers (Linux/NVIDIA) — heads‑up
 
-dev = (jax.devices("cuda") or jax.devices("cpu"))[0]
-@jax.jit
-def mm(x, y): return x @ y + 1.0
-a = jax.device_put(jnp.ones((1024,1024), jnp.float32), device=dev)
-b = jax.device_put(jnp.ones((1024,1024), jnp.float32), device=dev)
-out = mm(a, b).block_until_ready()
-out.shape, float(out.mean())
+For **GPU JAX** you need both the correct **JAX wheels** *and* a new enough **NVIDIA driver**:
+- **`jax[cuda13]`** expects **driver ≥ 580.xx**.
+- **`jax[cuda12]`** expects **driver ≥ 525.xx**.
+
+### Debian 12 quick path (what we use)
+Install the official NVIDIA driver from the CUDA repo (gives you 580+):
+```bash
+# add NVIDIA’s repo key and refresh
+wget https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt update
+
+# install the driver meta-package (brings nvidia-smi)
+sudo apt install -y cuda-drivers
+
+# reboot, then verify
+sudo reboot
+# after reboot:
+nvidia-smi   # should show Driver Version 580.xx or newer
 ```
+If you prefer **Debian backports** instead of the NVIDIA repo, you’ll typically get a **535.xx** driver on bookworm; in that case install **`jax[cuda12]`**.
+
+> **Secure Boot:** If enabled, the kernel may block unsigned DKMS modules. NVIDIA/DKMS can sign with a local MOK; you might be prompted on reboot to enroll it. If the driver doesn’t load, check `mokutil --sb-state` and enroll/disable as needed.
+
+### Troubleshooting
+- **`nvidia-smi` missing** → driver not installed. Install via the NVIDIA repo (`cuda-drivers`) or Debian backports.
+- **JAX sees GPU but cuDNN errors** → driver/runtime mismatch. Either upgrade to R580+ and use `jax[cuda13]`, or install `jax[cuda12]` with R525+.
+- **Still CPU only** → confirm CUDA path with a minimal test:
+  ```bash
+  python - <<'PY'
+  import jax; print(jax.devices())
+  PY
+  ```
 
 ---
 
@@ -115,16 +101,10 @@ out.shape, float(out.mean())
   - `optical_depth/__init__.py`
 - `configs/`: user-editable YAMLs (examples included)
 - `notebooks/`: exploration (empty placeholder)
-- `scripts/`: small ops helpers
-  - `verify_install.py` — versions/devices + tiny JIT test
-  - `with_jax_gpu.sh` — run commands with CUDA-first + friendly memory settings
-  - `setup_vscode_kernel.py` — creates the **skewerjax (GPU)** kernelspec
 
-> Intentionally omitted for now: tests, examples, data, benchmarks, docs.
-> We’ll add them when features need them to keep things modular.
+> Intentionally omitted (for now): tests, examples, data, benchmarks, docs.
 
 ---
 
 ## License
 This project is released under the MIT License (see `LICENSE`).
-

@@ -31,9 +31,18 @@ dev = [
   "pytest>=8",
   "mypy>=1.10",
 ]
+science = [
+  "matplotlib>=3.7",
+  "scipy>=1.11",
+  "h5py>=3.10",
+  "iminuit>=2.27",
+  "ipdb>=0.13",
+  "ipykernel>=6.29",
+]
 cpu = ["jax"]
 cuda12 = ["jax[cuda12]"]
 cuda13 = ["jax[cuda13]"]
+
 
 [tool.setuptools]
 packages = ["skewerjax"]
