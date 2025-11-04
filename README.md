@@ -7,31 +7,12 @@ and metal-line skewers and compute survey-facing statistics (e.g., P1D).
 
 ## Installation (simple)
 
-You can use either **conda/mamba** or **pip**. In both paths, we install the package normally and then install **JAX** with GPU support when available.
-
-### Option A — Conda/Mamba
 ```bash
 # from the repo root
 bash env/create.sh         # creates/updates env & installs JAX (GPU on Linux+NVIDIA, else CPU)
 conda activate skewerjax
+python scripts/verify_install.py
 ```
-
-### Option B — Pip (your current venv)
-```bash
-python -m pip install --upgrade pip
-pip install -e .[dev]
-
-# JAX install:
-# Linux + NVIDIA (CUDA 13 preferred; fallback to CUDA 12)
-if command -v nvidia-smi >/dev/null 2>&1 && [ "$(uname -s)" = "Linux" ]; then
-  pip install -U "jax[cuda13]" || pip install -U "jax[cuda12]"
-else
-  # macOS (CPU/Metal) or Windows → regular JAX
-  pip install -U jax
-fi
-```
-
-> Notes: CUDA GPU wheels are **Linux-only**; macOS/Windows will use CPU by default. Apple Silicon users may get Metal support via the regular `jax` package depending on local setup.
 
 ---
 
@@ -44,25 +25,13 @@ python -m ipykernel install --user --name skewerjax --display-name "SkewerJAX (C
 
 ---
 
-## Quick check
-```bash
-python - <<'PY'
-import jax, skewerjax as m
-print("SkewerJAX:", getattr(m, "__version__", "unknown"))
-print("JAX:", jax.__version__)
-print("Devices:", jax.devices())
-PY
-```
-
----
-
 ## CUDA drivers (Linux/NVIDIA) — heads‑up
 
 For **GPU JAX** you need both the correct **JAX wheels** *and* a new enough **NVIDIA driver**:
 - **`jax[cuda13]`** expects **driver ≥ 580.xx**.
 - **`jax[cuda12]`** expects **driver ≥ 525.xx**.
 
-### Debian 12 quick path (what we use)
+### Debian 12 quick path
 Install the official NVIDIA driver from the CUDA repo (gives you 580+):
 ```bash
 # add NVIDIA’s repo key and refresh
@@ -95,14 +64,7 @@ If you prefer **Debian backports** instead of the NVIDIA repo, you’ll typicall
 ---
 
 ## Layout
-- `skewerjax/`: Python package (kept minimal on purpose)
-  - `__init__.py`
-  - `config/__init__.py`
-  - `optical_depth/__init__.py`
-- `configs/`: user-editable YAMLs (examples included)
-- `notebooks/`: exploration (empty placeholder)
-
-> Intentionally omitted (for now): tests, examples, data, benchmarks, docs.
+# Under developement
 
 ---
 
