@@ -15,7 +15,6 @@ class PhysicalConstants:
     # Handy unit conversions (SI base)
     ANGSTROM: float = 1e-10                  # m
     AMU: float = 1.66053906660e-27           # kg
-    CM: float = 1e-2                         # m
 
 # single shared instance (immutable)
 phys = PhysicalConstants()

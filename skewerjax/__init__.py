@@ -1,9 +1,9 @@
-"""
-SkewerJAX minimal package.
-
-This package is intentionally sparse at bootstrap time.
-We expose only a version string for sanity checks.
-"""
-
-__all__ = ["__version__"]
+# skewerjax/_version.py
 __version__ = "0.0.1"
+
+# Eagerly expose lightweight namespaces
+from . import config as config
+from . import constants as constants
+from . import optical_depth as optical_depth
+
+__all__ = ["__version__", "config", "constants", "optical_depth"]

@@ -1,1 +1,1 @@
-"""Configuration subpackage (placeholder)."""
+from . import setup_matplotlib

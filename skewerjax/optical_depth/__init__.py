@@ -1,1 +1,1 @@
-"""Optical depth models will live here (placeholder)."""
+from . import line_profile

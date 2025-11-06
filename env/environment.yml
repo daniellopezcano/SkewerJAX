@@ -8,9 +8,11 @@ dependencies:
   - scipy>=1.11
   - h5py>=3.10
   - matplotlib>=3.7
+  - ipympl>=0.9
+  - ipywidgets>=8.1
   - iminuit>=2.27
   - ipdb>=0.13
   - ipykernel>=6.29
   - pip
-  - pip:
-      - "-e ..[dev]"   # IMPORTANT: repo root, not env/
+  # - pip:
+  #     - "-e ..[dev]"   # IMPORTANT: repo root, not env/
