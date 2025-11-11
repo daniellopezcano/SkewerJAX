@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Optional
 
+import jax
 import jax.numpy as jnp
 from jax import jit
 
@@ -20,12 +21,6 @@ def Voigt_np(x: np.ndarray, sigma: np.ndarray, gamma: np.ndarray) -> np.ndarray:
       - sigma, gamma: scalars, shape (N,), or shape (P,) for a parameter grid
       - If x is (N,) and sigma/gamma are (P,), result has shape (P, N).
     """
-    from scipy.special import wofz
-
-    x = np.asarray(x)
-    sigma = np.asarray(sigma, dtype=x.dtype)
-    gamma = np.asarray(gamma, dtype=x.dtype)
-
     # Avoid σ = 0 → division by zero; keeps correct limiting behavior numerically.
     sigma = np.maximum(sigma, np.finfo(x.dtype).tiny)
 
@@ -44,128 +39,94 @@ def Voigt_np(x: np.ndarray, sigma: np.ndarray, gamma: np.ndarray) -> np.ndarray:
     z = (x_b + 1j * gamma_b) / (np.sqrt(2.0) * sigma_b)
     return np.real(wofz(z)) / (np.sqrt(2.0 * np.pi) * sigma_b)
 
+def _outer_or_broadcast(x: jnp.ndarray, p: jnp.ndarray):
+    """
+    Align shapes to emulate the NumPy example behavior:
+
+    - If x is (N,) and p is (P,) and N != P -> return (x[None, :], p[:, None]) so
+      downstream elementwise ops produce a (P, N) outer grid.
+    - Otherwise, return (x, p) and rely on standard NumPy broadcasting rules
+      (scalars, matching shapes, or broadcastable shapes).
+
+    Notes:
+      * Branching is on static shape info (ndim, shape), so it's JIT-safe.
+      * We deliberately avoid try/except inside jit.
+    """
+    # ensure common dtype (important for jnp.finfo later)
+    dtype = jnp.result_type(x, p)
+    x = jnp.asarray(x, dtype=dtype)
+    p = jnp.asarray(p, dtype=dtype)
+
+    if (x.ndim == 1) and (p.ndim == 1) and (x.shape[0] != p.shape[0]):
+        # Outer evaluation: (P, N)
+        return x[None, :], p[:, None]
+    else:
+        # Normal elementwise broadcasting (handles scalar p, or shapes already aligned)
+        return x, p
+
 @jit
 def Lorentzian(x: jnp.ndarray, gamma: jnp.ndarray) -> jnp.ndarray:
-    """
-    Lorentz function L(x; γ) = (1/π) * γ / (x^2 + γ^2), normalized: ∫ L dx = 1.
-    Safe for γ→0 via a tiny floor to avoid 0/0 at x=0.
-    """
-    # Avoid the 0/0 at (x=0, gamma=0)
-    gsafe = jnp.maximum(gamma, jnp.finfo(x.dtype).tiny)
-    return (1.0 / jnp.pi) * (gsafe / (x * x + gsafe * gsafe))
+    """L(x;γ) = (1/π) * γ / (x² + γ²), normalized."""
+    g = jnp.maximum(gamma, jnp.finfo(x.dtype).tiny)
+    return (1.0 / jnp.pi) * g / (x * x + g * g)
 
 @jit
 def Gaussian(x: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:
-    """
-    Gauss function G(x; σ) = (1/√(2π)σ) * exp[-x^2/(2σ^2)], normalized: ∫ G dx = 1.
-    """
-    # Avoid σ = 0 → division by zero
-    sigma = jnp.maximum(sigma, jnp.finfo(x.dtype).tiny)
-    z = x / sigma
-    return jnp.exp(-0.5 * z * z) / (jnp.sqrt(2.0 * jnp.pi) * sigma)
+    """G(x;σ) = (1/√(2π)σ) * exp[-x²/(2σ²)], normalized."""
+    s = jnp.maximum(sigma, jnp.finfo(x.dtype).tiny)
+    z = x / s
+    return jnp.exp(-0.5 * z * z) / (jnp.sqrt(2.0 * jnp.pi) * s)
 
 @jit
-def Voigt(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray) -> jnp.ndarray:
+def _voigt_conv_single(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray) -> jnp.ndarray:
     """
-    V(x; σ, γ) ≈ (G * L)(x) via *linear* convolution implemented with FFT.
-
-    Broadcasting rules:
-      - x: shape (N,)
-      - sigma, gamma: scalars OR arrays broadcastable to shape (P,)
-      - Result shape: (P, N) for parameter vectors; (N,) for scalars.
-
-    Notes:
-      * Uses zero-padding to length 2N-1 to realize linear conv; then 'same' crop.
-      * Multiplies by dx so that ∫V dx ≈ 1 if the domain is sufficiently wide.
+    Discrete-convolution Voigt on a uniform grid:
+        V(x) ≈ (G * L)(x) * Δx
+    where G and L are **normalized** Gaussian & Lorentzian.
     """
-    # grid stats (assume uniform)
-    N = x.shape[-1]
-    dx = (x[-1] - x[0]) / (N - 1)
+    G = Gaussian(x, sigma)       # (N,)
+    L = Lorentzian(x, gamma)     # (N,)
+    dx = x[1] - x[0]             # assumes uniform spacing
+    # 'same' → same length as x; multiply by dx to approximate the integral
+    return jnp.convolve(G, L, mode="same") * dx
 
-    # Broadcast parameters to a common batch shape S (possibly empty)
-    # We then add a trailing axis to match x.
-    sigma_b = jnp.expand_dims(sigma, -1)  # (..., 1)
-    gamma_b = jnp.expand_dims(gamma, -1)  # (..., 1)
+def _broadcast_sig_gam(sigma: jnp.ndarray, gamma: jnp.ndarray):
+    """Scalar or 1D arrays → matched 1D arrays (outside jit)."""
+    sigma = jnp.atleast_1d(sigma)
+    gamma = jnp.atleast_1d(gamma)
+    if sigma.size == 1 and gamma.size > 1:
+        sigma = jnp.repeat(sigma, gamma.size)
+    elif gamma.size == 1 and sigma.size > 1:
+        gamma = jnp.repeat(gamma, sigma.size)
+    elif sigma.size != gamma.size:
+        raise ValueError(f"sigma (size {sigma.size}) and gamma (size {gamma.size}) are incompatible")
+    return sigma, gamma
 
-    # Broadcast x to (..., N) implicitly via arithmetic
-    # Build profiles with shape (..., N)
-    g = Gaussian(x, sigma_b)      # (..., N)
-    l = Lorentzian(x, gamma_b)    # (..., N)
-
-    # --- Linear convolution via FFT along the last axis ---
-    n_lin = 2 * N - 1
-    # next power-of-two for speed (static given N, OK for JIT)
-    n_fft = 1 << (n_lin - 1).bit_length()
-
-    pad_specs = [(0, 0)] * g.ndim
-    pad_specs[-1] = (0, n_fft - N)
-
-    Gf = jnp.fft.rfft(jnp.pad(g, pad_specs))
-    Lf = jnp.fft.rfft(jnp.pad(l, pad_specs))
-    Vf = Gf * Lf
-    v_full_padded = jnp.fft.irfft(Vf, n_fft)  # (..., n_fft)
-
-    # Take the first n_lin samples (linear conv), then crop to 'same' length N
-    v_full = v_full_padded[..., :n_lin]       # (..., 2N-1)
-    start = (n_lin - N) // 2
-    v_same = v_full[..., start:start + N]     # (..., N)
-
-    # Riemann-sum factor to approximate the integral
-    return v_same * dx
-
-@jit
-def _K_TG(x: jnp.ndarray) -> jnp.ndarray:
+def Voigt_conv(x: jnp.ndarray, sigma, gamma):
     """
-    K(x) from Tepper-García (2006), eq. (24), implemented stably.
-    Uses a small-x series to avoid cancellation/div-by-zero.
+    Voigt profile via discrete convolution of normalized Gaussian & Lorentzian.
+
+    Args
+    ----
+    x : (N,) jnp.ndarray
+        Uniform grid (recommend symmetric & wide enough that tails are negligible).
+    sigma, gamma : float or (P,) jnp.ndarray
+        If arrays, they are paired element-wise; if one is scalar it broadcasts.
+
+    Returns
+    -------
+    V : (N,) if scalars, else (P, N) jnp.ndarray
     """
-    x = jnp.asarray(x)
-    t = x * x
-    eps = jnp.finfo(x.dtype).eps
+    # shape/broadcast outside jit; compute profiles inside jit
+    sigma, gamma = _broadcast_sig_gam(jnp.asarray(sigma), jnp.asarray(gamma))
 
-    # general form (with safe denominators)
-    t_safe = jnp.maximum(t, eps)
-    term1 = (4.0 * t + 3.0) * (t + 1.0) * jnp.exp(-t)
-    term2 = ((2.0 * t + 3.0) / t_safe) * jnp.sinh(t)
-    k_general = (term1 - term2) / (2.0 * t_safe)
+    if sigma.size == 1:
+        return _voigt_conv_single(x, sigma[0], gamma[0])
 
-    # small-x series: K(x) = 1 - (7/6) x^2 + O(x^4)
-    k_series = 1.0 - (7.0 / 6.0) * t
+    vm = jit(vmap(lambda s, g: _voigt_conv_single(x, s, g), in_axes=(0, 0), out_axes=0))
+    return vm(sigma, gamma)
 
-    return jnp.where(t < 1e-6, k_series, k_general)
 
-@jit
-def Voigt_TG(a: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
-    """Tepper-García first-order approximation to the Voigt–Hjerting function H(a,x) ≈ e^{-x^2}[1 - a/(2√π) K(x)]."""
-    a = jnp.asarray(a); x = jnp.asarray(x)
-    return jnp.exp(-x * x) * (1.0 - a * _K_TG(x) / (2.0 * jnp.sqrt(jnp.pi)))
-
-@jit
-def Voigt_TG_profile(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray) -> jnp.ndarray:
-    """
-    Convenience wrapper that maps (x, σ, γ) → V_TG(x; σ, γ).
-
-    TG gives H(a, u) with u = x/(√2 σ) and a = γ/(√2 σ); convert back via:
-      V_TG(x; σ, γ) = H(a, u) / (√(2π) σ)
-
-    Supports the same broadcasting and returns (P, N) for vector σ, γ.
-    """
-    sqrt2 = jnp.sqrt(2.0)
-
-    x = jnp.asarray(x)
-    sigma = jnp.asarray(sigma)
-    gamma = jnp.asarray(gamma)
-
-    sigma = jnp.maximum(sigma, jnp.finfo(x.dtype).tiny)
-
-    # Shape to (..., N)
-    u = x / (sqrt2 * jnp.expand_dims(sigma, -1))     # (..., N)
-    a = gamma / (sqrt2 * sigma)                      # (...,)
-
-    # Your TG core expects H(a, u) with broadcasting
-    H = Voigt_TG(jnp.expand_dims(a, -1), u)          # (..., N)
-
-    return H / (jnp.sqrt(2.0 * jnp.pi) * jnp.expand_dims(sigma, -1))
 
 
 # ---------------------------------------------------------------------
