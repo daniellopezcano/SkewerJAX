@@ -1,57 +1,71 @@
-"""
-Spectral line constants used by SkewerJAX.
-Extend this file as new transitions or ions are added.
-All wavelengths are in Angstroms unless noted otherwise.
-"""
-
 from dataclasses import dataclass
 from typing import Dict
-from .physical import phys
+import csv
+from importlib.resources import files
+import skewerjax as sjx
 
+# ---- dataclass ----
 @dataclass(frozen=True)
 class Line:
-    """Basic information about an absorption/emission line."""
     id: str
     species: str
-    ion: int
+    ion: int               # keep int for API compatibility
     name: str
-    lambda0_A: float      # rest wavelength [Å]
-    f_osc: float          # oscillator strength
-    A_s1: float           # Einstein A coefficient [s^-1]
-    mass: float       # atomic mass [amu] (for Doppler widths)
+    lambda0_A: float
+    f_osc: float
+    A_s1: float
+    mass: float
 
     @property
     def lambda0_m(self) -> float:
-        """Rest wavelength in meters."""
-        return self.lambda0_A * phys.ANGSTROM
+        return self.lambda0_A * sjx.constants.physical. ANGSTROM
 
-
-
-# --- Define the lines explicitly here ---
-LINES: Dict[str, Line] = {
-    "HI-LyA": Line(
-        id="HI-LyA",
-        species="H",
-        ion=1,
-        name="Lyman-α",
-        lambda0_A=1215.67,
-        f_osc=0.416,
-        A_s1=6.265e8,
-        mass=1.00784,
-    ),
-    "HI-LyB": Line(
-        id="HI-LyB",
-        species="H",
-        ion=1,
-        name="Lyman-β",
-        lambda0_A=1025.72,
-        f_osc=0.079,
-        A_s1=1.64e8,
-        mass=1.00784,
-    ),
+# ---- minimal helpers ----
+_ROMAN_MAP = {
+    "I": 1, "II": 2, "III": 3, "IV": 4, "V": 5,
+    "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10,
 }
 
-# convenient aliases
+def _roman_to_int(s: str) -> int:
+    try:
+        return _ROMAN_MAP[s]
+    except KeyError:
+        raise ValueError(f"Unknown Roman numeral for ion: {s!r}")
+
+# ---- loader ----
+def _load() -> Dict[str, Line]:
+    """
+    Load tab-separated 'lines_table.dat' packaged next to this module.
+    Expected header (tab-separated):
+    id  species ion name lambda_A f_osc A_s1 mass_amu
+    """
+    p = files(__package__) / "lines_table.dat"
+    out: Dict[str, Line] = {}
+    with p.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for r in reader:
+            # Convert types and map field names
+            try:
+                line = Line(
+                    id=r["id"],
+                    species=r["species"],
+                    ion=_roman_to_int(r["ion"]),
+                    name=r["name"],
+                    lambda0_A=float(r["lambda_A"]),
+                    f_osc=float(r["f_osc"]),
+                    A_s1=float(r["A_s1"]),
+                    mass=float(r["mass_amu"]) if r.get("mass_amu", "") != "" else float("nan"),
+                )
+            except Exception:
+                # Keep minimal/robust: skip malformed rows silently
+                continue
+            out[line.id] = line
+    return out
+
+# Materialized registry
+LINES: Dict[str, Line] = _load()
+
+# Minimal aliases; extend later as needed
 ALIASES = {
     "LyA": "HI-LyA",
     "LyB": "HI-LyB",

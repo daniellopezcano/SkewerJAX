@@ -39,92 +39,99 @@ def Voigt_np(x: np.ndarray, sigma: np.ndarray, gamma: np.ndarray) -> np.ndarray:
     z = (x_b + 1j * gamma_b) / (np.sqrt(2.0) * sigma_b)
     return np.real(wofz(z)) / (np.sqrt(2.0 * np.pi) * sigma_b)
 
-def _outer_or_broadcast(x: jnp.ndarray, p: jnp.ndarray):
-    """
-    Align shapes to emulate the NumPy example behavior:
 
-    - If x is (N,) and p is (P,) and N != P -> return (x[None, :], p[:, None]) so
-      downstream elementwise ops produce a (P, N) outer grid.
-    - Otherwise, return (x, p) and rely on standard NumPy broadcasting rules
-      (scalars, matching shapes, or broadcastable shapes).
-
-    Notes:
-      * Branching is on static shape info (ndim, shape), so it's JIT-safe.
-      * We deliberately avoid try/except inside jit.
-    """
-    # ensure common dtype (important for jnp.finfo later)
-    dtype = jnp.result_type(x, p)
-    x = jnp.asarray(x, dtype=dtype)
-    p = jnp.asarray(p, dtype=dtype)
-
-    if (x.ndim == 1) and (p.ndim == 1) and (x.shape[0] != p.shape[0]):
-        # Outer evaluation: (P, N)
-        return x[None, :], p[:, None]
-    else:
-        # Normal elementwise broadcasting (handles scalar p, or shapes already aligned)
-        return x, p
-
-@jit
 def Lorentzian(x: jnp.ndarray, gamma: jnp.ndarray) -> jnp.ndarray:
     """L(x;γ) = (1/π) * γ / (x² + γ²), normalized."""
     g = jnp.maximum(gamma, jnp.finfo(x.dtype).tiny)
     return (1.0 / jnp.pi) * g / (x * x + g * g)
 
-@jit
+
 def Gaussian(x: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:
     """G(x;σ) = (1/√(2π)σ) * exp[-x²/(2σ²)], normalized."""
     s = jnp.maximum(sigma, jnp.finfo(x.dtype).tiny)
     z = x / s
     return jnp.exp(-0.5 * z * z) / (jnp.sqrt(2.0 * jnp.pi) * s)
 
-@jit
-def _voigt_conv_single(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray) -> jnp.ndarray:
+def _next_pow2(n: int) -> int:
+    return 1 << (int(n) - 1).bit_length()
+
+def Voigt_JAX_convolution(
+    x: jnp.ndarray,
+    sigma: jnp.ndarray,
+    gamma: jnp.ndarray,
+    *,
+    oversample: int = 1,            # ≥1; e.g., 4–8 for higher fidelity
+    work_dtype = jnp.float64        # internal compute dtype
+) -> jnp.ndarray:
     """
-    Discrete-convolution Voigt on a uniform grid:
-        V(x) ≈ (G * L)(x) * Δx
-    where G and L are **normalized** Gaussian & Lorentzian.
+    Voigt(x; σ, γ) via discrete convolution at internally increased precision.
+
+    Strategy:
+      - Build a finer grid with 'oversample'× more points.
+      - Evaluate Gaussian & Lorentzian on the fine grid.
+      - Convolve on the fine grid (direct or FFT), scale by fine dx (unit area).
+      - Downsample back to the original grid by striding.
+
+    Notes:
+      - Assumes x is uniformly spaced.
+      - Returns an array with the same shape and dtype as x.
     """
-    G = Gaussian(x, sigma)       # (N,)
-    L = Lorentzian(x, gamma)     # (N,)
-    dx = x[1] - x[0]             # assumes uniform spacing
-    # 'same' → same length as x; multiply by dx to approximate the integral
-    return jnp.convolve(G, L, mode="same") * dx
+    # --- original grid info ---
+    n = x.shape[0]
+    x0, x1 = x[0], x[-1]
+    dx = (x1 - x0) / (n - 1)
 
-def _broadcast_sig_gam(sigma: jnp.ndarray, gamma: jnp.ndarray):
-    """Scalar or 1D arrays → matched 1D arrays (outside jit)."""
-    sigma = jnp.atleast_1d(sigma)
-    gamma = jnp.atleast_1d(gamma)
-    if sigma.size == 1 and gamma.size > 1:
-        sigma = jnp.repeat(sigma, gamma.size)
-    elif gamma.size == 1 and sigma.size > 1:
-        gamma = jnp.repeat(gamma, sigma.size)
-    elif sigma.size != gamma.size:
-        raise ValueError(f"sigma (size {sigma.size}) and gamma (size {gamma.size}) are incompatible")
-    return sigma, gamma
+    # --- build oversampled grid (matching endpoints exactly) ---
+    factor = int(oversample)
+    n_hi = (n - 1) * factor + 1
+    x_hi = jnp.linspace(x0, x1, n_hi, dtype=work_dtype)
+    dx_hi = dx / factor
 
-def Voigt_conv(x: jnp.ndarray, sigma, gamma):
-    """
-    Voigt profile via discrete convolution of normalized Gaussian & Lorentzian.
+    # --- evaluate kernels on fine grid in higher precision ---
+    g_hi = Gaussian(x_hi, sigma).astype(work_dtype)
+    l_hi = Lorentzian(x_hi, gamma).astype(work_dtype)
 
-    Args
-    ----
-    x : (N,) jnp.ndarray
-        Uniform grid (recommend symmetric & wide enough that tails are negligible).
-    sigma, gamma : float or (P,) jnp.ndarray
-        If arrays, they are paired element-wise; if one is scalar it broadcasts.
+    # Linear convolution via FFT with zero-padding to avoid circular wrap
+    n_full = n_hi + n_hi - 1
+    n_fft = _next_pow2(n_full)
+    G = jnp.fft.rfft(g_hi, n_fft)
+    L = jnp.fft.rfft(l_hi, n_fft)
+    full = jnp.fft.irfft(G * L, n_fft)[:n_full]
+    # Extract 'same' segment (centered) to match jnp.convolve(..., mode='same')
+    start = (n_hi - 1) // 2
+    conv_hi = full[start:start + n_hi]
 
-    Returns
-    -------
-    V : (N,) if scalars, else (P, N) jnp.ndarray
-    """
-    # shape/broadcast outside jit; compute profiles inside jit
-    sigma, gamma = _broadcast_sig_gam(jnp.asarray(sigma), jnp.asarray(gamma))
+    # --- preserve area in discrete sum ---
+    conv_hi = conv_hi * dx_hi
 
-    if sigma.size == 1:
-        return _voigt_conv_single(x, sigma[0], gamma[0])
+    # --- downsample back to original grid positions (exact index alignment) ---
+    conv_lo = conv_hi[::factor]
 
-    vm = jit(vmap(lambda s, g: _voigt_conv_single(x, s, g), in_axes=(0, 0), out_axes=0))
-    return vm(sigma, gamma)
+    # Safety: in case of any rounding mismatch, slice to n
+    conv_lo = conv_lo[:n]
+
+    # Cast back to input dtype
+    return conv_lo.astype(x.dtype)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
