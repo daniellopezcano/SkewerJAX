@@ -1,15 +1,16 @@
-# skewerjax/optical_depth/line_profiles.py
 from __future__ import annotations
-from typing import Optional
+from typing import Literal, Union, Any
 
 import jax
 import jax.numpy as jnp
-from jax import jit
+from jax import vmap
+
+from skewerjax.constants.physical import phys
 
 import numpy as np
 from scipy.special import wofz
 
-from skewerjax.constants.physical import phys
+from exojax.opacity.lpf.lpf import voigtone
 
 def Voigt_np(x: np.ndarray, sigma: np.ndarray, gamma: np.ndarray) -> np.ndarray:
     """
@@ -113,175 +114,142 @@ def Voigt_JAX_convolution(
     # Cast back to input dtype
     return conv_lo.astype(x.dtype)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------
-# Helpers for physical widths in frequency space (Hz)
-#   - γ_j(x) = [A_j + 2/τ_coll(x)] / (4π)
-#   - σ_j(x) = (ν_j / (√2 c)) * b_eff(x)
-#     with b_eff^2 = 2kT/m + b_turb^2
-# ---------------------------------------------------------------------
-
-@jit
-def gamma_from_rates(A_s1: jnp.ndarray, tau_coll_s: Optional[jnp.ndarray]) -> jnp.ndarray:
-    """
-    Compute Lorentzian HWHM γ [Hz] from radiative+collisional rates.
-    If tau_coll_s is None, uses pure radiative damping.
-    """
-    A_s1 = jnp.asarray(A_s1)
-    if tau_coll_s is None:
-        return A_s1 / (4.0 * jnp.pi)
-    tau_coll_s = jnp.asarray(tau_coll_s)
-    return (A_s1 + 2.0 / tau_coll_s) / (4.0 * jnp.pi)
-
-
-@jit
-def sigma_from_T_b(
-    nu0_hz: jnp.ndarray,
-    *,
-    T_K: Optional[jnp.ndarray] = None,
-    mass_amu: Optional[jnp.ndarray] = None,
-    b_ms: Optional[jnp.ndarray] = None,        # effective Doppler parameter (includes turbulence) [m/s]
-    b_turb_ms: Optional[jnp.ndarray] = None,    # microturbulent velocity [m/s]
+def Voigt_exojax(
+    x: jnp.ndarray,
+    sigma: jnp.ndarray,
+    gamma: jnp.ndarray,
 ) -> jnp.ndarray:
     """
-    Return Gaussian σ in frequency units [Hz] for the line center ν0.
-
-    Provide either:
-      - b_ms (effective Doppler parameter, already includes turbulence), or
-      - T_K and mass_amu (to compute thermal b_th), with optional b_turb_ms.
+    Voigt(x; σ, γ) using ExoJAX `voigtone`: https://secondearths.sakura.ne.jp/exojax/tutorials/voigt_function.html?highlight=voigt
+    Assumes:
+      - x: 1D grid, shape (N,)
+      - sigma, gamma: scalars (or 0-D arrays)
     """
-    nu0_hz = jnp.asarray(nu0_hz)
-
-    if b_ms is None:
-        if (T_K is None) or (mass_amu is None):
-            raise ValueError("Provide either b_ms, or T_K and mass_amu.")
-        m = jnp.asarray(mass_amu) * phys.AMU
-        b_th = jnp.sqrt(2.0 * phys.k_B * jnp.asarray(T_K) / m)  # [m/s]
-        if b_turb_ms is None:
-            b_eff = b_th
-        else:
-            b_eff = jnp.sqrt(b_th * b_th + jnp.asarray(b_turb_ms) ** 2)
-    else:
-        b_eff = jnp.asarray(b_ms)
-
-    # σ_ν = (ν0 / (√2 c)) * b_eff
-    return (nu0_hz / (jnp.sqrt(2.0) * phys.c)) * b_eff
+    tiny = jnp.finfo(x.dtype).tiny
+    sigma = jnp.maximum(sigma, tiny)
+    gamma = jnp.maximum(gamma, tiny)
+    # voigtone is scalar in all args → vmap over x only
+    return jax.vmap(voigtone, in_axes=(0, None, None))(x, sigma, gamma)
 
 
-# ---------------------------------------------------------------------
-# Physical profiles in λ per your notes:
-#   x_phys(λ; ν_j) = (c/λ) - ν_j   [Hz]
-#   φ_j^(N)(λ; x)  = L( x_phys(λ;ν_j) ; γ_j(x) )
-#   φ_j^(T)(λ; x)  = G( x_phys(λ;ν_j) ; σ_j(x) )
-#   φ_j^(V)(λ; x)  = V( x_phys(λ;ν_j) ; σ_j(x), γ_j(x) )
-# ---------------------------------------------------------------------
-
-@jit
-def x_phys_from_lambda(lambda_m: jnp.ndarray, nu0_hz: jnp.ndarray) -> jnp.ndarray:
-    """x_phys(λ; ν0) = c/λ - ν0  [Hz].  Broadcasts over λ and ν0."""
-    lambda_m = jnp.asarray(lambda_m)
-    nu0_hz = jnp.asarray(nu0_hz)
-    return phys.c / lambda_m - nu0_hz
-
-
-@jit
-def phi_N_lambda(
-    lambda_m: jnp.ndarray,
-    nu0_hz: jnp.ndarray,
+def Voigt(
+    x: Union[jnp.ndarray, np.ndarray],
+    sigma: Union[jnp.ndarray, np.ndarray],
+    gamma: Union[jnp.ndarray, np.ndarray],
     *,
-    A_s1: jnp.ndarray,
-    tau_coll_s: Optional[jnp.ndarray] = None,
-) -> jnp.ndarray:
-    """Natural/collisional broadening φ_j^(N)(λ; x) = L( c/λ - ν0 ; γ )."""
-    x = x_phys_from_lambda(lambda_m, nu0_hz)
-    gamma = gamma_from_rates(A_s1, tau_coll_s)
-    return Lorentzian(x, gamma)
+    mode: Literal["ExoJAX", "convolution", "scipy_wofz"] = "ExoJAX",
+    **kwargs: Any,
+):
+    """
+    Unified Voigt profile wrapper.
+    -----
+    - For autodiff and JIT, use modes "ExoJAX" or "convolution".
+    - The "scipy_wofz" mode must not be used inside jax.jit / grad / vmap
+      with tracer arguments; it is purely a host-side evaluation.
+    """
 
+    mode_norm = mode.lower()
 
-@jit
-def phi_T_lambda(
-    lambda_m: jnp.ndarray,
-    nu0_hz: jnp.ndarray,
-    *,
-    T_K: Optional[jnp.ndarray] = None,
-    mass_amu: Optional[jnp.ndarray] = None,
-    b_ms: Optional[jnp.ndarray] = None,
-    b_turb_ms: Optional[jnp.ndarray] = None,
-) -> jnp.ndarray:
-    """Thermal/turbulent Doppler φ_j^(T)(λ; x) = G( c/λ - ν0 ; σ )."""
-    x = x_phys_from_lambda(lambda_m, nu0_hz)
-    sigma = sigma_from_T_b(
-        nu0_hz, T_K=T_K, mass_amu=mass_amu, b_ms=b_ms, b_turb_ms=b_turb_ms
+    # --- JAX / ExoJAX implementation ---
+    if mode_norm == "exojax":
+        return Voigt_exojax(x, sigma, gamma)
+
+    # --- JAX convolution implementation ---
+    if mode_norm == "convolution":
+        return Voigt_JAX_convolution(x, sigma, gamma, **kwargs)
+
+    # --- SciPy / NumPy implementation (NO autodiff / jit) ---
+    if mode_norm == "scipy_wofz":
+        x_np = np.asarray(x)
+        sigma_np = np.asarray(sigma)
+        gamma_np = np.asarray(gamma)
+        return Voigt_np(x_np, sigma_np, gamma_np)
+
+    raise ValueError(
+        f"Unknown Voigt mode '{mode}'. "
+        "Supported modes: 'ExoJAX', 'convolution', 'scipy_wofz'."
     )
-    return Gaussian(x, sigma)
+
+def compute_sigma_gamma(
+    T_K: jnp.ndarray,                 # (N_sp, N_sk, N_ppsk) — UNITS: [K]   — gas temperature
+    b_turb_m_per_s: jnp.ndarray,      # (N_sp, N_sk, N_ppsk) — UNITS: [m/s] — microturbulent velocity
+    tau_coll_ns: jnp.ndarray,         # (N_sp, N_sk, N_ppsk) — UNITS: [ns]  — collisional dephasing time
+    lambda0_A: jnp.ndarray,           # (N_sp,)              — UNITS: [Å]   — rest-frame wavelength of each line
+    A21_GHz: jnp.ndarray,             # (N_sp,)              — UNITS: [GHz] — Einstein A21 coefficient
+    mass_amu: jnp.ndarray,            # (N_sp,)              — UNITS: [amu] — absorber mass in atomic mass units
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Compute Gaussian (σ_j) and Lorentzian (γ_j) widths for each line/species.
+
+    Returns
+    -------
+    sigma_GHz : array, shape (N_sp, N_sk, N_ppsk), UNITS: [GHz]
+    gamma_GHz : array, shape (N_sp, N_sk, N_ppsk), UNITS: [GHz]
+    """
+
+    # Broadcast line parameters along (skewer, point) dimensions
+    A21_GHz = A21_GHz[:, None, None]              # (N_sp, 1, 1) [A21_GHz]
+    lambda0_A = lambda0_A[:, None, None]          # (N_sp, 1, 1) [m]
+    mass_amu = mass_amu[:, None, None]            # (N_sp, 1, 1) [kg]
+    
+    gamma_GHz = (A21_GHz + 2.0 / tau_coll_ns) / (4.0 * jnp.pi)  # UNITS: [GHz]
+    v_th_m_per_s = jnp.sqrt(2.0 * phys.kB_amu * T_K / mass_amu) # UNITS: [m/s]
+    v_eff_A_GHz = (v_th_m_per_s + b_turb_m_per_s)*10            # UNITS: [Å GHz]
+    sigma_GHz = v_eff_A_GHz / (2.0 * lambda0_A)                 # UNITS: [GHz]
+    
+    return sigma_GHz, gamma_GHz
 
 
-@jit
-def phi_V_lambda(
-    lambda_m: jnp.ndarray,
-    nu0_hz: jnp.ndarray,
-    *,
-    A_s1: jnp.ndarray,
-    tau_coll_s: Optional[jnp.ndarray] = None,
-    T_K: Optional[jnp.ndarray] = None,
-    mass_amu: Optional[jnp.ndarray] = None,
-    b_ms: Optional[jnp.ndarray] = None,
-    b_turb_ms: Optional[jnp.ndarray] = None,
-) -> jnp.ndarray:
-    """Voigt φ_j^(V)(λ; x) = V( c/λ - ν0 ; σ(·), γ(·) )."""
-    x = x_phys_from_lambda(lambda_m, nu0_hz)
-    gamma = gamma_from_rates(A_s1, tau_coll_s)
-    sigma = sigma_from_T_b(
-        nu0_hz, T_K=T_K, mass_amu=mass_amu, b_ms=b_ms, b_turb_ms=b_turb_ms
-    )
-    return Voigt(x, sigma, gamma)
+def line_profiles(
+    lambdas: jnp.ndarray,        # (N_lambda,)          — UNITS: [Angs] — wavelength range
+    T_K: jnp.ndarray,            # (N_sp, N_sk, N_ppsk) — UNITS: [K]    — gas temperature
+    b_turb_m_per_s: jnp.ndarray, # (N_sp, N_sk, N_ppsk) — UNITS: [m/s]  — microturbulent velocity
+    tau_coll_ns: jnp.ndarray,    # (N_sp, N_sk, N_ppsk) — UNITS: [ns]   — collisional dephasing time
+    absorption_lines,            # 
+    mode: str = "ExoJAX",        # or "convolution"
+):
+    """
+    Returns line profiles:
+        phi: shape (N_sp, N_sk, N_ppsk, N_lambda)
+    """
 
+    # Build arrays of line parameters from Line objects
+    lambda0_A = jnp.array([line.lambda0_A for line in absorption_lines])  # (N_sp,) — UNITS: [Angs]
+    A21_GHz   = jnp.array([line.A21_GHz   for line in absorption_lines])  # (N_sp,) — UNITS: [GHz]
+    mass_amu  = jnp.array([line.mass_amu  for line in absorption_lines])  # (N_sp,) — UNITS: [amu]
 
+    # --- x_j(λ) for each species and lambda ---
+    nu     = phys.c_A_THz / lambdas[None, :]   # shape: (1, N_lambda)    — UNITS: THz
+    nu0    = phys.c_A_THz / lambda0_A[:, None] # shape: (N_sp, 1)        — UNITS: THz
+    x_grid = nu - nu0                          # shape: (N_sp, N_lambda) — UNITS: THz. x_j(λ) for each line species j. "x" argument to Voigt for each line
 
+    # --- σ_j(x) and γ_j(x) on full (sp, sk, ppsk) grid ---
+    sigma, gamma = compute_sigma_gamma(T_K, b_turb_m_per_s, tau_coll_ns, lambda0_A, A21_GHz, mass_amu)
 
+    # Helper: Voigt for a single line j, all skewers, all points.
+    def voigt_one_species(
+        x_j: jnp.ndarray,          # (N_lambda,)
+        sigma_j: jnp.ndarray,      # (N_sk, N_ppsk)
+        gamma_j: jnp.ndarray,      # (N_sk, N_ppsk)
+    ) -> jnp.ndarray:
+        """
+        Compute φ_j for one species j: returns (N_sk, N_ppsk, N_lambda)
+        """
 
+        # Flatten (skewer, point) → cells
+        N_sk, N_ppsk = sigma_j.shape
+        sigma_flat = sigma_j.reshape(-1)     # (N_sk * N_ppsk,)
+        gamma_flat = gamma_j.reshape(-1)     # (N_sk * N_ppsk,)
 
+        # For each cell, call Voigt with: x = x_j (1D over λ), sigma, gamma = scalars for that cell
+        def voigt_cell(s, g):
+            return Voigt(x_j, s, g, mode=mode)   # → (N_lambda,)
 
+        voigt_cells = vmap(voigt_cell, in_axes=(0, 0))(sigma_flat, gamma_flat) # shape: (N_sk * N_ppsk, N_lambda)
 
+        return voigt_cells.reshape(N_sk, N_ppsk, -1)  # (N_sk, N_ppsk, N_lambda)
 
+    # vmap over species j
+    phi = vmap(voigt_one_species, in_axes=(0, 0, 0))(x_grid, sigma, gamma) # shape: (N_sp, N_sk, N_ppsk, N_lambda)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    return phi

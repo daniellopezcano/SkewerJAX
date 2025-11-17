@@ -1,4 +1,4 @@
-id	species	ion	name	lambda_A	f_osc	A_s1	mass_amu
+id	species	ion	name	lambda0_A	f_osc	A21_Hz	mass_amu
 HI-LyA	H	I	Lyman-α	1215.67010	0.416400	6.265000e+08	1.007940
 HI-LyB	H	I	Lyman-β	1025.72230	0.079120	1.897000e+08	1.007940
 HI-LyG	H	I	Lyman-γ	972.53680	0.029000	8.127000e+07	1.007940
