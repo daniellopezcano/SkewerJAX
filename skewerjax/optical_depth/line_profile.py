@@ -173,9 +173,9 @@ def Voigt(
 def compute_sigma_gamma(
     T_K: jnp.ndarray,                 # (N_sp, N_sk, N_ppsk) — UNITS: [K]   — gas temperature
     b_turb_m_per_s: jnp.ndarray,      # (N_sp, N_sk, N_ppsk) — UNITS: [m/s] — microturbulent velocity
-    tau_coll_ns: jnp.ndarray,         # (N_sp, N_sk, N_ppsk) — UNITS: [ns]  — collisional dephasing time
+    tau_coll_ps: jnp.ndarray,         # (N_sp, N_sk, N_ppsk) — UNITS: [ps]  — collisional dephasing time
     lambda0_A: jnp.ndarray,           # (N_sp,)              — UNITS: [Å]   — rest-frame wavelength of each line
-    A21_GHz: jnp.ndarray,             # (N_sp,)              — UNITS: [GHz] — Einstein A21 coefficient
+    A21_THz: jnp.ndarray,             # (N_sp,)              — UNITS: [THz] — Einstein A21 coefficient
     mass_amu: jnp.ndarray,            # (N_sp,)              — UNITS: [amu] — absorber mass in atomic mass units
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """
@@ -183,73 +183,61 @@ def compute_sigma_gamma(
 
     Returns
     -------
-    sigma_GHz : array, shape (N_sp, N_sk, N_ppsk), UNITS: [GHz]
-    gamma_GHz : array, shape (N_sp, N_sk, N_ppsk), UNITS: [GHz]
+    sigma_THz : array, shape (N_sp, N_sk, N_ppsk), UNITS: [THz]
+    gamma_THz : array, shape (N_sp, N_sk, N_ppsk), UNITS: [THz]
     """
 
     # Broadcast line parameters along (skewer, point) dimensions
-    A21_GHz = A21_GHz[:, None, None]              # (N_sp, 1, 1) [A21_GHz]
+    A21_THz = A21_THz[:, None, None]              # (N_sp, 1, 1) [A21_THz]
     lambda0_A = lambda0_A[:, None, None]          # (N_sp, 1, 1) [m]
     mass_amu = mass_amu[:, None, None]            # (N_sp, 1, 1) [kg]
     
-    gamma_GHz = (A21_GHz + 2.0 / tau_coll_ns) / (4.0 * jnp.pi)  # UNITS: [GHz]
+    gamma_THz = (A21_THz + 2.0 / tau_coll_ps) / (4.0 * jnp.pi)  # UNITS: [THz]
     v_th_m_per_s = jnp.sqrt(2.0 * phys.kB_amu * T_K / mass_amu) # UNITS: [m/s]
-    v_eff_A_GHz = (v_th_m_per_s + b_turb_m_per_s)*10            # UNITS: [Å GHz]
-    sigma_GHz = v_eff_A_GHz / (2.0 * lambda0_A)                 # UNITS: [GHz]
+    v_eff_A_THz = (v_th_m_per_s + b_turb_m_per_s)*1e-2          # UNITS: [Å THz]
+    sigma_THz = v_eff_A_THz / (2.0 * lambda0_A)                 # UNITS: [THz]
     
-    return sigma_GHz, gamma_GHz
+    return sigma_THz, gamma_THz
 
 
 def line_profiles(
     lambdas: jnp.ndarray,        # (N_lambda,)          — UNITS: [Angs] — wavelength range
+    lambda0_A: jnp.ndarray,      # (N_sp,)              — UNITS: [Angs] — rest-frame wavelength of each line
+    A21_THz: jnp.ndarray,        # (N_sp,)              — UNITS: [THz]  — Einstein A21 coefficient
+    mass_amu: jnp.ndarray,       # (N_sp,)              — UNITS: [amu]  — absorber mass in atomic mass units
     T_K: jnp.ndarray,            # (N_sp, N_sk, N_ppsk) — UNITS: [K]    — gas temperature
     b_turb_m_per_s: jnp.ndarray, # (N_sp, N_sk, N_ppsk) — UNITS: [m/s]  — microturbulent velocity
-    tau_coll_ns: jnp.ndarray,    # (N_sp, N_sk, N_ppsk) — UNITS: [ns]   — collisional dephasing time
-    absorption_lines,            # 
+    tau_coll_ps: jnp.ndarray,    # (N_sp, N_sk, N_ppsk) — UNITS: [ps]   — collisional dephasing time
     mode: str = "ExoJAX",        # or "convolution"
 ):
     """
     Returns line profiles:
-        phi: shape (N_sp, N_sk, N_ppsk, N_lambda)
+        phi: shape (N_sp, N_sk, N_ppsk, N_lambda) — UNITS: []
     """
 
-    # Build arrays of line parameters from Line objects
-    lambda0_A = jnp.array([line.lambda0_A for line in absorption_lines])  # (N_sp,) — UNITS: [Angs]
-    A21_GHz   = jnp.array([line.A21_GHz   for line in absorption_lines])  # (N_sp,) — UNITS: [GHz]
-    mass_amu  = jnp.array([line.mass_amu  for line in absorption_lines])  # (N_sp,) — UNITS: [amu]
+    # --- σ_j(x) and γ_j(x) on full (sp, sk, ppsk) grid ---
+    sigma_THz, gamma_THz = compute_sigma_gamma(T_K, b_turb_m_per_s, tau_coll_ps, lambda0_A, A21_THz, mass_amu)
 
     # --- x_j(λ) for each species and lambda ---
-    nu     = phys.c_A_THz / lambdas[None, :]   # shape: (1, N_lambda)    — UNITS: THz
-    nu0    = phys.c_A_THz / lambda0_A[:, None] # shape: (N_sp, 1)        — UNITS: THz
-    x_grid = nu - nu0                          # shape: (N_sp, N_lambda) — UNITS: THz. x_j(λ) for each line species j. "x" argument to Voigt for each line
+    nu_THz      = phys.c_A_THz / lambdas[None, :]   # shape: (1, N_lambda)    — UNITS: THz
+    nu0_THz     = phys.c_A_THz / lambda0_A[:, None] # shape: (N_sp, 1)        — UNITS: THz
+    nu_grid_THz = nu_THz - nu0_THz                  # shape: (N_sp, N_lambda) — UNITS: THz. x_j(λ) for each line species j. Argument to Voigt for each line
 
-    # --- σ_j(x) and γ_j(x) on full (sp, sk, ppsk) grid ---
-    sigma, gamma = compute_sigma_gamma(T_K, b_turb_m_per_s, tau_coll_ns, lambda0_A, A21_GHz, mass_amu)
+    def voigt_one_species(x_j, sigma_j, gamma_j):
+        # sigma_j, gamma_j: (N_sk, N_ppsk)
 
-    # Helper: Voigt for a single line j, all skewers, all points.
-    def voigt_one_species(
-        x_j: jnp.ndarray,          # (N_lambda,)
-        sigma_j: jnp.ndarray,      # (N_sk, N_ppsk)
-        gamma_j: jnp.ndarray,      # (N_sk, N_ppsk)
-    ) -> jnp.ndarray:
-        """
-        Compute φ_j for one species j: returns (N_sk, N_ppsk, N_lambda)
-        """
-
-        # Flatten (skewer, point) → cells
-        N_sk, N_ppsk = sigma_j.shape
-        sigma_flat = sigma_j.reshape(-1)     # (N_sk * N_ppsk,)
-        gamma_flat = gamma_j.reshape(-1)     # (N_sk * N_ppsk,)
-
-        # For each cell, call Voigt with: x = x_j (1D over λ), sigma, gamma = scalars for that cell
         def voigt_cell(s, g):
-            return Voigt(x_j, s, g, mode=mode)   # → (N_lambda,)
+            return Voigt(x_j, s, g, mode=mode)  # (N_lambda,)
 
-        voigt_cells = vmap(voigt_cell, in_axes=(0, 0))(sigma_flat, gamma_flat) # shape: (N_sk * N_ppsk, N_lambda)
+        # vmap over ppsk inside skewer
+        voigt_over_pp = vmap(voigt_cell, in_axes=(0, 0))          # (N_ppsk, N_lambda)
 
-        return voigt_cells.reshape(N_sk, N_ppsk, -1)  # (N_sk, N_ppsk, N_lambda)
+        # vmap over skewer
+        voigt_over_sk = vmap(voigt_over_pp, in_axes=(0, 0))       # (N_sk, N_ppsk, N_lambda)
+
+        return voigt_over_sk(sigma_j, gamma_j)
 
     # vmap over species j
-    phi = vmap(voigt_one_species, in_axes=(0, 0, 0))(x_grid, sigma, gamma) # shape: (N_sp, N_sk, N_ppsk, N_lambda)
+    phi = vmap(voigt_one_species, in_axes=(0, 0, 0))(nu_grid_THz, sigma_THz, gamma_THz) # shape: (N_sp, N_sk, N_ppsk, N_lambda)
 
     return phi
