@@ -17,8 +17,8 @@ class Line:
     mass_amu: float
     
     @property
-    def A21_THz(self) -> float:
-        return self.A21_Hz * 1e-12
+    def A21_GHz(self) -> float:
+        return self.A21_Hz * 1e-9
 
 # ----------------- loading -------------------
 
