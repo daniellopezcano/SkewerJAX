@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from jax import vmap
-
 from skewerjax.optical_depth.voigt import log10_voigt
 
 import logging
 logger = logging.getLogger(__name__)
 
 import jax
-from jax import vmap, pmap, jit
+from jax import vmap, pmap
 import jax.numpy as jnp
 from functools import partial
 

@@ -4,6 +4,7 @@ __version__ = "0.0.1"
 # Eagerly expose lightweight namespaces
 from . import config as config
 from . import constants as constants
+from . import fields as fields
 from . import optical_depth as optical_depth
 from . import utils as utils
 
