@@ -1,166 +1,361 @@
+# skewerjax/fields.py
+from __future__ import annotations
+from typing import Callable, Protocol, Any
 import jax.numpy as jnp
-from typing import Dict, Sequence, Union, Callable
-from dataclasses import dataclass
+from jax.typing import ArrayLike
 
-# Type alias for clarity
-Points = jnp.ndarray  # Shape: (N_points, 4) where columns are [scale_factor, x, y, z]
+# =============================================================================
+# Field Protocols & Base Classes
+# =============================================================================
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Base field classes
-# ─────────────────────────────────────────────────────────────────────────────
+class Field(Protocol):
+    """A callable that samples a field at points x."""
+    def __call__(self, x: ArrayLike) -> ArrayLike:
+        """x: (N_points, 4) → output: scalar or vector per point."""
+        ...
 
 class ScalarField:
-    """Species-independent scalar field: f(points) → values."""
-    def __call__(self, points: Points) -> jnp.ndarray:
-        raise NotImplementedError
+    """
+    Immutable wrapper for scalar-valued fields.
+    Usage: field = ScalarField(lambda x: x[:,0])  # samples scale factor
+    """
+    def __init__(self, sampler: Callable[[ArrayLike], ArrayLike]):
+        self._sampler = sampler
+    
+    def __call__(self, x: ArrayLike) -> ArrayLike:
+        return self._sampler(x)  # Returns (N_points,)
 
 class VectorField:
-    """Species-independent 3D vector field: f(points) → vectors."""
-    def __call__(self, points: Points) -> jnp.ndarray:
-        raise NotImplementedError
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Concrete fields
-# ─────────────────────────────────────────────────────────────────────────────
-
-@dataclass(frozen=True)
-class UniformScalarField(ScalarField):
-    """Constant scalar everywhere."""
-    value: float
+    """
+    Immutable wrapper for vector-valued fields (e.g., velocity).
+    Usage: field = VectorField(lambda x: jnp.stack([x[:,1], x[:,2], x[:,3]], axis=-1))
+    """
+    def __init__(self, sampler: Callable[[ArrayLike], ArrayLike]):
+        self._sampler = sampler
     
-    def __call__(self, points: Points) -> jnp.ndarray:
-        return jnp.full(points.shape[0], self.value)
-
-@dataclass(frozen=True)
-class UniformVectorField(VectorField):
-    """Constant vector everywhere."""
-    vx: float; vy: float; vz: float
+    def __call__(self, x: ArrayLike) -> ArrayLike:
+        return self._sampler(x)  # Returns (N_points, 3)
     
-    def __call__(self, points: Points) -> jnp.ndarray:
-        vec = jnp.array([self.vx, self.vy, self.vz])
-        return jnp.tile(vec, (points.shape[0], 1))
+    def project(self, x: ArrayLike, directions: ArrayLike, tol: float = 1e-5) -> ArrayLike:
+        """
+        Project onto line-of-sight directions.
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Species-dependent wrappers
-# ─────────────────────────────────────────────────────────────────────────────
+        Parameters
+        ----------
+        x : (..., 4)
+            Sampling points.
+        directions : (..., 3)
+            Line-of-sight direction vectors. Must be normalized (‖d‖ = 1).
+        tol : float
+            Allowed deviation from unit norm. If max |‖d‖ - 1| > tol,
+            a ValueError is raised.
 
-class SpeciesScalarField:
-    """Species-dependent scalar: f(species_key, points) → values."""
-    def __call__(self, species_key: str, points: Points) -> jnp.ndarray:
-        raise NotImplementedError
+        Returns
+        -------
+        projected : (...,)
+            Velocity projected along each line-of-sight.
+        """
+        v = self(x)  # (..., 3)
 
-class SpeciesVectorField:
-    """Species-dependent vector: f(species_key, points) → vectors."""
-    def __call__(self, species_key: str, points: Points) -> jnp.ndarray:
-        raise NotImplementedError
+        # Check normalization of LoS directions
+        norms = jnp.linalg.norm(directions, axis=-1)          # (...)
+        deviations = jnp.abs(norms - 1.0)                     # (...)
+        max_dev = float(jnp.max(deviations))                  # scalar (for message)
 
-@dataclass(frozen=True)
-class SharedSpeciesScalarField(SpeciesScalarField):
-    """Use same scalar field for all species."""
-    base_field: ScalarField
+        if max_dev > tol:
+            raise ValueError(
+                f"LoS directions must be normalized (‖d‖ ≈ 1). "
+                f"Max |‖d‖ - 1| = {max_dev:.3e} > tol = {tol:.3e}."
+            )
+
+        # Actual projection
+        return jnp.sum(v * directions, axis=-1)
+
+
+class LoSProjector:
+    """Descriptor that creates an LoS-projected field on-demand."""
+    def __init__(self, vector_field: VectorField):
+        self._vf = vector_field
     
-    def __call__(self, species_key: str, points: Points) -> jnp.ndarray:
-        return self.base_field(points)  # Species key ignored
+    def sample(self, x: ArrayLike, directions: ArrayLike) -> ArrayLike:
+        """Return LoS velocity at x along directions."""
+        return self._vf.project(x, directions)
 
-@dataclass(frozen=True)
-class SharedSpeciesVectorField(SpeciesVectorField):
-    """Use same vector field for all species."""
-    base_field: VectorField
-    
-    def __call__(self, species_key: str, points: Points) -> jnp.ndarray:
-        return self.base_field(points)  # Species key ignored
+# =============================================================================
+# Species & Master Container
+# =============================================================================
 
-@dataclass(frozen=True)
-class SpeciesFieldMap(SpeciesScalarField):
-    """Different scalar field per species."""
-    fields: Dict[str, ScalarField]
+class SpeciesFields:
+    """
+    Container for all fields of a single species.
+    Access: species_field.temperature(x) -> (N_points,)
+    """
+    def __init__(self, fields: dict[str, Field]):
+        self._fields = fields
     
-    def __call__(self, species_key: str, points: Points) -> jnp.ndarray:
-        return self.fields[species_key](points)
+    def __getattr__(self, name: str) -> Field:
+        """Enable dot-access: species.temperature"""
+        if name in self._fields:
+            return self._fields[name]
+        raise AttributeError(
+            f"Field '{name}' not found. Available: {list(self._fields.keys())}"
+        )
+    
+    @property
+    def LoS_velocity(self) -> LoSProjector:
+        """Special property: projects species velocity onto LoS."""
+        if "velocity" not in self._fields:
+            raise AttributeError("Cannot project LoS_velocity: no 'velocity' field defined.")
+        return LoSProjector(self._fields["velocity"])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FieldBundle: container for all physics
-# ─────────────────────────────────────────────────────────────────────────────
 
-@dataclass(frozen=True)
-class FieldBundle:
-    """All fields needed to compute line profiles."""
-    temperature: SpeciesScalarField
-    collisional: SpeciesScalarField
-    turbulence: SpeciesScalarField
-    velocity: SpeciesVectorField
+class Fields:
+    """
+    Master container for all species.
+
+    Construction:
+        Fields({"HI": {"temperature": ScalarField(...), ...}})
+
+    Access:
+        - Per-species:
+            fields.HI.temperature(x)
+        - All species, all fields:
+            fields.sample(x, LoS_directions, as_array=False/True)
+        - All species, single field:
+            fields.temperature(x)                 -> (N_species, *batch_shape)
+            fields.velocity(x)                    -> (N_species, *batch_shape, 3)
+            fields.LoS_velocity(x, LoS_dirs)      -> (N_species, *batch_shape)
+    """
+    def __init__(self, species_fields: dict[str, dict[str, "Field"]]):
+        self._species = {
+            name: SpeciesFields(fields) for name, fields in species_fields.items()
+        }
     
-    @classmethod
-    def create_uniform(
-        cls,
-        temp_dict: Dict[str, float],
-        coll_dict: Dict[str, float],
-        turb_dict: Dict[str, float],
-        shared_velocity: tuple[float, float, float] = None,
-        vel_dict: Dict[str, tuple[float, float, float]] = None,
-    ) -> "FieldBundle":
-        """Quick factory for uniform fields."""
-        if shared_velocity is not None and vel_dict is not None:
-            raise ValueError("Specify either shared_velocity or vel_dict, not both")
-        
-        # Build scalar maps
-        temp_map = SpeciesFieldMap({
-            sid: UniformScalarField(val) for sid, val in temp_dict.items()
-        })
-        coll_map = SpeciesFieldMap({
-            sid: UniformScalarField(val) for sid, val in coll_dict.items()
-        })
-        turb_map = SpeciesFieldMap({
-            sid: UniformScalarField(val) for sid, val in turb_dict.items()
-        })
-        
-        # Build velocity field
-        if vel_dict:
-            vel_map = SpeciesFieldMap({
-                sid: UniformVectorField(*vals) for sid, vals in vel_dict.items()
-            })
-        else:
-            vx, vy, vz = shared_velocity or (0.0, 0.0, 0.0)
-            vel_map = SharedSpeciesVectorField(UniformVectorField(vx, vy, vz))
-        
-        return cls(temp_map, coll_map, turb_map, vel_map)
+    def __getattr__(self, name: str) -> Any:
+        """
+        Enable:
+          - dot-access to species: fields.HI
+          - dot-access to cross-species field samplers: fields.temperature(x)
+          - special-case LoS_velocity: fields.LoS_velocity(x, LoS_directions)
+        """
+        # 1) Species access: fields.HI
+        if name in self._species:
+            return self._species[name]
+
+        # 2) Special case: LoS_velocity is *not* in species._fields,
+        #    but is exposed via SpeciesFields.LoS_velocity.
+        if name == "LoS_velocity":
+            return self._make_LoS_velocity_sampler()
+
+        # 3) Generic cross-species field access for fields that *are* in _fields
+        if any(name in species._fields for species in self._species.values()):
+            return self._make_field_sampler(name)
+
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'. "
+            f"Available species: {list(self._species.keys())}"
+        )
     
-    def project_velocity_los(
+    @property
+    def species_keys(self) -> tuple[str, ...]:
+        """Tuple of defined species names."""
+        return tuple(self._species.keys())
+    
+    @property
+    def field_keys(self) -> dict[str, tuple[str, ...]]:
+        """Mapping species → tuple of field names."""
+        return {
+            name: tuple(species._fields.keys())
+            for name, species in self._species.items()
+        }
+
+    # ------------------------------------------------------------------
+    # Generic cross-species field sampler: fields.temperature(x), etc.
+    # ------------------------------------------------------------------
+    def _make_field_sampler(self, field_name: str):
+        """
+        fields.<field_name>(x, *args, **kwargs) -> (N_species, *field_shape)
+        """
+        def _sampler(x: "ArrayLike", *args, **kwargs) -> jnp.ndarray:
+            species_names = self.species_keys
+            if not species_names:
+                raise ValueError("No species defined in Fields.")
+
+            values = []
+            ref_shape = None
+
+            for sname in species_names:
+                species = self._species[sname]
+                if field_name not in species._fields:
+                    raise AttributeError(
+                        f"Field '{field_name}' not found in species '{sname}'. "
+                        "All species must carry this field for cross-species sampling."
+                    )
+
+                field = species._fields[field_name]
+                v = jnp.asarray(field(x, *args, **kwargs))
+
+                if ref_shape is None:
+                    ref_shape = v.shape
+                elif v.shape != ref_shape:
+                    raise ValueError(
+                        f"Inconsistent shape for field '{field_name}' across species. "
+                        f"Species '{sname}' has shape {v.shape}, expected {ref_shape}."
+                    )
+
+                values.append(v)
+
+            # (N_species, *ref_shape)
+            return jnp.stack(values, axis=0)
+
+        _sampler.__name__ = field_name
+        return _sampler
+
+    # ------------------------------------------------------------------
+    # NEW: cross-species sampler specifically for LoS_velocity
+    # ------------------------------------------------------------------
+    def _make_LoS_velocity_sampler(self):
+        """
+        fields.LoS_velocity(x, LoS_directions) -> (N_species, *batch_shape)
+        """
+        def _sampler(x: "ArrayLike", LoS_directions: "ArrayLike") -> jnp.ndarray:
+            species_names = self.species_keys
+            if not species_names:
+                raise ValueError("No species defined in Fields.")
+
+            values = []
+            ref_shape = None
+
+            for sname in species_names:
+                species = self._species[sname]
+
+                # Uses SpeciesFields.LoS_velocity property, which requires 'velocity'
+                projector = species.LoS_velocity
+                v = jnp.asarray(projector.sample(x, LoS_directions))
+
+                if ref_shape is None:
+                    ref_shape = v.shape
+                elif v.shape != ref_shape:
+                    raise ValueError(
+                        "Inconsistent LoS_velocity shape across species. "
+                        f"Species '{sname}' has shape {v.shape}, expected {ref_shape}."
+                    )
+
+                values.append(v)
+
+            # (N_species, *batch_shape)
+            return jnp.stack(values, axis=0)
+
+        _sampler.__name__ = "LoS_velocity"
+        return _sampler
+    
+    def sample(
         self,
-        species_keys: Sequence[str],
-        points: Points,
-        los_directions: jnp.ndarray,  # Shape: (N_points, 3)
-    ) -> jnp.ndarray:
-        """Compute LOS velocity for multiple species."""
-        velocities = []
-        for species in species_keys:
-            v_3d = self.velocity(species, points)  # (N_points, 3)
-            v_los = jnp.sum(v_3d * los_directions, axis=1)  # (N_points,)
-            velocities.append(v_los)
-        return jnp.stack(velocities)  # (N_sp, N_points)
+        x: "ArrayLike",
+        LoS_directions: "ArrayLike",
+        as_array: bool = False,
+    ) -> Any:
+        """
+        Sample ALL fields for ALL species at once.
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Convenience function for your use case
-# ─────────────────────────────────────────────────────────────────────────────
+        Default (as_array=False)
+        ------------------------
+        Returns a nested dict:
+        {
+            "HI": {
+                "temperature": (batch_shape),
+                "velocity": (batch_shape, 3),
+                "LoS_velocity": (batch_shape,),  # projected
+                "number_density": (batch_shape,),
+                ...
+            },
+            "SiIII": {...}
+        }
 
-def evaluate_fields_for_lines(
-    bundle: FieldBundle,
-    species_keys: Sequence[str],
-    points: Points,
-    los_directions: jnp.ndarray,
-) -> dict:
-    """
-    Evaluate all fields for given species and points.
-    
-    Returns dictionary with keys:
-      - 'temperature': (N_sp, N_points)
-      - 'collisional': (N_sp, N_points)
-      - 'turbulence': (N_sp, N_points)
-      - 'velocity_los': (N_sp, N_points)
-    """
-    return {
-        'temperature': jnp.stack([bundle.temperature(k, points) for k in species_keys]),
-        'collisional': jnp.stack([bundle.collisional(k, points) for k in species_keys]),
-        'turbulence': jnp.stack([bundle.turbulence(k, points) for k in species_keys]),
-        'velocity_los': bundle.project_velocity_los(species_keys, points, los_directions),
-    }
+        Array mode (as_array=True)
+        ---------------------------
+        Returns a single jnp.ndarray with shape:
+            (N_species, N_scalar_fields, *batch_shape)
+
+        where:
+        - batch_shape = x.shape[:-1]
+        - Only scalar fields are included (shape == batch_shape).
+        - Vector fields (e.g. "velocity" with trailing dim 3) are ignored.
+        - Their LoS projections (e.g. "LoS_velocity") ARE included.
+        - Axes:
+            0 -> species (in self.species_keys order)
+            1 -> scalar fields (sorted by name for determinism)
+            2+ -> original point grid (same as each scalar field)
+        """
+        # --------- 1. Build the usual nested dict of sampled fields ---------
+        results: dict[str, dict[str, jnp.ndarray]] = {}
+        for name, species in self._species.items():
+            species_results: dict[str, jnp.ndarray] = {}
+            for field_name, field in species._fields.items():
+                species_results[field_name] = field(x)
+            
+            # Add LoS projection if velocity exists
+            if "velocity" in species._fields:
+                species_results["LoS_velocity"] = species.LoS_velocity.sample(
+                    x, LoS_directions
+                )
+            
+            results[name] = species_results
+        
+        # If standard dict mode: we're done
+        if not as_array:
+            return results
+
+        # --------- 2. Convert to a stacked jnp.ndarray without flattening ---------
+        batch_shape = x.shape[:-1]  # e.g. (N_sk, N_ppsk)
+
+        species_names = self.species_keys
+        if not species_names:
+            raise ValueError("No species defined in Fields.")
+
+        # Use first species as reference to decide which fields are scalar
+        ref_species_name = species_names[0]
+        ref_fields = results[ref_species_name]
+
+        # Scalar fields: those whose shape == batch_shape
+        scalar_field_names = [
+            fname for fname, value in ref_fields.items()
+            if jnp.shape(value) == batch_shape
+        ]
+        if not scalar_field_names:
+            raise ValueError(
+                f"No scalar fields found for species '{ref_species_name}'. "
+                "Cannot build stacked array."
+            )
+
+        # Optional: keep ordering deterministic (alphabetical)
+        scalar_field_names = sorted(scalar_field_names)
+
+        # Sanity-check that all species have these scalar fields
+        for sname in species_names:
+            for fname in scalar_field_names:
+                if fname not in results[sname]:
+                    raise ValueError(
+                        f"Scalar field '{fname}' missing in species '{sname}'. "
+                        "Cannot build a uniform stacked array."
+                    )
+                if jnp.shape(results[sname][fname]) != batch_shape:
+                    raise ValueError(
+                        f"Field '{fname}' in species '{sname}' does not match "
+                        f"batch shape {batch_shape}: got {jnp.shape(results[sname][fname])}"
+                    )
+
+        # Stack: for each species → (N_scalar_fields, *batch_shape),
+        # then stack species → (N_species, N_scalar_fields, *batch_shape)
+        species_stacks = []
+        for sname in species_names:
+            field_values = []
+            for fname in scalar_field_names:
+                v = jnp.asarray(results[sname][fname])  # shape batch_shape
+                field_values.append(v)
+            # (N_scalar_fields, *batch_shape)
+            species_stacks.append(jnp.stack(field_values, axis=0))
+
+        # Final: (N_species, N_scalar_fields, *batch_shape)
+        stacked = jnp.stack(species_stacks, axis=0)
+        return stacked
