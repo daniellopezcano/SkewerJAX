@@ -43,7 +43,6 @@ def Lorentzian(x: jnp.ndarray, gamma: jnp.ndarray) -> jnp.ndarray:
     g = jnp.maximum(gamma, jnp.finfo(x.dtype).tiny)
     return (1.0 / jnp.pi) * g / (x * x + g * g)
 
-
 def Gaussian(x: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:
     """G(x;σ) = (1/√(2π)σ) * exp[-x²/(2σ²)], normalized."""
     s = jnp.maximum(sigma, jnp.finfo(x.dtype).tiny)

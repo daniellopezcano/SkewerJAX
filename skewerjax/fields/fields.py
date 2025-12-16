@@ -1,6 +1,6 @@
 # skewerjax/fields.py
 from __future__ import annotations
-from typing import Callable, Protocol, Any
+from typing import Callable, Protocol, Any, Union
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
@@ -169,9 +169,6 @@ class Fields:
             for name, species in self._species.items()
         }
 
-    # ------------------------------------------------------------------
-    # Generic cross-species field sampler: fields.temperature(x), etc.
-    # ------------------------------------------------------------------
     def _make_field_sampler(self, field_name: str):
         """
         fields.<field_name>(x, *args, **kwargs) -> (N_species, *field_shape)
@@ -211,9 +208,6 @@ class Fields:
         _sampler.__name__ = field_name
         return _sampler
 
-    # ------------------------------------------------------------------
-    # NEW: cross-species sampler specifically for LoS_velocity
-    # ------------------------------------------------------------------
     def _make_LoS_velocity_sampler(self):
         """
         fields.LoS_velocity(x, LoS_directions) -> (N_species, *batch_shape)
@@ -359,3 +353,62 @@ class Fields:
         # Final: (N_species, N_scalar_fields, *batch_shape)
         stacked = jnp.stack(species_stacks, axis=0)
         return stacked
+
+    def tile_field_to_lines(
+        self,
+        field_name: str,
+        points: ArrayLike,
+        indices_for_species: dict[str, Union[list[int], jnp.ndarray]],
+        *,
+        LoS_directions: ArrayLike | None = None,
+    ) -> ArrayLike:
+        """
+        Generic method to sample any species-level field and tile to line-level.
+        Works for both regular fields and special LoS_velocity.
+        
+        Args:
+            field_name: Name of the field to sample ("temperature", "collisional", etc.)
+            points: Quadrivectors (a, x, y, z) of shape (*batch_shape, 4)
+            indices_for_species: Mapping {species: [line_idx1, line_idx2, ...]}
+            LoS_directions: Required ONLY for "LoS_velocity" field
+        
+        Returns:
+            tiled_field: (N_lines, *batch_shape)
+        """
+        # 1) Sample the species-level field
+        if field_name == "LoS_velocity":
+            if LoS_directions is None:
+                raise ValueError("LoS_directions required for field 'LoS_velocity'")
+            species_field = self.LoS_velocity(points, LoS_directions)
+        else:
+            # Use the dynamic field sampler we already have
+            field_sampler = self._make_field_sampler(field_name)
+            species_field = field_sampler(points)
+        
+        # 2) Tile to line-level using the internal helper
+        return self._tile_field_to_lines(species_field, indices_for_species)
+
+    def _tile_field_to_lines(
+        self,
+        species_field: ArrayLike,
+        indices_for_species: dict[str, Union[list[int], jnp.ndarray]]
+    ) -> ArrayLike:
+        """
+        Core tiling logic: (N_species, *batch_shape) → (N_lines, *batch_shape)
+        """
+        # Determine total number of lines from mapping
+        all_indices = []
+        for species_name in self.species_keys:
+            all_indices.extend(indices_for_species[species_name])
+        N_lines = max(all_indices) + 1
+        
+        # Initialize tiled array
+        batch_shape = species_field.shape[1:]
+        tiled = jnp.zeros((N_lines,) + batch_shape, dtype=species_field.dtype)
+        
+        # Map species indices to line indices
+        for i_species, species_name in enumerate(self.species_keys):
+            line_indices = jnp.asarray(indices_for_species[species_name])
+            tiled = tiled.at[line_indices].set(species_field[i_species])
+        
+        return tiled
