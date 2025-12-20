@@ -10,36 +10,26 @@ logger = logging.getLogger(__name__)
 import jax
 from jax import vmap, pmap
 import jax.numpy as jnp
+from jax.scipy.integrate import trapezoid
 
 from skewerjax.optical_depth.voigt import log10_voigt
-
-
-from dataclasses import dataclass
-
-@dataclass(frozen=True)
-class PhysicalConstants:
-    c: float = 2.99792458e8                         # speed of light      — UNITS: [m / s]
-    kB_amu: float = 8314.46262102654                # Boltzman constant   — UNITS: [amu ⋅ m^2 ⋅ s^-2 ⋅ K^-1]
-    qe: float = 1.60217663e-19                      # electron charge     — UNITS: [C]
-    me: float = 9.1093837e-31                       # electron mass       — UNITS: [kg]
-    epsilon_0: float = 8.85418782e-12               # vacuum permittivity — UNITS: [C^2 ⋅ kg^−1 ⋅ m^−3 ⋅ s^2]
-
-# single shared instance (immutable)
-phys = PhysicalConstants()
+from skewerjax.constants.physical_constants import phys
 
 
 def compute_lambda_prime(
     wavelengths: ArrayLike,           # (N_lambda,)
+    scale_factor_obs: float,          # scalar
     scale_factor: ArrayLike,          # (*batch_shape,)
     LoS_velocity: ArrayLike,          # (N_species, *batch_shape)
 ) -> jnp.ndarray:
     """
     Compute observer-frame wavelength shifted by cosmological expansion and peculiar velocities.
     
-    λ' = λ_obs × a × (1 + v_LoS / c)
+    λ' = λ_obs × (a / a_obs) × (1 + v_LoS / c)
     
     Args:
         wavelengths: Rest-frame wavelengths [Å], shape (N_lambda,)
+        scale_factor_obs: Cosmological scale factor at observer position
         scale_factor: Scale factor a(z) for each point, shape (*batch_shape,)
         LoS_velocity: Line-of-sight velocity v/c [dimensionless], shape (N_species, *batch_shape)
     
@@ -63,7 +53,7 @@ def compute_lambda_prime(
     wavelengths_expanded = wavelengths[(None,) * (LoS_velocity.ndim - 1) + (slice(None),)]
     
     # Add trailing dimension to scale_factor and LoS_velocity
-    scale_factor_expanded = scale_factor[None, ..., None]
+    scale_factor_expanded = scale_factor[None, ..., None] / scale_factor_obs
     velocity_expanded = LoS_velocity[..., None]
     
     # Compute lambda prime
@@ -72,12 +62,11 @@ def compute_lambda_prime(
     return lambdas_A_prime
 
 
-
-
 def compute_line_profiles(
-    wavelengths: jnp.ndarray,
     points: jnp.ndarray,
     LoS_directions: jnp.ndarray,
+    scale_factor_obs: float,
+    wavelengths: jnp.ndarray,
     line_bundle,
     fields,
     compute_mode: str = "pmap",
@@ -89,13 +78,15 @@ def compute_line_profiles(
 
     Parameters
     ----------
-    wavelengths : jnp.ndarray, shape (N_lambda,)
-        Wavelength grid in Angstrom.
     points : jnp.ndarray, shape (..., 4)
         Sampling points in the form [a, x, y, z]. The leading dimensions define
         the spatial batch shape.
     LoS_directions : jnp.ndarray, shape (..., 3),
         Line-of-sight direction vectors at each spatial point.
+    scale_factor_obs : float
+        Cosmological scale factor at observer position.
+    wavelengths : jnp.ndarray, shape (N_lambda,)
+        Wavelength grid in Angstrom.
     line_bundle : LineBundle-like
         Object describing the set of lines. Must provide:
             - species_keys
@@ -263,7 +254,7 @@ def compute_line_profiles(
     # ------------------------------------------------------------------
     # lambdas_A_prime: (N_lines, N_points, N_lambda)
     lambdas_A_prime = compute_lambda_prime(
-        wavelengths, scale_factors_flat, LoS_velocity
+        wavelengths, scale_factor_obs, scale_factors_flat, LoS_velocity
     )
 
     # nu [GHz]: (N_lines, N_points, N_lambda)
@@ -356,3 +347,173 @@ def compute_line_profiles(
     phi = phi_flat.reshape(N_lines, *batch_shape, N_lambda)
 
     return phi
+
+
+def compute_comoving_distance(points: jnp.ndarray) -> jnp.ndarray:
+    """
+    Compute cumulative comoving distance along each skewer.
+    
+    The distance is the Euclidean norm in the spatial (x,y,z) coordinates,
+    accumulated from the first point along each line-of-sight.
+    
+    Args:
+        points: Array of shape (N_skewers, N_ppsk, 4) where last dim is [a, x, y, z]
+    
+    Returns:
+        distances: Array of shape (N_skewers, N_ppsk) with cumulative distance 
+                   from the first point (in comoving units, same as x,y,z)
+    """
+    def single_skewer_distances(skewer_points):
+        # Extract spatial coordinates (x, y, z) -> shape (N_ppsk, 3)
+        spatial_coords = skewer_points[:, 1:]
+        
+        # Compute differences between consecutive points
+        diffs = spatial_coords[1:] - spatial_coords[:-1]
+        
+        # Euclidean distance for each step
+        step_distances = jnp.linalg.norm(diffs, axis=-1)
+        
+        # Cumulative sum with initial 0
+        cumulative = jnp.concatenate([
+            jnp.zeros(1),
+            jnp.cumsum(step_distances)
+        ])
+        
+        return cumulative
+    
+    # Vectorize over skewers
+    return vmap(single_skewer_distances)(points)
+
+
+def compute_optical_depth(
+    points: jnp.ndarray,
+    LoS_directions: jnp.ndarray,
+    scale_factor_obs: float,
+    wavelengths: jnp.ndarray,
+    line_bundle,
+    fields,
+    compute_mode: str = "pmap",
+    voigt_implementation_mode: str = "ExoJAX",
+    num_gpus: Optional[int] = None,
+    mode_integration: str = "trapz",
+) -> jnp.ndarray:
+    """
+    Compute integrand terms from Voigt line profiles for a bundle of lines and a 3D grid of points.
+
+    Parameters
+    ----------
+    points : jnp.ndarray, shape (N_skewers, N_ppsk, 4)
+        Sampling skewer points in the form [a, x, y, z].
+        N_skewers is the number of skewers, and N_ppsk is the number of points per skewer.
+    LoS_directions : jnp.ndarray, shape (N_skewers, N_ppsk, 3),
+        Line-of-sight direction vectors at each spatial point.
+    scale_factor_obs : float
+        Cosmological scale factor at observer position.
+    wavelengths : jnp.ndarray, shape (N_lambda,)
+        Wavelength grid in Angstrom.
+    line_bundle : LineBundle-like
+        Object describing the set of lines. Must provide:
+            - species_keys
+            - n_lines, n_species
+            - indices_for_species(species_name)
+            - lambda0_A   : (N_lines,)  [Angstrom]
+            - A21_GHz     : (N_lines,)  [GHz]
+            - mass_amu    : (N_lines,)  [amu]
+            - f_osc       : (N_lines,)  [adim]
+    fields : Fields-like
+        Field container. Must provide:
+            - species_keys
+            - field_keys  (mapping species -> tuple of field names)
+            - tile_field_to_lines(field_name, points_flat, indices_for_species, ...)
+              and support "LoS_velocity" with an extra LoS_directions= argument.
+
+        Required per-species fields:
+            - "number_density"
+            - "temperature"
+            - "collisional"
+            - "turbulence"
+            - "velocity" (used to build LoS_velocity)
+
+    compute_mode : {"vmap", "pmap"}, default "pmap"
+        How to parallelize Voigt evaluations:
+            - "vmap": single-device vectorization
+            - "pmap": multi-device sharding + per-device vmap
+
+    voigt_implementation_mode : str, default "ExoJAX"
+        Passed through to the low-level `log10_voigt(...)` implementation.
+
+    num_gpus : int or None, default None
+        Number of GPUs to use in "pmap" mode. If None, uses `jax.local_device_count()`.
+
+    mode_integration : {"trapz", "simps", ...?}, default "trapz"
+        Integration mode for the Voigt line profiles.
+    Returns
+    -------
+    optical_depth : jnp.ndarray, shape (N_lines, N_skewers, N_lambda)
+        Integrand terms from Voigt line profiles.
+    """
+    # ------------------------------------------------------------------
+    # 1. Compute line profiles
+    # ------------------------------------------------------------------
+    phi_ns = compute_line_profiles(
+        points, LoS_directions, scale_factor_obs, wavelengths, line_bundle, fields,
+        compute_mode=compute_mode,
+        voigt_implementation_mode=voigt_implementation_mode,
+        num_gpus=num_gpus
+    )
+
+    # ------------------------------------------------------------------
+    # 2. Map species → line indices, and tile fields to lines
+    # ------------------------------------------------------------------
+
+    # Precompute field indices for each species
+    # Calling just fields.field_name(points) returns the fields as (N_species, *batch_shape)
+    # but we need to extract the fields tiled to the different lines, not just the species,
+    # so the field values have the dimension (N_lines, N_points), N_lines >= N_species
+
+    indices_for_species: Mapping[str, jnp.ndarray] = {
+        sp: line_bundle.indices_for_species(sp) for sp in line_bundle.species_keys
+    }
+
+    # Each of these returns shape (N_lines, N_points)
+    number_density = fields.tile_field_to_lines(
+        "number_density",
+        points,
+        indices_for_species=indices_for_species,
+    )
+
+    # ------------------------------------------------------------------
+    # 3. Extract line parameters
+    # ------------------------------------------------------------------
+    f_osc = jnp.asarray(line_bundle.f_osc)  # (N_lines,)
+
+    # ------------------------------------------------------------------
+    # 4. Compute dtau_dx
+    # ------------------------------------------------------------------
+    scale_factors = points[..., 0]
+    cte_nm2_per_ns = (phys.qe**2 / (4 * phys.epsilon_0 * phys.me * phys.c))*1e3          # UNITS: [nm² / ns]
+    sigma_nm2 = cte_nm2_per_ns * f_osc[:, None, None, None] * phi_ns                     # (N_lines, N_skewers, N_ppsk, N_lambda) — UNITS: [nm²]
+    dtau_dx = sigma_nm2 * number_density[..., None] * scale_factors[None, ..., None]**-2 # (N_lines, N_skewers, N_ppsk, N_lambda) — UNITS: [1/nm]  
+    
+    # ------------------------------------------------------------------
+    # 4. Compute comoving distances along skewers necessary for integration 
+    # ------------------------------------------------------------------
+
+    comoving_distances = compute_comoving_distance(points)
+
+    # ------------------------------------------------------------------
+    # 5. perform numerical integration to compute optical_depth across the different skewers
+    # ------------------------------------------------------------------
+    
+    # tile comoving distances to match dtau_dx shape
+    comoving_distances_tiled = comoving_distances[None, :, :, None]  # (1, N_skewers, N_ppsk, 1)
+    if mode_integration == "trapz":
+        optical_depth = trapezoid(
+            dtau_dx,
+            x=comoving_distances_tiled,
+            axis=2
+        )  # (N_lines, N_skewers, N_lambda)
+    else:
+        raise NotImplementedError(f"Integration mode '{mode_integration}' not implemented.")
+    
+    return optical_depth
