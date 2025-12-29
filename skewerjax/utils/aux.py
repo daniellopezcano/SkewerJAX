@@ -1,4 +1,41 @@
 import jax.numpy as jnp
+from pathlib import Path
+
+def print_tree(start_path=".", ignore=None, max_depth=None):
+
+    if ignore is None:
+        ignore = {'.git', '__pycache__', '.ipynb_checkpoints', 'build', 'dist', '*.egg-info'}
+    
+    start = Path(start_path).resolve()
+    print(f"{start}/")
+    
+    def _walk(path, prefix="", depth=0):
+        if max_depth is not None and depth >= max_depth:
+            return
+        
+        try:
+            contents = sorted(path.iterdir())
+        except PermissionError:
+            print(f"{prefix}└── [Permission Denied]")
+            return
+        
+        files = [p for p in contents if p.is_file()]
+        dirs = [p for p in contents if p.is_dir() and p.name not in ignore]
+        
+        for i, directory in enumerate(dirs):
+            is_last_dir = (i == len(dirs) - 1) and (len(files) == 0)
+            connector = "└── " if is_last_dir else "├── "
+            print(f"{prefix}{connector}{directory.name}/")
+            
+            new_prefix = prefix + ("    " if is_last_dir else "│   ")
+            _walk(directory, new_prefix, depth + 1)
+        
+        for i, file in enumerate(files):
+            is_last = (i == len(files) - 1)
+            connector = "└── " if is_last else "├── "
+            print(f"{prefix}{connector}{file.name}")
+    
+    _walk(start)
 
 def make_plane_points(L_box, fixed_axis, fixed_value, scale_factor, n_var1, n_var2):
     """Points on plane fixed_axis='x'/'y'/'z'. Shape: (n_var1, n_var2, 4)."""

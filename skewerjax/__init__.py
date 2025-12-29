@@ -5,6 +5,8 @@ __version__ = "0.0.1"
 from . import config as config
 from . import constants as constants
 from . import fields as fields
+from . import skewers as skewers
+from . import cosmology as cosmology
 from . import optical_depth as optical_depth
 from . import utils as utils
 

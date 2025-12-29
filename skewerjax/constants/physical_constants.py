@@ -36,6 +36,13 @@ class PhysicalConstants:
         Speed of light in Gpc/Gyr units.
         """
         return self.c * self.Gyr_to_s / self.Gpc_to_m
+    
+    @property
+    def H0_over_cc(self) -> float:
+        """
+        Hubble constant over speed of light in 1/Gpc units.
+        """
+        return self.H0 / self.cc_Gpc_per_Gyr
 
 # single shared instance (immutable)
 phys = PhysicalConstants()
