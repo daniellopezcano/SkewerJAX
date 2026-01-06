@@ -77,10 +77,16 @@ class Cosmology:
         if not jnp.allclose(density_sum, 1.0, atol=1e-4):
             raise ValueError(f"Cosmological densities do not sum to 1: {density_sum}")
         
-    def solve_a_of_x(self, ICs: ArrayLike, x_eval: ArrayLike,
-                     solver: diffrax.AbstractSolver = diffrax.Tsit5(),
-                     rtol: float = 1e-4, atol: float = 1e-4,
-                     max_steps: int = 1000) -> jnp.ndarray:
+    def solve_a_of_x(
+        self,
+        ICs: ArrayLike,
+        x_eval: ArrayLike,
+        solver: diffrax.AbstractSolver = diffrax.Tsit5(),
+        rtol: float = 1e-4,
+        atol: float = 1e-4,
+        max_steps: int = 1000
+        ) -> jnp.ndarray:
+        
         """
         Solve for the scale factor a(x) over specified comoving distances
         employing diffrax.diffeqsolve for ODE integration.
