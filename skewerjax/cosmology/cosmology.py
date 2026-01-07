@@ -109,6 +109,11 @@ class Cosmology:
             Maximum number of integration steps, by default 1000
         """
 
+        # assert that ICs has shape (N_cosmologies,)
+        ICs = jnp.atleast_1d(ICs)
+        if ICs.shape[0] != self.N_cosmologies:
+            raise ValueError(f"ICs shape {ICs.shape} incompatible with number of cosmologies {self.N_cosmologies}.")
+
         def _da_dx(xx, aa, params, cc=phys.cc_Gpc_per_Gyr):
             """
             ODE for photon geodesic: da/dx = (H0/cc) * sqrt(Ω_r + Ω_m a + Ω_k a² + Ω_Λ a⁴) / sqrt(1 - kk x²)
