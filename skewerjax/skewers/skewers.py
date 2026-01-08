@@ -44,7 +44,7 @@ class SkewerBundle:
         ICs_defined_at_index: ArrayLike = -1,
         ICs_at_emission_or_absorption: Union[str, Sequence[str]] = "absorption",
         los_directions: Optional[ArrayLike] = None,
-        manual_scale_factors_in_the_skewer_direction: Optional[jnp.ndarray] = None,
+        manual_scale_factors: Optional[jnp.ndarray] = None,
         cosmologies: Optional[Cosmology] = None,
     ):
         """
@@ -81,14 +81,19 @@ class SkewerBundle:
             automatically from spatial coordinate differences.
             Must be normalized to unit length (‖d‖ = 1) within tolerance.
             
-        manual_scale_factors_in_the_skewer_direction : Optional[jnp.ndarray], shape (N_sk, N_ppsk)
+        manual_scale_factors : Optional[jnp.ndarray], shape (N_sk, N_cosmologies, N_ppsk)
             Pre-computed scale factors a(x) at each point along the skewer.
             If None, will be computed from cosmology using the comoving distance grid.
             
         cosmologies : Optional[Cosmology]
             Cosmology object required for computing scale factors when
-            manual_scale_factors_in_the_skewer_direction is not provided.
+            manual_scale_factors is not provided.
             Must implement solve_a_of_x(a0, distances) method.
+
+        Attributes
+        ----------
+        quadri_vectors : jnp.ndarray, shape (N_cosmologies, N_sk, N_ppsk, 4)
+            Quadratic vector coefficients for each skewer (a, x, y, z)
         """
         logger.info(f"Initializing SkewerBundle with {spatial_points.shape[0]} skewers, "
                     f"{spatial_points.shape[1]} points per skewer")
@@ -127,17 +132,10 @@ class SkewerBundle:
             logger.info("Using per-skewer emission/absorption flags")
             is_absorption = jnp.array([s == "absorption" for s in ICs_at_emission_or_absorption])
         
-        # Compute direction per skewer: +1 or -1
+        # Compute array_direction per skewer: +1 or -1
         is_start = (ICs_defined_at_index == 0)
-        direction = jnp.where(
+        array_direction = jnp.where(
             is_start, jnp.where(is_absorption, -1, 1), jnp.where(is_absorption, 1, -1)
-        )
-
-        # Reorganize spatial_points to match skewer orientation, inverting the order when the associated direction is -1
-        oriented_spatial_points = jnp.where(
-            direction[:, None, None] == 1,
-            spatial_points,
-            spatial_points[:, ::-1, :]
         )
 
         # Handle los_directions
@@ -155,37 +153,56 @@ class SkewerBundle:
                 raise ValueError(f"los_directions must be normalized. Max |‖d‖-1| = {max_dev:.3e}")
         else:
             logger.info("Computing los_directions automatically from spatial coordinate differences")
-            los_directions = self._compute_los_directions(spatial_points, direction)
+            los_directions = self._compute_los_directions(spatial_points, array_direction)
 
         # Store attributes
         self.spatial_points = spatial_points
-        self.oriented_spatial_points = oriented_spatial_points
         self.a0 = a0
         self.x0 = x0
         self.ICs_defined_at_index = ICs_defined_at_index
         self.is_absorption = is_absorption
-        self.direction = direction
+        self.array_direction = array_direction
         self.los_directions = los_directions  # Store computed/provided directions
 
-        # compute comoving_distances_in_the_skewer_direction
+        # compute comoving distances
         logger.info("Computing comoving distances along skewer direction")
-        comoving_distances_in_the_skewer_direction = self._compute_comoving_distances_in_the_skewer_direction()
-        self.comoving_distances_in_the_skewer_direction = comoving_distances_in_the_skewer_direction
+        self.comoving_positions_from_ICs = self._compute_comoving_distances_starting_from_ICs()
 
         # Handle scale factors
-        if manual_scale_factors_in_the_skewer_direction is not None:
-            logger.info("Using provided manual_scale_factors_in_the_skewer_direction")
-            self.scale_factors_in_the_skewer_direction = manual_scale_factors_in_the_skewer_direction
+        if manual_scale_factors is not None:
+            logger.info("Using provided scale factors (bypassing auto-calculation)")
+            # verify that the dimensions match the expected (N_cosmologies, N_sk, N_ppsk) -- length of shape == 3
+            manual_scale_factors = jnp.asarray(manual_scale_factors)
+            if len(manual_scale_factors.shape) != 3:
+                raise ValueError(
+                    f" must have shape (N_cosmologies, N_sk, N_ppsk), got {manual_scale_factors.shape}"
+                )
+            scale_factors = manual_scale_factors
         else:
             logger.info("Computing scale factors from cosmology")
             if cosmologies is None: # Require cosmologies object to compute them
                 logger.error("Cosmology object required but not provided")
                 raise ValueError(
-                    "When manual_scale_factors_in_the_skewer_direction is not provided, you must supply the 'cosmologies' argument."
+                    "When manual_scale_factors is not provided, you must supply the 'cosmologies' argument."
                 )
-            self.scale_factors_in_the_skewer_direction = self._compute_scale_factors_in_the_skewer_direction(
-                cosmo=cosmologies
-            )
+            scale_factors_from_ICs = self._compute_scale_factors(cosmo=cosmologies)
+            # the output comes by default as (N_sk, N_cosmologies, N_ppsk), we need to transpose
+            scale_factors_from_ICs = jnp.swapaxes(scale_factors_from_ICs, 0, 1)
+
+            # Store scale factors ordered as spatial points
+            mask = ICs_defined_at_index == -1
+            reversed_scale_factors = jnp.flip(scale_factors_from_ICs, axis=-1) # Reverse the last axis for ALL rows
+            # Apply mask: where True pick reversed, else keep original. Broadcast mask to match array dimensions
+            scale_factors = jnp.where(mask[None, :, None], reversed_scale_factors, scale_factors_from_ICs)
+        
+        self.scale_factors = scale_factors
+
+        # store quadri-vectors combining spatial points and scale factors
+        # (N_cosmologies, N_sk, N_ppsk, 4)
+        logger.info("Storing quadri-vectors")
+        _spatial_points = jnp.tile(spatial_points[None, ...], (scale_factors.shape[0], 1, 1, 1))
+        self.quadri_vectors = jnp.concatenate([scale_factors[..., None], _spatial_points], axis=-1)
+
         logger.info("SkewerBundle initialization complete")
 
     @staticmethod
@@ -263,7 +280,7 @@ class SkewerBundle:
         Compute comoving distances for a single skewer.
         
         Distances are measured from the observer (x=0) to each point along
-        the LoS, with sign conventions for absorption vs emission.
+        the LoS, from the IC point outward.
         
         Parameters
         ----------
@@ -299,7 +316,7 @@ class SkewerBundle:
         distances = x0 + jnp.concatenate([jnp.array([0.0]), relative_distances], axis=0)
         return distances
     
-    def _compute_comoving_distances_in_the_skewer_direction(self) -> jnp.ndarray:
+    def _compute_comoving_distances_starting_from_ICs(self) -> jnp.ndarray:
         """
         Compute comoving distances for all skewers.
         
@@ -311,7 +328,7 @@ class SkewerBundle:
         vmapped_fn = vmap(SkewerBundle._compute_comoving_distances_single, in_axes=(0, 0, 0, 0))
         return vmapped_fn(self.spatial_points, self.x0, self.ICs_defined_at_index, self.is_absorption)
     
-    def _compute_scale_factors_in_the_skewer_direction(self, cosmo: Cosmology) -> jnp.ndarray:
+    def _compute_scale_factors(self, cosmo: Cosmology) -> jnp.ndarray:
         """
         Compute scale factors a(x) for all skewers using cosmology object.
         
@@ -326,7 +343,7 @@ class SkewerBundle:
         Returns
         -------
         scale_factors : jnp.ndarray, shape (N_sk, N_ppsk)
-            Scale factor a(z) at each point along each skewer (dimensionless)
+            Scale factor a(z) at each point (dimensionless)
         """
 
         def _compute_skewer_scale_factors(a0_scalar, comoving_distances):
@@ -334,11 +351,7 @@ class SkewerBundle:
             a0_expanded = jnp.repeat(a0_scalar, cosmo.N_cosmologies)
             return cosmo.solve_a_of_x(a0_expanded, comoving_distances)
 
-        scale_factors_in_the_skewer_direction = vmap(_compute_skewer_scale_factors)(
-            self.a0, self.comoving_distances_in_the_skewer_direction
-        )
-        
-        return scale_factors_in_the_skewer_direction
+        return vmap(_compute_skewer_scale_factors)(self.a0, self.comoving_positions_from_ICs)
     
     # TODO: Store optical depth information (tau, transmitted flux) as attributes
     # These will be computed later using the SkewerJAX pipeline and attached

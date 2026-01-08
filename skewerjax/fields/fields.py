@@ -9,7 +9,7 @@ from jax.typing import ArrayLike
 # =============================================================================
 
 class Field(Protocol):
-    """A callable that samples a field at points x."""
+    """A callable that samples a field at events x."""
     def __call__(self, x: ArrayLike) -> ArrayLike:
         """x: (N_points, 4) → output: scalar or vector per point."""
         ...
@@ -43,7 +43,7 @@ class VectorField:
         Parameters
         ----------
         x : (..., 4)
-            Sampling points.
+            Sampling events.
         directions : (..., 3)
             Line-of-sight direction vectors. Must be normalized (‖d‖ = 1).
         tol : float
@@ -357,7 +357,7 @@ class Fields:
     def tile_field_to_lines(
         self,
         field_name: str,
-        points: ArrayLike,
+        quadri_vectors: ArrayLike,
         indices_for_species: dict[str, Union[list[int], jnp.ndarray]],
         *,
         LoS_directions: ArrayLike | None = None,
@@ -368,7 +368,7 @@ class Fields:
         
         Args:
             field_name: Name of the field to sample ("temperature", "collisional", etc.)
-            points: Quadrivectors (a, x, y, z) of shape (*batch_shape, 4)
+            quadri_vectors: Quadrivectors (a, x, y, z) of shape (*batch_shape, 4)
             indices_for_species: Mapping {species: [line_idx1, line_idx2, ...]}
             LoS_directions: Required ONLY for "LoS_velocity" field
         
@@ -379,11 +379,11 @@ class Fields:
         if field_name == "LoS_velocity":
             if LoS_directions is None:
                 raise ValueError("LoS_directions required for field 'LoS_velocity'")
-            species_field = self.LoS_velocity(points, LoS_directions)
+            species_field = self.LoS_velocity(quadri_vectors, LoS_directions)
         else:
             # Use the dynamic field sampler we already have
             field_sampler = self._make_field_sampler(field_name)
-            species_field = field_sampler(points)
+            species_field = field_sampler(quadri_vectors)
         
         # 2) Tile to line-level using the internal helper
         return self._tile_field_to_lines(species_field, indices_for_species)

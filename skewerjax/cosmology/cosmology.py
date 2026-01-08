@@ -6,6 +6,36 @@ import diffrax
 
 from skewerjax.constants.physical_constants import phys
 
+def da_dx(xx, aa, params, cc=phys.cc_Gpc_per_Gyr):
+    """
+    ODE for photon geodesic: da/dx = (H0/cc) * sqrt(Ω_r + Ω_m a + Ω_k a² + Ω_Λ a⁴) / sqrt(1 - kk x²)
+
+    Parameters
+    ----------
+    xx : ArrayLike
+        Comoving distance [Gpc]
+    aa : ArrayLike
+        Scale factor
+    params : ArrayLike
+        Cosmological parameters
+    cc : float, optional
+        Speed of light by default phys.cc_Gpc_per_Gyr
+    """
+    # Unpack parameters
+    H0, omega_r, omega_m, omega_k, omega_lambda = params
+            
+    # Curvature term
+    kk = -omega_k / (cc**2)
+    
+    # Safe terms
+    denominator = jnp.maximum(1e-32, 1 - kk * xx**2)
+    numerator = omega_r + omega_m * aa + omega_k * aa**2 + omega_lambda * aa**4
+    
+    # Compute derivative
+    da_dx = (H0 / cc) * jnp.sqrt(numerator / denominator)
+    
+    return da_dx
+
 @dataclass(frozen=True)
 class Cosmology:
     """
@@ -88,10 +118,8 @@ class Cosmology:
         ) -> jnp.ndarray:
         
         """
-        Solve for the scale factor a(x) over specified comoving distances
-        employing diffrax.diffeqsolve for ODE integration.
-        diffrax.diffeqsolve handles systems of ODEs. In this case
-        we have a single ODE for the scale factor.
+        Solve for the scale factor a(x) over specified comoving distances employing diffrax.diffeqsolve for ODE integration.
+        diffrax.diffeqsolve handles systems of ODEs. In this case we have a single ODE for the scale factor.
         
         Parameters
         ----------
@@ -109,57 +137,15 @@ class Cosmology:
             Maximum number of integration steps, by default 1000
         """
 
-        # assert that ICs has shape (N_cosmologies,)
-        ICs = jnp.atleast_1d(ICs)
-        if ICs.shape[0] != self.N_cosmologies:
-            raise ValueError(f"ICs shape {ICs.shape} incompatible with number of cosmologies {self.N_cosmologies}.")
-
-        def _da_dx(xx, aa, params, cc=phys.cc_Gpc_per_Gyr):
+        def _solve_single_cosmology(H0, Omega_r_0, Omega_m_0, Omega_k_0, Omega_lambda_0, ICs, x_eval, solver=solver, rtol=rtol, atol=atol, max_steps=max_steps):
             """
-            ODE for photon geodesic: da/dx = (H0/cc) * sqrt(Ω_r + Ω_m a + Ω_k a² + Ω_Λ a⁴) / sqrt(1 - kk x²)
-
-            Parameters
-            ----------
-            xx : ArrayLike
-                Comoving distance [Gpc]
-            aa : ArrayLike
-                Scale factor
-            params : ArrayLike
-                Cosmological parameters
-            cc : float, optional
-                Speed of light [Gpc/Gyr], by default phys.cc_Gpc_per_Gyr
+            Solve for the scale factor a(x) over specified comoving distances employing diffrax.diffeqsolve for ODE integration.
             """
-            # Unpack parameters
-            H0, omega_r, omega_m, omega_k, omega_lambda = params
-                    
-            # Curvature term
-            kk = -omega_k / (cc**2)
-            
-            # Safe terms
-            denominator = jnp.maximum(1e-32, 1 - kk * xx**2)
-            numerator = omega_r + omega_m * aa + omega_k * aa**2 + omega_lambda * aa**4
-            
-            # Compute derivative
-            da_dx = (H0 / cc) * jnp.sqrt(numerator / denominator)
-            
-            return da_dx
 
-        def _solve_ODES(params, ICs, x_eval, solver=solver, rtol=rtol, atol=atol, max_steps=max_steps):
-            """
-            Solve for the scale factor a(x) over specified comoving distances.
-
-            Parameters
-            ----------
-            params : ArrayLike
-                Cosmological parameters
-            ICs : ArrayLike
-                Initial conditions
-            x_eval : ArrayLike
-                Comoving distances to evaluate at
-            """
+            params = jnp.array([H0, Omega_r_0, Omega_m_0, Omega_k_0, Omega_lambda_0])
 
             solution_obj = diffrax.diffeqsolve(
-                diffrax.ODETerm(_da_dx),
+                diffrax.ODETerm(da_dx),
                 solver=solver,
                 t0=x_eval[0], t1=x_eval[-1], dt0=None,
                 y0=ICs,
@@ -170,12 +156,18 @@ class Cosmology:
             )
             return solution_obj.ys
 
+        # assert that ICs has shape (N_cosmologies,)
+        ICs = jnp.atleast_1d(ICs)
+        if ICs.shape[0] != self.N_cosmologies:
+            raise ValueError(f"ICs shape {ICs.shape} incompatible with number of cosmologies {self.N_cosmologies}.")
         # convert ICs to shape (N_cosmologies, 1) because diffrax expects a single initial condition value
         # for each of the variables in the system of ODEs, however, in this case we have a single ODE.
         ICs = jnp.atleast_1d(ICs)[:, None]  
 
         # shape (N_cosmologies, N_eval, N_ODEs)
-        _solution_obj_ys = vmap(_solve_ODES, in_axes=(0, 0, None))(self.params, ICs, x_eval)
+        _solution_obj_ys = vmap(_solve_single_cosmology, in_axes=(0, 0, 0, 0, 0, 0, None))(
+            self.H0, self.Omega_r_0, self.Omega_m_0, self.Omega_k_0, self.Omega_lambda_0, ICs, x_eval
+        )
 
         # Extract only the entry [..., 0] corresponding to the scale factor as a function of x
         # solution_obj.ys has shape (N_cosmologies, N_eval, N_ODEs), in this case N_ODEs = 1.
@@ -183,3 +175,4 @@ class Cosmology:
         a_of_x = _solution_obj_ys[..., 0]
 
         return a_of_x
+        

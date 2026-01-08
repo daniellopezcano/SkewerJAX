@@ -37,7 +37,7 @@ def print_tree(start_path=".", ignore=None, max_depth=None):
     
     _walk(start)
 
-def make_plane_points(L_box, fixed_axis, fixed_value, scale_factor, n_var1, n_var2):
+def make_plane_points(L_box, fixed_axis, fixed_value, n_var1, n_var2):
     """Points on plane fixed_axis='x'/'y'/'z'. Shape: (n_var1, n_var2, 4)."""
     # Map: fixed → (fixed_idx, var1_idx, var2_idx)
     f, v1, v2 = {'x': (0,1,2), 'y': (1,2,0), 'z': (2,0,1)}[fixed_axis]
@@ -52,7 +52,7 @@ def make_plane_points(L_box, fixed_axis, fixed_value, scale_factor, n_var1, n_va
     coords[v1] = g1
     coords[v2] = g2
     
-    return jnp.stack([jnp.full_like(g1, scale_factor)] + coords, axis=-1)
+    return jnp.stack(coords, axis=-1)
 
 
 def make_LoS(batch_shape, direction):

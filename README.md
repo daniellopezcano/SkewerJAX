@@ -112,25 +112,7 @@ PY
 - MANIFEST.in
 - pyproject.toml
 - .gitignore
-- configs/
-  - global_setup.yaml
-- notebooks/
-  - tests.ipynb
-- skewerjax/
-  - __init__.py
-  - constants/
-    - __init__.py
-    - lines.py
-    - physical.py
-  - optical_depth/
-    - __init__.py
-  - config/
-    - __init__.py
-- env/
-  - create.sh
-  - environment.yml
-- scripts/
-  - verify_install.py
+...
 
 
 
