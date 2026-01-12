@@ -110,7 +110,7 @@ class Cosmology:
     def solve_a_of_x(
         self,
         ICs: ArrayLike,
-        x_eval: ArrayLike,
+        x_eval_Mpc: ArrayLike,
         solver: diffrax.AbstractSolver = diffrax.Tsit5(),
         rtol: float = 1e-4,
         atol: float = 1e-4,
@@ -126,7 +126,7 @@ class Cosmology:
         ICs : ArrayLike
             Initial conditions for the scale factor, a(x0). shape (N_cosmologies,).
         x_eval : ArrayLike
-            Comoving distances to evaluate at. Units [Gpc]. shape (N_eval,).
+            Comoving distances to evaluate at. Units [Mpc]. shape (N_eval,).
         solver : diffrax.AbstractSolver, optional
             Integration solver, by default diffrax.Tsit5()
         rtol : float, optional
@@ -137,7 +137,7 @@ class Cosmology:
             Maximum number of integration steps, by default 1000
         """
 
-        def _solve_single_cosmology(H0, Omega_r_0, Omega_m_0, Omega_k_0, Omega_lambda_0, ICs, x_eval, solver=solver, rtol=rtol, atol=atol, max_steps=max_steps):
+        def _solve_single_cosmology(H0, Omega_r_0, Omega_m_0, Omega_k_0, Omega_lambda_0, ICs, x_eval_Gpc, solver=solver, rtol=rtol, atol=atol, max_steps=max_steps):
             """
             Solve for the scale factor a(x) over specified comoving distances employing diffrax.diffeqsolve for ODE integration.
             """
@@ -147,10 +147,10 @@ class Cosmology:
             solution_obj = diffrax.diffeqsolve(
                 diffrax.ODETerm(da_dx),
                 solver=solver,
-                t0=x_eval[0], t1=x_eval[-1], dt0=None,
+                t0=x_eval_Gpc[0], t1=x_eval_Gpc[-1], dt0=None,
                 y0=ICs,
                 args=params,
-                saveat=diffrax.SaveAt(ts=x_eval),
+                saveat=diffrax.SaveAt(ts=x_eval_Gpc),
                 stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),
                 max_steps=max_steps,
             )
@@ -166,7 +166,7 @@ class Cosmology:
 
         # shape (N_cosmologies, N_eval, N_ODEs)
         _solution_obj_ys = vmap(_solve_single_cosmology, in_axes=(0, 0, 0, 0, 0, 0, None))(
-            self.H0, self.Omega_r_0, self.Omega_m_0, self.Omega_k_0, self.Omega_lambda_0, ICs, x_eval
+            self.H0, self.Omega_r_0, self.Omega_m_0, self.Omega_k_0, self.Omega_lambda_0, ICs, x_eval_Mpc*1e-3 # convert Mpc to Gpc
         )
 
         # Extract only the entry [..., 0] corresponding to the scale factor as a function of x

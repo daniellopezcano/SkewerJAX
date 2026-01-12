@@ -98,11 +98,11 @@ def compute_optical_depth(
               and support "LoS_velocity" with an extra LoS_directions= argument.
 
         Required per-species fields:
-            - "number_density"
-            - "temperature"
-            - "collisional"
-            - "turbulence"
-            - "velocity" (used to build LoS_velocity)
+            - "temperature"                             # UNITS: [K]
+            - "collisional"                             # UNITS: [GHz]
+            - "turbulence"                              # UNITS: [km/s]
+            - "velocity" (used to build LoS_velocity)   # UNITS: [km/s]  
+            - "number_density"                          # UNITS: [cm^-3]
 
     ii_cosmology : int, default 0
         Index of the cosmology to use. This applies only (for now) to skewers.
@@ -181,11 +181,11 @@ def compute_optical_depth(
     }
 
     # Each of these returns shape (N_lines, N_points)
-    number_density = fields.tile_field_to_lines(
+    number_density_cm3 = fields.tile_field_to_lines(
         "number_density", quadri_vectors, indices_for_species=indices_for_species,
     )
 
-    logger.info("[OPTICAL_DEPTH] Tiled number_density with shape %s", number_density.shape)
+    logger.info("[OPTICAL_DEPTH] Tiled number_density with shape %s", number_density_cm3.shape)
 
     # ------------------------------------------------------------------
     # 3. Compute dtau_dx
@@ -193,12 +193,10 @@ def compute_optical_depth(
     logger.info("[OPTICAL_DEPTH] Computing dtau_dx with constant %e nm²/ns", 
                 float((phys.qe**2 / (4 * phys.epsilon_0 * phys.me * phys.c))*1e3))
     
-    f_osc = jnp.asarray(line_bundle.f_osc)  # (N_lines,)
-    cte_nm2_per_ns = (phys.qe**2 / (4 * phys.epsilon_0 * phys.me * phys.c))*1e3                   # UNITS: [nm² / ns]
-    sigma_nm2 = cte_nm2_per_ns * f_osc[:, None, None, None] * phi_ns                              # (N_lines, N_skewers, N_ppsk, N_lambda) — UNITS: [nm²]
-    dtau_dx = sigma_nm2 * number_density[..., None] * quadri_vectors[..., 0][None, ..., None]**-2 # (N_lines, N_skewers, N_ppsk, N_lambda) — UNITS: [1/nm]  
+    sigma_cm2 = phys.cross_section_prefactor * line_bundle.f_osc[:, None, None, None] * phi_ns                # (N_lines, N_skewers, N_ppsk, N_lambda) — UNITS: [cm²]
+    dtau_dx_m = sigma_cm2 * number_density_cm3[..., None] * quadri_vectors[..., 0][None, ..., None]**-2 * 1e2 # (N_lines, N_skewers, N_ppsk, N_lambda) — UNITS: [1/m]  
     
-    logger.info("[OPTICAL_DEPTH] dtau_dx computed with shape %s", dtau_dx.shape)
+    logger.info("[OPTICAL_DEPTH] dtau_dx computed with shape %s", dtau_dx_m.shape)
 
     # ------------------------------------------------------------------
     # 4. Reorder skewer array order to match the integration direction and
@@ -213,16 +211,16 @@ def compute_optical_depth(
 
     _original = quadri_vectors
     _reversed = jnp.flip(_original, axis=1) # Reverse along the N_ppsk dimension
-    quadri_vectors_oriented = jnp.where(mask[:, None, None], _reversed, _original)
-    comoving_distances_oriented = compute_comoving_distance(quadri_vectors_oriented)    
+    quadri_vectors = jnp.where(mask[:, None, None], _reversed, _original)
+    comoving_distances_m = compute_comoving_distance(quadri_vectors) * phys.Mpc_to_m # (N_sk, N_ppsk), UNITS: [m]
 
     # Reorder dtau_dx array order to match integration direction
-    _original = dtau_dx
-    _reversed = jnp.flip(dtau_dx, axis=2) # Reverse along the N_ppsk dimension
-    dtau_dx_oriented = jnp.where(mask[None, :, None, None], _reversed, _original)
+    _original = dtau_dx_m
+    _reversed = jnp.flip(dtau_dx_m, axis=2) # Reverse along the N_ppsk dimension
+    dtau_dx_m = jnp.where(mask[None, :, None, None], _reversed, _original)
 
-    logger.info("[OPTICAL_DEPTH] Arrays reoriented: quadri_vectors %s, dtau_dx %s", 
-        quadri_vectors_oriented.shape, dtau_dx_oriented.shape)
+    logger.info("[OPTICAL_DEPTH] Arrays reoriented: quadri_vectors %s, dtau_dx_m %s", 
+        quadri_vectors.shape, dtau_dx_m.shape)
 
     # ------------------------------------------------------------------
     # 5. perform numerical integration to compute optical_depth across the different skewers
@@ -232,11 +230,11 @@ def compute_optical_depth(
                 mode_integration, skewer_bundle.N_ppsk)
 
     # tile comoving distances to match dtau_dx shape
-    comoving_distances_oriented_tiled = comoving_distances_oriented[None, :, :, None]  # (1, N_skewers, N_ppsk, 1)
+    comoving_distances_m = comoving_distances_m[None, :, :, None]  # (1, N_skewers, N_ppsk, 1)
     if mode_integration == "trapz":
         optical_depth = trapezoid(
-            dtau_dx_oriented,
-            x=comoving_distances_oriented_tiled,
+            dtau_dx_m,
+            x=comoving_distances_m,
             axis=2
         )  # (N_lines, N_skewers, N_lambda)
     else:
@@ -245,3 +243,44 @@ def compute_optical_depth(
     logger.info("[OPTICAL_DEPTH] Computation complete. Result shape: %s", optical_depth.shape)
 
     return optical_depth
+
+
+def compute_optical_depth_analytical_radiation_domination(
+    lambda_vals,                      # (N_lambda,) [Å]
+    lambda_rest,                      # (N_lines,)  [Å]
+    A21_GHz,                          # (N_lines,)  [GHz]
+    f_osc,                            # (N_lines,)  dimensionless oscillator strength
+    a0,                               # (N_sk,)     scale factor at observer
+    x0_Mpc,                           # (N_sk,)     comoving dist to observer [Mpc]
+    xem_Mpc,                          # (N_sk,)     comoving dist to emission [Mpc]
+    xf_Mpc,                           # (N_sk,)     comoving dist to observer [Mpc]
+    n0_cm3,                           # (N_sk,)     number density at observer [cm^-3]
+) -> jnp.ndarray:
+    
+    # --- broadcast shapes ----------------------------------------------------
+    lambda_vals = lambda_vals[None, None, :] # (1,       1,    N_lambda)
+    lambda_rest = lambda_rest[:, None, None] # (N_lines, 1,    1)
+    A21_GHz     = A21_GHz[:, None, None]     # (N_lines, 1,    1)
+    f_osc       = f_osc[:, None, None]       # (N_lines, 1,    1)
+    a0          = a0[None, :, None]          # (1,       N_sk, 1)
+    x0_Mpc      = x0_Mpc[None, :, None]      # (1,       N_sk, 1)
+    xem_Mpc     = xem_Mpc[None, :, None]     # (1,       N_sk, 1)
+    xf_Mpc      = xf_Mpc[None, :, None]      # (1,       N_sk, 1)
+    n0_cm3      = n0_cm3[None, :, None]      # (1,       N_sk, 1)
+
+    # --- prefactor -----------------------------------------------------------
+    _constants_prefactor = (phys.cross_section_prefactor  * phys.Gyr_to_s * 1e9) / (jnp.pi * phys.H0) # UNITS: [cm^2]
+    _prefactor = _constants_prefactor * 1e-8 * f_osc * n0_cm3 * lambda_vals / a0                      # UNITS: [adim]
+
+    # --- helper: arctan term -------------------------------------------------
+    _gamma = A21_GHz / (4*jnp.pi) # UNITS: [GHz]
+
+    _lambda = lambda_vals * ((phys.H0_over_c / a0) * (xf_Mpc - x0_Mpc) + 1.0)   # UNITS: [Å]
+    _nu_GHz = (1 / lambda_rest - 1 / _lambda) * phys.c * 10                     # UNITS: [GHz]
+    termf = jnp.arctan(_nu_GHz / _gamma)                                        # UNITS: [adim]                      
+
+    _lambda = lambda_vals * ((phys.H0_over_c / a0) * (xem_Mpc - x0_Mpc) + 1.0)  # UNITS: [Å]
+    _nu_GHz = (1 / lambda_rest - 1 / _lambda) * phys.c * 10                     # UNITS: [GHz]
+    termi = jnp.arctan(_nu_GHz / _gamma)                                        # UNITS: [adim]
+
+    return _prefactor * (termf - termi)

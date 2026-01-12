@@ -30,7 +30,7 @@ def compute_lambda_prime(
         wavelengths: Rest-frame wavelengths [Å], shape (N_lambda,)
         scale_factor_obs: Cosmological scale factor relative to observer position, shape (*batch_shape,)
         scale_factor: Scale factor a(z) for each point, shape (*batch_shape,)
-        LoS_velocity: Line-of-sight velocity v/c [dimensionless], shape (N_species, *batch_shape)
+        LoS_velocity: Line-of-sight velocity, shape (N_species, *batch_shape), UNITS [km/s]
     
     Returns:
         lambdas_A_prime: Shifted wavelengths [Å], shape (N_species, *batch_shape, N_lambda)
@@ -42,19 +42,13 @@ def compute_lambda_prime(
             f"LoS_velocity shape {LoS_velocity.shape}. "
             f"Expected scale_factor.shape == LoS_velocity.shape[1:]"
         )
-    
-    # Reshape for broadcasting:
-    # wavelengths: (N_lambda,) -> (1, ..., 1, N_lambda)
-    # scale_factor: (*batch_shape,) -> (1, *batch_shape, 1)
-    # scale_factor_obs: (*batch_shape,) -> (1, *batch_shape, 1)
-    # LoS_velocity: (N_species, *batch_shape) -> (N_species, *batch_shape, 1)
-    
+        
     # Add leading dimensions to wavelengths (one for species + one per batch dim)
     wavelengths_expanded = wavelengths[(None,) * (LoS_velocity.ndim - 1) + (slice(None),)]
     
     # Add trailing dimension to scale_factor and LoS_velocity
     scale_factor_expanded = scale_factor[None, ..., None] / scale_factor_obs[None, ..., None]
-    velocity_expanded = LoS_velocity[..., None]
+    velocity_expanded = LoS_velocity[..., None] * 1e3 / phys.c # convert km/s to m/s, hence velocity_expanded has UNITS [adim]
 
     # Compute lambda prime
     lambdas_A_prime = wavelengths_expanded * scale_factor_expanded * (1.0 + velocity_expanded)
@@ -103,10 +97,10 @@ def compute_line_profiles(
               and support "LoS_velocity" with an extra LoS_directions= argument.
 
         Required per-species fields:
-            - "temperature"
-            - "collisional"
-            - "turbulence"
-            - "velocity" (used to build LoS_velocity)
+            - "temperature"                             # UNITS: [K]
+            - "collisional"                             # UNITS: [GHz]
+            - "turbulence"                              # UNITS: [km/s]
+            - "velocity" (used to build LoS_velocity)   # UNITS: [km/s]  
 
     compute_mode : {"vmap", "pmap"}, default "pmap"
         How to parallelize Voigt evaluations:
@@ -204,26 +198,17 @@ def compute_line_profiles(
     }
 
     # Each of these returns shape (N_lines, N_points)
-    collisional = fields.tile_field_to_lines(
-        "collisional",
-        quadri_vectors_flat,
-        indices_for_species=indices_for_species,
+    collisional = fields.tile_field_to_lines(                                        # UNITS: [GHz]
+        "collisional", quadri_vectors_flat, indices_for_species=indices_for_species,
     )
-    temperature = fields.tile_field_to_lines(
-        "temperature",
-        quadri_vectors_flat,
-        indices_for_species=indices_for_species,
+    temperature = fields.tile_field_to_lines(                                        # UNITS: [K]
+        "temperature", quadri_vectors_flat, indices_for_species=indices_for_species,
     )
-    turbulence = fields.tile_field_to_lines(
-        "turbulence",
-        quadri_vectors_flat,
-        indices_for_species=indices_for_species,
+    turbulence = fields.tile_field_to_lines(                                         # UNITS: [km/s]
+        "turbulence", quadri_vectors_flat, indices_for_species=indices_for_species,
     )
-    LoS_velocity = fields.tile_field_to_lines(
-        "LoS_velocity",
-        quadri_vectors_flat,
-        indices_for_species=indices_for_species,
-        LoS_directions=LoS_flat,
+    LoS_velocity = fields.tile_field_to_lines(                                       # UNITS: [km/s]
+        "LoS_velocity", quadri_vectors_flat, indices_for_species=indices_for_species, LoS_directions=LoS_flat,
     )
 
     # ------------------------------------------------------------------
@@ -240,8 +225,8 @@ def compute_line_profiles(
     gamma_GHz = (A21_GHz[:, None] + collisional) / (4.0 * jnp.pi)  # (N_lines, N_points)
 
     # Thermal velocity [m/s]
-    # phys.kB_amu : Boltzmann constant in (m^2 s^-2 K^-1 per amu)
-    v_th_m_per_s = jnp.sqrt(2.0 * phys.kB_amu * temperature / mass_amu[:, None])
+    # phys.kB : Boltzmann constant in (amu km^2 s^-2 K^-1)
+    v_th_m_per_s = jnp.sqrt(2.0 * phys.kB * temperature / mass_amu[:, None])
 
     # Effective Doppler velocity [Å/ns]
     v_eff_A_GHz = (v_th_m_per_s + turbulence) * 10.0

@@ -11,13 +11,14 @@ class PhysicalConstants:
     
     # Fundamental physical constants
     c: float = 2.99792458e8                         # speed of light      — UNITS: [m / s]
-    kB_amu: float = 8314.46262102654                # Boltzmann constant  — UNITS: [amu ⋅ m^2 ⋅ s^-2 ⋅ K^-1]
+    kB: float = 8314.46262102654                    # Boltzmann constant  — UNITS: [amu ⋅ m^2 ⋅ s^-2 ⋅ K^-1]
     qe: float = 1.60217663e-19                      # electron charge     — UNITS: [C]
     me: float = 9.1093837e-31                       # electron mass       — UNITS: [kg]
     epsilon_0: float = 8.85418782e-12               # vacuum permittivity — UNITS: [C^2 ⋅ kg^−1 ⋅ m^−3 ⋅ s^2]
     
     # Unit conversions for cosmology
     Gpc_to_m: float = 3.085678e25                   # 1 Gpc in meters     — UNITS: [m / Gpc]
+    Mpc_to_m: float = 3.085678e22                   # 1 Mpc in meters     — UNITS: [m / Mpc]
     Gyr_to_s: float = 3.1536e16                     # 1 Gyr in seconds    — UNITS: [s / Gyr]
     
     # Cosmological parameters (default ΛCDM values)
@@ -38,11 +39,18 @@ class PhysicalConstants:
         return self.c * self.Gyr_to_s / self.Gpc_to_m
     
     @property
-    def H0_over_cc(self) -> float:
+    def H0_over_c(self) -> float:
         """
-        Hubble constant over speed of light in 1/Gpc units.
+        Hubble constant over speed of light in 1/Mpc units.
         """
-        return self.H0 / self.cc_Gpc_per_Gyr
+        return self.H0 / self.cc_Gpc_per_Gyr * 1e-3
+    
+    @property
+    def cross_section_prefactor(self) -> float:
+        """
+        units of [cm² / ns]
+        """
+        return (self.qe**2 / (4 * self.epsilon_0 * self.me * self.c))*1e-5
 
 # single shared instance (immutable)
 phys = PhysicalConstants()
