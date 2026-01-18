@@ -245,42 +245,168 @@ def compute_optical_depth(
     return optical_depth
 
 
-def compute_optical_depth_analytical_radiation_domination(
-    lambda_vals,                      # (N_lambda,) [Å]
-    lambda_rest,                      # (N_lines,)  [Å]
-    A21_GHz,                          # (N_lines,)  [GHz]
-    f_osc,                            # (N_lines,)  dimensionless oscillator strength
-    a0,                               # (N_sk,)     scale factor at observer
-    x0_Mpc,                           # (N_sk,)     comoving dist to observer [Mpc]
-    xem_Mpc,                          # (N_sk,)     comoving dist to emission [Mpc]
-    xf_Mpc,                           # (N_sk,)     comoving dist to observer [Mpc]
-    n0_cm3,                           # (N_sk,)     number density at observer [cm^-3]
+def compute_optical_depth_analytical_radiation_domination_Natural(
+    lambda_vals: jnp.ndarray,   # (N_lambda,) [Å]
+    lambda_rest: jnp.ndarray,   # (N_lines,)  [Å]
+    A21_GHz: jnp.ndarray,       # (N_lines,)  [GHz]
+    f_osc: jnp.ndarray,         # (N_lines,)  dimensionless
+    a0: jnp.ndarray,            # (N_sk,)     scale factor at observer
+    x0_Mpc: jnp.ndarray,        # (N_sk,)     comoving distance to observer [Mpc]
+    xem_Mpc: jnp.ndarray,       # (N_sk,)     comoving distance to emission [Mpc]
+    xf_Mpc: jnp.ndarray,        # (N_sk,)     comoving distance to front [Mpc]
+    n0_cm3: jnp.ndarray,        # (N_sk,)     number density at observer [cm^-3]
 ) -> jnp.ndarray:
+    """
+    Compute optical depth for natural (Lorentzian) line broadening in radiation-dominated era.
     
-    # --- broadcast shapes ----------------------------------------------------
-    lambda_vals = lambda_vals[None, None, :] # (1,       1,    N_lambda)
-    lambda_rest = lambda_rest[:, None, None] # (N_lines, 1,    1)
-    A21_GHz     = A21_GHz[:, None, None]     # (N_lines, 1,    1)
-    f_osc       = f_osc[:, None, None]       # (N_lines, 1,    1)
-    a0          = a0[None, :, None]          # (1,       N_sk, 1)
-    x0_Mpc      = x0_Mpc[None, :, None]      # (1,       N_sk, 1)
-    xem_Mpc     = xem_Mpc[None, :, None]     # (1,       N_sk, 1)
-    xf_Mpc      = xf_Mpc[None, :, None]      # (1,       N_sk, 1)
-    n0_cm3      = n0_cm3[None, :, None]      # (1,       N_sk, 1)
+    Returns:
+        Optical depth array of shape (N_lines, N_sk, N_lambda)
+    """
+    # --- Broadcast to common shape: (N_lines, N_sk, N_lambda) ---
+    lambda_vals = lambda_vals[None, None, :]  # (1, 1, N_lambda)
+    lambda_rest = lambda_rest[:, None, None]  # (N_lines, 1, 1)
+    A21_GHz = A21_GHz[:, None, None]          # (N_lines, 1, 1)
+    f_osc = f_osc[:, None, None]              # (N_lines, 1, 1)
+    a0 = a0[None, :, None]                    # (1, N_sk, 1)
+    x0_Mpc = x0_Mpc[None, :, None]            # (1, N_sk, 1)
+    xem_Mpc = xem_Mpc[None, :, None]          # (1, N_sk, 1)
+    xf_Mpc = xf_Mpc[None, :, None]            # (1, N_sk, 1)
+    n0_cm3 = n0_cm3[None, :, None]            # (1, N_sk, 1)
 
-    # --- prefactor -----------------------------------------------------------
-    _constants_prefactor = (phys.cross_section_prefactor  * phys.Gyr_to_s * 1e9) / (jnp.pi * phys.H0) # UNITS: [cm^2]
-    _prefactor = _constants_prefactor * 1e-8 * f_osc * n0_cm3 * lambda_vals / a0                      # UNITS: [adim]
+    # --- Compute prefactor ----------------------------------------------------
+    # cross_section_prefactor * Gyr_to_s * 1e9 = σ₀ in cm²·GHz
+    # Divide by π for Lorentzian normalization
+    constants_prefactor = (phys.cross_section_prefactor * phys.Gyr_to_s * 1e9) / (jnp.pi * phys.H0)  # [cm²]
+    
+    # Final prefactor: converts to dimensionless optical depth
+    prefactor = constants_prefactor * 1e-8 * f_osc * n0_cm3 * lambda_vals / a0
 
-    # --- helper: arctan term -------------------------------------------------
-    _gamma = A21_GHz / (4*jnp.pi) # UNITS: [GHz]
+    # --- Compute line profile terms -------------------------------------------
+    gamma_GHz = A21_GHz / (4 * jnp.pi)  # Lorentzian HWHM [GHz]
+    
+    # Helper to compute λ' at given comoving distance
+    def compute_shifted_lambda(x_Mpc):
+        return lambda_vals * ((phys.H0_over_c / a0) * (x_Mpc - x0_Mpc) + 1.0)  # [Å]
+    
+    # Helper to compute arctan term at given comoving distance
+    def compute_arctan_term(x_Mpc):
+        lambda_prime = compute_shifted_lambda(x_Mpc)  # [Å]
+        # Frequency offset from line center: ν - ν₀ [GHz]
+        nu_offset_GHz = (1 / lambda_rest - 1 / lambda_prime) * phys.c * 10
+        return jnp.arctan(nu_offset_GHz / gamma_GHz)
+    
+    # Evaluate at integration limits
+    term_front = compute_arctan_term(xf_Mpc)
+    term_emission = compute_arctan_term(xem_Mpc)
+    
+    return prefactor * (term_front - term_emission)
 
-    _lambda = lambda_vals * ((phys.H0_over_c / a0) * (xf_Mpc - x0_Mpc) + 1.0)   # UNITS: [Å]
-    _nu_GHz = (1 / lambda_rest - 1 / _lambda) * phys.c * 10                     # UNITS: [GHz]
-    termf = jnp.arctan(_nu_GHz / _gamma)                                        # UNITS: [adim]                      
 
-    _lambda = lambda_vals * ((phys.H0_over_c / a0) * (xem_Mpc - x0_Mpc) + 1.0)  # UNITS: [Å]
-    _nu_GHz = (1 / lambda_rest - 1 / _lambda) * phys.c * 10                     # UNITS: [GHz]
-    termi = jnp.arctan(_nu_GHz / _gamma)                                        # UNITS: [adim]
+def compute_optical_depth_analytical_radiation_domination_Thermal(
+    lambda_vals: jnp.ndarray,   # (N_lambda,) [Å]
+    lambda_rest: jnp.ndarray,   # (N_lines,)  [Å]
+    f_osc: jnp.ndarray,         # (N_lines,)  dimensionless
+    mass_amu: jnp.ndarray,      # (N_lines,)  mass [amu]
+    T0: jnp.ndarray,            # (N_sk,)     gas temperature [K]
+    a0: jnp.ndarray,            # (N_sk,)     scale factor at observer
+    x0_Mpc: jnp.ndarray,        # (N_sk,)     comoving distance to observer [Mpc]
+    xem_Mpc: jnp.ndarray,       # (N_sk,)     comoving distance to emission [Mpc]
+    xf_Mpc: jnp.ndarray,        # (N_sk,)     comoving distance to front [Mpc]
+    n0_cm3: jnp.ndarray,        # (N_sk,)     number density at observer [cm^-3]
+) -> jnp.ndarray:
+    """
+    Compute optical depth for thermal (Gaussian) line broadening in radiation-dominated era.
+    
+    Returns:
+        Optical depth array of shape (N_lines, N_sk, N_lambda)
+    """
+    # --- Broadcast to common shape: (N_lines, N_sk, N_lambda) ---
+    lambda_vals = lambda_vals[None, None, :]  # (1, 1, N_lambda)
+    lambda_rest = lambda_rest[:, None, None]  # (N_lines, 1, 1)
+    f_osc = f_osc[:, None, None]              # (N_lines, 1, 1)
+    mass_amu = mass_amu[:, None, None]        # (N_lines, 1, 1)
+    T0 = T0[None, :, None]                    # (1, N_sk, 1)
+    a0 = a0[None, :, None]                    # (1, N_sk, 1)
+    x0_Mpc = x0_Mpc[None, :, None]            # (1, N_sk, 1)
+    xem_Mpc = xem_Mpc[None, :, None]          # (1, N_sk, 1)
+    xf_Mpc = xf_Mpc[None, :, None]            # (1, N_sk, 1)
+    n0_cm3 = n0_cm3[None, :, None]            # (1, N_sk, 1)
 
-    return _prefactor * (termf - termi)
+    # --- Compute prefactor ----------------------------------------------------
+    # Same as natural but with factor 2 instead of π for Gaussian normalization
+    constants_prefactor = (phys.cross_section_prefactor * phys.Gyr_to_s * 1e9) / (2.0 * phys.H0)  # [cm²]
+    
+    prefactor = constants_prefactor * 1e-8 * f_osc * n0_cm3 * lambda_vals / a0
+
+    # --- Compute thermal broadening width -------------------------------------
+    # Convert mass from amu to kg for proper thermal velocity calculation
+    
+    
+    # Thermal velocity: v_th = √(2k_B T / m); σ_ν = (v_th / c) * ν₀
+    v_eff_A_GHz = jnp.sqrt(2.0 * phys.kB * T0 / mass_amu) * 10.0
+    sigma_GHz = v_eff_A_GHz / (2.0 * lambda_rest)
+
+    # --- Compute error function terms -----------------------------------------
+    # Helper to compute λ' at given comoving distance
+    def compute_shifted_lambda(x_Mpc):
+        return lambda_vals * ((phys.H0_over_c / a0) * (x_Mpc - x0_Mpc) + 1.0)  # [Å]
+    
+    # Helper to compute erf term at given comoving distance
+    def compute_erf_term(x_Mpc):
+        lambda_prime = compute_shifted_lambda(x_Mpc)  # [Å]
+        # Frequency offset from line center: ν - ν₀ [GHz]
+        nu_offset_GHz = (1 / lambda_rest - 1 / lambda_prime) * phys.c * 10
+        # Argument of error function: (ν - ν₀) / (√2 σ_ν)
+        arg = nu_offset_GHz / (jnp.sqrt(2.0) * sigma_GHz)
+        return jax.scipy.special.erf(arg)
+    
+    # Evaluate at integration limits
+    term_front = compute_erf_term(xf_Mpc)
+    term_emission = compute_erf_term(xem_Mpc)
+    
+    return prefactor * (term_front - term_emission)
+
+
+# def compute_optical_depth_analytical_radiation_domination_Thermal(
+#     lambda_vals,                      # (N_lambda,) [Å]
+#     lambda_rest,                      # (N_lines,)  [Å]
+#     f_osc,                            # (N_lines,)  dimensionless oscillator strength
+#     mass_amu,                         # (N_lines,)  mass [amu]
+#     T0,                               # (N_sk,)     gas temperature [K]
+#     a0,                               # (N_sk,)     scale factor at observer
+#     x0_Mpc,                           # (N_sk,)     comoving dist to observer [Mpc]
+#     xem_Mpc,                          # (N_sk,)     comoving dist to emission [Mpc]
+#     xf_Mpc,                           # (N_sk,)     comoving dist to observer [Mpc]
+#     n0_cm3,                           # (N_sk,)     number density at observer [cm^-3]
+# ) -> jnp.ndarray:
+    
+#     # --- broadcast shapes (same as before) ---
+#     lambda_vals = lambda_vals[None, None, :]
+#     lambda_rest = lambda_rest[:, None, None]
+#     f_osc = f_osc[:, None, None]
+#     mass_amu = mass_amu[:, None, None]
+#     T0 = T0[None, :, None]
+#     a0 = a0[None, :, None]
+#     x0_Mpc = x0_Mpc[None, :, None]
+#     xem_Mpc = xem_Mpc[None, :, None]
+#     xf_Mpc = xf_Mpc[None, :, None]
+#     n0_cm3 = n0_cm3[None, :, None]
+
+#     # --- prefactor (same structure, different constant) ---
+#     _constants_prefactor = (phys.cross_section_prefactor * phys.Gyr_to_s * 1e9) / (2.0 * phys.H0)
+#     _prefactor = _constants_prefactor * 1e-8 * f_osc * n0_cm3 * lambda_vals / a0
+
+#     # --- thermal width in consistent units ---
+#     v_eff_A_GHz = jnp.sqrt(2.0 * phys.kB * T0 / mass_amu) * 10.0
+#     _sigma_GHz = v_eff_A_GHz / (2.0 * lambda_rest)
+
+#     _lambda = lambda_vals * ((phys.H0_over_c / a0) * (xf_Mpc - x0_Mpc) + 1.0)   # UNITS: [Å]
+#     _nu_GHz = (1 / lambda_rest - 1 / _lambda) * phys.c * 10                     # UNITS: [GHz]
+#     termf = jax.scipy.special.erf(_nu_GHz / (jnp.sqrt(2.0) * _sigma_GHz))       # UNITS: [adim]                      
+
+#     _lambda = lambda_vals * ((phys.H0_over_c / a0) * (xem_Mpc - x0_Mpc) + 1.0)  # UNITS: [Å]
+#     _nu_GHz = (1 / lambda_rest - 1 / _lambda) * phys.c * 10                     # UNITS: [GHz]
+#     termi = jax.scipy.special.erf(_nu_GHz / (jnp.sqrt(2.0) * _sigma_GHz))       # UNITS: [adim]
+
+    
+#     return _prefactor * (termf - termi)

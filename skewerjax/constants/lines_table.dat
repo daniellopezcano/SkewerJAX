@@ -1,5 +1,6 @@
 id            species     name            lambda0_A    f_osc      A21_Hz        mass_amu  
-null          null        null            1215.670100  0.416400   0.00          1.007940  
+nullHI-LyA    HI          nullHI          1215.670100  0.416400   0.00          1.007940
+nullSiIII1206 SiIII	      nullSi III 1206 1206.500	   1.63000	  0.00          28.0855
 HI-LyA        HI          Lyman-α         1215.670100  0.416400   6.265000e+08  1.007940  
 HI-LyB        HI          Lyman-β         1025.722300  0.079120   1.897000e+08  1.007940  
 HI-LyG        HI          Lyman-γ         972.536800   0.029000   8.127000e+07  1.007940  
