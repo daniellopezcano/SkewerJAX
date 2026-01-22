@@ -12,7 +12,8 @@ from jax import vmap, pmap
 import jax.numpy as jnp
 from jax.scipy.integrate import trapezoid
 
-from skewerjax.optical_depth.voigt import log10_voigt
+from skewerjax.optical_depth.voigt import Lorentzian
+from skewerjax.optical_depth.voigt import Gaussian
 from skewerjax.constants.physical_constants import phys
 
 from skewerjax.optical_depth import line_profile
@@ -54,8 +55,6 @@ def compute_comoving_distance(points: jnp.ndarray) -> jnp.ndarray:
     
     # Vectorize over skewers
     return vmap(_single_skewer_distances)(points)
-
-
 
 
 def compute_optical_depth(
@@ -245,6 +244,87 @@ def compute_optical_depth(
     return optical_depth
 
 
+def compute_optical_depth_analytical_static_Natural(
+    lambda_vals: jnp.ndarray,   # (N_lambda,) [Å]
+    lambda_rest: jnp.ndarray,   # (N_lines,)  [Å]
+    A21_GHz: jnp.ndarray,       # (N_lines,)  [GHz]
+    f_osc: jnp.ndarray,         # (N_lines,)  dimensionless
+    a0: jnp.ndarray,            # (N_sk,)     scale factor at observer
+    Delta_x_Mpc: jnp.ndarray,   # (N_sk,)     comoving distance to emission [Mpc]
+    n0_cm3: jnp.ndarray,        # (N_sk,)     number density at observer [cm^-3]
+) -> jnp.ndarray:
+    """
+    Compute optical depth for natural (Lorentzian) line broadening in radiation-dominated era.
+    
+    Returns:
+        Optical depth array of shape (N_lines, N_sk, N_lambda)
+    """
+    # --- Broadcast to common shape: (N_lines, N_sk, N_lambda) ---
+    lambda_vals = lambda_vals[None, None, :]  # (1, 1, N_lambda)
+    lambda_rest = lambda_rest[:, None, None]  # (N_lines, 1, 1)
+    A21_GHz = A21_GHz[:, None, None]          # (N_lines, 1, 1)
+    f_osc = f_osc[:, None, None]              # (N_lines, 1, 1)
+    a0 = a0[None, :, None]                    # (1, N_sk, 1)
+    Delta_x_Mpc = Delta_x_Mpc[None, :, None]  # (1, N_sk, 1)
+    n0_cm3 = n0_cm3[None, :, None]            # (1, N_sk, 1)
+
+    # --- Compute prefactor ----------------------------------------------------
+    prefactor = phys.cross_section_prefactor * f_osc * n0_cm3 * Delta_x_Mpc * 1e2 * phys.Mpc_to_m / a0**2 # UNITS [GHz]
+
+    # --- Compute nu_GHz -------------------------------------------
+    nu_GHz = (1 / lambda_rest - a0 / lambda_vals) * phys.c * 10
+
+    # --- Compute line profile terms -------------------------------------------
+    gamma_GHz = A21_GHz / (4 * jnp.pi)  # Lorentzian HWHM [GHz]
+    
+    # --- Compute line profile -------------------------------------------
+    phi_ns = Lorentzian(nu_GHz, gamma_GHz)
+
+    return prefactor * phi_ns
+
+
+def compute_optical_depth_analytical_static_Thermal(
+    lambda_vals: jnp.ndarray,   # (N_lambda,) [Å]
+    lambda_rest: jnp.ndarray,   # (N_lines,)  [Å]
+    mass_amu: jnp.ndarray,      # (N_lines,)  [amu]
+    f_osc: jnp.ndarray,         # (N_lines,)  dimensionless
+    a0: jnp.ndarray,            # (N_sk,)     scale factor at observer
+    Delta_x_Mpc: jnp.ndarray,   # (N_sk,)     comoving distance to emission [Mpc]
+    n0_cm3: jnp.ndarray,        # (N_sk,)     number density at observer [cm^-3]
+    T0_K: jnp.ndarray,          # (N_sk,)     Temperature at observer [K]
+) -> jnp.ndarray:
+    """
+    Compute optical depth for natural (Lorentzian) line broadening in radiation-dominated era.
+    
+    Returns:
+        Optical depth array of shape (N_lines, N_sk, N_lambda)
+    """
+    # --- Broadcast to common shape: (N_lines, N_sk, N_lambda) ---
+    lambda_vals = lambda_vals[None, None, :]  # (1, 1, N_lambda)
+    lambda_rest = lambda_rest[:, None, None]  # (N_lines, 1, 1)
+    mass_amu = mass_amu[:, None, None]        # (N_lines, 1, 1)
+    f_osc = f_osc[:, None, None]              # (N_lines, 1, 1)
+    a0 = a0[None, :, None]                    # (1, N_sk, 1)
+    Delta_x_Mpc = Delta_x_Mpc[None, :, None]  # (1, N_sk, 1)
+    n0_cm3 = n0_cm3[None, :, None]            # (1, N_sk, 1)
+    T0_K = T0_K[None, :, None]                # (1, N_sk, 1)
+
+    # --- Compute prefactor ----------------------------------------------------
+    prefactor = phys.cross_section_prefactor * f_osc * n0_cm3 * Delta_x_Mpc * 1e2 * phys.Mpc_to_m / a0**2 # UNITS [GHz]
+
+    # --- Compute nu_GHz -------------------------------------------
+    nu_GHz = (1 / lambda_rest - a0 / lambda_vals) * phys.c * 10
+
+    # --- Compute line profile terms -------------------------------------------
+    v_eff_A_GHz = jnp.sqrt(2.0 * phys.kB * T0_K / mass_amu) * 10.0 # UNITS: [Å/ns]
+    sigma_GHz = v_eff_A_GHz / (2.0 * lambda_rest)                  # UNITS: [GHz]
+    
+    # --- Compute line profile -------------------------------------------
+    phi_ns = Gaussian(nu_GHz, sigma_GHz)
+
+    return prefactor * phi_ns
+
+
 def compute_optical_depth_analytical_radiation_domination_Natural(
     lambda_vals: jnp.ndarray,   # (N_lambda,) [Å]
     lambda_rest: jnp.ndarray,   # (N_lines,)  [Å]
@@ -366,47 +446,3 @@ def compute_optical_depth_analytical_radiation_domination_Thermal(
     
     return prefactor * (term_front - term_emission)
 
-
-# def compute_optical_depth_analytical_radiation_domination_Thermal(
-#     lambda_vals,                      # (N_lambda,) [Å]
-#     lambda_rest,                      # (N_lines,)  [Å]
-#     f_osc,                            # (N_lines,)  dimensionless oscillator strength
-#     mass_amu,                         # (N_lines,)  mass [amu]
-#     T0,                               # (N_sk,)     gas temperature [K]
-#     a0,                               # (N_sk,)     scale factor at observer
-#     x0_Mpc,                           # (N_sk,)     comoving dist to observer [Mpc]
-#     xem_Mpc,                          # (N_sk,)     comoving dist to emission [Mpc]
-#     xf_Mpc,                           # (N_sk,)     comoving dist to observer [Mpc]
-#     n0_cm3,                           # (N_sk,)     number density at observer [cm^-3]
-# ) -> jnp.ndarray:
-    
-#     # --- broadcast shapes (same as before) ---
-#     lambda_vals = lambda_vals[None, None, :]
-#     lambda_rest = lambda_rest[:, None, None]
-#     f_osc = f_osc[:, None, None]
-#     mass_amu = mass_amu[:, None, None]
-#     T0 = T0[None, :, None]
-#     a0 = a0[None, :, None]
-#     x0_Mpc = x0_Mpc[None, :, None]
-#     xem_Mpc = xem_Mpc[None, :, None]
-#     xf_Mpc = xf_Mpc[None, :, None]
-#     n0_cm3 = n0_cm3[None, :, None]
-
-#     # --- prefactor (same structure, different constant) ---
-#     _constants_prefactor = (phys.cross_section_prefactor * phys.Gyr_to_s * 1e9) / (2.0 * phys.H0)
-#     _prefactor = _constants_prefactor * 1e-8 * f_osc * n0_cm3 * lambda_vals / a0
-
-#     # --- thermal width in consistent units ---
-#     v_eff_A_GHz = jnp.sqrt(2.0 * phys.kB * T0 / mass_amu) * 10.0
-#     _sigma_GHz = v_eff_A_GHz / (2.0 * lambda_rest)
-
-#     _lambda = lambda_vals * ((phys.H0_over_c / a0) * (xf_Mpc - x0_Mpc) + 1.0)   # UNITS: [Å]
-#     _nu_GHz = (1 / lambda_rest - 1 / _lambda) * phys.c * 10                     # UNITS: [GHz]
-#     termf = jax.scipy.special.erf(_nu_GHz / (jnp.sqrt(2.0) * _sigma_GHz))       # UNITS: [adim]                      
-
-#     _lambda = lambda_vals * ((phys.H0_over_c / a0) * (xem_Mpc - x0_Mpc) + 1.0)  # UNITS: [Å]
-#     _nu_GHz = (1 / lambda_rest - 1 / _lambda) * phys.c * 10                     # UNITS: [GHz]
-#     termi = jax.scipy.special.erf(_nu_GHz / (jnp.sqrt(2.0) * _sigma_GHz))       # UNITS: [adim]
-
-    
-#     return _prefactor * (termf - termi)
