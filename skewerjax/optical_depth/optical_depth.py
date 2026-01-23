@@ -446,3 +446,65 @@ def compute_optical_depth_analytical_radiation_domination_Thermal(
     
     return prefactor * (term_front - term_emission)
 
+
+def compute_mid_point_tau(
+    line_bundle,
+    T0_K,
+    n0_cm3,
+    Delta_x_Mpc,
+    a0,
+    method: str = "trapezoidal"
+):    
+    
+    from skewerjax.optical_depth.voigt import log10_voigt
+
+    f_osc = line_bundle.f_osc           # N_lines
+    lambda0_A = line_bundle.lambda0_A   # N_lines
+    A21_GHz = line_bundle.A21_GHz       # N_lines
+    mass_amu = line_bundle.mass_amu     # N_lines
+
+    if method == "trapezoidal":
+        _term = Delta_x_Mpc / 2
+    elif method == "analytical_deltas":
+        _term = 1.0
+    else:
+        raise NotImplementedError
+    
+    N_lines = f_osc.shape[0]
+    N_T0 = T0_K.shape[0]
+    N_xx = Delta_x_Mpc.shape[0]
+
+    # --- Broadcast to common shape: (N_lines, N_T0, N_n0, N_xx) ---
+    T0_K = T0_K[None, :, None, None]
+    n0_cm3 = n0_cm3[None, None, :, None]
+    f_osc = f_osc[:, None, None, None]
+    lambda0_A = lambda0_A[:, None, None, None]
+    A21_GHz = A21_GHz[:, None, None, None]
+    mass_amu = mass_amu[:, None, None, None]
+    Delta_x_Mpc = Delta_x_Mpc[None, None, None, :]
+
+    v_eff_A_GHz = jnp.sqrt(2.0 * phys.kB * T0_K / mass_amu) * 10.0
+    sigma_GHz = v_eff_A_GHz / (2.0 * lambda0_A) # (N_lines, N_T0, 1, 1)
+    gamma_GHz = A21_GHz / (4.0 * jnp.pi)        # (N_lines, 1, 1, 1)
+
+    # Tile gamma_GHz to (N_lines * N_T0), then flatten to (N_lines * N_T0)
+    gamma_GHz_tiled = jnp.tile(gamma_GHz, (1, N_T0, 1, 1))
+    gamma_GHz_flat = gamma_GHz_tiled.reshape(-1)
+    # Flatten sigma_GHz to (N_lines * N_T0)
+    sigma_GHz_flat = sigma_GHz.reshape(-1)
+    # flatten Delta_xx_Mpc
+    nu_GHz = (phys.c * 10.0 / lambda0_A) * (1 - a0 / (a0 + 0.5 * phys.H0_over_c * Delta_x_Mpc)) # GHz, (N_lines, 1, 1, N_xx)
+    nu_GHz_tiled = jnp.tile(nu_GHz, (1, N_T0, 1, 1))
+    nu_flat_GHz = jnp.reshape(nu_GHz_tiled, (N_lines*N_T0, N_xx))
+    # compute phi using Voigt profile
+    voigt_batched = vmap(lambda x, s, g: 10**log10_voigt(x, s, g), in_axes=(0, 0, 0))
+    phi_flat_ns = voigt_batched(nu_flat_GHz, sigma_GHz_flat, gamma_GHz_flat) # (N_lines * N_T0, N_xx)
+    # Reshape to (N_lines, N_T0, 1, N_xx)
+    phi_ns = phi_flat_ns.reshape(N_lines, N_T0, 1, N_xx)
+
+    C_j_cm2_GHz = phys.cross_section_prefactor * f_osc
+    rhs = (2 * n0_cm3 * C_j_cm2_GHz * _term) * (1e2 * phys.Mpc_to_m) # GHz
+    rhs *= (a0 + 0.5 * phys.H0_over_c * Delta_x_Mpc)**-2             # GHz
+    mid_point_tau = rhs * phi_ns                                     # adim
+
+    return mid_point_tau
