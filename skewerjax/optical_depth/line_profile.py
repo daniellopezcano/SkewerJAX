@@ -66,6 +66,7 @@ def compute_line_profiles(
     compute_mode: str = "pmap",
     voigt_implementation_mode: str = "ExoJAX",
     num_gpus: Optional[int] = None,
+    box_velocity_kms: Optional[float] = None,
 ) -> jnp.ndarray:
     """
     Compute Voigt line profiles for a set of quadri_vectors.
@@ -245,6 +246,19 @@ def compute_line_profiles(
 
     # nu [GHz]: (N_lines, N_points, N_lambda)
     nu_GHz = ((1.0 / lambdas_A_prime) - (1.0 / lambda0_A[:, None, None])) * phys.c * 10.0
+
+# ==================================================================
+    # PERIODIC BOUNDARY CONDITIONS (PBC)
+    # ==================================================================
+    if box_velocity_kms is not None:
+        v_box_ms = box_velocity_kms * 1000.0
+        
+        # Calculate box width in frequency space [GHz] for each line.
+        # Factor 10.0 handles unit conversion: (m/s) / Å -> GHz
+        nu_box_GHz = (v_box_ms * 10.0) / lambda0_A[:, None, None]
+
+        # Apply Minimum Image Convention (wrap frequencies)
+        nu_GHz = nu_GHz - nu_box_GHz * jnp.round(nu_GHz / nu_box_GHz)
 
     # ------------------------------------------------------------------
     # 6. Flatten for Voigt evaluation: each (line,point) has its own 1D spectrum

@@ -68,6 +68,7 @@ def compute_optical_depth(
     voigt_implementation_mode: str = "ExoJAX",
     num_gpus: Optional[int] = None,
     mode_integration: str = "trapz",
+    box_velocity_kms=None,
 ) -> jnp.ndarray:
     """
     Compute integrand terms from Voigt line profiles for a bundle of lines and a 3D grid of points.
@@ -160,7 +161,8 @@ def compute_optical_depth(
         fields = fields,
         compute_mode = compute_mode,
         voigt_implementation_mode = voigt_implementation_mode,
-        num_gpus = num_gpus
+        num_gpus = num_gpus,
+        box_velocity_kms=box_velocity_kms
     )
 
     logger.info("[OPTICAL_DEPTH] Line profiles computed with shape %s", phi_ns.shape)
