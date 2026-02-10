@@ -60,3 +60,58 @@ def make_LoS(batch_shape, direction):
     base = jnp.asarray(direction, dtype=float)
     loS = jnp.broadcast_to(base, batch_shape + (3,))
     return loS / jnp.linalg.norm(loS, axis=-1, keepdims=True)
+
+
+def make_skewer_grid_points(L_box, N_grid, N_ppsk, direction="y"):
+    """
+    Build a regular grid of skewers through a periodic box.
+
+    Returns an array of spatial comoving positions (x, y, z) with shape:
+        (N_grid, N_grid, N_ppsk, 3)
+
+    Interpretation:
+      - There are N_grid**2 skewers.
+      - For direction="y", each skewer starts at y=0 and goes to y=L_box,
+        at fixed (x,z) set by a N_grid x N_grid transverse grid.
+      - Analogously for direction="x" (vary x) or direction="z" (vary z).
+
+    Parameters
+    ----------
+    L_box : float
+        Box size (same units you want in the output positions).
+    N_grid : int
+        Number of skewers per transverse dimension (total skewers = N_grid**2).
+    N_ppsk : int
+        Number of points per skewer (samples along the LOS direction).
+    direction : {"x","y","z"}
+        Skewer direction / LOS axis.
+
+    Notes
+    -----
+    Uses linspace(0, L_box, ...) including endpoints. If you prefer to avoid
+    duplicating the periodic boundary (0 and L_box), change to endpoint=False.
+    """
+    dir_idx = {"x": 0, "y": 1, "z": 2}[direction]
+    # transverse axes for the 2D grid
+    t1_idx, t2_idx = {0: (1, 2), 1: (0, 2), 2: (0, 1)}[dir_idx]
+
+    # Transverse grid (N_grid x N_grid)
+    c1 = jnp.linspace(0.0, L_box, N_grid)
+    c2 = jnp.linspace(0.0, L_box, N_grid)
+    g1, g2 = jnp.meshgrid(c1, c2, indexing="ij")  # (N_grid, N_grid)
+
+    # Coordinate along the skewer direction (N_ppsk)
+    s = jnp.linspace(0.0, L_box, N_ppsk)  # (N_ppsk,)
+
+    # Broadcast to (N_grid, N_grid, N_ppsk)
+    g1b = g1[..., None]
+    g2b = g2[..., None]
+    sb  = s[None, None, :]
+
+    # Fill xyz
+    xyz = jnp.zeros((N_grid, N_grid, N_ppsk, 3), dtype=jnp.float32)
+    xyz = xyz.at[..., dir_idx].set(sb)
+    xyz = xyz.at[..., t1_idx].set(g1b)
+    xyz = xyz.at[..., t2_idx].set(g2b)
+
+    return xyz

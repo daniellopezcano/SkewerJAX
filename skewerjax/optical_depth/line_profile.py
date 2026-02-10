@@ -63,9 +63,7 @@ def compute_line_profiles(
     wavelengths: jnp.ndarray,
     line_bundle,
     fields,
-    compute_mode: str = "pmap",
     voigt_implementation_mode: str = "ExoJAX",
-    num_gpus: Optional[int] = None,
 ) -> jnp.ndarray:
     """
     Compute Voigt line profiles for a set of quadri_vectors.
@@ -102,16 +100,8 @@ def compute_line_profiles(
             - "turbulence"                              # UNITS: [km/s]
             - "velocity" (used to build LoS_velocity)   # UNITS: [km/s]  
 
-    compute_mode : {"vmap", "pmap"}, default "pmap"
-        How to parallelize Voigt evaluations:
-            - "vmap": single-device vectorization
-            - "pmap": multi-device sharding + per-device vmap
-
     voigt_implementation_mode : str, default "ExoJAX"
         Passed through to the low-level `log10_voigt(...)` implementation.
-
-    num_gpus : int or None, default None
-        Number of GPUs to use in "pmap" mode. If None, uses `jax.local_device_count()`.
 
     Returns
     -------
@@ -258,11 +248,6 @@ def compute_line_profiles(
     # ------------------------------------------------------------------
     # 7. Compute Voigt profiles (log10 space for numerical stability)
     # ------------------------------------------------------------------
-    compute_mode = compute_mode.lower()
-    if compute_mode not in ("vmap", "pmap"):
-        raise ValueError(
-            f"`compute_mode` must be 'vmap' or 'pmap', got '{compute_mode}'"
-        )
 
     def _eval_voigt_batch(nu_batch, sigma_batch, gamma_batch):
         """
@@ -276,55 +261,8 @@ def compute_line_profiles(
             in_axes=(0, 0, 0),
         )(nu_batch, sigma_batch, gamma_batch)
 
-    if compute_mode == "vmap":
-        # Single-device batched evaluation
-        log10_phi_flat = _eval_voigt_batch(nu_flat, sigma_flat, gamma_flat)
-        # (N_total, N_lambda)
-
-    else:  # "pmap"
-        # 1) Detect devices
-        if num_gpus is None:
-            num_gpus = jax.local_device_count()
-            logger.info("Detected %d device(s) for pmap.", num_gpus)
-
-        if num_gpus <= 0:
-            raise RuntimeError("No devices available for pmap.")
-
-        # 2) Handle non-divisible batch size via padding
-        if N_total % num_gpus != 0:
-            pad_size = num_gpus - (N_total % num_gpus)
-            logger.info(
-                "Padding %d elements for pmap (N_total=%d, num_gpus=%d)",
-                pad_size, N_total, num_gpus,
-            )
-            nu_flat = jnp.pad(nu_flat, ((0, pad_size), (0, 0)), mode="constant")
-            sigma_flat = jnp.pad(sigma_flat, (0, pad_size), mode="constant")
-            gamma_flat = jnp.pad(gamma_flat, (0, pad_size), mode="constant")
-            N_total_padded = N_total + pad_size
-        else:
-            N_total_padded = N_total
-
-        N_per_gpu = N_total_padded // num_gpus
-
-        # 3) Shard across devices: (num_gpus, N_per_gpu, ...)
-        nu_sharded    = nu_flat.reshape(num_gpus, N_per_gpu, N_lambda)
-        sigma_sharded = sigma_flat.reshape(num_gpus, N_per_gpu)
-        gamma_sharded = gamma_flat.reshape(num_gpus, N_per_gpu)
-
-        # 4) Define per-device computation
-        @partial(pmap, in_axes=(0, 0, 0))
-        def compute_on_device(nu_shard, sigma_shard, gamma_shard):
-            return _eval_voigt_batch(nu_shard, sigma_shard, gamma_shard)
-            # (N_per_gpu, N_lambda) per device
-
-        # 5) Execute across devices
-        log10_phi_padded = compute_on_device(
-            nu_sharded, sigma_sharded, gamma_sharded
-        )
-        # (num_gpus, N_per_gpu, N_lambda)
-
-        # 6) Flatten back and trim padding
-        log10_phi_flat = log10_phi_padded.reshape(N_total_padded, N_lambda)[:N_total, :]
+    log10_phi_flat = _eval_voigt_batch(nu_flat, sigma_flat, gamma_flat)
+    # (N_total, N_lambda)
 
     # ------------------------------------------------------------------
     # 8. Convert back from log10 to phi, reshape to (N_lines, *batch_shape, N_lambda)
