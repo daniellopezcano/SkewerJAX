@@ -10,5 +10,6 @@ from . import cosmology as cosmology
 from . import simulations as simulations
 from . import optical_depth as optical_depth
 from . import utils as utils
+from . import summary_stats as summary_stats
 
 __all__ = ["__version__", "config", "constants", "optical_depth", "utils"]

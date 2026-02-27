@@ -12,14 +12,17 @@ class PhysicalConstants:
     # Fundamental physical constants
     c: float = 2.99792458e8                         # speed of light      — UNITS: [m / s]
     kB: float = 8314.46262102654                    # Boltzmann constant  — UNITS: [amu ⋅ m^2 ⋅ s^-2 ⋅ K^-1]
+    kB_erg_per_K: float = 1.380649e-16              # Boltzmann constant  — UNITS: [erg/K}
     qe: float = 1.60217663e-19                      # electron charge     — UNITS: [C]
     me: float = 9.1093837e-31                       # electron mass       — UNITS: [kg]
+    mp: float = 1.67262192369e-24                   #  proton mass        — UNITS: [g]
     epsilon_0: float = 8.85418782e-12               # vacuum permittivity — UNITS: [C^2 ⋅ kg^−1 ⋅ m^−3 ⋅ s^2]
     
     # Unit conversions for cosmology
     Gpc_to_m: float = 3.085678e25                   # 1 Gpc in meters     — UNITS: [m / Gpc]
     Mpc_to_m: float = 3.085678e22                   # 1 Mpc in meters     — UNITS: [m / Mpc]
     Gyr_to_s: float = 3.1536e16                     # 1 Gyr in seconds    — UNITS: [s / Gyr]
+    g_to_amu: float = 1/1.66053906660e-24           # 1 g in amu          — UNITS: [amu / g]
     
     # Cosmological parameters (default ΛCDM values)
     H0_km_s_mpc: float = 70.0                       # Hubble constant     — UNITS: [km / s / Mpc]

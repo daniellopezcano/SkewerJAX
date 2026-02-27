@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from typing import Dict, Sequence, List
+from typing import Dict, Sequence, List, Union
 from jax import numpy as jnp
 from importlib.resources import files
+import re
 
 # ----------------- dataclass -----------------
 
@@ -132,3 +133,88 @@ class LineBundle:
     def indices_for_species(self, species: str) -> List[int]:
         """Get line indices for slicing arrays like phi[indices, :, :]."""
         return [i for i, line in enumerate(self.lines) if line.species == species]
+
+
+
+def _species_to_element(species: str) -> str:
+    """
+    Map a line-table `species` token (e.g. 'HI', 'HeII', 'SiIII', 'HI2', 'DI', 'CIV')
+    to a plain element/isotope label (e.g. 'H', 'He', 'Si', 'H', 'D', 'C').
+
+    Robust rule:
+      1) Strip leading "null" if present (some of your IDs/names use it).
+      2) Grab the first 1–2 letters as an element symbol:
+         - first char must be a letter
+         - optional second char is lowercase letter if present
+      3) Special-case Deuterium 'D' if the token starts with 'D' (e.g. 'DI').
+    """
+    s = species.strip()
+    s = re.sub(r"^null", "", s, flags=re.IGNORECASE)  # handle 'nullHI', etc.
+
+    # Special case: Deuterium lines are 'DI', 'DII', etc -> element 'D'
+    if s and s[0].upper() == "D":
+        return "D"
+
+    # Element symbol = first letter + optional lowercase second letter
+    m = re.match(r"^([A-Z][a-z]?)", s)
+    if not m:
+        # Sometimes tables might use lowercase; try normalizing
+        s2 = s[:1].upper() + s[1:]
+        m = re.match(r"^([A-Z][a-z]?)", s2)
+    if not m:
+        raise ValueError(f"Cannot parse element symbol from species={species!r}")
+
+    return m.group(1)
+
+
+def get_mass_amu(elements: Sequence[str], *, return_dict: bool = True) -> Union[Dict[str, float], "jnp.ndarray"]:
+    """
+    Get atomic masses [amu] for requested plain elements like ['H','He','Si'].
+
+    Scans your existing `LINES` dict (loaded from lines_table.dat), infers the
+    plain element for each line via `_species_to_element(line.species)` and
+    returns masses for the requested elements.
+
+    Parameters
+    ----------
+    elements : sequence[str]
+        Plain element symbols (case-insensitive): 'H','He','Si',...
+    return_dict : bool
+        If True -> dict {elem: mass_amu}. If False -> jnp.array in same order.
+    """
+    # Build element -> mass_amu by scanning LINES once
+    elem_to_mass: Dict[str, float] = {}
+    for line in LINES.values():
+        try:
+            elem = _species_to_element(line.species)
+        except Exception:
+            continue
+        m = float(line.mass_amu)
+        if not (m == m):  # NaN guard
+            continue
+        elem_to_mass.setdefault(elem, m)
+
+    # Normalize requested elements
+    def _norm_elem(e: str) -> str:
+        e = e.strip()
+        if not e:
+            return e
+        # normalize capitalization: 'si' -> 'Si', 'h' -> 'H'
+        return e[0].upper() + (e[1:].lower() if len(e) > 1 else "")
+
+    elems = [_norm_elem(e) for e in elements]
+
+    out: Dict[str, float] = {}
+    missing = [e for e in elems if e not in elem_to_mass]
+    if missing:
+        raise KeyError(
+            f"Could not find mass_amu for elements: {missing}. "
+            f"Available elements inferred from lines_table: {sorted(elem_to_mass.keys())}"
+        )
+
+    for e in elems:
+        out[e] = elem_to_mass[e]
+
+    if return_dict:
+        return out
+    return jnp.array([out[e] for e in elems])
