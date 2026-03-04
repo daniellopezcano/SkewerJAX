@@ -18,9 +18,6 @@ from skewerjax.constants.physical_constants import phys
 
 from skewerjax.optical_depth import line_profile
 
-
-
-
 def compute_comoving_distance(points: jnp.ndarray) -> jnp.ndarray:
     """
     Compute cumulative comoving distance along each skewer.
