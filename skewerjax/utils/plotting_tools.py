@@ -311,7 +311,7 @@ def plot_flux_panels(
 
         ls = linestyles[i_line % len(linestyles)]
         F_line = F_np[i_line, ic, jc, :]
-        ax.plot(x_axis_array, F_line, color=curve_color, lw=2.4, ls="-", alpha=0.95)
+        ax.plot(x_axis_array, F_line, color=curve_color, lw=2.0, ls="-", alpha=0.95)
 
         lam0_rest = float(getattr(ln, "lambda0_A"))
         lamf_rest = lam0_rest * scale_factor_ratio
@@ -463,9 +463,9 @@ def plot_flux_panels_colored_by_los(
             )
             cmap_use = cmap_trunc.reversed()
 
-        lc = LineCollection(segs, cmap=cmap_use, norm=norm_x, linestyle='-', alpha=0.9)
+        lc = LineCollection(segs, cmap=cmap_use, norm=norm_x, linestyle='-', alpha=0.7)
         lc.set_array(x_mid)
-        lc.set_linewidth(2.0)
+        lc.set_linewidth(1.5)
         ax.add_collection(lc)
 
         if add_legend:
