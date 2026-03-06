@@ -428,10 +428,140 @@ def two_point_corr_1d_from_precomp(
 
     return jax.vmap(corr_one)(y)
 
+def two_point_corr_1d_cross_from_precomp(
+    pb: PairBinning1D,
+    y1: jnp.ndarray,
+    y2: jnp.ndarray,
+    *,
+    center: bool = True,
+    standardize: bool = False,
+    eps: float = 1e-12,
+    symmetrize: bool = True,
+    acc_dtype: Optional[jnp.dtype] = None,
+) -> jnp.ndarray:
+    """
+    Compute the 1D *cross* two-point correlation function xi_12(r) using precomputed pairs/bins.
+
+    This computes (by default) the symmetrized estimator:
+        xi_12(r) = < yy1(x_i) * yy2(x_j) > + < yy2(x_i) * yy1(x_j) >
+    where the averages are performed over unordered pairs (i<j) selected by each separation bin.
+    With unordered pairs, the implementation is:
+        num[k] = sum_{(i,j) in bin k} w_ij * [yy1[i]*yy2[j] + yy2[i]*yy1[j]]
+        den[k] = sum_{(i,j) in bin k} w_ij   (= pb.den_per_bin)
+        xi[k]  = num[k] / den[k]
+
+    Parameters
+    ----------
+    pb : PairBinning1D
+        Precomputed pair/bin structure from `precompute_pair_binning_1d(...)`.
+        Must have been built for the same x-grid length.
+
+    y1, y2 : jnp.ndarray
+        Field values for multiple realizations, sampled at the same x used to build pb.
+        Accepted shapes:
+          - (N_samples, N_x)
+          - (N_x,)  (will be broadcast to all samples)
+        If both are 2D, they must have the same N_samples.
+
+    center : bool
+        If True, subtract the per-sample mean over x independently for y1 and y2.
+
+    standardize : bool
+        If True, divide each field by its per-sample std over x (independently).
+        This yields a correlation-coefficient-like quantity.
+
+    eps : float
+        Stabilizer for standardize=True.
+
+    symmetrize : bool
+        If True (default), compute yy1[i]*yy2[j] + yy2[i]*yy1[j] for each unordered pair.
+        If False, compute only yy1[i]*yy2[j] (orientation fixed by your i<j convention).
+
+    acc_dtype : jnp.dtype or None
+        Accumulation dtype. If None, inferred from y1, y2, and pb.denom_w and at least float32.
+
+    Returns
+    -------
+    xi12 : jnp.ndarray, shape (N_samples, pb.n_bins)
+        Estimated cross-2PCF per sample. Bins with zero valid pairs return NaN.
+    """
+    y1 = jnp.asarray(y1)
+    y2 = jnp.asarray(y2)
+
+    # Normalize shapes to (N_samples, N_x)
+    if y1.ndim == 1:
+        y1 = y1[None, :]
+    if y2.ndim == 1:
+        y2 = y2[None, :]
+
+    if y1.ndim != 2 or y2.ndim != 2:
+        raise ValueError(f"y1 and y2 must be 1D or 2D. Got shapes y1={y1.shape}, y2={y2.shape}")
+
+    if int(y1.shape[1]) != pb.n_x:
+        raise ValueError(f"y1.shape[1] must match pb.n_x={pb.n_x}, got {int(y1.shape[1])}")
+    if int(y2.shape[1]) != pb.n_x:
+        raise ValueError(f"y2.shape[1] must match pb.n_x={pb.n_x}, got {int(y2.shape[1])}")
+
+    # Broadcast single-sample to match the other if needed
+    n1 = int(y1.shape[0])
+    n2 = int(y2.shape[0])
+    if n1 != n2:
+        if n1 == 1:
+            y1 = jnp.broadcast_to(y1, (n2, pb.n_x))
+        elif n2 == 1:
+            y2 = jnp.broadcast_to(y2, (n1, pb.n_x))
+        else:
+            raise ValueError(f"y1 and y2 must have same N_samples (or one can be 1). Got {n1} and {n2}")
+
+    n_bins = pb.n_bins
+    den = pb.den_per_bin
+
+    if acc_dtype is None:
+        acc_dtype = jnp.result_type(y1.dtype, y2.dtype, pb.denom_w.dtype, jnp.float32)
+
+    den_acc = den.astype(acc_dtype)
+
+    def corr_one(y1_s: jnp.ndarray, y2_s: jnp.ndarray) -> jnp.ndarray:
+        # Preprocess each field independently
+        a = y1_s.astype(acc_dtype)
+        b = y2_s.astype(acc_dtype)
+
+        if center:
+            a = a - jnp.mean(a)
+            b = b - jnp.mean(b)
+
+        if standardize:
+            a = a / (jnp.std(a) + jnp.asarray(eps, dtype=acc_dtype))
+            b = b / (jnp.std(b) + jnp.asarray(eps, dtype=acc_dtype))
+
+        def body(k, num):
+            ii = pb.pair_i[k]
+            jj = pb.pair_j[k]
+            bb = pb.bin_idx[k]   # safe
+            mm = pb.mask[k]
+            w  = pb.denom_w[k].astype(acc_dtype)
+
+            # core cross contribution per unordered pair
+            prod = w * (a[ii] * b[jj])
+            if symmetrize:
+                prod = prod + w * (b[ii] * a[jj])
+
+            prod = jnp.where(mm, prod, jnp.asarray(0.0, dtype=acc_dtype))
+            num = num + jnp.bincount(bb, weights=prod, length=n_bins).astype(acc_dtype)
+            return num
+
+        num0 = jnp.zeros((n_bins,), dtype=acc_dtype)
+        num = jax.lax.fori_loop(0, pb.pair_i.shape[0], body, num0)
+
+        xi12 = jnp.where(den_acc > 0, num / den_acc, jnp.nan)
+        return xi12
+
+    return jax.vmap(corr_one)(y1, y2)
 
 def two_point_corr_1d(
     x: jnp.ndarray,
-    y: jnp.ndarray,
+    y1: jnp.ndarray,
+    y2: Optional[jnp.ndarray] = None,
     *,
     bins: Optional[jnp.ndarray] = None,
     n_bins: int = 64,
@@ -442,64 +572,22 @@ def two_point_corr_1d(
     weights: Optional[jnp.ndarray] = None,
     center: bool = True,
     standardize: bool = False,
+    symmetrize: bool = True,           # NEW (only used if y2 is not None)
     chunk_size: int = 1 << 16,
     eps: float = 1e-12,
     weight_dtype: Optional[jnp.dtype] = None,
     acc_dtype: Optional[jnp.dtype] = None,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
-    Convenience wrapper that computes xi(r) directly from (x, y).
+    Compute 1D 2PCF from (x, y1) [auto] or (x, y1, y2) [cross].
 
-    Objective (conceptual)
-    ----------------------
-    This is the "one-shot" interface:
-      - build the pair/bin mapping from x
-      - compute xi(r) for each sample in y
-
-    If you will compute xi for many different y arrays sharing the same x/bins,
-    prefer the two-step API:
-      pb = precompute_pair_binning_1d(x, ...)
-      xi = two_point_corr_1d_from_precomp(pb, y, ...)
-
-    Parameters
-    ----------
-    x : jnp.ndarray, shape (N_x,), float
-        Sample positions (not necessarily uniform).
-    y : jnp.ndarray, shape (N_samples, N_x), float
-        Field values at positions x for multiple realizations (rows).
-    bins : jnp.ndarray, shape (n_bins+1,), float, optional
-        Explicit separation-bin edges. If provided, overrides (n_bins, r_min, r_max).
-    n_bins : int
-        Number of bins (used only if bins is None).
-    r_min : float
-        Minimum separation (used only if bins is None).
-    r_max : float or None
-        Maximum separation (used only if bins is None).
-    periodic_L : float or None
-        If provided, separations are computed with minimum-image convention (robust to x not being wrapped).
-    include_self : bool
-        If True, include i==j pairs (separation 0). Default False uses i<j only.
-    weights : jnp.ndarray, shape (N_x,), float, optional
-        Per-point weights w_i used to build pair weights w_ij = w_i*w_j.
-    center : bool
-        If True, subtract per-sample mean over x before correlating.
-    standardize : bool
-        If True, divide per-sample by std over x (correlation-coefficient-like).
-    chunk_size : int
-        Pair chunk size for JIT-safe accumulation.
-    eps : float
-        Stabilizer for standardize=True.
-    weight_dtype : jnp.dtype or None
-        Optional dtype used for pair weights and denominators. If None, inferred.
-    acc_dtype : jnp.dtype or None
-        Accumulation dtype for the correlation computation. If None, inferred.
+    If y2 is None: returns auto-correlation of y1 (your current behavior).
+    If y2 is provided: returns cross-correlation between y1 and y2, optionally symmetrized.
 
     Returns
     -------
-    r_centers : jnp.ndarray, shape (n_bins,), float
-        Separation bin centers (same units as x).
-    xi : jnp.ndarray, shape (N_samples, n_bins), float
-        Estimated 2PCF for each sample realization, evaluated at r_centers.
+    r_centers : (n_bins,)
+    xi : (N_samples, n_bins)
     """
     pb = precompute_pair_binning_1d(
         x,
@@ -513,12 +601,16 @@ def two_point_corr_1d(
         chunk_size=chunk_size,
         weight_dtype=weight_dtype,
     )
-    xi = two_point_corr_1d_from_precomp(
-        pb,
-        y,
-        center=center,
-        standardize=standardize,
-        eps=eps,
-        acc_dtype=acc_dtype,
-    )
+
+    if y2 is None:
+        xi = two_point_corr_1d_from_precomp(
+            pb, y1, center=center, standardize=standardize, eps=eps, acc_dtype=acc_dtype
+        )
+    else:
+        xi = two_point_corr_1d_cross_from_precomp(
+            pb, y1, y2,
+            center=center, standardize=standardize, eps=eps,
+            symmetrize=symmetrize, acc_dtype=acc_dtype,
+        )
+
     return pb.r_centers, xi
