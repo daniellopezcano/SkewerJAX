@@ -228,7 +228,7 @@ def plot_flux_panels(
           - line.name (fallback: line.label or "Line i")
 
     scale_factor_ratio : float
-        af/ai factor used to compute the shifted marker xf.
+        a0/ai factor used to compute the shifted marker xf.
 
     x_axis_key : {"wavelengths", "velocities", "log_lambda"}
         X-axis representation.
@@ -244,10 +244,6 @@ def plot_flux_panels(
     fig, axes
         Matplotlib figure and 2D axes array (nrows, ncols).
     """
-    import os
-    import numpy as np
-    import matplotlib as mpl
-    import matplotlib.pyplot as plt
 
     linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1))]
 
@@ -262,16 +258,14 @@ def plot_flux_panels(
         if lambda0_anchor is None:
             raise ValueError("lambda0_anchor must be provided when x_axis_key='velocities'")
         x_label = r"Velocity space [$\mathrm{km\,/\,s}$]"
-        x_axis_array = phys.c * 1e-3 * (wavelengths * scale_factor_ratio - lambda0_anchor) / (
-            lambda0_anchor * scale_factor_ratio
-        )
+        x_axis_array = phys.c*1e-3 * (wavelengths * scale_factor_ratio - lambda0_anchor) / (lambda0_anchor * scale_factor_ratio) # km/s
     else:  # log_lambda
         if lambda0_anchor is None:
             raise ValueError("lambda0_anchor must be provided when x_axis_key='log_lambda'")
         if lambda0_anchor == 1:
-            x_label = r"$\log_{10}(\lambda \frac{a_\mathrm{QSO}}{a_0} \left[\mathrm{\AA}\right])$"
+            x_label = r"$\log_{10}(\lambda \frac{a_0}{a_\mathrm{QSO}} \left[\mathrm{\AA}\right])$"
         else:
-            x_label = r"$\log_{10}( \frac{\lambda a_\mathrm{QSO}}{\lambda_\dagger a_0}/ )$"
+            x_label = r"$\log_{10}( \frac{\lambda a_0}{\lambda_\dagger a_\mathrm{QSO}}/ )$"
         x_axis_array = np.log10(wavelengths * scale_factor_ratio / lambda0_anchor)
 
     x_axis_array = np.asarray(x_axis_array, dtype=float)
@@ -315,21 +309,19 @@ def plot_flux_panels(
 
         lam0_rest = float(getattr(ln, "lambda0_A"))
         lamf_rest = lam0_rest * scale_factor_ratio
-
         if x_axis_key == "wavelengths":
+            xi = lam0_rest
             x0 = lam0_rest
             xf = lamf_rest
         elif x_axis_key == "velocities":
-            x0 = phys.c * 1e-3 * (lam0_rest * scale_factor_ratio - lambda0_anchor) / (
-                lambda0_anchor * scale_factor_ratio
-            )
-            xf = phys.c * 1e-3 * (lamf_rest * scale_factor_ratio - lambda0_anchor) / (
-                lambda0_anchor * scale_factor_ratio
-            )
+            xi = phys.c * 1e-3 * (lam0_rest - lambda0_anchor) / (lambda0_anchor)
+            x0 = phys.c * 1e-3 * (lam0_rest * scale_factor_ratio - lambda0_anchor) / (lambda0_anchor * scale_factor_ratio)
+            xf = phys.c * 1e-3 * (lamf_rest * scale_factor_ratio - lambda0_anchor) / (lambda0_anchor * scale_factor_ratio)
         else:  # log_lambda
+            xi = np.log10(lam0_rest / lambda0_anchor)
             x0 = np.log10(lam0_rest * scale_factor_ratio / lambda0_anchor)
             xf = np.log10(lamf_rest * scale_factor_ratio / lambda0_anchor)
-
+        ax.axvline(xi, color="grey", linestyle=ls, lw=1.5, alpha=1.0)
         ax.axvline(x0, color="grey", linestyle=ls, lw=1.5, alpha=1.0)
         ax.axvline(xf, color="grey", linestyle=ls, lw=1.5, alpha=1.0)
 
@@ -395,9 +387,7 @@ def plot_flux_panels_colored_by_los(
 ):  
     
     _scale_factors = np.asarray(skewer_bundle.scale_factors[0, ic * N_grid_skewers + jc], dtype=float)
-    ai = float(_scale_factors[0])
-    af = float(_scale_factors[-1])
-    scale_factor_ratio = af / ai
+    scale_factor_ratio = float(_scale_factors[-1] / _scale_factors[0])
 
     assert x_axis_key in ("wavelengths", "velocities", "log_lambda"), "x_axis_key should be either 'wavelengths', 'velocities' or 'log_lambda'"
     if x_axis_key == "wavelengths":
@@ -408,9 +398,9 @@ def plot_flux_panels_colored_by_los(
         x_axis_array = phys.c*1e-3 * (wavelengths*scale_factor_ratio - lambda0_anchor) / (lambda0_anchor*scale_factor_ratio) # km/s
     elif x_axis_key == "log_lambda":
         if lambda0_anchor == 1:
-            x_label = r"$\log_{10}(\lambda \frac{a_\mathrm{QSO}}{a_0} \left[\mathrm{\AA}\right])$"
+            x_label = r"$\log_{10}(\lambda \frac{a_0}{a_\mathrm{QSO}} \left[\mathrm{\AA}\right])$"
         else:
-            x_label = r"$\log_{10}( \frac{\lambda a_\mathrm{QSO}}{\lambda_\dagger a_0})$"
+            x_label = r"$\log_{10}( \frac{\lambda a_0}{\lambda_\dagger a_\mathrm{QSO}})$"
         x_axis_array = np.log10(wavelengths*scale_factor_ratio / lambda0_anchor)
 
     x_axis_array = np.asarray(x_axis_array, dtype=float)
@@ -429,14 +419,18 @@ def plot_flux_panels_colored_by_los(
         lam0_rest = float(line.lambda0_A)
         lamf_rest = lam0_rest * scale_factor_ratio
         if x_axis_key == "wavelengths":
+            xi = lam0_rest
             x0 = lam0_rest
             xf = lamf_rest
         elif x_axis_key == "velocities":
+            xi = phys.c*1e-3 * (lam0_rest - lambda0_anchor) / (lambda0_anchor)
             x0 = phys.c*1e-3 * (lam0_rest*scale_factor_ratio - lambda0_anchor) / (lambda0_anchor * scale_factor_ratio)
             xf = phys.c*1e-3 * (lamf_rest*scale_factor_ratio - lambda0_anchor) / (lambda0_anchor * scale_factor_ratio)
         elif x_axis_key == "log_lambda":
+            xi = np.log10(lam0_rest / lambda0_anchor)
             x0 = np.log10(lam0_rest*scale_factor_ratio / lambda0_anchor)
             xf = np.log10(lamf_rest*scale_factor_ratio / lambda0_anchor)
+        ax.axvline(xi, color="grey", linestyle=linestyles[i_line], lw=1.5, alpha=1.0)
         ax.axvline(x0, color="grey", linestyle=linestyles[i_line], lw=1.5, alpha=1.0)
         ax.axvline(xf, color="grey", linestyle=linestyles[i_line], lw=1.5, alpha=1.0)
 
