@@ -59,6 +59,7 @@ def compute_optical_depth(
     wavelengths: jnp.ndarray,
     line_bundle,
     fields,
+    scale_factors_obs: Optional[jnp.ndarray] = None,
     ii_cosmology: int = 0,
     voigt_implementation_mode: str = "ExoJAX",
     mode_integration: str = "trapz",
@@ -98,6 +99,10 @@ def compute_optical_depth(
             - "velocity" (used to build LoS_velocity)   # UNITS: [km/s]  
             - "number_density"                          # UNITS: [cm^-3]
 
+    scale_factors_obs : jnp.ndarray, shape (N_skewers,) default None
+        Scale factor for the observer position for each skewer.
+        If None, uses the scale factors from the initial conditions setted up in the skewer_bundle.
+
     ii_cosmology : int, default 0
         Index of the cosmology to use. This applies only (for now) to skewers.
         Reasson explaining why this is as it is right now:
@@ -127,7 +132,12 @@ def compute_optical_depth(
     
     quadri_vectors = skewer_bundle.quadri_vectors[ii_cosmology]                             # (N_sk, N_ppsk, 4)
     LoS_directions = skewer_bundle.los_directions                                           # (N_sk, N_ppsk, 3)
-    scale_factor_obs_tiled = jnp.tile(skewer_bundle.a0[:, None], (1, skewer_bundle.N_ppsk)) # (N_sk, N_ppsk)
+
+    if scale_factors_obs is None:
+        scale_factors_obs = skewer_bundle.a0
+    else:
+        assert len(scale_factors_obs) == skewer_bundle.N_sk
+    scale_factor_obs_tiled = jnp.tile(scale_factors_obs, (1, skewer_bundle.N_ppsk)) # (N_sk, N_ppsk)
 
     # ------------------------------------------------------------------
     # 1. Compute line profiles
@@ -169,7 +179,8 @@ def compute_optical_depth(
     logger.info("[OPTICAL_DEPTH] Computing dtau_dx with constant %e nm²/ns", float((phys.qe**2 / (4 * phys.epsilon_0 * phys.me * phys.c))*1e3))
     
     sigma_cm2 = phys.cross_section_prefactor * line_bundle.f_osc[:, None, None, None] * phi_ns                # (N_lines, N_skewers, N_ppsk, N_lambda) — UNITS: [cm²]
-    dtau_dx_m = sigma_cm2 * number_density_cm3[..., None] * quadri_vectors[..., 0][None, ..., None]**-2 * 1e2 # (N_lines, N_skewers, N_ppsk, N_lambda) — UNITS: [1/m]  
+    scale_factors = quadri_vectors[..., 0][None, ..., None]
+    dtau_dx_m = sigma_cm2 * number_density_cm3[..., None] * scale_factors**-2 * 1e2 # (N_lines, N_skewers, N_ppsk, N_lambda) — UNITS: [1/m]  
     
     logger.info("[OPTICAL_DEPTH] dtau_dx computed with shape %s", dtau_dx_m.shape)
 

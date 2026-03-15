@@ -180,7 +180,8 @@ def plot_flux_panels(
     ic: int,
     jc: int,
     line_bundle,
-    scale_factor_ratio: float,
+    scale_factor_start: float,
+    scale_factor_end: float,
     x_axis_key: str,
     min_x: float,
     max_x: float,
@@ -245,16 +246,17 @@ def plot_flux_panels(
         F_line = F_np[i_line, ic, jc, :]
         ax.plot(x_axis_array, F_line, color=curve_color, lw=2.0, ls="-", alpha=0.95)
 
-        lam0_rest = float(getattr(ln, "lambda0_A"))
-        lamf_rest = lam0_rest * scale_factor_ratio
+        lam0 = float(getattr(ln, "lambda0_A"))
+        lam0_end = lam0 / scale_factor_end
+        lam0_start = lam0 / scale_factor_start
         if x_axis_key == "wavelengths":
-            x0 = lam0_rest
-            xf = lamf_rest
+            x_end = lam0_end
+            x_start = lam0_start
         elif x_axis_key == "velocities":
-            x0 = phys.c*1e-3 * np.log(lam0_rest / lambda0_anchor)
-            xf = phys.c*1e-3 * np.log(lamf_rest / lambda0_anchor)
-        ax.axvline(x0, color="grey", linestyle=ls, lw=1.5, alpha=1.0)
-        ax.axvline(xf, color="grey", linestyle=ls, lw=1.5, alpha=1.0)
+            x_end = phys.c*1e-3 * np.log(lam0_end / lambda0_anchor)
+            x_start = phys.c*1e-3 * np.log(lam0_start / lambda0_anchor)
+        ax.axvline(x_end, color="grey", linestyle=ls, lw=1.5, alpha=1.0)
+        ax.axvline(x_start, color="grey", linestyle=ls, lw=1.5, alpha=1.0)
 
         name = getattr(ln, "name", None) or getattr(ln, "label", None) or f"Line {i_line}"
         ax.set_title(name, pad=8)
@@ -304,9 +306,9 @@ def plot_flux_panels_colored_by_los(
     jc: int,
     line_bundle,
     x_axis_key,
-    skewer_bundle,
+    scale_factor_start: float,
+    scale_factor_end: float,
     min_x, max_x, skewer_last_index,
-    N_grid_skewers: int,
     lambda0_anchor: float | None = None,
     savepath_png: str | None = None,
     show: bool = False,
@@ -317,9 +319,6 @@ def plot_flux_panels_colored_by_los(
     ylim: tuple[float, float] = (-0.05, 1.05),
 ):  
     
-    _scale_factors = np.asarray(skewer_bundle.scale_factors[0, ic * N_grid_skewers + jc], dtype=float)
-    scale_factor_ratio = float(_scale_factors[-1] / _scale_factors[0])
-
     assert x_axis_key in ("wavelengths", "velocities"), "x_axis_key should be either 'wavelengths', or 'velocities'"
     if x_axis_key == "wavelengths":
         x_label = r"$\lambda\ [\mathrm{\AA}]$"
@@ -343,16 +342,17 @@ def plot_flux_panels_colored_by_los(
     for i_line, line in enumerate(line_bundle.lines):
         ls = linestyles[i_line % len(linestyles)]
 
-        lam0_rest = float(line.lambda0_A)
-        lamf_rest = lam0_rest * scale_factor_ratio
+        lam0 = float(line.lambda0_A)
+        lam0_end = lam0 / scale_factor_end
+        lam0_start = lam0 / scale_factor_start
         if x_axis_key == "wavelengths":
-            x0 = lam0_rest
-            xf = lamf_rest
+            x_end = lam0_end
+            x_start = lam0_start
         elif x_axis_key == "velocities":
-            x0 = phys.c*1e-3 * np.log(lam0_rest / lambda0_anchor)
-            xf = phys.c*1e-3 * np.log(lamf_rest / lambda0_anchor)
-        ax.axvline(x0, color="grey", linestyle=linestyles[i_line], lw=1.5, alpha=1.0)
-        ax.axvline(xf, color="grey", linestyle=linestyles[i_line], lw=1.5, alpha=1.0)
+            x_end = phys.c*1e-3 * np.log(lam0_end / lambda0_anchor)
+            x_start = phys.c*1e-3 * np.log(lam0_start / lambda0_anchor)
+        ax.axvline(x_end, color="grey", linestyle=linestyles[i_line], lw=1.5, alpha=1.0)
+        ax.axvline(x_start, color="grey", linestyle=linestyles[i_line], lw=1.5, alpha=1.0)
 
         F_line = F_np[i_line, ic, jc, :]
         pts  = np.column_stack([x_axis_array, F_line]).reshape(-1, 1, 2)
@@ -360,7 +360,7 @@ def plot_flux_panels_colored_by_los(
 
         x_mid = 0.5 * (x_axis_array[:-1] + x_axis_array[1:])
 
-        xmin, xmax = (min(x0, xf), max(x0, xf))
+        xmin, xmax = (min(x_end, x_start), max(x_end, x_start))
         norm_x = Normalize(vmin=xmin, vmax=xmax, clip=True)
 
         # --- build inverted colormap, still ending at the same "max color" defined by skewer_last_index ---
