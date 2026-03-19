@@ -29,6 +29,8 @@ def plot_density_imshow_and_central_profile(
     log10_number_density_imshow: np.ndarray,
     log10_number_density_central: np.ndarray,
     line_bundle,
+    scale_factor_start: float,
+    scale_factor_end: float,
     savepath_png: str | None = None,
     show: bool = False,
     extent_yz: tuple[float, float, float, float] | None = None,
@@ -95,15 +97,42 @@ def plot_density_imshow_and_central_profile(
 
         ax_img.imshow(
             log10_number_density_imshow[i_line].T,
-            origin="lower",
-            extent=extent_yz,
-            aspect="auto",
-            norm=density_norm,
-            cmap="cividis",
+            origin="lower", extent=extent_yz, aspect="auto", norm=density_norm, cmap="cividis",
         )
 
-        ax_img.plot(y_c, z_c, color="k", lw=1.0, alpha=0.35, zorder=4)
         ax_img.scatter(y_c, z_c, c=idx, cmap=skewer_cmap, norm=skewer_norm, s=1, linewidths=1.0, zorder=5)
+
+        # leftmost/rightmost along y_c
+        i_left  = int(np.argmin(np.asarray(y_c)))
+        i_right = int(np.argmax(np.asarray(y_c)))
+        # endpoint colors (match scatter mapping)
+        idx_arr = np.asarray(idx)
+        if idx_arr.ndim == 0:
+            c_left = c_right = skewer_cmap(skewer_norm(float(idx_arr)))
+        else:
+            c_left  = skewer_cmap(skewer_norm(float(idx_arr[i_left])))
+            c_right = skewer_cmap(skewer_norm(float(idx_arr[i_right])))
+        # endpoint coordinates
+        xL, yL = float(np.asarray(y_c)[i_left]),  float(np.asarray(z_c)[i_left])
+        xR, yR = float(np.asarray(y_c)[i_right]), float(np.asarray(z_c)[i_right])
+        # labels with decimals
+        txt_left  = rf"$a_\mathrm{{start}} = {float(scale_factor_start):.4f}$"
+        txt_right = rf"$a_\mathrm{{end}} = {float(scale_factor_end):.4f}$"
+        # centered above each point
+        ax_img.annotate(
+            txt_left, xy=(xL+6, yL), xycoords="data",
+            xytext=(0, 8), textcoords="offset points",
+            ha="center", va="bottom", color=c_left, fontsize=11,
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor=c_left, alpha=0.85),
+            zorder=6,
+        )
+        ax_img.annotate(
+            txt_right, xy=(xR-6, yR-3), xycoords="data",
+            xytext=(0, 8), textcoords="offset points",
+            ha="center", va="top", color=c_right, fontsize=11,
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor=c_right, alpha=0.85),
+            zorder=6,
+        )
 
         npts = len(y_c)
         centers = np.linspace(0.10, 0.90, n_arrows)
@@ -258,6 +287,25 @@ def plot_flux_panels(
         ax.axvline(x_end, color="grey", linestyle=ls, lw=1.5, alpha=1.0)
         ax.axvline(x_start, color="grey", linestyle=ls, lw=1.5, alpha=1.0)
 
+        # --- annotate a_i / a_f anchored to the vertical lines at y=0.5, rotated vertical ---
+        c_ai = skewer_cmap(skewer_norm(0.0))
+        c_af = curve_color
+        txt_ai = rf"$a_\mathrm{{i}} = {float(scale_factor_start):.4f}$"
+        txt_af = rf"$a_\mathrm{{f}} = {float(scale_factor_end):.4f}$"
+        y_ax = 0.5
+        ax.annotate(
+            txt_ai, xy=(x_start, y_ax-0.3), xycoords=("data", "axes fraction"),
+            xytext=(13, 0), textcoords="offset points", ha="left", va="center",
+            rotation=90, rotation_mode="anchor", color=c_ai, fontsize=11, bbox=dict(boxstyle="round,pad=0.25",
+            facecolor="white", edgecolor=c_ai, alpha=0.85), zorder=6,
+        )
+        ax.annotate(
+            txt_af, xy=(x_end, y_ax+0.3), xycoords=("data", "axes fraction"),
+            xytext=(-13, 0), textcoords="offset points", ha="right", va="center",
+            rotation=90, rotation_mode="anchor", color=c_af, fontsize=11, bbox=dict(boxstyle="round,pad=0.25",
+            facecolor="white", edgecolor=c_af, alpha=0.85), zorder=6,
+        )
+
         name = getattr(ln, "name", None) or getattr(ln, "label", None) or f"Line {i_line}"
         ax.set_title(name, pad=8)
 
@@ -354,6 +402,25 @@ def plot_flux_panels_colored_by_los(
         ax.axvline(x_end, color="grey", linestyle=linestyles[i_line], lw=1.5, alpha=1.0)
         ax.axvline(x_start, color="grey", linestyle=linestyles[i_line], lw=1.5, alpha=1.0)
 
+        # --- annotate a_i / a_f anchored to the vertical lines at y=0.5, rotated vertical ---
+        c_ai = skewer_cmap(skewer_norm(0.0))
+        c_af = skewer_cmap(skewer_norm(float(skewer_last_index)))
+        txt_ai = rf"$a_\mathrm{{i}} = {float(scale_factor_start):.4f}$"
+        txt_af = rf"$a_\mathrm{{f}} = {float(scale_factor_end):.4f}$"
+        y_ax = 0.5
+        ax.annotate(
+            txt_ai, xy=(x_start, y_ax-0.3), xycoords=("data", "axes fraction"),
+            xytext=(13, 0), textcoords="offset points", ha="left", va="center",
+            rotation=90, rotation_mode="anchor", color=c_ai, fontsize=11, bbox=dict(boxstyle="round,pad=0.25",
+            facecolor="white", edgecolor=c_ai, alpha=0.85), zorder=6,
+        )
+        ax.annotate(
+            txt_af, xy=(x_end, y_ax+0.3), xycoords=("data", "axes fraction"),
+            xytext=(-13, 0), textcoords="offset points", ha="right", va="center",
+            rotation=90, rotation_mode="anchor", color=c_af, fontsize=11, bbox=dict(boxstyle="round,pad=0.25",
+            facecolor="white", edgecolor=c_af, alpha=0.85), zorder=6,
+        )
+
         F_line = F_np[i_line, ic, jc, :]
         pts  = np.column_stack([x_axis_array, F_line]).reshape(-1, 1, 2)
         segs = np.concatenate([pts[:-1], pts[1:]], axis=1)
@@ -400,7 +467,7 @@ def plot_flux_panels_colored_by_los(
 
     if add_legend and legend_handles:
         ax.legend(
-            legend_handles, legend_labels, loc="lower right", fontsize=16, handlelength=2.6, handletextpad=0.6, borderaxespad=0.6, ncols=1
+            legend_handles, legend_labels, loc="lower left", fontsize=16, handlelength=2.6, handletextpad=0.6, borderaxespad=0.6, ncols=1
         )
 
     fig.tight_layout()

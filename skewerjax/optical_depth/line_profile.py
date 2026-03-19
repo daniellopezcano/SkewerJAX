@@ -65,7 +65,7 @@ def compute_line_profiles(
     fields,
     voigt_implementation_mode: str = "ExoJAX",
 ) -> jnp.ndarray:
-    """
+    """compute_lambda_prime
     Compute Voigt line profiles for a set of quadri_vectors.
 
     Parameters
