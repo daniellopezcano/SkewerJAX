@@ -24,7 +24,7 @@ def compute_lambda_prime(
     """
     Compute observer-frame wavelength shifted by cosmological expansion and peculiar velocities.
     
-    λ' = λ_obs × (a / a_obs) × (1 + v_LoS / c)
+    λ' = λ_obs × (a / a_obs) × sqrt((1 + v_LoS/c) / (1 - v_LoS/c))
     
     Args:
         wavelengths: Rest-frame wavelengths [Å], shape (N_lambda,)
@@ -48,10 +48,10 @@ def compute_lambda_prime(
     
     # Add trailing dimension to scale_factor and LoS_velocity
     scale_factor_expanded = scale_factor[None, ..., None] / scale_factor_obs[None, ..., None]
-    velocity_expanded = LoS_velocity[..., None] * 1e3 / phys.c # convert km/s to m/s, hence velocity_expanded has UNITS [adim]
+    beta = LoS_velocity[..., None] * 1e3 / phys.c # convert km/s to m/s, hence velocity_expanded has UNITS [adim]
 
     # Compute lambda prime
-    lambdas_A_prime = wavelengths_expanded * scale_factor_expanded * (1.0 + velocity_expanded)
+    lambdas_A_prime = wavelengths_expanded * scale_factor_expanded * jnp.sqrt((1.0 + beta) / (1.0 - beta))
     
     return lambdas_A_prime
 
@@ -112,9 +112,6 @@ def compute_line_profiles(
     # ------------------------------------------------------------------
     # 0. Basic validation and bookkeeping
     # ------------------------------------------------------------------
-    wavelengths = jnp.asarray(wavelengths)
-    if wavelengths.ndim != 1:
-        raise ValueError(f"`wavelengths` must be 1D, got shape {wavelengths.shape}")
     N_lambda = wavelengths.size
 
     if quadri_vectors.ndim < 2 or quadri_vectors.shape[-1] != 4:
@@ -222,7 +219,7 @@ def compute_line_profiles(
     v_eff_A_GHz = (v_th_m_per_s + turbulence) * 10.0
 
     # sigma [GHz]
-    sigma_GHz = v_eff_A_GHz / (2.0 * lambda0_A[:, None])           # (N_lines, N_points)
+    sigma_GHz = v_eff_A_GHz / (jnp.sqrt(2.0) * lambda0_A[:, None])           # (N_lines, N_points)
 
     # ------------------------------------------------------------------
     # 5. Frequency offsets for each line / point / wavelength

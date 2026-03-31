@@ -84,7 +84,7 @@ def compute_optical_depth_analytical_static_Thermal(
 
     # --- Compute line profile terms -------------------------------------------
     v_eff_A_GHz = jnp.sqrt(2.0 * phys.kB * T0_K / mass_amu) * 10.0 # UNITS: [Å/ns]
-    sigma_GHz = v_eff_A_GHz / (2.0 * lambda_rest)                  # UNITS: [GHz]
+    sigma_GHz = v_eff_A_GHz / (jnp.sqrt(2.0) * lambda_rest)                  # UNITS: [GHz]
     
     # --- Compute line profile -------------------------------------------
     phi_ns = Gaussian(nu_GHz, sigma_GHz)
@@ -191,7 +191,7 @@ def compute_optical_depth_analytical_radiation_domination_Thermal(
     
     # Thermal velocity: v_th = √(2k_B T / m); σ_ν = (v_th / c) * ν₀
     v_eff_A_GHz = jnp.sqrt(2.0 * phys.kB * T0 / mass_amu) * 10.0
-    sigma_GHz = v_eff_A_GHz / (2.0 * lambda_rest)
+    sigma_GHz = v_eff_A_GHz / (jnp.sqrt(2.0) * lambda_rest)
 
     # --- Compute error function terms -----------------------------------------
     # Helper to compute λ' at given comoving distance
