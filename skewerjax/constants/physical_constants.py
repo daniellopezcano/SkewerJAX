@@ -11,6 +11,7 @@ class PhysicalConstants:
     
     # Fundamental physical constants
     c: float = 2.99792458e8                         # speed of light      — UNITS: [m / s]
+    c_kms: float = 2.99792458e5                     # speed of light      — UNITS: [km / s]
     kB: float = 8314.46262102654                    # Boltzmann constant  — UNITS: [amu ⋅ m^2 ⋅ s^-2 ⋅ K^-1]
     kB_erg_per_K: float = 1.380649e-16              # Boltzmann constant  — UNITS: [erg/K}
     qe: float = 1.60217663e-19                      # electron charge     — UNITS: [C]

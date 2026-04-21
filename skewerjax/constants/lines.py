@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Dict, Sequence, List, Union
 from jax import numpy as jnp
 from importlib.resources import files
+from skewerjax.constants.physical_constants import phys
 import re
 
 # ----------------- dataclass -----------------
@@ -78,13 +79,27 @@ def get_line(line_id: str) -> Line:
 class LineBundle:
     """A collection of absorption lines with convenient accessors."""
     
-    def __init__(self, line_ids: Sequence[str]):
-        """Create from line IDs like ['HI-LyA', 'HI-LyB', 'SiIII-1206']."""
-        self.lines = [LINES[lid] for lid in line_ids]
-        if len(self.lines) != len(line_ids):
-            missing = set(line_ids) - set(LINES.keys())
+    def __init__(self, line_ids: Sequence[str], ref_line_id: str = "HI-LyA"):
+        """Create from line IDs like ['HI-LyA', 'HI-LyB', 'SiIII-1206'].
+
+        Parameters
+        ----------
+        line_ids : sequence[str]
+            Line IDs included in the bundle.
+        ref_line_id : str, optional
+            Reference line ID used to anchor relative line-velocity offsets,
+            defined as delta_v_j = c * ln(lambda_ref / lambda_j).
+            Defaults to 'HI-LyA'.
+        """
+        missing = [lid for lid in line_ids if lid not in LINES]
+        if missing:
             raise ValueError(f"Unknown line IDs: {missing}")
         
+        if ref_line_id not in LINES:
+            raise ValueError(f"Unknown reference line ID: {ref_line_id}")
+        
+        self.lines = [LINES[lid] for lid in line_ids]
+        self.ref_line = LINES[ref_line_id]
         self._species_map = self._build_species_map()
     
     def _build_species_map(self) -> Dict[str, List[Line]]:
@@ -108,6 +123,16 @@ class LineBundle:
         """Species identifiers like ['HI', 'SiIII']."""
         return list(self._species_map.keys())
     
+    @property
+    def ref_line_id(self) -> str:
+        """Reference line ID used for relative velocity offsets."""
+        return self.ref_line.id
+    
+    @property
+    def ref_lambda0_A(self) -> float:
+        """Reference line rest-frame wavelength in Angstrom."""
+        return self.ref_line.lambda0_A
+    
     # ────────── JAX-friendly arrays ──────────
     @property
     def lambda0_A(self) -> jnp.ndarray:
@@ -125,6 +150,18 @@ class LineBundle:
     def f_osc(self) -> jnp.ndarray:
         return jnp.array([line.f_osc for line in self.lines])
     
+    @property
+    def delta_v(self) -> jnp.ndarray:
+        """Relative line velocity offsets [same units as phys.c_kms].
+
+        Defined as:
+            delta_v_j = c * ln(lambda_ref / lambda_j)
+        for each line j in the bundle.
+        """
+        lambda_ref = self.ref_line.lambda0_A
+        lambda_lines = self.lambda0_A
+        return phys.c_kms * jnp.log(lambda_ref / lambda_lines)
+    
     # ────────── Species-based access ──────────
     def lines_for_species(self, species: str) -> List[Line]:
         """Get all lines for a species."""
@@ -133,6 +170,21 @@ class LineBundle:
     def indices_for_species(self, species: str) -> List[int]:
         """Get line indices for slicing arrays like phi[indices, :, :]."""
         return [i for i, line in enumerate(self.lines) if line.species == species]
+    
+    # ────────── Reference-line utilities ──────────
+    def delta_v_for_line(self, line_id: str) -> float:
+        """Get delta_v for a specific line ID in the bundle."""
+        for line in self.lines:
+            if line.id == line_id:
+                return float(phys.c_kms * jnp.log(self.ref_line.lambda0_A / line.lambda0_A))
+        raise KeyError(f"Line {line_id!r} is not present in this LineBundle")
+    
+    def ref_index(self) -> Union[int, None]:
+        """Return the index of the reference line if it is included in the bundle."""
+        for i, line in enumerate(self.lines):
+            if line.id == self.ref_line.id:
+                return i
+        return None
 
 
 
