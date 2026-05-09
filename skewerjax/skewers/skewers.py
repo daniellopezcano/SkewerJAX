@@ -357,3 +357,95 @@ class SkewerBundle:
     # These will be computed later using the SkewerJAX pipeline and attached
     # to this bundle for easy access to observables
     logger.info("SkewerBundle class definition complete")
+
+
+
+from itertools import combinations
+
+class DeltaFieldBuilder:
+    """
+    Build single-field and composite overdensity fields from a dictionary
+    of input fields with shape (N_samples, N_points).
+    """
+
+    def __init__(self, fields, labels=None, key_joiner="", dtype=float):
+        self.fields = {k: jnp.asarray(v, dtype=dtype) for k, v in fields.items()}
+        self.labels = list(fields.keys()) if labels is None else list(labels)
+        self.key_joiner = key_joiner
+        self.dtype = dtype
+
+        self._validate_inputs()
+
+        self.N_samples = self.fields[self.labels[0]].shape[0]
+
+        self.subset_keys = None
+        self.composite_keys = None
+        self.delta_terms = None
+        self.C_per_sample = None
+        self.field_total = None
+        self.total = None
+
+    def _validate_inputs(self):
+        if not self.fields:
+            raise ValueError("`fields` cannot be empty.")
+
+        if set(self.labels) != set(self.fields.keys()):
+            raise ValueError("`labels` must contain exactly the same keys as `fields`.")
+
+        ref_shape = None
+        for key in self.labels:
+            arr = self.fields[key]
+
+            if arr.ndim != 2:
+                raise ValueError(
+                    f"Field '{key}' must have shape (N_samples, N_points), got {arr.shape}."
+                )
+
+            if ref_shape is None:
+                ref_shape = arr.shape
+            elif arr.shape != ref_shape:
+                raise ValueError(
+                    f"All fields must have the same shape. Expected {ref_shape}, "
+                    f"got {arr.shape} for field '{key}'."
+                )
+
+    def _make_key(self, members):
+        return self.key_joiner.join(members)
+
+    def build(self):
+        self.delta_terms = {}
+        self.subset_keys = []
+        self.composite_keys = []
+        self.C_per_sample = jnp.zeros((self.N_samples, 1), dtype=self.dtype)
+
+        # -------------------- Single-field deltas -------------------- #
+        for key in self.labels:
+            mean = jnp.mean(self.fields[key], axis=1, keepdims=True)
+            self.delta_terms[key] = self.fields[key] / mean - 1.0
+            self.subset_keys.append(key)
+
+        # -------------------- Total field and total delta -------------------- #
+        stacked_fields = jnp.stack([self.fields[key] for key in self.labels], axis=0)
+        self.field_total = jnp.prod(stacked_fields, axis=0)
+
+        field_total_mean = jnp.mean(self.field_total, axis=1, keepdims=True)
+        self.total = self.field_total / field_total_mean - 1.0
+
+        # -------------------- Composite overdensity fields -------------------- #
+        for r in range(2, len(self.labels) + 1):
+            for members in combinations(self.labels, r):
+                key = self._make_key(members)
+
+                term = self.delta_terms[members[0]]
+                for member in members[1:]:
+                    term = term * self.delta_terms[member]
+
+                self.delta_terms[key] = term
+                self.subset_keys.append(key)
+                self.composite_keys.append(key)
+
+                self.C_per_sample = self.C_per_sample + jnp.mean(
+                    term, axis=1, keepdims=True
+                )
+
+        return self
