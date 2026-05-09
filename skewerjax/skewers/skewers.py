@@ -518,7 +518,7 @@ class DeltaFieldBuilder:
                 self.delta_terms[key] = term
                 self.subset_keys.append(key)
                 self.composite_keys.append(key)
-                self.C_per_sample = self.C_per_sample + jnp.mean(term, axis=1, keepdims=True)
+                self.C_per_sample += jnp.mean(term, axis=1, keepdims=True)
 
         if int(jnp.sum(jnp.isnan(self.C_per_sample))):
             logger.warning("NaNs detected in C_per_sample.")
