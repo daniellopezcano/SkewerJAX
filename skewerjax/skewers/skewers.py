@@ -360,12 +360,22 @@ class SkewerBundle:
 
 
 
+import logging
 from itertools import combinations
+
+
+logger = logging.getLogger(__name__)
+
 
 class DeltaFieldBuilder:
     """
     Build single-field and composite overdensity fields from a dictionary
     of input fields with shape (N_samples, N_points).
+
+    NaN handling
+    ------------
+    If any sample contains at least one NaN in any input field, that sample
+    is removed from all fields so sample alignment is preserved.
     """
 
     def __init__(self, fields, labels=None, key_joiner="", dtype=float):
@@ -374,7 +384,13 @@ class DeltaFieldBuilder:
         self.key_joiner = key_joiner
         self.dtype = dtype
 
+        logger.info(
+            "Initializing DeltaFieldBuilder with %d fields.",
+            len(self.fields),
+        )
+
         self._validate_inputs()
+        self._filter_nan_samples_inplace()
 
         self.N_samples = self.fields[self.labels[0]].shape[0]
 
@@ -384,6 +400,28 @@ class DeltaFieldBuilder:
         self.C_per_sample = None
         self.field_total = None
         self.total = None
+
+        logger.info(
+            "DeltaFieldBuilder initialized successfully with N_samples=%d, N_points=%d.",
+            self.N_samples,
+            self.fields[self.labels[0]].shape[1],
+        )
+
+    @staticmethod
+    def _count_nans(x):
+        x = jnp.asarray(x)
+        return int(jnp.sum(jnp.isnan(x)))
+
+    def _log_nan_summary(self, name, x):
+        x = jnp.asarray(x)
+        n_nan = self._count_nans(x)
+        if n_nan > 0:
+            logger.warning(
+                "NaNs detected in %s: count=%d, shape=%s",
+                name,
+                n_nan,
+                x.shape,
+            )
 
     def _validate_inputs(self):
         if not self.fields:
@@ -409,10 +447,76 @@ class DeltaFieldBuilder:
                     f"got {arr.shape} for field '{key}'."
                 )
 
+        logger.info(
+            "Input validation passed: %d fields with common shape %s.",
+            len(self.labels),
+            ref_shape,
+        )
+
+    def _filter_nan_samples_inplace(self):
+        """
+        Remove any sample that contains at least one NaN in any field.
+        Filtering is done consistently across all fields.
+        """
+        N_samples_initial = self.fields[self.labels[0]].shape[0]
+
+        bad_sample_mask = jnp.zeros((N_samples_initial,), dtype=bool)
+
+        for key in self.labels:
+            arr = self.fields[key]
+            nan_mask = jnp.any(jnp.isnan(arr), axis=1)
+
+            n_bad_here = int(jnp.sum(nan_mask))
+            n_nan_here = self._count_nans(arr)
+
+            if n_bad_here > 0:
+                logger.warning(
+                    "Field %r contains NaNs: total_nan_count=%d, affected_samples=%d/%d.",
+                    key,
+                    n_nan_here,
+                    n_bad_here,
+                    N_samples_initial,
+                )
+
+            bad_sample_mask = bad_sample_mask | nan_mask
+
+        n_bad_total = int(jnp.sum(bad_sample_mask))
+
+        if n_bad_total == 0:
+            logger.info("No NaNs detected in input fields. No sample filtering applied.")
+            return
+
+        keep_mask = ~bad_sample_mask
+        n_keep = int(jnp.sum(keep_mask))
+
+        logger.warning(
+            "Filtering out %d/%d samples because they contain at least one NaN in at least one field.",
+            n_bad_total,
+            N_samples_initial,
+        )
+
+        for key in self.labels:
+            self.fields[key] = self.fields[key][keep_mask]
+
+        logger.info(
+            "NaN filtering completed. Remaining samples: %d/%d.",
+            n_keep,
+            N_samples_initial,
+        )
+
+        if n_keep == 0:
+            raise ValueError("All samples were removed after NaN filtering.")
+
     def _make_key(self, members):
         return self.key_joiner.join(members)
 
     def build(self):
+        logger.info(
+            "Starting build() with %d labels and N_samples=%d.",
+            len(self.labels),
+            self.N_samples,
+        )
+
         self.delta_terms = {}
         self.subset_keys = []
         self.composite_keys = []
@@ -421,15 +525,44 @@ class DeltaFieldBuilder:
         # -------------------- Single-field deltas -------------------- #
         for key in self.labels:
             mean = jnp.mean(self.fields[key], axis=1, keepdims=True)
+
+            n_zero_mean = int(jnp.sum(mean == 0))
+            if n_zero_mean > 0:
+                logger.warning(
+                    "Field %r has %d samples with zero mean. This may generate invalid overdensity values.",
+                    key,
+                    n_zero_mean,
+                )
+
             self.delta_terms[key] = self.fields[key] / mean - 1.0
             self.subset_keys.append(key)
+
+            self._log_nan_summary(f"delta_terms[{key!r}]", self.delta_terms[key])
+
+        logger.info(
+            "Built %d single-field overdensity terms.",
+            len(self.labels),
+        )
 
         # -------------------- Total field and total delta -------------------- #
         stacked_fields = jnp.stack([self.fields[key] for key in self.labels], axis=0)
         self.field_total = jnp.prod(stacked_fields, axis=0)
 
+        self._log_nan_summary("field_total", self.field_total)
+
         field_total_mean = jnp.mean(self.field_total, axis=1, keepdims=True)
+
+        n_zero_total_mean = int(jnp.sum(field_total_mean == 0))
+        if n_zero_total_mean > 0:
+            logger.warning(
+                "Total field has %d samples with zero mean. This may generate invalid total overdensity values.",
+                n_zero_total_mean,
+            )
+
         self.total = self.field_total / field_total_mean - 1.0
+        self._log_nan_summary("total", self.total)
+
+        logger.info("Built total overdensity field.")
 
         # -------------------- Composite overdensity fields -------------------- #
         for r in range(2, len(self.labels) + 1):
@@ -447,5 +580,15 @@ class DeltaFieldBuilder:
                 self.C_per_sample = self.C_per_sample + jnp.mean(
                     term, axis=1, keepdims=True
                 )
+
+                self._log_nan_summary(f"delta_terms[{key!r}]", term)
+
+        self._log_nan_summary("C_per_sample", self.C_per_sample)
+
+        logger.info(
+            "Finished build(): total subset_keys=%d, composite_keys=%d.",
+            len(self.subset_keys),
+            len(self.composite_keys),
+        )
 
         return self
