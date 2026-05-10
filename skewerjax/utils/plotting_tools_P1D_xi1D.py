@@ -427,6 +427,7 @@ def collapse_order_pairs_xi(pairs_this_order, xi_pair, tolerance_threshold=1e-6)
 # ============================================================
 # P1D plotting
 # ============================================================
+import warnings
 
 def plot_p1d_by_order(
     ordered_pairs,
@@ -438,41 +439,15 @@ def plot_p1d_by_order(
     *,
     tolerance_threshold=1e-6,
     residual_mode="auto_reference",
-    cmap=None,
-    colors=None,
-    figsize=None,
-    main_panel_height=5.0,
-    residual_panel_height=3.0,
-    hspace=0.08,
-    main_curve_lw=2.0,
-    collapsed_sum_lw=1.5,
-    sum_color="k",
-    sum_ls=":",
     show_harmonics=True,
-    harmonic_color_mode="cycle",
-    harmonic_main_lw=1.5,
-    harmonic_higher_lw=1.5,
-    harmonic_alpha=0.7,
-    show_zero_line_main=True,
-    show_zero_line_residual=True,
     use_symlog_main=True,
     use_symlog_residual=False,
+    use_log_x=False,
+    xlim=None,
     symlog_linscale=1.0,
-    symlog_base=10,
     symlog_label_minor=False,
     symlog_sci_cutoff=1e-2,
-    show_order_badge=True,
-    order_badge_fontsize=22,
-    order_badge_boxstyle="round,pad=0.25",
-    order_badge_facecolor="white",
-    order_badge_edgecolor="black",
-    order_badge_alpha=0.9,
-    label_fontsize=22,
-    residual_label_fontsize=20,
-    tick_fontsize=22,
-    legend_fontsize=18,
     legend_ncol_terms=2,
-    harmonic_legend_fontsize=16,
     xlabel=r"$kL_\mathrm{box}/(2\pi)$",
     ylabel=r"$P_{\rm 1D}$",
     residual_ylabel=r"$\Delta$",
@@ -480,8 +455,58 @@ def plot_p1d_by_order(
     if not ordered_pairs:
         raise ValueError("ordered_pairs cannot be empty.")
 
-    cmap = plt.get_cmap("tab10") if cmap is None else cmap
-    colors = _default_colors() if colors is None else colors
+    # ------------------------------------------------------------------
+    # Fixed defaults from the original function
+    # ------------------------------------------------------------------
+    cmap = plt.get_cmap("tab10")
+    colors = _default_colors()
+    figsize = None
+    main_panel_height = 5.0
+    residual_panel_height = 3.0
+    hspace = 0.08
+    main_curve_lw = 2.0
+    collapsed_sum_lw = 1.5
+    sum_color = "k"
+    sum_ls = ":"
+    harmonic_color_mode = "cycle"
+    harmonic_main_lw = 1.5
+    harmonic_higher_lw = 1.5
+    harmonic_alpha = 0.7
+    show_zero_line_main = True
+    show_zero_line_residual = True
+    symlog_base = 10
+    order_badge_fontsize = 22
+    order_badge_boxstyle = "round,pad=0.25"
+    order_badge_facecolor = "white"
+    order_badge_edgecolor = "black"
+    order_badge_alpha = 0.9
+    label_fontsize = 22
+    residual_label_fontsize = 20
+    tick_fontsize = 22
+    legend_fontsize = 18
+    harmonic_legend_fontsize = 16
+    show_order_badge = True
+
+    # ------------------------------------------------------------------
+    # Harmonic-folding convention:
+    # if delta_v > L_box/2, display harmonics at L_box - delta_v
+    # ------------------------------------------------------------------
+    delta_v_array = np.asarray(delta_v_list, dtype=float)
+    delta_v_harmonics = np.where(delta_v_array > 0.5 * L_box, L_box - delta_v_array, delta_v_array)
+    folded_mask = delta_v_array > 0.5 * L_box
+
+    if np.any(folded_mask):
+        folded_entries = []
+        for i, (orig, shown) in enumerate(zip(delta_v_array, delta_v_harmonics)):
+            if folded_mask[i]:
+                folded_entries.append(
+                    f"index {i}: delta_v={orig:.6g} -> displayed as {shown:.6g}"
+                )
+        warnings.warn(
+            "Some harmonic positions use the folded convention delta_v -> L_box - delta_v "
+            f"for delta_v > L_box/2. Affected entries: {', '.join(folded_entries)}",
+            UserWarning,
+        )
 
     orders = sorted({pair_order(pair) for pair in ordered_pairs})
     if figsize is None:
@@ -509,7 +534,10 @@ def plot_p1d_by_order(
 
         if show_harmonics:
             draw_harmonics(
-                ax, delta_v_list, L_box, Npix,
+                ax,
+                delta_v_harmonics,
+                L_box,
+                Npix,
                 colors=colors,
                 harmonic_color_mode=harmonic_color_mode,
                 harmonic_main_lw=harmonic_main_lw,
@@ -523,25 +551,60 @@ def plot_p1d_by_order(
 
         sum_diff = np.max(np.abs(Pk_order_sum[1:] - Pk_order_sum_full[1:]))
         if sum_diff > tolerance_threshold:
-            print(f"[warning] order {order}: collapsed/fallback representation differs from the full sum by max {sum_diff:.6e}")
+            print(
+                f"[warning] order {order}: collapsed/fallback representation differs "
+                f"from the full sum by max {sum_diff:.6e}"
+            )
 
         order_sum_dict[order] = Pk_order_sum
 
-        legend_terms = [Line2D([0], [0], color=sum_color, lw=collapsed_sum_lw, ls=sum_ls, label="Sum")]
+        legend_terms = [
+            Line2D([0], [0], color=sum_color, lw=collapsed_sum_lw, ls=sum_ls, label="Sum")
+        ]
+
         for i, entry in enumerate(entries):
             entry["color"] = cmap(i % 10)
-            ax.plot(k_norm[1:], entry["curve"].real[1:], lw=main_curve_lw, ls=entry["ls"], color=entry["color"], alpha=0.95)
-            legend_terms.append(Line2D([0], [0], color=entry["color"], lw=main_curve_lw, ls=entry["ls"], label=entry["label"]))
+            ax.plot(
+                k_norm[1:],
+                entry["curve"].real[1:],
+                lw=main_curve_lw,
+                ls=entry["ls"],
+                color=entry["color"],
+                alpha=0.95,
+            )
+            legend_terms.append(
+                Line2D(
+                    [0], [0],
+                    color=entry["color"],
+                    lw=main_curve_lw,
+                    ls=entry["ls"],
+                    label=entry["label"],
+                )
+            )
 
-        ax.plot(k_norm[1:], Pk_order_sum.real[1:], lw=collapsed_sum_lw, color=sum_color, ls=sum_ls, alpha=0.95)
+        ax.plot(
+            k_norm[1:],
+            Pk_order_sum.real[1:],
+            lw=collapsed_sum_lw,
+            color=sum_color,
+            ls=sum_ls,
+            alpha=0.95,
+        )
+
         if show_zero_line_main:
             ax.axhline(0.0, color="k", lw=1.0, alpha=0.8, ls=":")
 
-        ax.legend(handles=legend_terms, fontsize=legend_fontsize, loc="upper right", ncol=legend_ncol_terms)
+        ax.legend(
+            handles=legend_terms,
+            fontsize=legend_fontsize,
+            loc="upper right",
+            ncol=legend_ncol_terms,
+        )
 
         if show_order_badge:
             _add_order_badge(
-                ax, order,
+                ax,
+                order,
                 fontsize=order_badge_fontsize,
                 boxstyle=order_badge_boxstyle,
                 facecolor=order_badge_facecolor,
@@ -555,8 +618,13 @@ def plot_p1d_by_order(
         if use_symlog_main:
             linthresh = _nonzero_min([Pk_order_sum.real[1:]])
             apply_clean_symlog(
-                ax, axis="y", linthresh=linthresh, linscale=symlog_linscale,
-                base=symlog_base, label_minor=symlog_label_minor, sci_cutoff=symlog_sci_cutoff,
+                ax,
+                axis="y",
+                linthresh=linthresh,
+                linscale=symlog_linscale,
+                base=symlog_base,
+                label_minor=symlog_label_minor,
+                sci_cutoff=symlog_sci_cutoff,
             )
 
         nonzero_residuals = []
@@ -565,7 +633,14 @@ def plot_p1d_by_order(
             Pk_ref = Pk_order_sum.real[1:]
             for entry in entries:
                 res = _safe_relative_residual(entry["curve"].real[1:], Pk_ref)
-                ax_res.plot(k_norm[1:], res, lw=1.5, ls=entry["ls"], color=entry["color"], alpha=0.95)
+                ax_res.plot(
+                    k_norm[1:],
+                    res,
+                    lw=1.5,
+                    ls=entry["ls"],
+                    color=entry["color"],
+                    alpha=0.95,
+                )
                 nz = np.abs(res[np.abs(res) > 0])
                 if len(nz):
                     nonzero_residuals.append(np.min(nz))
@@ -576,12 +651,27 @@ def plot_p1d_by_order(
                 Pk_ref = auto_entries[0]["curve"].real[1:]
                 for entry in auto_entries:
                     res = _safe_relative_residual(entry["curve"].real[1:], Pk_ref)
-                    ax_res.plot(k_norm[1:], res, lw=1.5, ls=entry["ls"], color=entry["color"], alpha=0.95)
+                    ax_res.plot(
+                        k_norm[1:],
+                        res,
+                        lw=1.5,
+                        ls=entry["ls"],
+                        color=entry["color"],
+                        alpha=0.95,
+                    )
                     nz = np.abs(res[np.abs(res) > 0])
                     if len(nz):
                         nonzero_residuals.append(np.min(nz))
             else:
-                ax_res.text(0.5, 0.5, "No auto terms in this order", transform=ax_res.transAxes, fontsize=16, va="center", ha="center")
+                ax_res.text(
+                    0.5,
+                    0.5,
+                    "No auto terms in this order",
+                    transform=ax_res.transAxes,
+                    fontsize=16,
+                    va="center",
+                    ha="center",
+                )
         else:
             raise ValueError("residual_mode must be 'sum' or 'auto_reference'")
 
@@ -590,7 +680,10 @@ def plot_p1d_by_order(
 
         if show_harmonics:
             draw_harmonics(
-                ax_res, delta_v_list, L_box, Npix,
+                ax_res,
+                delta_v_harmonics,
+                L_box,
+                Npix,
                 colors=colors,
                 harmonic_color_mode=harmonic_color_mode,
                 harmonic_main_lw=harmonic_main_lw,
@@ -600,13 +693,25 @@ def plot_p1d_by_order(
 
         if use_symlog_residual:
             apply_clean_symlog(
-                ax_res, axis="y", linthresh=(np.min(nonzero_residuals) if nonzero_residuals else 1e-12),
-                linscale=symlog_linscale, base=symlog_base,
-                label_minor=symlog_label_minor, sci_cutoff=symlog_sci_cutoff,
+                ax_res,
+                axis="y",
+                linthresh=(np.min(nonzero_residuals) if nonzero_residuals else 1e-12),
+                linscale=symlog_linscale,
+                base=symlog_base,
+                label_minor=symlog_label_minor,
+                sci_cutoff=symlog_sci_cutoff,
             )
 
         ax_res.set_ylabel(residual_ylabel, fontsize=residual_label_fontsize)
         ax_res.tick_params(axis="both", labelsize=tick_fontsize, labelbottom=(ax_res == axes_res[-1]))
+
+        if use_log_x:
+            ax.set_xscale("log")
+            ax_res.set_xscale("log")
+
+        if xlim is not None:
+            ax.set_xlim(xlim)
+            ax_res.set_xlim(xlim)
 
     if show_harmonics:
         add_harmonic_legend(axes[0], fontsize=harmonic_legend_fontsize)
