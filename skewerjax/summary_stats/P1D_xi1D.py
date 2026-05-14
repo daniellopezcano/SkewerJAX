@@ -59,7 +59,7 @@ class OverfluxStatistics1D:
 
         self.subset_keys = overflux.subset_keys
         self.Npix = self.total.shape[1]
-        self.k = 2.0 * jnp.pi * rfftfreq(self.Npix, d=self.dv)
+        self.k = 2.0 * jnp.pi * rfftfreq(self.Npix, d=self.dv) # 2 pi \frac{m}{Npix dv} with m \in \{0, ..., Npix/2\}
         self.lags = (jnp.arange(self.Npix) - self.Npix // 2) * self.dv
         self.ordered_pairs = list(product(self.subset_keys, repeat=2))
 

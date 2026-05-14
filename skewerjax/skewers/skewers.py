@@ -391,9 +391,7 @@ class DeltaFieldBuilder:
 
         logger.info(
             "Initialized DeltaFieldBuilder with %d fields, N_samples=%d, N_points=%d.",
-            len(self.labels),
-            self.N_samples,
-            self.fields[self.labels[0]].shape[1],
+            len(self.labels), self.N_samples, self.fields[self.labels[0]].shape[1],
         )
 
     def _validate_inputs(self):

@@ -222,18 +222,19 @@ def draw_harmonics(
     harmonic_alpha=0.7,
 ):
     colors = _default_colors() if colors is None else colors
+    dv = L_box / Npix
 
     for j, delta_v_0 in enumerate(delta_v_list):
         if delta_v_0 == 0.0:
             continue
 
         c = colors[j % len(colors)] if harmonic_color_mode == "cycle" else "grey"
-        k0_norm = L_box / delta_v_0
-        n_max_harmonic = int(np.floor((Npix / 2) / k0_norm))
+        k0 = 2 * np.pi / delta_v_0   # Characteristic frequency from Delta v_0
+        ax.axvline(k0, color=c, lw=harmonic_main_lw, ls="--")
 
-        ax.axvline(k0_norm, color=c, lw=harmonic_main_lw, ls="--")
+        n_max_harmonic = int(np.floor((delta_v_0 / (2*dv))))
         for n in range(0, n_max_harmonic + 1):
-            ax.axvline(n * k0_norm, color=c, lw=harmonic_higher_lw, ls=":", alpha=harmonic_alpha)
+            ax.axvline(n * k0, color=c, lw=harmonic_higher_lw, ls=":", alpha=harmonic_alpha)
 
 
 def add_harmonic_legend(ax, *, fontsize=16):
@@ -432,7 +433,7 @@ import warnings
 def plot_p1d_by_order(
     ordered_pairs,
     Pk_pair,
-    k_norm,
+    k,
     delta_v_list,
     L_box,
     Npix,
@@ -448,7 +449,7 @@ def plot_p1d_by_order(
     symlog_label_minor=False,
     symlog_sci_cutoff=1e-2,
     legend_ncol_terms=2,
-    xlabel=r"$kL_\mathrm{box}/(2\pi)$",
+    xlabel=r"$k \, \left[ \mathrm{s} / \mathrm{km} \right]$",
     ylabel=r"$P_{\rm 1D}$",
     residual_ylabel=r"$\Delta$",
 ):
@@ -488,8 +489,7 @@ def plot_p1d_by_order(
     show_order_badge = True
 
     # ------------------------------------------------------------------
-    # Harmonic-folding convention:
-    # if delta_v > L_box/2, display harmonics at L_box - delta_v
+    # Harmonic-folding convention: if delta_v > L_box/2, display harmonics at L_box - delta_v
     # ------------------------------------------------------------------
     delta_v_array = np.asarray(delta_v_list, dtype=float)
     delta_v_harmonics = np.where(delta_v_array > 0.5 * L_box, L_box - delta_v_array, delta_v_array)
@@ -499,12 +499,10 @@ def plot_p1d_by_order(
         folded_entries = []
         for i, (orig, shown) in enumerate(zip(delta_v_array, delta_v_harmonics)):
             if folded_mask[i]:
-                folded_entries.append(
-                    f"index {i}: delta_v={orig:.6g} -> displayed as {shown:.6g}"
-                )
+                folded_entries.append(f"index {i}: delta_v={orig:.6g} -> displayed as {shown:.6g}")
+
         warnings.warn(
-            "Some harmonic positions use the folded convention delta_v -> L_box - delta_v "
-            f"for delta_v > L_box/2. Affected entries: {', '.join(folded_entries)}",
+            "Some harmonic positions use the folded convention delta_v -> L_box - delta_v for delta_v > L_box/2. Affected entries: {', '.join(folded_entries)}",
             UserWarning,
         )
 
@@ -513,11 +511,8 @@ def plot_p1d_by_order(
         figsize = (14, 6.0 * len(orders))
 
     fig = plt.figure(figsize=figsize)
-    gs = fig.add_gridspec(
-        nrows=2 * len(orders),
-        ncols=1,
-        height_ratios=[v for _ in orders for v in (main_panel_height, residual_panel_height)],
-        hspace=hspace,
+    gs = fig.add_gridspec(nrows=2 * len(orders), ncols=1,
+        height_ratios=[v for _ in orders for v in (main_panel_height, residual_panel_height)], hspace=hspace,
     )
 
     axes, axes_res = [], []
@@ -533,16 +528,8 @@ def plot_p1d_by_order(
         pairs_this_order = [pair for pair in ordered_pairs if pair_order(pair) == order]
 
         if show_harmonics:
-            draw_harmonics(
-                ax,
-                delta_v_harmonics,
-                L_box,
-                Npix,
-                colors=colors,
-                harmonic_color_mode=harmonic_color_mode,
-                harmonic_main_lw=harmonic_main_lw,
-                harmonic_higher_lw=harmonic_higher_lw,
-                harmonic_alpha=harmonic_alpha,
+            draw_harmonics(ax, delta_v_harmonics, L_box, Npix, colors=colors, harmonic_color_mode=harmonic_color_mode,
+                harmonic_main_lw=harmonic_main_lw, harmonic_higher_lw=harmonic_higher_lw, harmonic_alpha=harmonic_alpha,
             )
 
         entries, Pk_order_sum, Pk_order_sum_full = collapse_order_pairs(
@@ -551,65 +538,32 @@ def plot_p1d_by_order(
 
         sum_diff = np.max(np.abs(Pk_order_sum[1:] - Pk_order_sum_full[1:]))
         if sum_diff > tolerance_threshold:
-            print(
-                f"[warning] order {order}: collapsed/fallback representation differs "
-                f"from the full sum by max {sum_diff:.6e}"
-            )
+            print(f"[warning] order {order}: collapsed/fallback representation differs from the full sum by max {sum_diff:.6e}")
 
         order_sum_dict[order] = Pk_order_sum
 
-        legend_terms = [
-            Line2D([0], [0], color=sum_color, lw=collapsed_sum_lw, ls=sum_ls, label="Sum")
-        ]
+        legend_terms = [Line2D([0], [0], color=sum_color, lw=collapsed_sum_lw, ls=sum_ls, label="Sum")]
 
         for i, entry in enumerate(entries):
             entry["color"] = cmap(i % 10)
-            ax.plot(
-                k_norm[1:],
-                entry["curve"].real[1:],
-                lw=main_curve_lw,
-                ls=entry["ls"],
-                color=entry["color"],
-                alpha=0.95,
-            )
-            legend_terms.append(
-                Line2D(
-                    [0], [0],
-                    color=entry["color"],
-                    lw=main_curve_lw,
-                    ls=entry["ls"],
-                    label=entry["label"],
-                )
-            )
-
-        ax.plot(
-            k_norm[1:],
-            Pk_order_sum.real[1:],
-            lw=collapsed_sum_lw,
-            color=sum_color,
-            ls=sum_ls,
-            alpha=0.95,
-        )
+            ax.plot(k[1:], entry["curve"].real[1:], lw=main_curve_lw, ls=entry["ls"], color=entry["color"], alpha=0.95)
+            legend_terms.append(Line2D([0], [0], color=entry["color"], lw=main_curve_lw, ls=entry["ls"], label=entry["label"]))
+        ax.plot(k[1:], Pk_order_sum.real[1:], lw=collapsed_sum_lw, color=sum_color, ls=sum_ls, alpha=0.95)
 
         if show_zero_line_main:
             ax.axhline(0.0, color="k", lw=1.0, alpha=0.8, ls=":")
 
-        ax.legend(
+        leg_terms = ax.legend(
             handles=legend_terms,
             fontsize=legend_fontsize,
             loc="upper right",
             ncol=legend_ncol_terms,
         )
+        ax.add_artist(leg_terms)
 
         if show_order_badge:
-            _add_order_badge(
-                ax,
-                order,
-                fontsize=order_badge_fontsize,
-                boxstyle=order_badge_boxstyle,
-                facecolor=order_badge_facecolor,
-                edgecolor=order_badge_edgecolor,
-                alpha=order_badge_alpha,
+            _add_order_badge(ax, order, fontsize=order_badge_fontsize, boxstyle=order_badge_boxstyle,
+                facecolor=order_badge_facecolor, edgecolor=order_badge_edgecolor, alpha=order_badge_alpha,
             )
 
         ax.set_ylabel(ylabel, fontsize=label_fontsize)
@@ -618,13 +572,7 @@ def plot_p1d_by_order(
         if use_symlog_main:
             linthresh = _nonzero_min([Pk_order_sum.real[1:]])
             apply_clean_symlog(
-                ax,
-                axis="y",
-                linthresh=linthresh,
-                linscale=symlog_linscale,
-                base=symlog_base,
-                label_minor=symlog_label_minor,
-                sci_cutoff=symlog_sci_cutoff,
+                ax, axis="y", linthresh=linthresh, linscale=symlog_linscale, base=symlog_base, label_minor=symlog_label_minor, sci_cutoff=symlog_sci_cutoff
             )
 
         nonzero_residuals = []
@@ -633,14 +581,7 @@ def plot_p1d_by_order(
             Pk_ref = Pk_order_sum.real[1:]
             for entry in entries:
                 res = _safe_relative_residual(entry["curve"].real[1:], Pk_ref)
-                ax_res.plot(
-                    k_norm[1:],
-                    res,
-                    lw=1.5,
-                    ls=entry["ls"],
-                    color=entry["color"],
-                    alpha=0.95,
-                )
+                ax_res.plot(k[1:], res, lw=1.5, ls=entry["ls"], color=entry["color"], alpha=0.95)
                 nz = np.abs(res[np.abs(res) > 0])
                 if len(nz):
                     nonzero_residuals.append(np.min(nz))
@@ -651,27 +592,12 @@ def plot_p1d_by_order(
                 Pk_ref = auto_entries[0]["curve"].real[1:]
                 for entry in auto_entries:
                     res = _safe_relative_residual(entry["curve"].real[1:], Pk_ref)
-                    ax_res.plot(
-                        k_norm[1:],
-                        res,
-                        lw=1.5,
-                        ls=entry["ls"],
-                        color=entry["color"],
-                        alpha=0.95,
-                    )
+                    ax_res.plot(k[1:], res, lw=1.5, ls=entry["ls"], color=entry["color"], alpha=0.95)
                     nz = np.abs(res[np.abs(res) > 0])
                     if len(nz):
                         nonzero_residuals.append(np.min(nz))
             else:
-                ax_res.text(
-                    0.5,
-                    0.5,
-                    "No auto terms in this order",
-                    transform=ax_res.transAxes,
-                    fontsize=16,
-                    va="center",
-                    ha="center",
-                )
+                ax_res.text(0.5, 0.5, "No auto terms in this order", transform=ax_res.transAxes, fontsize=16, va="center", ha="center")
         else:
             raise ValueError("residual_mode must be 'sum' or 'auto_reference'")
 
@@ -679,27 +605,13 @@ def plot_p1d_by_order(
             ax_res.axhline(0.0, color="k", lw=1.0, alpha=0.8, ls=":")
 
         if show_harmonics:
-            draw_harmonics(
-                ax_res,
-                delta_v_harmonics,
-                L_box,
-                Npix,
-                colors=colors,
-                harmonic_color_mode=harmonic_color_mode,
-                harmonic_main_lw=harmonic_main_lw,
-                harmonic_higher_lw=harmonic_higher_lw,
-                harmonic_alpha=harmonic_alpha,
+            draw_harmonics(ax_res, delta_v_harmonics, L_box, Npix, colors=colors, harmonic_color_mode=harmonic_color_mode,
+                harmonic_main_lw=harmonic_main_lw, harmonic_higher_lw=harmonic_higher_lw, harmonic_alpha=harmonic_alpha,
             )
 
         if use_symlog_residual:
-            apply_clean_symlog(
-                ax_res,
-                axis="y",
-                linthresh=(np.min(nonzero_residuals) if nonzero_residuals else 1e-12),
-                linscale=symlog_linscale,
-                base=symlog_base,
-                label_minor=symlog_label_minor,
-                sci_cutoff=symlog_sci_cutoff,
+            apply_clean_symlog(ax_res, axis="y", linthresh=(np.min(nonzero_residuals) if nonzero_residuals else 1e-12),
+                linscale=symlog_linscale, base=symlog_base, label_minor=symlog_label_minor, sci_cutoff=symlog_sci_cutoff,
             )
 
         ax_res.set_ylabel(residual_ylabel, fontsize=residual_label_fontsize)
@@ -727,7 +639,7 @@ def plot_p1d_total_recovery(
     Pk_total,
     Pk_total_from_terms,
     Pk_pair,
-    k_norm,
+    k,
     delta_v_list,
     L_box,
     Npix,
@@ -766,7 +678,7 @@ def plot_p1d_total_recovery(
     tick_fontsize=22,
     legend_fontsize=18,
     harmonic_legend_fontsize=16,
-    xlabel=r"$kL_\mathrm{box}/(2\pi)$",
+    xlabel=r"$k \, \left[ \mathrm{s} / \mathrm{km} \right]$",
     ylabel=r"$P_{\rm 1D}$",
     residual_ylabel=r"$\Delta$",
 ):
@@ -800,11 +712,11 @@ def plot_p1d_total_recovery(
         for order in orders:
             curve = order_sum_dict[order].real[1:]
             c = order_color_dict[order]
-            ax.plot(k_norm[1:], curve, lw=order_sum_lw, color=c, alpha=order_sum_alpha)
+            ax.plot(k[1:], curve, lw=order_sum_lw, color=c, alpha=order_sum_alpha)
             order_sum_handles.append(Line2D([0], [0], color=c, lw=order_sum_lw, label=rf"$\mathcal{{O}}({order})$"))
 
-    ax.plot(k_norm[1:], Pk_total.real[1:], lw=total_lw, color=total_color)
-    ax.plot(k_norm[1:], Pk_total_from_terms[1:], lw=recovered_lw, color=recovered_color, ls=recovered_ls)
+    ax.plot(k[1:], Pk_total.real[1:], lw=total_lw, color=total_color)
+    ax.plot(k[1:], Pk_total_from_terms[1:], lw=recovered_lw, color=recovered_color, ls=recovered_ls)
 
     if use_symlog_main:
         linthresh = _nonzero_min([Pk_total.real[1:]]) if main_symlog_linthresh is None else main_symlog_linthresh
@@ -842,9 +754,9 @@ def plot_p1d_total_recovery(
         for order in orders:
             c = order_color_dict[order]
             curve = order_sum_dict[order].real[1:]
-            ax_res.plot(k_norm[1:], _safe_relative_residual(curve, Pk_ref), lw=1.0, color=c, alpha=order_sum_alpha)
+            ax_res.plot(k[1:], _safe_relative_residual(curve, Pk_ref), lw=1.0, color=c, alpha=order_sum_alpha)
 
-    ax_res.plot(k_norm[1:], _safe_relative_residual(Pk_total_from_terms[1:], Pk_ref), lw=2.0, color=recovered_color, ls=recovered_ls)
+    ax_res.plot(k[1:], _safe_relative_residual(Pk_total_from_terms[1:], Pk_ref), lw=2.0, color=recovered_color, ls=recovered_ls)
 
     if show_harmonics:
         draw_harmonics(
@@ -989,7 +901,12 @@ def plot_xi_by_order(
         ax.plot(lags_norm, xi_order_sum_plot, lw=collapsed_sum_lw, color=sum_color, ls=sum_ls, alpha=0.95)
         ax.axhline(0.0, color="k", lw=1.0, alpha=0.8, ls=":")
 
-        leg_terms = ax.legend(handles=legend_terms, fontsize=legend_fontsize, loc="upper right", ncol=legend_ncol_terms)
+        leg_terms = ax.legend(
+            handles=legend_terms,
+            fontsize=legend_fontsize,
+            loc="upper right",
+            ncol=legend_ncol_terms,
+        )
         ax.add_artist(leg_terms)
 
         if show_order_badge:
