@@ -485,3 +485,419 @@ def plot_flux_panels_colored_by_los(
         plt.close(fig)
 
     return fig, ax
+
+
+
+
+
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+
+
+# ============================================================
+# Shared helpers
+# ============================================================
+
+def _neon_colors(labels):
+    palette = ["#00FFFF", "#FF00FF", "#39FF14", "#FFEA00", "#FF5F1F", "#9D00FF", "#00BFFF", "#FF1493", "#7FFF00", "#FF073A", "#00FF7F", "#FF3131"]
+    return {lab: palette[i % len(palette)] for i, lab in enumerate(labels)}
+
+
+def _dark_3d_style(ax, tick_fs=13, hide_ticks=False):
+    ax.set_facecolor("black")
+    ax.grid(False)
+    ax.tick_params(axis="both", which="major", labelsize=tick_fs, colors="white", length=0 if hide_ticks else 5, width=0 if hide_ticks else 1.0)
+    for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
+        axis.pane.fill = False
+        axis.pane.set_edgecolor("black")
+        axis.label.set_color("white")
+        try:
+            axis._axinfo["grid"]["linewidth"] = 0.0
+            axis._axinfo["axisline"]["linewidth"] = 0.0
+            axis._axinfo["tick"]["color"] = "white"
+        except Exception:
+            pass
+
+
+def _box_edges(x0, x1, y0, y1, z0, z1):
+    return [
+        ((x0, y0, z0), (x1, y0, z0)), ((x0, y1, z0), (x1, y1, z0)), ((x0, y0, z1), (x1, y0, z1)), ((x0, y1, z1), (x1, y1, z1)),
+        ((x0, y0, z0), (x0, y1, z0)), ((x1, y0, z0), (x1, y1, z0)), ((x0, y0, z1), (x0, y1, z1)), ((x1, y0, z1), (x1, y1, z1)),
+        ((x0, y0, z0), (x0, y0, z1)), ((x1, y0, z0), (x1, y0, z1)), ((x0, y1, z0), (x0, y1, z1)), ((x1, y1, z0), (x1, y1, z1)),
+    ]
+
+
+def _line_labels_and_species(line_bundle, n_lines):
+    if line_bundle is None or not hasattr(line_bundle, "lines"):
+        labels = [f"line {i}" for i in range(n_lines)]
+        return labels, labels
+
+    species = [getattr(line, "species", f"line {i}") for i, line in enumerate(line_bundle.lines)]
+    if len(species) != n_lines:
+        labels = [f"line {i}" for i in range(n_lines)]
+        return labels, labels
+
+    counts, seen, labels = {s: species.count(s) for s in set(species)}, {}, []
+    for s in species:
+        seen[s] = seen.get(s, 0) + 1
+        labels.append(f"{s} {seen[s]}" if counts[s] > 1 else s)
+
+    return labels, species
+
+
+def _scaled_range(values, eps=1e-300, logscale=True, positive_only=False):
+    values = np.asarray(values)
+    mask = np.isfinite(values)
+    if positive_only:
+        mask &= values > 0
+    data = values[mask]
+    if data.size == 0:
+        return (np.log10(eps), np.log10(eps) + 1.0, 1.0) if logscale else (0.0, 1.0, 1.0)
+    data = np.log10(np.maximum(data, eps)) if logscale else data
+    vmin, vmax = np.nanmin(data), np.nanmax(data)
+    return vmin, vmax, max(vmax - vmin, 1e-30)
+
+
+def _scale_values(values, vmin, vrange, eps=1e-300, logscale=True, positive_only=False):
+    values = np.asarray(values)
+    out = np.full(values.shape, vmin, dtype=float)
+    mask = np.isfinite(values)
+    if positive_only:
+        mask &= values > 0
+    out[mask] = np.log10(np.maximum(values[mask], eps)) if logscale else values[mask]
+    return np.clip((out - vmin) / vrange, 0.0, 1.0)
+
+
+def _resample_path(path, n_target):
+    path = np.asarray(path)
+    if path.shape[0] == n_target:
+        return path
+    old_t, new_t = np.linspace(0, 1, path.shape[0]), np.linspace(0, 1, n_target)
+    return np.column_stack([np.interp(new_t, old_t, path[:, i]) for i in range(3)])
+
+
+def _local_basis(path):
+    los = np.asarray(path[-1] - path[0], dtype=float)
+    los /= np.linalg.norm(los) + 1e-30
+    ref = np.array([0.0, 0.0, 1.0])
+    if abs(np.dot(los, ref)) > 0.95:
+        ref = np.array([1.0, 0.0, 0.0])
+    e1 = np.cross(los, ref)
+    e1 /= np.linalg.norm(e1) + 1e-30
+    e2 = np.cross(los, e1)
+    e2 /= np.linalg.norm(e2) + 1e-30
+    return e1, e2
+
+
+def _select_indices(points, skewer_index=0, n_samples_plot=1):
+    n_skewers = np.asarray(points).shape[0]
+    idx = np.arange(int(skewer_index), int(skewer_index) + max(1, int(n_samples_plot)))
+    return np.clip(idx, 0, n_skewers - 1)
+
+
+def _grid_pairs_from_flat(flat, Nx, Nz):
+    flat = np.clip(np.asarray(flat, dtype=int), 0, Nx * Nz - 1)
+    return [(int(i // Nz), int(i % Nz)) for i in flat]
+
+
+def _profile_setup(points, sampled_fields=None, field="number_density", mode="sampled_fields", optical_depth_grid=None, line_bundle=None, selected=None, normalization="global", field_logscale=True, eps=1e-300, optical_depth_eps=1e-30):
+    selected = np.asarray(selected, dtype=int)
+
+    if mode == "sampled_fields":
+        labels = list(sampled_fields.keys())
+        profiles = np.asarray([[np.asarray(sampled_fields[s][field][idx]) for s in labels] for idx in selected])
+        range_values = profiles if normalization == "skewer" else np.concatenate([np.asarray(sampled_fields[s][field]).ravel() for s in labels])
+        vmin, vmax, vrange = _scaled_range(range_values, eps=eps, logscale=field_logscale)
+        return dict(labels=labels, color_labels=labels, profiles=profiles, selected=selected, vmin=vmin, vmax=vmax, vrange=vrange, eps=eps, positive_only=False)
+
+    if mode == "optical_depth":
+        tau = np.asarray(optical_depth_grid)
+        if tau.ndim != 4:
+            raise ValueError("optical_depth_grid must have shape (n_lines, Nx, Nz, N_lambda).")
+        n_lines, Nx, Nz, _ = tau.shape
+        grid_pairs = _grid_pairs_from_flat(selected, Nx, Nz)
+        labels, species = _line_labels_and_species(line_bundle, n_lines)
+        profiles = np.asarray([tau[:, ix, iz, :] for ix, iz in grid_pairs])
+        range_values = profiles if normalization == "skewer" else tau
+        vmin, vmax, vrange = _scaled_range(range_values, eps=optical_depth_eps, logscale=field_logscale, positive_only=True)
+        return dict(labels=labels, color_labels=species, profiles=profiles, selected=selected, vmin=vmin, vmax=vmax, vrange=vrange, eps=optical_depth_eps, positive_only=True)
+
+    raise ValueError("mode must be 'sampled_fields' or 'optical_depth'.")
+
+
+# ============================================================
+# 1. Compact radar-cylinder plot
+# ============================================================
+
+def plot_3d_radar_cylinder(
+    points, sampled_fields=None, field="number_density", mode="sampled_fields", optical_depth=None, line_bundle=None,
+    skewer_index=0, n_samples_plot=1, cylinder_radius=1.5, cylinder_separation=5.2, field_logscale=True, normalization="global",
+    scale_box_x_factor=0.8, legend_y_factor=0.8, scale_units_xy=(0.50, 1.05), profile_angle_offset_deg=90.0,
+    n_y_slices=3, field_units=None, view_elev=18, view_azim=-58, show=True
+):
+    points = np.asarray(points)
+    selected = _select_indices(points, skewer_index, n_samples_plot)
+
+    if mode == "sampled_fields":
+        labels = list(sampled_fields.keys())
+        color_labels = labels
+        profiles = np.asarray([[np.asarray(sampled_fields[s][field][idx]) for s in labels] for idx in selected])
+        range_values = profiles if normalization == "skewer" else np.concatenate([np.asarray(sampled_fields[s][field]).ravel() for s in labels])
+        vmin, vmax, vrange = _scaled_range(range_values, eps=1e-300, logscale=field_logscale, positive_only=False)
+        eps, positive_only = 1e-300, False
+
+    elif mode == "optical_depth":
+        tau = np.asarray(optical_depth)
+        n_lines = int(line_bundle.n_lines)
+        if tau.ndim != 3 or tau.shape[0] != n_lines:
+            raise ValueError("Expected optical_depth with shape (line_bundle.n_lines, N_skewers, N_lambda).")
+
+        labels, color_labels = _line_labels_and_species(line_bundle, n_lines)
+        selected = np.clip(selected, 0, tau.shape[1] - 1)
+        profiles = np.asarray([tau[:, idx, :] for idx in selected])
+        range_values = profiles if normalization == "skewer" else tau
+        vmin, vmax, vrange = _scaled_range(range_values, eps=1e-30, logscale=field_logscale, positive_only=True)
+        eps, positive_only = 1e-30, True
+
+    else:
+        raise ValueError("mode must be either 'sampled_fields' or 'optical_depth'.")
+
+    n_samples, n_profiles = profiles.shape[0], profiles.shape[1]
+    colors = _neon_colors(list(dict.fromkeys(color_labels)))
+    profile_color = {lab: colors[color_labels[i]] for i, lab in enumerate(labels)}
+    angles = {lab: np.deg2rad(profile_angle_offset_deg) + 2 * np.pi * i / n_profiles for i, lab in enumerate(labels)}
+
+    fig = plt.figure(figsize=(12.2 + 1.85 * max(n_samples - 1, 0), 7.0), facecolor="black")
+    ax = fig.add_subplot(111, projection="3d", facecolor="black")
+    ax.set_position((0.01, 0.02, 0.86, 0.90))
+
+    axis_length = 7.5
+    centers = np.arange(n_samples, dtype=float) * cylinder_separation
+    centers -= centers.mean()
+
+    phi = np.linspace(0, 2 * np.pi, 360)
+    y_slices = np.linspace(0, axis_length, n_y_slices)
+    rings = cylinder_radius * np.linspace(1 / 6, 1, 6)
+
+    for i_sample, x0 in enumerate(centers):
+        n_pix = profiles[i_sample].shape[-1]
+        pix = np.arange(n_pix) if n_pix <= 512 else np.linspace(0, n_pix - 1, 512).astype(int)
+        y = np.linspace(0, axis_length, n_pix)[pix]
+
+        ax.plot(np.full_like(y_slices, x0), y_slices, np.zeros_like(y_slices), color="white", lw=1.6, alpha=0.9)
+
+        for yy in y_slices:
+            for rr in rings:
+                ax.plot(x0 + rr * np.cos(phi), np.full_like(phi, yy), rr * np.sin(phi), color="white", lw=0.85, alpha=0.18)
+
+        for i_profile, lab in enumerate(labels):
+            th, c = angles[lab], profile_color[lab]
+            r = cylinder_radius * _scale_values(profiles[i_sample, i_profile][pix], vmin, vrange, eps, field_logscale, positive_only)
+
+            ax.plot(x0 + cylinder_radius * np.cos(th) * np.ones_like(y_slices), y_slices, cylinder_radius * np.sin(th) * np.ones_like(y_slices), color=c, lw=0.9, alpha=0.18)
+            ax.plot(x0 + r * np.cos(th), y, r * np.sin(th), color=c, lw=8.5, alpha=0.10)
+            ax.plot(x0 + r * np.cos(th), y, r * np.sin(th), color=c, lw=4.2, alpha=0.30)
+            ax.plot(x0 + r * np.cos(th), y, r * np.sin(th), color=c, lw=1.05, alpha=1.00)
+
+    margin = 1.22 * cylinder_radius
+    ax.set_xlim(np.min(centers) - margin, np.max(centers) + margin)
+    ax.set_ylim(-0.18 * axis_length, 1.05 * axis_length)
+    ax.set_zlim(-margin, margin)
+    ax.set_box_aspect((np.ptp(ax.get_xlim()), np.ptp(ax.get_ylim()), np.ptp(ax.get_zlim())))
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_zticks([])
+    _dark_3d_style(ax, hide_ticks=True)
+    ax.view_init(elev=view_elev, azim=view_azim)
+
+    sax = fig.add_axes((0.815 * scale_box_x_factor, 0.335, 0.125, 0.37), facecolor="black")
+    sax.set_xlim(0, 1)
+    sax.set_ylim(0, 1)
+    sax.set_xticks([])
+    sax.set_yticks([])
+
+    for spine in sax.spines.values():
+        spine.set_color("white")
+        spine.set_linewidth(1.1)
+
+    sax.plot([0.28, 0.28], [0.20, 0.80], color="white", lw=2.0)
+
+    for rr, vv in zip(np.linspace(0, 1, 5), np.linspace(vmin, vmax, 5)):
+        yy = 0.20 + 0.60 * rr
+        sax.plot([0.20, 0.36], [yy, yy], color="white", lw=1.5)
+        sax.text(0.88, yy, f"{vv:.2f}", color="white", fontsize=17, ha="right", va="center")
+
+    if field_units is not None:
+        sax.text(scale_units_xy[0], scale_units_xy[1], field_units, color="white", fontsize=22, ha="center", va="bottom", transform=sax.transAxes)
+
+    handles = [Line2D([0], [0], color=profile_color[lab], lw=5, label=lab) for lab in labels]
+    leg = fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.44, 0.965 * legend_y_factor), ncols=min(len(labels), 6), frameon=True, facecolor="black", edgecolor="white", framealpha=1, fontsize=15)
+
+    for text in leg.get_texts():
+        text.set_color("white")
+
+    if show:
+        plt.show()
+
+    return fig, ax
+
+
+# ============================================================
+# 2. Compact 3D neon-ridge cube
+# ============================================================
+
+def plot_3d_neon_ridge_cube(
+    points, sampled_fields=None, field="number_density", mode="sampled_fields", optical_depth=None, line_bundle=None,
+    skewer_index=0, normalization="global", field_logscale=True, profile_angle_offset_deg=-90.0,
+    ridge_scale=1.2, elev=13, azim=-70, show=True
+):
+    points = np.asarray(points)
+    selected = int(np.clip(skewer_index, 0, points.shape[0] - 1))
+
+    if mode == "sampled_fields":
+        labels = list(sampled_fields.keys())
+        color_labels = labels
+        range_values = np.asarray([np.asarray(sampled_fields[s][field][selected]) for s in labels]) if normalization == "skewer" else np.concatenate([np.asarray(sampled_fields[s][field]).ravel() for s in labels])
+        vmin, vmax, vrange = _scaled_range(range_values, eps=1e-300, logscale=field_logscale, positive_only=False)
+        eps, positive_only = 1e-300, False
+
+    elif mode == "optical_depth":
+        tau = np.asarray(optical_depth)
+        n_lines = int(line_bundle.n_lines)
+        if tau.ndim != 3 or tau.shape[0] != n_lines:
+            raise ValueError("Expected optical_depth with shape (line_bundle.n_lines, N_skewers, N_lambda).")
+
+        labels, color_labels = _line_labels_and_species(line_bundle, n_lines)
+        selected = int(np.clip(selected, 0, tau.shape[1] - 1))
+        range_values = tau[:, selected, :] if normalization == "skewer" else tau
+        vmin, vmax, vrange = _scaled_range(range_values, eps=1e-30, logscale=field_logscale, positive_only=True)
+        eps, positive_only = 1e-30, True
+
+    else:
+        raise ValueError("mode must be either 'sampled_fields' or 'optical_depth'.")
+
+    colors = _neon_colors(list(dict.fromkeys(color_labels)))
+    profile_color = {lab: colors[color_labels[i]] for i, lab in enumerate(labels)}
+    angles = {lab: np.deg2rad(profile_angle_offset_deg) + 2 * np.pi * i / len(labels) for i, lab in enumerate(labels)}
+
+    x0, x1 = np.nanmin(points[..., 0]), np.nanmax(points[..., 0])
+    y0, y1 = np.nanmin(points[..., 1]), np.nanmax(points[..., 1])
+    z0, z1 = np.nanmin(points[..., 2]), np.nanmax(points[..., 2])
+    extent = max(x1 - x0, y1 - y0, z1 - z0)
+    field_scale = 0.06 * ridge_scale * extent
+
+    fig = plt.figure(figsize=(10.2, 8.2), facecolor="black")
+    ax = fig.add_subplot(111, projection="3d", facecolor="black")
+    ax.set_position((0.01, 0.01, 0.98, 0.98))
+
+    for a, b in _box_edges(x0, x1, y0, y1, z0, z1):
+        ax.plot([a[0], b[0]], [a[1], b[1]], [a[2], b[2]], color="white", lw=2.2)
+
+    for sk_idx, path in enumerate(points):
+        e1, e2 = _local_basis(path)
+
+        for i_profile, lab in enumerate(labels):
+            if mode == "sampled_fields":
+                values = np.asarray(sampled_fields[lab][field][sk_idx])
+            else:
+                values = tau[i_profile, sk_idx, :]
+
+            p = _resample_path(path, values.size)
+            amp = field_scale * _scale_values(values, vmin, vrange, eps, field_logscale, positive_only)
+            direction = np.cos(angles[lab]) * e1 + np.sin(angles[lab]) * e2
+            ridge = p + amp[:, None] * direction[None, :]
+            c = profile_color[lab]
+
+            ax.plot(ridge[:, 0], ridge[:, 1], ridge[:, 2], color=c, lw=8.0, alpha=0.12)
+            ax.plot(ridge[:, 0], ridge[:, 1], ridge[:, 2], color=c, lw=4.0, alpha=0.35)
+            ax.plot(ridge[:, 0], ridge[:, 1], ridge[:, 2], color=c, lw=1.0, alpha=1.0)
+
+    xm, ym, zm = 0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5 * (z0 + z1)
+    half = 0.5 * extent + field_scale
+
+    ax.set_xlim(xm - half, xm + half)
+    ax.set_ylim(ym - half, ym + half)
+    ax.set_zlim(zm - half, zm + half)
+    ax.set_box_aspect((1, 1, 1))
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    ax.set_zlabel("")
+    _dark_3d_style(ax)
+    ax.view_init(elev=elev, azim=azim)
+
+    if show:
+        plt.show()
+
+    return fig, ax
+
+
+# ============================================================
+# 3. Compact transmission plot
+# ============================================================
+
+def plot_transmission_samples_neon(F_over_F0, line_bundle, x_axis_array, x_label, x_axis_key, scale_factor_left, scale_factor_right, lambda0_anchor=None, N_plot_sample=4, seed=0, sample_indices=None):
+    F_over_F0 = np.asarray(F_over_F0)
+    x_axis_array = np.asarray(x_axis_array)
+    N_lines, N_skewers, _ = F_over_F0.shape
+
+    if sample_indices is None:
+        rng = np.random.default_rng(seed)
+        idx = np.arange(N_skewers) if N_plot_sample >= N_skewers else np.sort(rng.choice(N_skewers, size=N_plot_sample, replace=False))
+    else:
+        idx = np.clip(np.asarray(sample_indices, dtype=int), 0, N_skewers - 1)
+
+    labels, species = _line_labels_and_species(line_bundle, N_lines)
+    species_color = _neon_colors(list(dict.fromkeys(species)))
+    linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 2))]
+    c_kms = 299792.458
+
+    fig, axes = plt.subplots(len(idx), 1, figsize=(14, 2.2 * len(idx)), sharex=True, sharey=True, facecolor="black")
+    axes = np.atleast_1d(axes)
+
+    handles = [Line2D([0], [0], color="white", lw=1.8, label="Total")]
+
+    for ax, sk_idx in zip(axes, idx):
+        ax.set_facecolor("black")
+        F_total = np.prod(F_over_F0[:, sk_idx, :], axis=0)
+        ax.plot(x_axis_array, F_total, color="white", lw=5.0, alpha=0.10)
+        ax.plot(x_axis_array, F_total, color="white", lw=1.2, alpha=1.0)
+
+        for i_line, line in enumerate(line_bundle.lines):
+            c = species_color[species[i_line]]
+            ls = linestyles[i_line % len(linestyles)]
+            ax.plot(x_axis_array, F_over_F0[i_line, sk_idx, :], color=c, lw=6.0, ls=ls, alpha=0.12)
+            ax.plot(x_axis_array, F_over_F0[i_line, sk_idx, :], color=c, lw=2.4, ls=ls, alpha=1.0)
+
+            lam0 = float(getattr(line, "lambda0_A", getattr(line, "wavelength_A", getattr(line, "lambda_A", np.nan))))
+            x_start, x_end = lam0 / scale_factor_left, lam0 / scale_factor_right
+            if x_axis_key == "velocities":
+                if lambda0_anchor is None:
+                    raise ValueError("lambda0_anchor is required when x_axis_key='velocities'.")
+                x_start, x_end = c_kms * np.log(x_start / lambda0_anchor), c_kms * np.log(x_end / lambda0_anchor)
+
+            ax.axvline(x_start, color=c, ls=ls, lw=1.1, alpha=0.35)
+            ax.axvline(x_end, color=c, ls=ls, lw=1.1, alpha=0.35)
+
+        ax.text(0.015, 0.12, f"sk. #{sk_idx}", transform=ax.transAxes, color="white", fontsize=12, ha="left", va="bottom")
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_ylabel(r"$e^{-\tau}$", fontsize=20, color="white")
+        ax.tick_params(axis="both", which="major", labelsize=14, colors="white", length=6, width=1.1)
+        for side in ["top", "right", "bottom", "left"]:
+            ax.spines[side].set_color("white")
+            ax.spines[side].set_linewidth(1.0)
+
+    for i_line, lab in enumerate(labels):
+        handles.append(Line2D([0], [0], color=species_color[species[i_line]], lw=2.4, ls=linestyles[i_line % len(linestyles)], label=lab))
+
+    axes[-1].set_xlabel(x_label, fontsize=20, color="white")
+    leg = fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.965), ncols=min(len(handles), 7), frameon=True, fontsize=16, handlelength=2.6, facecolor="black", edgecolor="white", framealpha=1)
+    for text in leg.get_texts():
+        text.set_color("white")
+
+    fig.subplots_adjust(top=0.88, hspace=0.08)
+    plt.show()
+    return fig, axes, idx
+
