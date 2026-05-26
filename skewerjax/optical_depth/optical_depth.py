@@ -36,10 +36,7 @@ def compute_comoving_distance(points: jnp.ndarray) -> jnp.ndarray:
         diffs = spatial_coords[1:] - spatial_coords[:-1]
         step_distances = jnp.linalg.norm(diffs, axis=-1)
 
-        cumulative = jnp.concatenate([
-            jnp.zeros(1),
-            jnp.cumsum(step_distances),
-        ])
+        cumulative = jnp.concatenate([jnp.zeros(1), jnp.cumsum(step_distances)])
 
         return cumulative
 
@@ -121,20 +118,12 @@ def compute_optical_depth(
         Optical depth for each line, skewer, and velocity pixel.
     """
 
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Starting computation for cosmology index %d, Voigt impl=%s",
-        ii_cosmology,
-        voigt_implementation_mode,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Starting computation for cosmology index %d, Voigt impl=%s", ii_cosmology, voigt_implementation_mode)
 
     # ------------------------------------------------------------------
     # 0. Extract and process quadri-vectors from skewer_bundle
     # ------------------------------------------------------------------
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Extracting %d skewers with %d points each",
-        skewer_bundle.N_sk,
-        skewer_bundle.N_ppsk,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Extracting %d skewers with %d points each", skewer_bundle.N_sk, skewer_bundle.N_ppsk)
 
     quadri_vectors = skewer_bundle.quadri_vectors[ii_cosmology]  # (N_sk, N_ppsk, 4)
     LoS_directions = skewer_bundle.los_directions                # (N_sk, N_ppsk, 3)
@@ -159,9 +148,7 @@ def compute_optical_depth(
         a_dagger_for_profiles = a_dagger
 
     elif a_dagger.shape == (N_sk,):
-        # Per-skewer reference scale factor.
-        # Tile along the N_ppsk axis and flatten because the line-profile
-        # function internally flattens quadri_vectors to (N_sk * N_ppsk, 4).
+        # Per-skewer reference scale factor. Tile along the N_ppsk axis and flatten because the line-profile function internally flattens quadri_vectors to (N_sk * N_ppsk, 4).
         a_dagger_tiled = jnp.repeat(a_dagger[:, None], N_ppsk, axis=1)
         a_dagger_for_profiles = a_dagger_tiled.reshape(N_points)
 
@@ -175,59 +162,23 @@ def compute_optical_depth(
 
     else:
         raise ValueError(
-            "`a_dagger` must be None, scalar, have shape "
-            f"({N_sk},), shape ({N_sk}, {N_ppsk}), or shape ({N_points},). "
-            f"Got shape {a_dagger.shape}."
+            "`a_dagger` must be None, scalar, have shape ({N_sk},), shape ({N_sk}, {N_ppsk}), or shape ({N_points},). Got shape {a_dagger.shape}."
         )
 
     # ------------------------------------------------------------------
     # 1. Compute line profiles
     # ------------------------------------------------------------------
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Computing line profiles for %d lines across %d species",
-        line_bundle.n_lines,
-        line_bundle.n_species,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Computing line profiles for %d lines across %d species", line_bundle.n_lines, line_bundle.n_species)
 
     phi_ns = line_profile.compute_line_profiles(
-        quadri_vectors=quadri_vectors,
-        LoS_directions=LoS_directions,
-        velocities_kms=velocities_kms,
-        a_dagger=a_dagger_for_profiles,
-        line_bundle=line_bundle,
-        fields=fields,
-        voigt_implementation_mode=voigt_implementation_mode,
+        quadri_vectors=quadri_vectors, LoS_directions=LoS_directions, velocities_kms=velocities_kms,
+        a_dagger=a_dagger_for_profiles, line_bundle=line_bundle,fields=fields, voigt_implementation_mode=voigt_implementation_mode,
     )
 
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Line profiles computed with raw shape %s",
-        phi_ns.shape,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Line profiles computed with raw shape %s", phi_ns.shape)
 
-    # Your current velocity-units line-profile function returns:
-    #
-    #     (N_lines, N_sk, N_ppsk * N_v)
-    #
-    # for quadri_vectors with shape:
-    #
-    #     (N_sk, N_ppsk, 4)
-    #
-    # For optical-depth integration we need:
-    #
-    #     (N_lines, N_sk, N_ppsk, N_v)
-    #
-    expected_flat_shape = (
-        int(line_bundle.n_lines),
-        N_sk,
-        N_ppsk * N_v,
-    )
-
-    expected_full_shape = (
-        int(line_bundle.n_lines),
-        N_sk,
-        N_ppsk,
-        N_v,
-    )
+    expected_flat_shape = (int(line_bundle.n_lines), N_sk, N_ppsk * N_v)
+    expected_full_shape = (int(line_bundle.n_lines), N_sk, N_ppsk, N_v)
 
     if phi_ns.shape == expected_flat_shape:
         phi_ns = phi_ns.reshape(expected_full_shape)
@@ -236,142 +187,121 @@ def compute_optical_depth(
         pass
 
     else:
-        raise ValueError(
-            f"Unexpected phi_ns shape {phi_ns.shape}. Expected either "
-            f"{expected_flat_shape} or {expected_full_shape}."
-        )
+        raise ValueError(f"Unexpected phi_ns shape {phi_ns.shape}. Expected either {expected_flat_shape} or {expected_full_shape}.")
 
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Line profiles reshaped for integration with shape %s",
-        phi_ns.shape,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Line profiles reshaped for integration with shape %s", phi_ns.shape)
 
     # ------------------------------------------------------------------
     # 2. Map species → line indices, and tile fields to lines
     # ------------------------------------------------------------------
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Tiling fields for %d species to line-level",
-        len(line_bundle.species_keys),
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Tiling fields for %d species to line-level", len(line_bundle.species_keys))
 
-    indices_for_species: Mapping[str, jnp.ndarray] = {
-        sp: line_bundle.indices_for_species(sp)
-        for sp in line_bundle.species_keys
-    }
+    indices_for_species: Mapping[str, jnp.ndarray] = {sp: line_bundle.indices_for_species(sp) for sp in line_bundle.species_keys}
 
     quadri_vectors_flat = quadri_vectors.reshape(N_points, 4)
 
-    number_density_cm3 = fields.tile_field_to_lines(
-        "number_density",
-        quadri_vectors_flat,
-        indices_for_species=indices_for_species,
-    )  # expected: (N_lines, N_points)
+    number_density_cm3 = fields.tile_field_to_lines("number_density", quadri_vectors_flat, indices_for_species=indices_for_species)  # expected: (N_lines, N_points)
 
-    number_density_cm3 = number_density_cm3.reshape(
-        int(line_bundle.n_lines),
-        N_sk,
-        N_ppsk,
-    )
+    number_density_cm3 = number_density_cm3.reshape(int(line_bundle.n_lines), N_sk, N_ppsk)
 
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Tiled number_density with shape %s",
-        number_density_cm3.shape,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Tiled number_density with shape %s", number_density_cm3.shape)
 
     # ------------------------------------------------------------------
     # 3. Compute dtau_dx
     # ------------------------------------------------------------------
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Computing dtau_dx with cross-section prefactor"
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Computing dtau_dx with cross-section prefactor")
 
-    sigma_cm2 = (
-        phys.cross_section_prefactor
-        * line_bundle.f_osc[:, None, None, None]
-        * phi_ns
-    )  # (N_lines, N_sk, N_ppsk, N_v)
+    sigma_cm2 = phys.cross_section_prefactor * line_bundle.f_osc[:, None, None, None] * phi_ns # (N_lines, N_sk, N_ppsk, N_v)
 
-    scale_factors = quadri_vectors[..., 0][None, ..., None]
-    # shape: (1, N_sk, N_ppsk, 1)
+    scale_factors = quadri_vectors[..., 0][None, ..., None]  # shape: (1, N_sk, N_ppsk, 1)
+    
+    dtau_dx_m = sigma_cm2 * number_density_cm3[..., None] * scale_factors**-2 * 1e2 # (N_lines, N_sk, N_ppsk, N_v)
 
-    dtau_dx_m = (
-        sigma_cm2
-        * number_density_cm3[..., None]
-        * scale_factors**-2
-        * 1e2
-    )  # (N_lines, N_sk, N_ppsk, N_v)
-
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] dtau_dx computed with shape %s",
-        dtau_dx_m.shape,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] dtau_dx computed with shape %s", dtau_dx_m.shape)
 
     # ------------------------------------------------------------------
     # 4. Reorder skewer array order to match the integration direction
     # ------------------------------------------------------------------
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Reorienting %d skewers based on photon path direction mask",
-        skewer_bundle.N_sk,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Reorienting %d skewers based on photon path direction mask", skewer_bundle.N_sk)
 
     mask = skewer_bundle.array_direction == -1
 
     _original = quadri_vectors
     _reversed = jnp.flip(_original, axis=1)
 
-    quadri_vectors_oriented = jnp.where(
-        mask[:, None, None],
-        _reversed,
-        _original,
-    )
+    quadri_vectors_oriented = jnp.where(mask[:, None, None], _reversed, _original)
 
-    comoving_distances_m = (
-        compute_comoving_distance(quadri_vectors_oriented)
-        * phys.Mpc_to_m
-    )  # (N_sk, N_ppsk)
+    comoving_distances_m = compute_comoving_distance(quadri_vectors_oriented) * phys.Mpc_to_m  # (N_sk, N_ppsk)
 
     _original = dtau_dx_m
     _reversed = jnp.flip(dtau_dx_m, axis=2)
 
-    dtau_dx_m = jnp.where(
-        mask[None, :, None, None],
-        _reversed,
-        _original,
-    )
+    dtau_dx_m = jnp.where(mask[None, :, None, None], _reversed, _original)
 
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Arrays reoriented: quadri_vectors %s, dtau_dx_m %s",
-        quadri_vectors_oriented.shape,
-        dtau_dx_m.shape,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Arrays reoriented: quadri_vectors %s, dtau_dx_m %s", quadri_vectors_oriented.shape, dtau_dx_m.shape)
 
     # ------------------------------------------------------------------
     # 5. Perform numerical integration to compute optical depth
     # ------------------------------------------------------------------
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Performing %s integration along %d spatial points",
-        mode_integration,
-        skewer_bundle.N_ppsk,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Performing %s integration along %d spatial points", mode_integration, skewer_bundle.N_ppsk)
 
     comoving_distances_m = comoving_distances_m[None, :, :, None]
     # shape: (1, N_sk, N_ppsk, 1)
 
     if mode_integration == "trapz":
-        optical_depth = trapezoid(
-            dtau_dx_m,
-            x=comoving_distances_m,
-            axis=2,
-        )  # (N_lines, N_sk, N_v)
+        optical_depth = trapezoid(dtau_dx_m, x=comoving_distances_m, axis=2)  # (N_lines, N_sk, N_v)
 
     else:
-        raise NotImplementedError(
-            f"Integration mode '{mode_integration}' not implemented."
-        )
+        raise NotImplementedError(f"Integration mode '{mode_integration}' not implemented.")
 
-    logger.info(
-        "[OPTICAL_DEPTH_VELOCITY] Computation complete. Result shape: %s",
-        optical_depth.shape,
-    )
+    logger.info("[OPTICAL_DEPTH_VELOCITY] Computation complete. Result shape: %s", optical_depth.shape)
 
     return optical_depth
+
+
+
+def wrap_optical_depth_to_ref_line(line_bundle, velocities_kms, optical_depth):
+    """
+    Periodically shift each line optical-depth field by its LineBundle delta_v.
+
+    Parameters
+    ----------
+    line_bundle :
+        Must provide `n_lines` and `delta_v`, with delta_v in km/s.
+    velocities_kms : jnp.ndarray, shape (N_v,)
+        Common velocity grid in km/s.
+    optical_depth : jnp.ndarray, shape (N_lines, N_skewers, N_v)
+        Optical depth in line-centered velocity units.
+
+    Returns
+    -------
+    optical_depth_wrapped : jnp.ndarray, shape (N_lines, N_skewers, N_v)
+        Optical depths shifted onto the reference-line velocity frame.
+    """
+    velocities_kms = jnp.asarray(velocities_kms)
+    optical_depth = jnp.asarray(optical_depth)
+    delta_v = jnp.asarray(line_bundle.delta_v)
+
+    if optical_depth.ndim != 3:
+        raise ValueError("`optical_depth` must have shape (N_lines, N_skewers, N_v).")
+    if optical_depth.shape[0] != line_bundle.n_lines:
+        raise ValueError(f"optical_depth.shape[0]={optical_depth.shape[0]} does not match line_bundle.n_lines={line_bundle.n_lines}.")
+    if optical_depth.shape[-1] != velocities_kms.size:
+        raise ValueError(f"optical_depth.shape[-1]={optical_depth.shape[-1]} does not match len(velocities_kms)={velocities_kms.size}.")
+    if delta_v.shape != (line_bundle.n_lines,):
+        raise ValueError(f"line_bundle.delta_v must have shape ({line_bundle.n_lines},), got {delta_v.shape}.")
+
+    dv_grid = velocities_kms[1] - velocities_kms[0]
+    period = velocities_kms.size * dv_grid
+    v0 = velocities_kms[0]
+
+    def shift_one_profile(tau_1d, shift):
+        v_query = jnp.mod(velocities_kms - shift - v0, period) + v0
+        return jnp.interp(v_query, velocities_kms, tau_1d, period=period)
+
+    def shift_one_line(tau_line, shift):
+        return vmap(lambda tau_sk: shift_one_profile(tau_sk, shift))(tau_line)
+
+    optical_depth_wrapped = vmap(shift_one_line, in_axes=(0, 0))(optical_depth, delta_v)
+
+    return optical_depth_wrapped
