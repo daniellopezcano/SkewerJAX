@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from functools import partial
-from typing import Optional, Mapping
+from typing import Mapping
 from jax.typing import ArrayLike
 
-import logging
-logger = logging.getLogger(__name__)
-
 import jax
-from jax import vmap, pmap
+from jax import vmap
 import jax.numpy as jnp
 
 from skewerjax.optical_depth.voigt import log10_voigt
@@ -16,103 +12,164 @@ from skewerjax.constants.physical_constants import phys
 
 
 def compute_lambda_prime(
-    wavelengths: ArrayLike,           # (N_lambda,)
-    scale_factor_obs: ArrayLike,      # (*batch_shape,)
-    scale_factor: ArrayLike,          # (*batch_shape,)
-    LoS_velocity: ArrayLike,          # (N_species, *batch_shape)
+    velocities_kms: ArrayLike,      # (N_v,)
+    lambda0_A: ArrayLike,           # (N_lines,)
+    a_dagger: ArrayLike,            # scalar, or shape (*batch_shape,)
+    scale_factor: ArrayLike,        # (*batch_shape,)
+    LoS_velocity: ArrayLike,        # (N_lines, *batch_shape), [km/s]
 ) -> jnp.ndarray:
     """
-    Compute observer-frame wavelength shifted by cosmological expansion and peculiar velocities.
-    
-    λ' = λ_obs × (a / a_obs) × sqrt((1 + v_LoS/c) / (1 - v_LoS/c))
-    
-    Args:
-        wavelengths: Rest-frame wavelengths [Å], shape (N_lambda,)
-        scale_factor_obs: Cosmological scale factor relative to observer position, shape (*batch_shape,)
-        scale_factor: Scale factor a(z) for each point, shape (*batch_shape,)
-        LoS_velocity: Line-of-sight velocity, shape (N_species, *batch_shape), UNITS [km/s]
-    
-    Returns:
-        lambdas_A_prime: Shifted wavelengths [Å], shape (N_species, *batch_shape, N_lambda)
+    Compute local wavelengths using exact line-centered velocity units.
+
+    For each transition j,
+
+        lambda'_j(x, v)
+        =
+        lambda_j exp(v / c) a(x) / a_dagger D^{-1}(x),
+
+    with
+
+        D^{-1} = sqrt((1 + beta) / (1 - beta)),
+        beta = v_parallel / c.
+
+    Parameters
+    ----------
+    velocities_kms : jnp.ndarray, shape (N_v,)
+        Common line-centered velocity grid in km/s.
+
+    lambda0_A : jnp.ndarray, shape (N_lines,)
+        Rest wavelengths of each transition in Angstrom.
+
+    a_dagger : scalar or jnp.ndarray
+        Reference scale factor.
+        Must be scalar or have shape matching `scale_factor`.
+
+    scale_factor : jnp.ndarray, shape (*batch_shape,)
+        Local scale factor a(x).
+
+    LoS_velocity : jnp.ndarray, shape (N_lines, *batch_shape)
+        Line-of-sight peculiar velocity in km/s, tiled to lines.
+
+    Returns
+    -------
+    lambdas_A_prime : jnp.ndarray, shape (N_lines, *batch_shape, N_v)
+        Local wavelength seen by each gas element, in Angstrom.
     """
-    # Validate batch shapes match
+    velocities_kms = jnp.asarray(velocities_kms)
+    lambda0_A = jnp.asarray(lambda0_A)
+    a_dagger = jnp.asarray(a_dagger)
+    scale_factor = jnp.asarray(scale_factor)
+    LoS_velocity = jnp.asarray(LoS_velocity)
+
     if scale_factor.shape != LoS_velocity.shape[1:]:
         raise ValueError(
             f"scale_factor shape {scale_factor.shape} incompatible with "
             f"LoS_velocity shape {LoS_velocity.shape}. "
             f"Expected scale_factor.shape == LoS_velocity.shape[1:]"
         )
-        
-    # Add leading dimensions to wavelengths (one for species + one per batch dim)
-    wavelengths_expanded = wavelengths[(None,) * (LoS_velocity.ndim - 1) + (slice(None),)]
-    
-    # Add trailing dimension to scale_factor and LoS_velocity
-    scale_factor_expanded = scale_factor[None, ..., None] / scale_factor_obs[None, ..., None]
-    beta = LoS_velocity[..., None] * 1e3 / phys.c # convert km/s to m/s, hence velocity_expanded has UNITS [adim]
 
-    # Compute lambda prime
-    lambdas_A_prime = wavelengths_expanded * scale_factor_expanded * jnp.sqrt((1.0 + beta) / (1.0 - beta))
-    
+    if a_dagger.ndim != 0 and a_dagger.shape != scale_factor.shape:
+        raise ValueError(
+            f"a_dagger must be scalar or have shape {scale_factor.shape}; "
+            f"got {a_dagger.shape}"
+        )
+
+    # lambda_j: (N_lines, 1, ..., 1)
+    lambda0_expanded = lambda0_A[
+        (slice(None),) + (None,) * scale_factor.ndim + (None,)
+    ]
+
+    # exp(v / c): (1, ..., 1, N_v)
+    velocity_factor = jnp.exp(
+        velocities_kms[
+            (None,) * (scale_factor.ndim + 1) + (slice(None),)
+        ] / phys.c_kms
+    )
+
+    # a(x) / a_dagger: (1, *batch_shape, 1)
+    if a_dagger.ndim == 0:
+        scale_factor_ratio = scale_factor[None, ..., None] / a_dagger
+    else:
+        scale_factor_ratio = (
+            scale_factor[None, ..., None]
+            / a_dagger[None, ..., None]
+        )
+
+    # Doppler inverse: (N_lines, *batch_shape, 1)
+    beta = LoS_velocity[..., None] / phys.c_kms
+    doppler_inverse = jnp.sqrt((1.0 + beta) / (1.0 - beta))
+
+    lambdas_A_prime = (
+        lambda0_expanded
+        * velocity_factor
+        * scale_factor_ratio
+        * doppler_inverse
+    )
+
     return lambdas_A_prime
 
 
 def compute_line_profiles(
     quadri_vectors: jnp.ndarray,
     LoS_directions: jnp.ndarray,
-    scale_factor_obs: jnp.ndarray,
-    wavelengths: jnp.ndarray,
+    velocities_kms: jnp.ndarray,
+    a_dagger: ArrayLike,
     line_bundle,
     fields,
     voigt_implementation_mode: str = "ExoJAX",
 ) -> jnp.ndarray:
-    """compute_lambda_prime
-    Compute Voigt line profiles for a set of quadri_vectors.
+    """
+    Compute Voigt line profiles using line-centered velocity units.
+
+    The spectral coordinate is a common velocity grid v_dagger in km/s.
+    For each line j,
+
+        lambda'_j(x, v_dagger)
+        =
+        lambda_j exp(v_dagger / c) a(x) / a_dagger D^{-1}(x).
 
     Parameters
     ----------
     quadri_vectors : jnp.ndarray, shape (..., 4)
-        Sampling events in the form [a, x, y, z]. The leading dimensions define the spatial batch shape.
-    LoS_directions : jnp.ndarray, shape (..., 3),
-        Line-of-sight direction vectors at each spatial point.
-    scale_factor_obs : jnp.ndarray with same batch shape as quadri_vectors
-        Cosmological scale factors relative to observer position.
-    wavelengths : jnp.ndarray, shape (N_lambda,)
-        Wavelength grid in Angstrom.
-    line_bundle : LineBundle-like
-        Object describing the set of lines. Must provide:
-            - species_keys
-            - n_lines, n_species
-            - indices_for_species(species_name)
-            - lambda0_A   : (N_lines,)  [Angstrom]
-            - A21_GHz     : (N_lines,)  [GHz]
-            - mass_amu    : (N_lines,)  [amu]
-            - f_osc       : (N_lines,)  [adim]
-    fields : Fields-like
-        Field container. Must provide:
-            - species_keys
-            - field_keys  (mapping species -> tuple of field names)
-            - tile_field_to_lines(field_name, quadri_vectors_flat, indices_for_species, ...)
-              and support "LoS_velocity" with an extra LoS_directions= argument.
+        Sampling events in the form [a, x, y, z].
+        The leading dimensions define the spatial batch shape.
 
-        Required per-species fields:
-            - "temperature"                             # UNITS: [K]
-            - "collisional"                             # UNITS: [GHz]
-            - "turbulence"                              # UNITS: [km/s]
-            - "velocity" (used to build LoS_velocity)   # UNITS: [km/s]  
+    LoS_directions : jnp.ndarray, shape (..., 3)
+        Line-of-sight direction vectors at each spatial point.
+
+    velocities_kms : jnp.ndarray, shape (N_v,)
+        Common line-centered velocity grid in km/s.
+
+    a_dagger : scalar or jnp.ndarray
+        Reference scale factor.
+        Accepted shapes:
+            - scalar
+            - same as quadri_vectors.shape[:-1]
+            - flattened shape (N_points,)
+
+    line_bundle : LineBundle-like
+        Object describing the set of lines.
+
+    fields : Fields-like
+        Field container.
 
     voigt_implementation_mode : str, default "ExoJAX"
-        Passed through to the low-level `log10_voigt(...)` implementation.
+        Passed through to `log10_voigt`.
 
     Returns
     -------
-    phi : jnp.ndarray, shape (N_lines, *batch_shape, N_lambda)
-        Line profiles in time units [ns] (same convention as your original script).
+    phi : jnp.ndarray, shape (N_lines, *batch_shape, N_v)
+        Line profiles in time units [ns], following the same shape convention
+        as the old wavelength-based `compute_line_profiles`.
     """
 
     # ------------------------------------------------------------------
     # 0. Basic validation and bookkeeping
     # ------------------------------------------------------------------
-    N_lambda = wavelengths.size
+    velocities_kms = jnp.asarray(velocities_kms)
+    a_dagger = jnp.asarray(a_dagger)
+
+    N_v = velocities_kms.size
 
     if quadri_vectors.ndim < 2 or quadri_vectors.shape[-1] != 4:
         raise ValueError(
@@ -123,7 +180,6 @@ def compute_line_profiles(
     batch_shape = quadri_vectors.shape[:-1]
     N_points = int(jnp.prod(jnp.array(batch_shape)))
 
-    # Species consistency
     species_fields = set(fields.species_keys)
     species_lines = set(line_bundle.species_keys)
     if species_fields != species_lines:
@@ -143,10 +199,9 @@ def compute_line_profiles(
     if LoS_directions.shape != batch_shape + (3,):
         raise ValueError(
             f"`LoS_directions` shape {LoS_directions.shape} is incompatible with "
-            f"batch_shape={batch_shape} (expected {batch_shape + (3,)})"
+            f"batch_shape={batch_shape}; expected {batch_shape + (3,)}"
         )
 
-    # Required field names per species
     required_scalar_fields = ("temperature", "collisional", "turbulence")
     required_vector_field = "velocity"
 
@@ -158,6 +213,7 @@ def compute_line_profiles(
                 f"Missing fields for species '{sp}': {missing}. "
                 "These are required for line-profile computation."
             )
+
         if required_vector_field not in available:
             raise ValueError(
                 f"Missing 'velocity' field for species '{sp}', required to build LoS_velocity."
@@ -166,105 +222,362 @@ def compute_line_profiles(
     # ------------------------------------------------------------------
     # 1. Flatten spatial dimensions
     # ------------------------------------------------------------------
-    quadri_vectors_flat = quadri_vectors.reshape(N_points, 4)        # (N_points, 4)
-    LoS_flat = LoS_directions.reshape(N_points, 3)                   # (N_points, 3)
-    scale_factors_flat = quadri_vectors_flat[:, 0]                   # (N_points,)
-    scale_factor_obs_flat = scale_factor_obs.reshape(N_points,)      # (N_points,)
+    quadri_vectors_flat = quadri_vectors.reshape(N_points, 4)
+    LoS_flat = LoS_directions.reshape(N_points, 3)
+    scale_factors_flat = quadri_vectors_flat[:, 0]
+
+    # Match the old scale_factor_obs behavior:
+    # if a_dagger is provided with the original batch shape, flatten it
+    # together with quadri_vectors.
+    if a_dagger.ndim == 0:
+        a_dagger_flat = a_dagger
+
+    elif a_dagger.shape == batch_shape:
+        a_dagger_flat = a_dagger.reshape(N_points)
+
+    elif a_dagger.shape == (N_points,):
+        a_dagger_flat = a_dagger
+
+    else:
+        raise ValueError(
+            f"`a_dagger` must be scalar, have shape {batch_shape}, "
+            f"or have shape ({N_points},). Got {a_dagger.shape}."
+        )
 
     # ------------------------------------------------------------------
-    # 2. Map species → line indices, and tile fields to lines
+    # 2. Map species -> line indices, and tile fields to lines
     # ------------------------------------------------------------------
-
-    # Precompute field indices for each species
-    # Calling just fields.field_name(quadri_vectors) returns the fields as (N_species, *batch_shape)
-    # but we need to extract the fields tiled to the different lines, not just the species,
-    # so the field values have the dimension (N_lines, N_points), N_lines >= N_species
-
     indices_for_species: Mapping[str, jnp.ndarray] = {
-        sp: line_bundle.indices_for_species(sp) for sp in line_bundle.species_keys
+        sp: line_bundle.indices_for_species(sp)
+        for sp in line_bundle.species_keys
     }
 
-    # Each of these returns shape (N_lines, N_points)
-    collisional = fields.tile_field_to_lines(                                        # UNITS: [GHz]
-        "collisional", quadri_vectors_flat, indices_for_species=indices_for_species,
+    collisional = fields.tile_field_to_lines(
+        "collisional",
+        quadri_vectors_flat,
+        indices_for_species=indices_for_species,
     )
-    temperature = fields.tile_field_to_lines(                                        # UNITS: [K]
-        "temperature", quadri_vectors_flat, indices_for_species=indices_for_species,
+
+    temperature = fields.tile_field_to_lines(
+        "temperature",
+        quadri_vectors_flat,
+        indices_for_species=indices_for_species,
     )
-    turbulence = fields.tile_field_to_lines(                                         # UNITS: [km/s]
-        "turbulence", quadri_vectors_flat, indices_for_species=indices_for_species,
+
+    turbulence = fields.tile_field_to_lines(
+        "turbulence",
+        quadri_vectors_flat,
+        indices_for_species=indices_for_species,
     )
-    LoS_velocity = fields.tile_field_to_lines(                                       # UNITS: [km/s]
-        "LoS_velocity", quadri_vectors_flat, indices_for_species=indices_for_species, LoS_directions=LoS_flat,
+
+    LoS_velocity = fields.tile_field_to_lines(
+        "LoS_velocity",
+        quadri_vectors_flat,
+        indices_for_species=indices_for_species,
+        LoS_directions=LoS_flat,
     )
 
     # ------------------------------------------------------------------
     # 3. Extract line parameters
     # ------------------------------------------------------------------
-    lambda0_A = jnp.asarray(line_bundle.lambda0_A)  # (N_lines,)
-    A21_GHz   = jnp.asarray(line_bundle.A21_GHz)    # (N_lines,)
-    mass_amu  = jnp.asarray(line_bundle.mass_amu)   # (N_lines,)
+    lambda0_A = jnp.asarray(line_bundle.lambda0_A)
+    A21_GHz = jnp.asarray(line_bundle.A21_GHz)
+    mass_amu = jnp.asarray(line_bundle.mass_amu)
 
     # ------------------------------------------------------------------
-    # 4. Compute line profile parameters (gamma, sigma, etc.)
+    # 4. Compute Voigt width parameters
     # ------------------------------------------------------------------
-    # gamma [GHz]
-    gamma_GHz = (A21_GHz[:, None] + collisional) / (4.0 * jnp.pi)  # (N_lines, N_points)
+    gamma_GHz = (A21_GHz[:, None] + collisional) / (4.0 * jnp.pi)
 
-    # Thermal velocity [m/s]
-    # phys.kB : Boltzmann constant in (amu km^2 s^-2 K^-1)
-    v_th_m_per_s = jnp.sqrt(2.0 * phys.kB * temperature / mass_amu[:, None])
-
-    # Effective Doppler velocity [Å/ns]
-    v_eff_A_GHz = (v_th_m_per_s + turbulence) * 10.0
-
-    # sigma [GHz]
-    sigma_GHz = v_eff_A_GHz / (jnp.sqrt(2.0) * lambda0_A[:, None])           # (N_lines, N_points)
-
-    # ------------------------------------------------------------------
-    # 5. Frequency offsets for each line / point / wavelength
-    # ------------------------------------------------------------------
-
-    # lambdas_A_prime: (N_lines, N_points, N_lambda)
-    lambdas_A_prime = compute_lambda_prime(
-        wavelengths, scale_factor_obs_flat, scale_factors_flat, LoS_velocity
+    v_th_kms = jnp.sqrt(
+        2.0 * phys.kB * temperature / mass_amu[:, None]
     )
 
-    # nu [GHz]: (N_lines, N_points, N_lambda)
-    nu_GHz = ((1.0 / lambdas_A_prime) - (1.0 / lambda0_A[:, None, None])) * phys.c * 10.0
+    v_eff_A_GHz = (v_th_kms + turbulence) * 10.0
+
+    sigma_GHz = (
+        v_eff_A_GHz
+        / (jnp.sqrt(2.0) * lambda0_A[:, None])
+    )
 
     # ------------------------------------------------------------------
-    # 6. Flatten for Voigt evaluation: each (line,point) has its own 1D spectrum
+    # 5. Frequency offsets from line-centered velocity units
+    # ------------------------------------------------------------------
+    lambdas_A_prime = compute_lambda_prime(
+        velocities_kms=velocities_kms,
+        lambda0_A=lambda0_A,
+        a_dagger=a_dagger_flat,
+        scale_factor=scale_factors_flat,
+        LoS_velocity=LoS_velocity,
+    )
+
+    nu_GHz = (
+        (1.0 / lambdas_A_prime)
+        - (1.0 / lambda0_A[:, None, None])
+    ) * phys.c * 10.0
+
+    # ------------------------------------------------------------------
+    # 6. Flatten for Voigt evaluation
     # ------------------------------------------------------------------
     N_total = N_lines * N_points
 
-    nu_flat    = nu_GHz.reshape(N_total, N_lambda)   # (N_total, N_lambda)
-    sigma_flat = sigma_GHz.reshape(N_total)          # (N_total,)
-    gamma_flat = gamma_GHz.reshape(N_total)          # (N_total,)
-
-    # ------------------------------------------------------------------
-    # 7. Compute Voigt profiles (log10 space for numerical stability)
-    # ------------------------------------------------------------------
+    nu_flat = nu_GHz.reshape(N_total, N_v)
+    sigma_flat = sigma_GHz.reshape(N_total)
+    gamma_flat = gamma_GHz.reshape(N_total)
 
     def _eval_voigt_batch(nu_batch, sigma_batch, gamma_batch):
-        """
-        nu_batch    : (B, N_lambda)
-        sigma_batch : (B,)
-        gamma_batch : (B,)
-        returns log10(phi) with shape (B, N_lambda)
-        """
         return vmap(
-            lambda x, s, g: log10_voigt(x, s, g, mode=voigt_implementation_mode),
+            lambda x, s, g: log10_voigt(
+                x,
+                s,
+                g,
+                mode=voigt_implementation_mode,
+            ),
             in_axes=(0, 0, 0),
         )(nu_batch, sigma_batch, gamma_batch)
 
-    log10_phi_flat = _eval_voigt_batch(nu_flat, sigma_flat, gamma_flat)
-    # (N_total, N_lambda)
+    log10_phi_flat = _eval_voigt_batch(
+        nu_flat,
+        sigma_flat,
+        gamma_flat,
+    )
 
     # ------------------------------------------------------------------
-    # 8. Convert back from log10 to phi, reshape to (N_lines, *batch_shape, N_lambda)
+    # 7. Convert back and reshape to the natural batch shape
     # ------------------------------------------------------------------
-    phi_flat = 10.0 ** log10_phi_flat # (N_total, N_lambda)
-    phi = phi_flat.reshape(N_lines, *batch_shape, N_lambda)
+    phi_flat = 10.0 ** log10_phi_flat
+
+    phi = phi_flat.reshape(
+        N_lines,
+        *batch_shape,
+        N_v,
+    )
 
     return phi
+
+
+def velocities_to_line_centered_wavelengths(
+    velocities_kms: ArrayLike,
+    line_bundle,
+    a_dagger: ArrayLike,
+    a_obs: ArrayLike = 1.0,
+) -> jnp.ndarray:
+    """
+    Convert a common line-centered velocity grid to wavelength grids.
+
+    For each transition j,
+
+        v^(j) = c ln[(lambda_obs / lambda_j) * (a_dagger / a_obs_j)],
+
+    therefore
+
+        lambda_obs_j(v)
+        =
+        lambda_j * (a_obs_j / a_dagger) * exp(v / c).
+
+    Parameters
+    ----------
+    velocities_kms : array, shape (N_v,)
+        Velocity grid in km/s.
+    line_bundle : LineBundle-like
+        Must provide lambda0_A with shape (N_lines,).
+    a_dagger : scalar or array broadcastable to (N_lines,)
+        Reference scale factor used to define the line-centered velocity coordinate.
+    a_obs : scalar or array, shape (N_lines,), default 1.0
+        Observer scale factor. Can be defined globally or per line.
+
+    Returns
+    -------
+    wavelengths_A : jnp.ndarray, shape (N_lines, N_v)
+        Wavelength grid in Angstrom for each transition.
+    """
+    velocities_kms = jnp.asarray(velocities_kms)
+    lambda0_A = jnp.asarray(line_bundle.lambda0_A)
+    a_dagger = jnp.asarray(a_dagger)
+    a_obs = jnp.asarray(a_obs)
+
+    N_lines = lambda0_A.shape[0]
+
+    if a_obs.ndim == 0:
+        a_obs_per_line = jnp.full((N_lines,), a_obs)
+    elif a_obs.shape == (N_lines,):
+        a_obs_per_line = a_obs
+    else:
+        raise ValueError(
+            f"`a_obs` must be scalar or have shape ({N_lines},), got {a_obs.shape}."
+        )
+
+    if a_dagger.ndim == 0:
+        a_dagger_per_line = jnp.full((N_lines,), a_dagger)
+    elif a_dagger.shape == (N_lines,):
+        a_dagger_per_line = a_dagger
+    else:
+        raise ValueError(
+            f"`a_dagger` must be scalar or have shape ({N_lines},), got {a_dagger.shape}."
+        )
+
+    wavelengths_A = (
+        lambda0_A[:, None]
+        * (a_obs_per_line[:, None] / a_dagger_per_line[:, None])
+        * jnp.exp(velocities_kms[None, :] / phys.c_kms)
+    )
+
+    return wavelengths_A
+
+
+def compute_lambda_prime_wavelength_units(
+    wavelengths_A: ArrayLike,        # (N_v,) or (N_lines, N_v)
+    scale_factor_obs: ArrayLike,     # scalar, (N_lines,), (*batch_shape), or (N_lines, *batch_shape)
+    scale_factor: ArrayLike,         # (*batch_shape,)
+    LoS_velocity: ArrayLike,         # (N_lines, *batch_shape), [km/s]
+) -> jnp.ndarray:
+    """
+    Compute local wavelengths from observer-frame wavelength grids.
+
+    This is the wavelength-units counterpart of `compute_lambda_prime`.
+
+    It applies
+        lambda'_j(x, lambda_obs) = lambda_obs_j * a(x) / a_obs * D^{-1}(x),
+
+    with
+        D^{-1} = sqrt((1 + beta) / (1 - beta)),  beta = v_parallel / c.
+
+    This function is designed to work directly with the output of
+        wavelengths_per_line_A = velocities_to_line_centered_wavelengths(
+                velocities_kms, line_bundle, a_dagger, a_obs=scale_factor_obs,
+            )
+
+    where `wavelengths_per_line_A` has shape
+        (N_lines, N_v).
+
+    If the same `scale_factor_obs` is used in both functions, then
+        lambda_obs_j(v) = lambda_j * (a_obs / a_dagger) * exp(v / c)
+
+    implies
+        lambda'_j(x, v) = lambda_j * exp(v / c) * a(x) / a_dagger * D^{-1}(x),
+
+    which matches the velocity-units implementation.
+
+    Parameters
+    ----------
+    wavelengths_A : jnp.ndarray, shape (N_v,) or (N_lines, N_v)
+        Observer-frame wavelength grid in Angstrom.
+        If shape is (N_v,), the same wavelength grid is used for all lines.
+        If shape is (N_lines, N_v), each line has its own wavelength grid.
+
+    scale_factor_obs : scalar or array
+        Observer/reference scale factor used to define `wavelengths_A`.
+
+        Accepted shapes:
+            - scalar
+            - (N_lines,)
+            - (*batch_shape,)
+            - (N_lines, *batch_shape)
+
+    scale_factor : jnp.ndarray, shape (*batch_shape,)
+        Local scale factor a(x).
+
+    LoS_velocity : jnp.ndarray, shape (N_lines, *batch_shape)
+        Line-of-sight peculiar velocity in km/s, tiled to lines.
+
+    Returns
+    -------
+    lambdas_A_prime : jnp.ndarray, shape (N_lines, *batch_shape, N_v)
+        Local wavelength seen by each gas element, in Angstrom.
+    """
+    wavelengths_A = jnp.asarray(wavelengths_A)
+    scale_factor_obs = jnp.asarray(scale_factor_obs)
+    scale_factor = jnp.asarray(scale_factor)
+    LoS_velocity = jnp.asarray(LoS_velocity)
+
+    if scale_factor.shape != LoS_velocity.shape[1:]:
+        raise ValueError(
+            f"`scale_factor` shape {scale_factor.shape} incompatible with "
+            f"`LoS_velocity` shape {LoS_velocity.shape}. Expected "
+            f"scale_factor.shape == LoS_velocity.shape[1:]"
+        )
+
+    N_lines = LoS_velocity.shape[0]
+    batch_shape = scale_factor.shape
+    batch_ndim = scale_factor.ndim
+
+    # ------------------------------------------------------------
+    # 1. Expand wavelength grid to (N_lines, *batch_shape, N_v)
+    # ------------------------------------------------------------
+    if wavelengths_A.ndim == 1:
+        # Same wavelength grid for every line.
+        wavelengths_expanded = wavelengths_A[
+            (None,) + (None,) * batch_ndim + (slice(None),)
+        ]
+
+    elif wavelengths_A.ndim == 2:
+        if wavelengths_A.shape[0] != N_lines:
+            raise ValueError(
+                f"`wavelengths_A` has shape {wavelengths_A.shape}, but "
+                f"LoS_velocity implies N_lines={N_lines}. Expected "
+                f"`wavelengths_A.shape[0] == N_lines`."
+            )
+
+        # Line-dependent wavelength grid.
+        wavelengths_expanded = wavelengths_A[
+            (slice(None),) + (None,) * batch_ndim + (slice(None),)
+        ]
+
+    else:
+        raise ValueError(
+            f"`wavelengths_A` must have shape (N_v,) or (N_lines, N_v), "
+            f"got {wavelengths_A.shape}."
+        )
+
+    # ------------------------------------------------------------
+    # 2. Build a(x) / a_obs with flexible broadcasting
+    # ------------------------------------------------------------
+    if scale_factor_obs.ndim == 0:
+        # Scalar observer scale factor.
+        scale_factor_ratio = scale_factor[None, ..., None] / scale_factor_obs
+
+    elif scale_factor_obs.shape == (N_lines,):
+        # Per-line observer scale factor.
+        scale_factor_ratio = (
+            scale_factor[None, ..., None]
+            / scale_factor_obs[(slice(None),) + (None,) * batch_ndim + (None,)]
+        )
+
+    elif scale_factor_obs.shape == batch_shape:
+        # Per-point observer scale factor, shared by all lines.
+        scale_factor_ratio = (
+            scale_factor[None, ..., None]
+            / scale_factor_obs[None, ..., None]
+        )
+
+    elif scale_factor_obs.shape == LoS_velocity.shape:
+        # Per-line and per-point observer scale factor.
+        scale_factor_ratio = (
+            scale_factor[None, ..., None]
+            / scale_factor_obs[..., None]
+        )
+
+    else:
+        raise ValueError(
+            "`scale_factor_obs` must be scalar, have shape "
+            f"({N_lines},), have shape {batch_shape}, or have shape "
+            f"{LoS_velocity.shape}. Got {scale_factor_obs.shape}."
+        )
+
+    # ------------------------------------------------------------
+    # 3. Doppler inverse factor
+    # ------------------------------------------------------------
+
+    beta = LoS_velocity[..., None] / phys.c_kms
+    doppler_inverse = jnp.sqrt((1.0 + beta) / (1.0 - beta))
+
+    # ------------------------------------------------------------
+    # 4. Local wavelength
+    # ------------------------------------------------------------
+    lambdas_A_prime = (
+        wavelengths_expanded
+        * scale_factor_ratio
+        * doppler_inverse
+    )
+
+    return lambdas_A_prime
