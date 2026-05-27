@@ -1155,66 +1155,245 @@ def plot_3d_neon_ridge_cube(
 # Transmission plot
 # ============================================================
 
-def plot_transmission_samples_neon(F_over_F0, line_bundle, x_axis_array, x_label, x_axis_key, scale_factor_left, scale_factor_right, lambda0_anchor=None, N_plot_sample=4, seed=0, sample_indices=None):
+def plot_transmission_samples_neon(
+    F_over_F0,
+    line_bundle,
+    x_axis_array,
+    x_label,
+    N_plot_sample=4,
+    seed=0,
+    sample_indices=None,
+    line_lw=2.2,
+    line_glow_lw=6.0,
+    line_alpha=0.95,
+    line_glow_alpha=0.12,
+    line_legend_lw=None,
+    total_color="white",
+    total_lw=1.05,
+    total_glow_lw=None,
+    total_alpha=1.0,
+    total_glow_alpha=0.12,
+):
+    """
+    Neon-style transmission plot for selected skewers.
+
+    Notes
+    -----
+    - No vertical line markers are drawn.
+    - Colors follow the same convention as the other plots:
+      one neon color per species.
+    - Linestyles are only used to distinguish multiple absorption lines
+      from the same species.
+    - The total transmitted flux is plotted last, on top of the individual
+      line transmissions.
+
+    Parameters
+    ----------
+    line_lw : float
+        Main linewidth for individual absorption-line transmissions.
+
+    line_glow_lw : float
+        Glow linewidth for individual absorption-line transmissions.
+
+    line_alpha : float
+        Alpha for the main individual absorption-line curves.
+
+    line_glow_alpha : float
+        Alpha for the glow individual absorption-line curves.
+
+    line_legend_lw : float or None
+        Linewidth used for individual absorption-line legend handles.
+        If None, defaults to line_lw.
+
+    total_lw : float
+        Main linewidth for total transmitted flux.
+
+    total_glow_lw : float or None
+        Glow linewidth for total transmitted flux.
+        If None, defaults to 3 * total_lw.
+    """
     F_over_F0 = np.asarray(F_over_F0)
     x_axis_array = np.asarray(x_axis_array)
-    N_lines, N_skewers, _ = F_over_F0.shape
+
+    if F_over_F0.ndim != 3:
+        raise ValueError("Expected F_over_F0 with shape (N_lines, N_skewers, N_x).")
+
+    N_lines, N_skewers, N_x = F_over_F0.shape
+
+    if x_axis_array.shape[-1] != N_x:
+        raise ValueError(
+            f"x_axis_array has length {x_axis_array.shape[-1]}, "
+            f"but F_over_F0 has N_x={N_x}."
+        )
 
     if sample_indices is None:
         rng = np.random.default_rng(seed)
-        idx = np.arange(N_skewers) if N_plot_sample >= N_skewers else np.sort(rng.choice(N_skewers, size=N_plot_sample, replace=False))
+        idx = (
+            np.arange(N_skewers)
+            if N_plot_sample >= N_skewers
+            else np.sort(rng.choice(N_skewers, size=N_plot_sample, replace=False))
+        )
     else:
         idx = np.clip(np.asarray(sample_indices, dtype=int), 0, N_skewers - 1)
 
     labels, species = _line_labels_and_species(line_bundle, N_lines)
-    species_color = _neon_colors(list(dict.fromkeys(species)))
-    linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 2))]
-    c_kms = 299792.458
 
-    fig, axes = plt.subplots(len(idx), 1, figsize=(14, 2.2 * len(idx)), sharex=True, sharey=True, facecolor="black")
+    unique_species = list(dict.fromkeys(species))
+    species_color = _neon_colors(unique_species)
+
+    base_linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 2))]
+
+    species_counts = {sp: species.count(sp) for sp in unique_species}
+    species_seen = {sp: 0 for sp in unique_species}
+
+    line_style = []
+    for sp in species:
+        i_seen = species_seen[sp]
+        species_seen[sp] += 1
+
+        if species_counts[sp] == 1:
+            line_style.append("-")
+        else:
+            line_style.append(base_linestyles[i_seen % len(base_linestyles)])
+
+    if total_glow_lw is None:
+        total_glow_lw = 3.0 * total_lw
+
+    if line_legend_lw is None:
+        line_legend_lw = line_lw
+
+    fig, axes = plt.subplots(
+        len(idx),
+        1,
+        figsize=(14, 2.2 * len(idx)),
+        sharex=True,
+        sharey=True,
+        facecolor="black",
+    )
     axes = np.atleast_1d(axes)
-
-    handles = [Line2D([0], [0], color="white", lw=1.8, label="Total")]
 
     for ax, sk_idx in zip(axes, idx):
         ax.set_facecolor("black")
+
+        # Individual line transmissions first.
+        for i_line, lab in enumerate(labels):
+            sp = species[i_line]
+            c = species_color[sp]
+            ls = line_style[i_line]
+            y = F_over_F0[i_line, sk_idx, :]
+
+            ax.plot(
+                x_axis_array,
+                y,
+                color=c,
+                lw=line_glow_lw,
+                ls=ls,
+                alpha=line_glow_alpha,
+                zorder=2,
+            )
+            ax.plot(
+                x_axis_array,
+                y,
+                color=c,
+                lw=line_lw,
+                ls=ls,
+                alpha=line_alpha,
+                zorder=3,
+            )
+
+        # Total transmitted flux last, on top.
         F_total = np.prod(F_over_F0[:, sk_idx, :], axis=0)
-        ax.plot(x_axis_array, F_total, color="white", lw=5.0, alpha=0.10)
-        ax.plot(x_axis_array, F_total, color="white", lw=1.2, alpha=1.0)
 
-        for i_line, line in enumerate(line_bundle.lines):
-            c = species_color[species[i_line]]
-            ls = linestyles[i_line % len(linestyles)]
-            ax.plot(x_axis_array, F_over_F0[i_line, sk_idx, :], color=c, lw=6.0, ls=ls, alpha=0.12)
-            ax.plot(x_axis_array, F_over_F0[i_line, sk_idx, :], color=c, lw=2.4, ls=ls, alpha=1.0)
+        ax.plot(
+            x_axis_array,
+            F_total,
+            color=total_color,
+            lw=total_glow_lw,
+            alpha=total_glow_alpha,
+            zorder=8,
+        )
+        ax.plot(
+            x_axis_array,
+            F_total,
+            color=total_color,
+            lw=total_lw,
+            alpha=total_alpha,
+            zorder=9,
+        )
 
-            lam0 = float(getattr(line, "lambda0_A", getattr(line, "wavelength_A", getattr(line, "lambda_A", np.nan))))
-            x_start, x_end = lam0 / scale_factor_left, lam0 / scale_factor_right
-            if x_axis_key == "velocities":
-                if lambda0_anchor is None:
-                    raise ValueError("lambda0_anchor is required when x_axis_key='velocities'.")
-                x_start, x_end = c_kms * np.log(x_start / lambda0_anchor), c_kms * np.log(x_end / lambda0_anchor)
+        ax.text(
+            0.015,
+            0.12,
+            f"sk. #{sk_idx}",
+            transform=ax.transAxes,
+            color="white",
+            fontsize=12,
+            ha="left",
+            va="bottom",
+        )
 
-            ax.axvline(x_start, color=c, ls=ls, lw=1.1, alpha=0.35)
-            ax.axvline(x_end, color=c, ls=ls, lw=1.1, alpha=0.35)
-
-        ax.text(0.015, 0.12, f"sk. #{sk_idx}", transform=ax.transAxes, color="white", fontsize=12, ha="left", va="bottom")
         ax.set_ylim(-0.05, 1.05)
         ax.set_ylabel(r"$e^{-\tau}$", fontsize=20, color="white")
-        ax.tick_params(axis="both", which="major", labelsize=14, colors="white", length=6, width=1.1)
+
+        ax.tick_params(
+            axis="both",
+            which="major",
+            labelsize=14,
+            colors="white",
+            length=6,
+            width=1.1,
+        )
+
         for side in ["top", "right", "bottom", "left"]:
             ax.spines[side].set_color("white")
             ax.spines[side].set_linewidth(1.0)
 
+    handles = []
+
     for i_line, lab in enumerate(labels):
-        handles.append(Line2D([0], [0], color=species_color[species[i_line]], lw=2.4, ls=linestyles[i_line % len(linestyles)], label=lab))
+        sp = species[i_line]
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=species_color[sp],
+                lw=line_legend_lw,
+                ls=line_style[i_line],
+                label=lab,
+            )
+        )
+
+    handles.append(
+        Line2D(
+            [0],
+            [0],
+            color=total_color,
+            lw=total_lw,
+            ls="-",
+            label="Total",
+        )
+    )
 
     axes[-1].set_xlabel(x_label, fontsize=20, color="white")
-    leg = fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.965), ncols=min(len(handles), 7), frameon=True, fontsize=16, handlelength=2.6, facecolor="black", edgecolor="white", framealpha=1)
+
+    leg = fig.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.965),
+        ncols=min(len(handles), 7),
+        frameon=True,
+        fontsize=16,
+        handlelength=2.6,
+        facecolor="black",
+        edgecolor="white",
+        framealpha=1,
+    )
+
     for text in leg.get_texts():
         text.set_color("white")
 
     fig.subplots_adjust(top=0.88, hspace=0.08)
-    plt.show()
-    return fig, axes, idx
 
+    plt.show()
+
+    return fig, axes, idx
