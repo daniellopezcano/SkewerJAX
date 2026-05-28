@@ -260,7 +260,7 @@ def get_delta_v_difference_info(delta_v_list, L_box):
         for j in range(i + 1, len(delta_v_list)):
             d = abs(delta_v_list[j] - delta_v_list[i]) % L_box
             d = min(d, L_box - d)
-            d_norm = d / L_box
+            d_norm = d
             if d_norm > 0.0:
                 out.append((i + 1, j + 1, d_norm))
     return out
@@ -793,7 +793,7 @@ def plot_p1d_total_recovery(
 def plot_xi_by_order(
     ordered_pairs,
     xi_pair,
-    lags_norm,
+    lags,
     delta_v_list,
     L_box,
     *,
@@ -895,10 +895,10 @@ def plot_xi_by_order(
         legend_terms = [Line2D([0], [0], color=sum_color, lw=collapsed_sum_lw, ls=sum_ls, label="Sum")]
         for i, entry in enumerate(entries):
             entry["color"] = cmap(i % 10)
-            ax.plot(lags_norm, entry["curve_plot"], lw=main_curve_lw, ls=entry["ls"], color=entry["color"], alpha=0.95)
+            ax.plot(lags, entry["curve_plot"], lw=main_curve_lw, ls=entry["ls"], color=entry["color"], alpha=0.95)
             legend_terms.append(Line2D([0], [0], color=entry["color"], lw=main_curve_lw, ls=entry["ls"], label=entry["label"]))
 
-        ax.plot(lags_norm, xi_order_sum_plot, lw=collapsed_sum_lw, color=sum_color, ls=sum_ls, alpha=0.95)
+        ax.plot(lags, xi_order_sum_plot, lw=collapsed_sum_lw, color=sum_color, ls=sum_ls, alpha=0.95)
         ax.axhline(0.0, color="k", lw=1.0, alpha=0.8, ls=":")
 
         leg_terms = ax.legend(
@@ -936,7 +936,7 @@ def plot_xi_by_order(
             xi_ref = xi_order_sum_plot
             for entry in entries:
                 res = _safe_relative_residual(entry["curve_plot"], xi_ref)
-                ax_res.plot(lags_norm, res, lw=1.5, ls=entry["ls"], color=entry["color"], alpha=0.95)
+                ax_res.plot(lags, res, lw=1.5, ls=entry["ls"], color=entry["color"], alpha=0.95)
                 nz = np.abs(res[np.abs(res) > 0])
                 if len(nz):
                     nonzero_residuals.append(np.min(nz))
@@ -947,7 +947,7 @@ def plot_xi_by_order(
                 xi_ref = auto_entries[0]["curve_plot"]
                 for entry in auto_entries:
                     res = _safe_relative_residual(entry["curve_plot"], xi_ref)
-                    ax_res.plot(lags_norm, res, lw=1.5, ls=entry["ls"], color=entry["color"], alpha=0.95)
+                    ax_res.plot(lags, res, lw=1.5, ls=entry["ls"], color=entry["color"], alpha=0.95)
                     nz = np.abs(res[np.abs(res) > 0])
                     if len(nz):
                         nonzero_residuals.append(np.min(nz))
@@ -984,7 +984,7 @@ def plot_xi_total_recovery(
     xi_total,
     xi_total_from_terms,
     xi_pair,
-    lags_norm,
+    lags,
     delta_v_list,
     L_box,
     *,
@@ -1064,14 +1064,14 @@ def plot_xi_total_recovery(
             xi_order_norm_plot = xi_order_sum_plot_dict[order]
             xi_order_norm_plot_dict[order] = xi_order_norm_plot
             c = order_color_dict[order]
-            ax.plot(lags_norm, xi_order_norm_plot, lw=order_sum_lw, color=c, alpha=order_sum_alpha)
+            ax.plot(lags, xi_order_norm_plot, lw=order_sum_lw, color=c, alpha=order_sum_alpha)
             order_sum_handles.append(Line2D([0], [0], color=c, lw=order_sum_lw, label=rf"$\mathcal{{O}}({order})$"))
     else:
         for order in orders:
             xi_order_norm_plot_dict[order] = xi_order_sum_plot_dict[order]
 
-    ax.plot(lags_norm, xi_total, lw=total_lw, color=total_color)
-    ax.plot(lags_norm, xi_total_from_terms, lw=decomp_lw, color=decomp_color, ls=decomp_ls)
+    ax.plot(lags, xi_total, lw=total_lw, color=total_color)
+    ax.plot(lags, xi_total_from_terms, lw=decomp_lw, color=decomp_color, ls=decomp_ls)
     ax.axhline(0.0, color="k", lw=1.0, alpha=0.8, ls=":")
 
     if annotate_half_line and show_half_line:
@@ -1115,12 +1115,12 @@ def plot_xi_total_recovery(
         for order in orders:
             c = order_color_dict[order]
             ax_res.plot(
-                lags_norm,
+                lags,
                 _safe_relative_residual(xi_order_norm_plot_dict[order], xi_ref),
                 lw=1.0, color=c, alpha=order_sum_alpha,
             )
 
-    ax_res.plot(lags_norm, _safe_relative_residual(xi_total_from_terms, xi_ref), lw=2.0, color=decomp_color, ls=decomp_ls)
+    ax_res.plot(lags, _safe_relative_residual(xi_total_from_terms, xi_ref), lw=2.0, color=decomp_color, ls=decomp_ls)
     ax_res.axhline(0.0, color="k", lw=1.0, alpha=0.8, ls=":")
 
     if use_symlog_residual:

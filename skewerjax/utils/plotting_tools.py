@@ -633,36 +633,110 @@ def _profile_setup(points, sampled_fields=None, field="number_density", mode="sa
 # ============================================================
 
 def plot_3d_radar_cylinder(
-    x_array, y_dict, skewer_index=0, n_samples_plot=1, cylinder_radius=10.0, cylinder_separation=5.2,
-    field_logscale=True, normalization="global", scale_box_x_factor=0.87, legend_y_factor=0.8,
-    scale_units_xy=(0.50, 1.05), profile_angle_offset_deg=90.0, n_y_slices=4, field_units=None,
-    x_axis_label=None, n_x_ticks=3, x_axis_pad=1.0, x_axis_tick_size=0.20, x_axis_fontsize=16,
-    factor_ticks_x=3.0, factor_ticks_z=7.0, factor_x_label=1.2,
-    view_elev=18, view_azim=-40, show=True,
+    x_array=None,
+    y_dict=None,
+    *,
+    points=None,
+    los_axis=1,
+    skewer_index=0,
+    n_samples_plot=1,
+    cylinder_radius=10.0,
+    cylinder_separation=5.2,
+    field_logscale=True,
+    normalization="global",
+    scale_box_x_factor=0.87,
+    legend_y_factor=0.8,
+    scale_units_xy=(0.50, 1.05),
+    profile_angle_offset_deg=90.0,
+    n_y_slices=4,
+    field_units=None,
+    x_axis_label=None,
+    n_x_ticks=3,
+    x_axis_pad=1.0,
+    x_axis_tick_size=0.20,
+    x_axis_fontsize=16,
+    factor_ticks_x=3.0,
+    factor_ticks_z=7.0,
+    factor_x_label=1.2,
+    view_elev=18,
+    view_azim=-40,
+    show_profile_points=False,
+    profile_point_size=10.0,
+    profile_linewidth=1.05,
+    glow=True,
+    show=True,
 ):
     """
     Radar-cylinder plot for one or more 1D skewers.
 
-    x_array : array, shape (N_samples, N_x)
-        Projected LoS coordinates used as the cylinder-axis coordinate.
+    This version always uses all points in the input arrays. It performs no
+    downsampling, so narrow spikes in sampled fields are preserved.
+
+    Parameters
+    ----------
+    x_array : array, optional, shape (N_samples, N_x)
+        Projected LoS coordinate used as the cylinder-axis coordinate.
+
+    points : array, optional, shape (N_samples, N_x, N_dim)
+        Alternative input. If provided and x_array is None, the LoS coordinate
+        is extracted as points[..., los_axis].
 
     y_dict : dict[str, array]
-        Maps species/line labels to arrays with shape (N_samples, N_x).
+        Maps labels to arrays with shape (N_samples, N_x).
+
+    los_axis : int
+        Coordinate axis used from points when x_array is not provided.
+
+    show_profile_points : bool
+        If True, overlay scatter points on top of the profile curves.
+
+    Returns
+    -------
+    fig, ax
     """
+    if x_array is None:
+        if points is None:
+            raise ValueError("Pass either `x_array` or `points`.")
+        points = np.asarray(points)
+        if points.ndim != 3:
+            raise ValueError(
+                "`points` must have shape (N_samples, N_x, N_dim). "
+                f"Got {points.shape}."
+            )
+        if los_axis < 0 or los_axis >= points.shape[-1]:
+            raise ValueError(
+                f"`los_axis={los_axis}` is invalid for points with "
+                f"N_dim={points.shape[-1]}."
+            )
+        x_array = points[:, :, los_axis]
+
     x_array = np.asarray(x_array)
+
     if x_array.ndim != 2:
-        raise ValueError("Expected x_array with shape (N_samples, N_x).")
+        raise ValueError(
+            "Expected x_array with shape (N_samples, N_x). "
+            f"Got {x_array.shape}."
+        )
+
     if not isinstance(y_dict, dict) or len(y_dict) == 0:
         raise ValueError("Expected non-empty y_dict mapping labels to arrays.")
 
     labels = list(y_dict.keys())
     y_arrays = {lab: np.asarray(y_dict[lab]) for lab in labels}
+
     for lab, arr in y_arrays.items():
         if arr.shape != x_array.shape:
-            raise ValueError(f"y_dict[{lab!r}] has shape {arr.shape}, but expected {x_array.shape} to match x_array.")
+            raise ValueError(
+                f"y_dict[{lab!r}] has shape {arr.shape}, but expected "
+                f"{x_array.shape} to match x_array."
+            )
 
     selected = _select_indices(x_array, skewer_index, n_samples_plot)
-    profiles = np.asarray([[y_arrays[lab][idx] for lab in labels] for idx in selected])
+
+    profiles = np.asarray(
+        [[y_arrays[lab][idx] for lab in labels] for idx in selected],
+        dtype=float,
+    )
 
     if normalization == "skewer":
         range_values = profiles
@@ -671,87 +745,270 @@ def plot_3d_radar_cylinder(
     else:
         raise ValueError("normalization must be either 'global' or 'skewer'.")
 
-    vmin, vmax, vrange = _scaled_range(range_values, eps=1e-300, logscale=field_logscale, positive_only=False)
-    eps, positive_only = 1e-300, False
+    vmin, vmax, vrange = _scaled_range(
+        range_values,
+        eps=1e-300,
+        logscale=field_logscale,
+        positive_only=False,
+    )
 
-    n_samples, n_profiles = profiles.shape[0], profiles.shape[1]
+    eps = 1e-300
+    positive_only = False
+
+    n_samples = profiles.shape[0]
+    n_profiles = profiles.shape[1]
+
     colors = _neon_colors(labels)
     profile_color = {lab: colors[lab] for lab in labels}
-    angles = {lab: np.deg2rad(profile_angle_offset_deg) + 2 * np.pi * i / n_profiles for i, lab in enumerate(labels)}
 
-    fig = plt.figure(figsize=(12.2 + 1.85 * max(n_samples - 1, 0), 7.0), facecolor="black")
+    angles = {
+        lab: np.deg2rad(profile_angle_offset_deg) + 2.0 * np.pi * i / n_profiles
+        for i, lab in enumerate(labels)
+    }
+
+    fig = plt.figure(
+        figsize=(12.2 + 1.85 * max(n_samples - 1, 0), 7.0),
+        facecolor="black",
+    )
     ax = fig.add_subplot(111, projection="3d", facecolor="black")
     ax.set_position((0.01, 0.02, 0.86, 0.90))
 
     centers = np.arange(n_samples, dtype=float) * cylinder_separation
     centers -= centers.mean()
 
-    phi = np.linspace(0, 2 * np.pi, 360)
-    rings = cylinder_radius * np.linspace(1 / 6, 1, 6)
+    phi = np.linspace(0.0, 2.0 * np.pi, 360)
+    rings = cylinder_radius * np.linspace(1.0 / 6.0, 1.0, 6)
+
     x_selected = x_array[selected]
-    x_min, x_max = float(np.nanmin(x_selected)), float(np.nanmax(x_selected))
+    x_min = float(np.nanmin(x_selected))
+    x_max = float(np.nanmax(x_selected))
     x_span = x_max - x_min
+
     if x_span <= 0:
-        x_span, x_min, x_max = 1.0, x_min - 0.5, x_max + 0.5
+        x_span = 1.0
+        x_min -= 0.5
+        x_max += 0.5
 
     axis_z = -cylinder_radius * (1.0 + x_axis_pad)
     tick_dx = cylinder_radius * x_axis_tick_size
 
     for i_sample, x0 in enumerate(centers):
-        x_los_full = x_array[selected[i_sample]]
-        n_pix = x_los_full.size
-        pix = np.arange(n_pix) if n_pix <= 512 else np.linspace(0, n_pix - 1, 512).astype(int)
-        x_los = x_los_full[pix]
-        y_slices = np.linspace(float(np.nanmin(x_los_full)), float(np.nanmax(x_los_full)), n_y_slices)
+        x_los = np.asarray(x_array[selected[i_sample]], dtype=float)
 
-        ax.plot(np.full_like(y_slices, x0), y_slices, np.zeros_like(y_slices), color="white", lw=1.6, alpha=0.9)
+        y_slices = np.linspace(
+            float(np.nanmin(x_los)),
+            float(np.nanmax(x_los)),
+            int(n_y_slices),
+        )
+
+        ax.plot(
+            np.full_like(y_slices, x0),
+            y_slices,
+            np.zeros_like(y_slices),
+            color="white",
+            lw=1.6,
+            alpha=0.9,
+        )
 
         for yy in y_slices:
             for rr in rings:
-                ax.plot(x0 + rr * np.cos(phi), np.full_like(phi, yy), rr * np.sin(phi), color="white", lw=0.85, alpha=0.18)
+                ax.plot(
+                    x0 + rr * np.cos(phi),
+                    np.full_like(phi, yy),
+                    rr * np.sin(phi),
+                    color="white",
+                    lw=0.85,
+                    alpha=0.18,
+                )
 
-        tick_vals = np.linspace(float(np.nanmin(x_los_full)), float(np.nanmax(x_los_full)), n_x_ticks)
-        ax.plot(np.full_like(tick_vals, x0), tick_vals, np.full_like(tick_vals, axis_z), color="white", lw=1.2, alpha=0.75)
+        tick_vals = np.linspace(
+            float(np.nanmin(x_los)),
+            float(np.nanmax(x_los)),
+            int(n_x_ticks),
+        )
+
+        ax.plot(
+            np.full_like(tick_vals, x0),
+            tick_vals,
+            np.full_like(tick_vals, axis_z),
+            color="white",
+            lw=1.2,
+            alpha=0.75,
+        )
+
         for tt in tick_vals:
-            ax.plot([x0 - tick_dx, x0 + tick_dx], [tt, tt], [axis_z, axis_z], color="white", lw=1.0, alpha=0.75)
-            ax.text(x0 - factor_ticks_x * tick_dx, tt, axis_z - factor_ticks_z, f"{tt:.2f}", color="white", fontsize=x_axis_fontsize, ha="left", va="center")
+            ax.plot(
+                [x0 - tick_dx, x0 + tick_dx],
+                [tt, tt],
+                [axis_z, axis_z],
+                color="white",
+                lw=1.0,
+                alpha=0.75,
+            )
+
+            ax.text(
+                x0 - factor_ticks_x * tick_dx,
+                tt,
+                axis_z - factor_ticks_z,
+                f"{tt:.2f}",
+                color="white",
+                fontsize=x_axis_fontsize,
+                ha="left",
+                va="center",
+            )
+
         if x_axis_label is not None:
-            ax.text(x0, float(np.nanmean(tick_vals)), axis_z - factor_x_label * cylinder_radius, x_axis_label, color="white", fontsize=x_axis_fontsize + 2, ha="center", va="top")
+            ax.text(
+                x0,
+                float(np.nanmean(tick_vals)),
+                axis_z - factor_x_label * cylinder_radius,
+                x_axis_label,
+                color="white",
+                fontsize=x_axis_fontsize + 2,
+                ha="center",
+                va="top",
+            )
 
         for i_profile, lab in enumerate(labels):
-            th, c = angles[lab], profile_color[lab]
-            r = cylinder_radius * _scale_values(profiles[i_sample, i_profile][pix], vmin, vrange, eps, field_logscale, positive_only)
-            ax.plot(x0 + cylinder_radius * np.cos(th) * np.ones_like(y_slices), y_slices, cylinder_radius * np.sin(th) * np.ones_like(y_slices), color=c, lw=0.9, alpha=0.18)
-            ax.plot(x0 + r * np.cos(th), x_los, r * np.sin(th), color=c, lw=8.5, alpha=0.10)
-            ax.plot(x0 + r * np.cos(th), x_los, r * np.sin(th), color=c, lw=4.2, alpha=0.30)
-            ax.plot(x0 + r * np.cos(th), x_los, r * np.sin(th), color=c, lw=1.05, alpha=1.00)
+            th = angles[lab]
+            c = profile_color[lab]
+
+            r = cylinder_radius * _scale_values(
+                profiles[i_sample, i_profile],
+                vmin,
+                vrange,
+                eps,
+                field_logscale,
+                positive_only,
+            )
+
+            ax.plot(
+                x0 + cylinder_radius * np.cos(th) * np.ones_like(y_slices),
+                y_slices,
+                cylinder_radius * np.sin(th) * np.ones_like(y_slices),
+                color=c,
+                lw=0.9,
+                alpha=0.18,
+            )
+
+            if glow:
+                ax.plot(
+                    x0 + r * np.cos(th),
+                    x_los,
+                    r * np.sin(th),
+                    color=c,
+                    lw=8.5,
+                    alpha=0.10,
+                )
+                ax.plot(
+                    x0 + r * np.cos(th),
+                    x_los,
+                    r * np.sin(th),
+                    color=c,
+                    lw=4.2,
+                    alpha=0.30,
+                )
+
+            ax.plot(
+                x0 + r * np.cos(th),
+                x_los,
+                r * np.sin(th),
+                color=c,
+                lw=profile_linewidth,
+                alpha=1.00,
+            )
+
+            if show_profile_points:
+                ax.scatter(
+                    x0 + r * np.cos(th),
+                    x_los,
+                    r * np.sin(th),
+                    color=c,
+                    s=profile_point_size,
+                    alpha=1.0,
+                    depthshade=False,
+                )
 
     margin = 1.22 * cylinder_radius
     z_min = min(-margin, axis_z - 0.35 * cylinder_radius)
+
     ax.set_xlim(np.min(centers) - margin, np.max(centers) + margin)
     ax.set_ylim(x_min - 0.05 * x_span, x_max + 0.05 * x_span)
     ax.set_zlim(z_min, margin)
-    ax.set_box_aspect((np.ptp(ax.get_xlim()), np.ptp(ax.get_ylim()), np.ptp(ax.get_zlim())))
-    ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
+
+    ax.set_box_aspect(
+        (
+            np.ptp(ax.get_xlim()),
+            np.ptp(ax.get_ylim()),
+            np.ptp(ax.get_zlim()),
+        )
+    )
+
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_zticks([])
+
     _dark_3d_style(ax, hide_ticks=True)
     ax.view_init(elev=view_elev, azim=view_azim)
 
-    sax = fig.add_axes((0.815 * scale_box_x_factor, 0.335, 0.125, 0.37), facecolor="black")
-    sax.set_xlim(0, 1); sax.set_ylim(0, 1); sax.set_xticks([]); sax.set_yticks([])
+    sax = fig.add_axes(
+        (0.815 * scale_box_x_factor, 0.335, 0.125, 0.37),
+        facecolor="black",
+    )
+
+    sax.set_xlim(0.0, 1.0)
+    sax.set_ylim(0.0, 1.0)
+    sax.set_xticks([])
+    sax.set_yticks([])
+
     for spine in sax.spines.values():
-        spine.set_color("white"); spine.set_linewidth(1.1)
+        spine.set_color("white")
+        spine.set_linewidth(1.1)
 
     sax.plot([0.28, 0.28], [0.20, 0.80], color="white", lw=2.0)
-    for rr, vv in zip(np.linspace(0, 1, 5), np.linspace(vmin, vmax, 5)):
+
+    for rr, vv in zip(np.linspace(0.0, 1.0, 5), np.linspace(vmin, vmax, 5)):
         yy = 0.20 + 0.60 * rr
         sax.plot([0.20, 0.36], [yy, yy], color="white", lw=1.5)
-        sax.text(0.88, yy, f"{vv:.2f}", color="white", fontsize=17, ha="right", va="center")
+        sax.text(
+            0.88,
+            yy,
+            f"{vv:.2f}",
+            color="white",
+            fontsize=17,
+            ha="right",
+            va="center",
+        )
 
     if field_units is not None:
-        sax.text(scale_units_xy[0], scale_units_xy[1], field_units, color="white", fontsize=22, ha="center", va="bottom", transform=sax.transAxes)
+        sax.text(
+            scale_units_xy[0],
+            scale_units_xy[1],
+            field_units,
+            color="white",
+            fontsize=22,
+            ha="center",
+            va="bottom",
+            transform=sax.transAxes,
+        )
 
-    handles = [Line2D([0], [0], color=profile_color[lab], lw=5, label=lab) for lab in labels]
-    leg = fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.44, 0.965 * legend_y_factor), ncols=min(len(labels), 6), frameon=True, facecolor="black", edgecolor="white", framealpha=1, fontsize=15)
+    handles = [
+        Line2D([0], [0], color=profile_color[lab], lw=5, label=lab)
+        for lab in labels
+    ]
+
+    leg = fig.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.44, 0.965 * legend_y_factor),
+        ncols=min(len(labels), 6),
+        frameon=True,
+        facecolor="black",
+        edgecolor="white",
+        framealpha=1.0,
+        fontsize=15,
+    )
+
     for text in leg.get_texts():
         text.set_color("white")
 
@@ -759,7 +1016,6 @@ def plot_3d_radar_cylinder(
         plt.show()
 
     return fig, ax
-
 
 # ============================================================
 # 3D ridge cube
