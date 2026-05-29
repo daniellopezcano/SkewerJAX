@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from typing import Mapping
+from math import prod
 from jax.typing import ArrayLike
 
-import jax
 from jax import vmap
 import jax.numpy as jnp
 
@@ -12,11 +12,11 @@ from skewerjax.constants.physical_constants import phys
 
 
 def compute_lambda_prime(
-    velocities_kms: ArrayLike,      # (N_v,)
-    lambda0_A: ArrayLike,           # (N_lines,)
-    a_dagger: ArrayLike,            # scalar, or shape (*batch_shape,)
-    scale_factor: ArrayLike,        # (*batch_shape,)
-    LoS_velocity: ArrayLike,        # (N_lines, *batch_shape), [km/s]
+    velocities_kms: ArrayLike,
+    lambda0_A: ArrayLike,
+    a_dagger: ArrayLike,
+    scale_factor: ArrayLike,
+    LoS_velocity: ArrayLike,
 ) -> jnp.ndarray:
     """
     Compute local wavelengths using exact line-centered velocity units.
@@ -34,26 +34,32 @@ def compute_lambda_prime(
 
     Parameters
     ----------
-    velocities_kms : jnp.ndarray, shape (N_v,)
+    velocities_kms : array, shape (N_v,)
         Common line-centered velocity grid in km/s.
 
-    lambda0_A : jnp.ndarray, shape (N_lines,)
+    lambda0_A : array, shape (N_lines,)
         Rest wavelengths of each transition in Angstrom.
 
-    a_dagger : scalar or jnp.ndarray
+    a_dagger : scalar or array
         Reference scale factor.
         Must be scalar or have shape matching `scale_factor`.
 
-    scale_factor : jnp.ndarray, shape (*batch_shape,)
+    scale_factor : array, shape (*batch_shape,)
         Local scale factor a(x).
 
-    LoS_velocity : jnp.ndarray, shape (N_lines, *batch_shape)
+    LoS_velocity : array, shape (N_lines, *batch_shape)
         Line-of-sight peculiar velocity in km/s, tiled to lines.
 
     Returns
     -------
-    lambdas_A_prime : jnp.ndarray, shape (N_lines, *batch_shape, N_v)
+    lambdas_A_prime : array, shape (N_lines, *batch_shape, N_v)
         Local wavelength seen by each gas element, in Angstrom.
+
+    Notes
+    -----
+    This function necessarily returns a heavy wavelength cube. For the
+    line-profile calculation below, use `compute_nu_offset_GHz()` instead,
+    which avoids materializing this wavelength cube.
     """
     velocities_kms = jnp.asarray(velocities_kms)
     lambda0_A = jnp.asarray(lambda0_A)
@@ -74,19 +80,16 @@ def compute_lambda_prime(
             f"got {a_dagger.shape}"
         )
 
-    # lambda_j: (N_lines, 1, ..., 1)
     lambda0_expanded = lambda0_A[
         (slice(None),) + (None,) * scale_factor.ndim + (None,)
     ]
 
-    # exp(v / c): (1, ..., 1, N_v)
     velocity_factor = jnp.exp(
         velocities_kms[
             (None,) * (scale_factor.ndim + 1) + (slice(None),)
         ] / phys.c_kms
     )
 
-    # a(x) / a_dagger: (1, *batch_shape, 1)
     if a_dagger.ndim == 0:
         scale_factor_ratio = scale_factor[None, ..., None] / a_dagger
     else:
@@ -95,7 +98,6 @@ def compute_lambda_prime(
             / a_dagger[None, ..., None]
         )
 
-    # Doppler inverse: (N_lines, *batch_shape, 1)
     beta = LoS_velocity[..., None] / phys.c_kms
     doppler_inverse = jnp.sqrt((1.0 + beta) / (1.0 - beta))
 
@@ -107,6 +109,108 @@ def compute_lambda_prime(
     )
 
     return lambdas_A_prime
+
+
+def compute_nu_offset_GHz(
+    velocities_kms: ArrayLike,
+    lambda0_A: ArrayLike,
+    a_dagger: ArrayLike,
+    scale_factor: ArrayLike,
+    LoS_velocity: ArrayLike,
+) -> jnp.ndarray:
+    """
+    Memory-lighter frequency-offset computation.
+
+    Instead of materializing
+
+        lambda_prime = lambda0 * exp(v/c) * a/a_dagger * D^{-1},
+
+    and then computing
+
+        nu = (1/lambda_prime - 1/lambda0) * c * 10,
+
+    this computes the reciprocal directly:
+
+        1/lambda_prime
+        =
+        1/lambda0
+        * exp(-v/c)
+        * a_dagger/a
+        * sqrt((1 - beta)/(1 + beta)).
+
+    Parameters
+    ----------
+    velocities_kms : array, shape (N_v,)
+    lambda0_A : array, shape (N_lines,)
+    a_dagger : scalar or shape (N_points,)
+    scale_factor : array, shape (N_points,)
+    LoS_velocity : array, shape (N_lines, N_points)
+
+    Returns
+    -------
+    nu_GHz : array, shape (N_lines, N_points, N_v)
+        Frequency offset in GHz.
+    """
+    velocities_kms = jnp.asarray(velocities_kms)
+    lambda0_A = jnp.asarray(lambda0_A)
+    a_dagger = jnp.asarray(a_dagger)
+    scale_factor = jnp.asarray(scale_factor)
+    LoS_velocity = jnp.asarray(LoS_velocity)
+
+    if scale_factor.ndim != 1:
+        raise ValueError(
+            "`compute_nu_offset_GHz` expects flattened scale_factor "
+            f"with shape (N_points,), got {scale_factor.shape}."
+        )
+
+    if LoS_velocity.ndim != 2:
+        raise ValueError(
+            "`compute_nu_offset_GHz` expects flattened LoS_velocity "
+            f"with shape (N_lines, N_points), got {LoS_velocity.shape}."
+        )
+
+    if LoS_velocity.shape[1] != scale_factor.shape[0]:
+        raise ValueError(
+            f"LoS_velocity.shape[1]={LoS_velocity.shape[1]} does not match "
+            f"scale_factor.shape[0]={scale_factor.shape[0]}."
+        )
+
+    if a_dagger.ndim != 0 and a_dagger.shape != scale_factor.shape:
+        raise ValueError(
+            f"a_dagger must be scalar or have shape {scale_factor.shape}; "
+            f"got {a_dagger.shape}."
+        )
+
+    inv_lambda0 = 1.0 / lambda0_A[:, None, None]
+
+    velocity_factor_inv = jnp.exp(
+        -velocities_kms[None, None, :] / phys.c_kms
+    )
+
+    if a_dagger.ndim == 0:
+        scale_factor_ratio_inv = a_dagger / scale_factor[None, :, None]
+    else:
+        scale_factor_ratio_inv = (
+            a_dagger[None, :, None]
+            / scale_factor[None, :, None]
+        )
+
+    beta = LoS_velocity[..., None] / phys.c_kms
+    doppler_forward = jnp.sqrt((1.0 - beta) / (1.0 + beta))
+
+    nu_GHz = (
+        inv_lambda0
+        * (
+            velocity_factor_inv
+            * scale_factor_ratio_inv
+            * doppler_forward
+            - 1.0
+        )
+        * phys.c
+        * 10.0
+    )
+
+    return nu_GHz
 
 
 def compute_line_profiles(
@@ -121,26 +225,19 @@ def compute_line_profiles(
     """
     Compute Voigt line profiles using line-centered velocity units.
 
-    The spectral coordinate is a common velocity grid v_dagger in km/s.
-    For each line j,
-
-        lambda'_j(x, v_dagger)
-        =
-        lambda_j exp(v_dagger / c) a(x) / a_dagger D^{-1}(x).
-
     Parameters
     ----------
-    quadri_vectors : jnp.ndarray, shape (..., 4)
+    quadri_vectors : array, shape (..., 4)
         Sampling events in the form [a, x, y, z].
         The leading dimensions define the spatial batch shape.
 
-    LoS_directions : jnp.ndarray, shape (..., 3)
+    LoS_directions : array, shape (..., 3)
         Line-of-sight direction vectors at each spatial point.
 
-    velocities_kms : jnp.ndarray, shape (N_v,)
+    velocities_kms : array, shape (N_v,)
         Common line-centered velocity grid in km/s.
 
-    a_dagger : scalar or jnp.ndarray
+    a_dagger : scalar or array
         Reference scale factor.
         Accepted shapes:
             - scalar
@@ -153,14 +250,13 @@ def compute_line_profiles(
     fields : Fields-like
         Field container.
 
-    voigt_implementation_mode : str, default "ExoJAX"
+    voigt_implementation_mode : str
         Passed through to `log10_voigt`.
 
     Returns
     -------
-    phi : jnp.ndarray, shape (N_lines, *batch_shape, N_v)
-        Line profiles in time units [ns], following the same shape convention
-        as the old wavelength-based `compute_line_profiles`.
+    phi : array, shape (N_lines, *batch_shape, N_v)
+        Line profiles in time units [ns].
     """
 
     # ------------------------------------------------------------------
@@ -169,33 +265,36 @@ def compute_line_profiles(
     velocities_kms = jnp.asarray(velocities_kms)
     a_dagger = jnp.asarray(a_dagger)
 
-    N_v = velocities_kms.size
+    N_v = int(velocities_kms.size)
 
     if quadri_vectors.ndim < 2 or quadri_vectors.shape[-1] != 4:
         raise ValueError(
-            f"`quadri_vectors` must have shape (..., 4) with last axis [a,x,y,z], "
-            f"got shape {quadri_vectors.shape}"
+            "`quadri_vectors` must have shape (..., 4) with last axis [a,x,y,z]. "
+            f"Got shape {quadri_vectors.shape}."
         )
 
     batch_shape = quadri_vectors.shape[:-1]
-    N_points = int(jnp.prod(jnp.array(batch_shape)))
+    N_points = int(prod(batch_shape))
 
     species_fields = set(fields.species_keys)
     species_lines = set(line_bundle.species_keys)
+
     if species_fields != species_lines:
         raise ValueError(
-            f"Species keys mismatch between fields and line_bundle. "
+            "Species keys mismatch between fields and line_bundle. "
             f"fields={species_fields}, line_bundle={species_lines}"
         )
 
     N_lines = int(line_bundle.n_lines)
     N_species = int(line_bundle.n_species)
+
     if N_lines < N_species:
         raise ValueError(
             f"More species than lines: N_lines={N_lines}, N_species={N_species}"
         )
 
     LoS_directions = jnp.asarray(LoS_directions)
+
     if LoS_directions.shape != batch_shape + (3,):
         raise ValueError(
             f"`LoS_directions` shape {LoS_directions.shape} is incompatible with "
@@ -207,6 +306,7 @@ def compute_line_profiles(
 
     for sp in line_bundle.species_keys:
         available = set(fields.field_keys[sp])
+
         missing = [f for f in required_scalar_fields if f not in available]
         if missing:
             raise ValueError(
@@ -216,7 +316,8 @@ def compute_line_profiles(
 
         if required_vector_field not in available:
             raise ValueError(
-                f"Missing 'velocity' field for species '{sp}', required to build LoS_velocity."
+                f"Missing 'velocity' field for species '{sp}', "
+                "required to build LoS_velocity."
             )
 
     # ------------------------------------------------------------------
@@ -226,18 +327,12 @@ def compute_line_profiles(
     LoS_flat = LoS_directions.reshape(N_points, 3)
     scale_factors_flat = quadri_vectors_flat[:, 0]
 
-    # Match the old scale_factor_obs behavior:
-    # if a_dagger is provided with the original batch shape, flatten it
-    # together with quadri_vectors.
     if a_dagger.ndim == 0:
         a_dagger_flat = a_dagger
-
     elif a_dagger.shape == batch_shape:
         a_dagger_flat = a_dagger.reshape(N_points)
-
     elif a_dagger.shape == (N_points,):
         a_dagger_flat = a_dagger
-
     else:
         raise ValueError(
             f"`a_dagger` must be scalar, have shape {batch_shape}, "
@@ -277,6 +372,9 @@ def compute_line_profiles(
         LoS_directions=LoS_flat,
     )
 
+    # LoS_flat is no longer needed after LoS_velocity is built.
+    del LoS_flat
+
     # ------------------------------------------------------------------
     # 3. Extract line parameters
     # ------------------------------------------------------------------
@@ -300,10 +398,13 @@ def compute_line_profiles(
         / (jnp.sqrt(2.0) * lambda0_A[:, None])
     )
 
+    # These heavy tiled fields are no longer needed.
+    del collisional, temperature, turbulence, v_th_kms, v_eff_A_GHz
+
     # ------------------------------------------------------------------
     # 5. Frequency offsets from line-centered velocity units
     # ------------------------------------------------------------------
-    lambdas_A_prime = compute_lambda_prime(
+    nu_GHz = compute_nu_offset_GHz(
         velocities_kms=velocities_kms,
         lambda0_A=lambda0_A,
         a_dagger=a_dagger_flat,
@@ -311,10 +412,8 @@ def compute_line_profiles(
         LoS_velocity=LoS_velocity,
     )
 
-    nu_GHz = (
-        (1.0 / lambdas_A_prime)
-        - (1.0 / lambda0_A[:, None, None])
-    ) * phys.c * 10.0
+    # These are no longer needed after nu_GHz is built.
+    del scale_factors_flat, LoS_velocity, a_dagger_flat
 
     # ------------------------------------------------------------------
     # 6. Flatten for Voigt evaluation
@@ -324,6 +423,9 @@ def compute_line_profiles(
     nu_flat = nu_GHz.reshape(N_total, N_v)
     sigma_flat = sigma_GHz.reshape(N_total)
     gamma_flat = gamma_GHz.reshape(N_total)
+
+    # The unflattened arrays are no longer needed.
+    del nu_GHz, sigma_GHz, gamma_GHz
 
     def _eval_voigt_batch(nu_batch, sigma_batch, gamma_batch):
         return vmap(
@@ -342,16 +444,24 @@ def compute_line_profiles(
         gamma_flat,
     )
 
+    # Inputs to Voigt are no longer needed after log10_phi_flat is computed.
+    del nu_flat, sigma_flat, gamma_flat
+
     # ------------------------------------------------------------------
     # 7. Convert back and reshape to the natural batch shape
     # ------------------------------------------------------------------
     phi_flat = 10.0 ** log10_phi_flat
+
+    # Drop log version before keeping the linear profile.
+    del log10_phi_flat
 
     phi = phi_flat.reshape(
         N_lines,
         *batch_shape,
         N_v,
     )
+
+    del phi_flat, quadri_vectors_flat
 
     return phi
 

@@ -273,7 +273,7 @@ def draw_delta_v_differences(ax, delta_v_list, L_box, *, cmap=None, lw=1.5, ls="
     for n, (i, j, d_norm) in enumerate(get_delta_v_difference_info(delta_v_list, L_box)):
         c = cmap(n % 10)
         ax.axvline(d_norm, color=c, lw=lw, ls=ls, alpha=alpha)
-        handles.append(Line2D([0], [0], color=c, lw=max(lw, 1.8), ls=ls, label=fr"$\Delta v_{{{i}{j}}}/L_\mathrm{{box}}$"))
+        handles.append(Line2D([0], [0], color=c, lw=max(lw, 1.8), ls=ls, label=fr"$\Delta v_{{{i}{j}}}$"))
 
     return handles
 

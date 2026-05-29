@@ -1408,14 +1408,15 @@ def plot_3d_neon_ridge_cube(
 
 
 # ============================================================
-# Transmission plot
+# samples plot
 # ============================================================
 
-def plot_transmission_samples_neon(
-    F_over_F0,
+def plot_samples_neon(
+    yy,
     line_bundle,
     x_axis_array,
     x_label,
+    ylabel=r"$e^{-\tau}$",
     N_plot_sample=4,
     seed=0,
     sample_indices=None,
@@ -1424,62 +1425,48 @@ def plot_transmission_samples_neon(
     line_alpha=0.95,
     line_glow_alpha=0.12,
     line_legend_lw=None,
+    total="product",          # None, "product", or "sum"
     total_color="white",
     total_lw=1.05,
     total_glow_lw=None,
     total_alpha=1.0,
     total_glow_alpha=0.12,
+    yscale="linear",          # "linear" or "log"
 ):
     """
-    Neon-style transmission plot for selected skewers.
-
-    Notes
-    -----
-    - No vertical line markers are drawn.
-    - Colors follow the same convention as the other plots:
-      one neon color per species.
-    - Linestyles are only used to distinguish multiple absorption lines
-      from the same species.
-    - The total transmitted flux is plotted last, on top of the individual
-      line transmissions.
+    Neon-style plot for selected skewers.
 
     Parameters
     ----------
-    line_lw : float
-        Main linewidth for individual absorption-line transmissions.
+    yy : array, shape (N_lines, N_skewers, N_x)
+        Quantity to plot per line.
 
-    line_glow_lw : float
-        Glow linewidth for individual absorption-line transmissions.
+    total : {None, "product", "sum"}
+        If None, no total curve is shown.
+        If "product", plot prod_i yy_i.
+        If "sum", plot sum_i yy_i.
 
-    line_alpha : float
-        Alpha for the main individual absorption-line curves.
-
-    line_glow_alpha : float
-        Alpha for the glow individual absorption-line curves.
-
-    line_legend_lw : float or None
-        Linewidth used for individual absorption-line legend handles.
-        If None, defaults to line_lw.
-
-    total_lw : float
-        Main linewidth for total transmitted flux.
-
-    total_glow_lw : float or None
-        Glow linewidth for total transmitted flux.
-        If None, defaults to 3 * total_lw.
+    yscale : {"linear", "log"}
+        Y-axis scale.
     """
-    F_over_F0 = np.asarray(F_over_F0)
+    yy = np.asarray(yy)
     x_axis_array = np.asarray(x_axis_array)
 
-    if F_over_F0.ndim != 3:
-        raise ValueError("Expected F_over_F0 with shape (N_lines, N_skewers, N_x).")
+    if yy.ndim != 3:
+        raise ValueError("Expected yy with shape (N_lines, N_skewers, N_x).")
 
-    N_lines, N_skewers, N_x = F_over_F0.shape
+    if total not in (None, "product", "sum"):
+        raise ValueError("`total` must be one of None, 'product', or 'sum'.")
+
+    if yscale not in ("linear", "log"):
+        raise ValueError("`yscale` must be either 'linear' or 'log'.")
+
+    N_lines, N_skewers, N_x = yy.shape
 
     if x_axis_array.shape[-1] != N_x:
         raise ValueError(
             f"x_axis_array has length {x_axis_array.shape[-1]}, "
-            f"but F_over_F0 has N_x={N_x}."
+            f"but yy has N_x={N_x}."
         )
 
     if sample_indices is None:
@@ -1531,12 +1518,12 @@ def plot_transmission_samples_neon(
     for ax, sk_idx in zip(axes, idx):
         ax.set_facecolor("black")
 
-        # Individual line transmissions first.
+        # Individual lines first.
         for i_line, lab in enumerate(labels):
             sp = species[i_line]
             c = species_color[sp]
             ls = line_style[i_line]
-            y = F_over_F0[i_line, sk_idx, :]
+            y = yy[i_line, sk_idx, :]
 
             ax.plot(
                 x_axis_array,
@@ -1557,25 +1544,36 @@ def plot_transmission_samples_neon(
                 zorder=3,
             )
 
-        # Total transmitted flux last, on top.
-        F_total = np.prod(F_over_F0[:, sk_idx, :], axis=0)
+        # Optional total curve, plotted last and on top.
+        if total is not None:
+            if total == "product":
+                y_total = np.prod(yy[:, sk_idx, :], axis=0)
+                total_label = "Total product"
+            elif total == "sum":
+                y_total = np.sum(yy[:, sk_idx, :], axis=0)
+                total_label = "Total sum"
 
-        ax.plot(
-            x_axis_array,
-            F_total,
-            color=total_color,
-            lw=total_glow_lw,
-            alpha=total_glow_alpha,
-            zorder=8,
-        )
-        ax.plot(
-            x_axis_array,
-            F_total,
-            color=total_color,
-            lw=total_lw,
-            alpha=total_alpha,
-            zorder=9,
-        )
+            ax.plot(
+                x_axis_array,
+                y_total,
+                color=total_color,
+                lw=total_glow_lw,
+                alpha=total_glow_alpha,
+                zorder=8,
+            )
+            ax.plot(
+                x_axis_array,
+                y_total,
+                color=total_color,
+                lw=total_lw,
+                alpha=total_alpha,
+                zorder=9,
+            )
+
+        if yscale == "log":
+            ax.set_yscale("log", nonpositive="clip")
+        else:
+            ax.set_yscale("linear")
 
         ax.text(
             0.015,
@@ -1588,8 +1586,7 @@ def plot_transmission_samples_neon(
             va="bottom",
         )
 
-        ax.set_ylim(-0.05, 1.05)
-        ax.set_ylabel(r"$e^{-\tau}$", fontsize=20, color="white")
+        ax.set_ylabel(ylabel, fontsize=20, color="white")
 
         ax.tick_params(
             axis="both",
@@ -1619,16 +1616,17 @@ def plot_transmission_samples_neon(
             )
         )
 
-    handles.append(
-        Line2D(
-            [0],
-            [0],
-            color=total_color,
-            lw=total_lw,
-            ls="-",
-            label="Total",
+    if total is not None:
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=total_color,
+                lw=total_lw,
+                ls="-",
+                label=total_label,
+            )
         )
-    )
 
     axes[-1].set_xlabel(x_label, fontsize=20, color="white")
 

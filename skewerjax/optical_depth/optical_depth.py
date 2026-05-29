@@ -23,41 +23,34 @@ from skewerjax.optical_depth import line_profile
 
 class OpticalDepthCalculator:
     """
-    Simple optical-depth calculator for line-centered velocity coordinates.
+    Memory-light optical-depth calculator for line-centered velocity coordinates.
 
     Main stored result
     ------------------
     self.optical_depth : array, shape (N_lines, N_sk, N_v)
         Optical depth for each line, skewer, and velocity pixel.
 
-    Two usage modes
-    ---------------
+    Memory policy
+    -------------
+    By default, after compute() finishes, this class releases references to the
+    heavy input containers:
 
-    1. Compute mode
-       Compute optical depth from skewer geometry, fields, and line profiles.
+        self.skewer_bundle = None
+        self.fields = None
 
-       od = OpticalDepthCalculator(
-           skewer_bundle=skewer_bundle,
-           velocities_kms=velocities_kms,
-           line_bundle=line_bundle,
-           fields=fields,
-           debug_memory=True,
-       )
+    but keeps
 
-       tau = od.compute()
-       tau = od.wrap_to_ref_line()
+        self.line_bundle
+        self.a_dagger
+        self.velocities_kms
+        self.optical_depth
 
-    2. Loading mode
-       Load already-computed optical depth.
+    because these may be useful afterwards, especially for wrap_to_ref_line()
+    and metadata inspection.
 
-       od = OpticalDepthCalculator(
-           optical_depth=optical_depth,
-           velocities_kms=velocities_kms,
-           line_bundle=line_bundle,
-       )
+    If you need to call compute() repeatedly on the same instance, set
 
-       tau = od.compute()          # returns the loaded optical_depth
-       tau = od.wrap_to_ref_line() # uses line_bundle.delta_v
+        release_inputs_after_compute=False
     """
 
     def __init__(
@@ -73,6 +66,8 @@ class OpticalDepthCalculator:
         mode_integration: str = "trapz",
         debug_memory: bool = False,
         sync_memory: bool = True,
+        *,
+        release_inputs_after_compute: bool = True,
     ):
         """
         Parameters
@@ -83,8 +78,7 @@ class OpticalDepthCalculator:
             `N_ppsk`, and `a0`.
 
         velocities_kms : array, shape (N_v,)
-            Common line-centered velocity grid in km/s. Required in both modes,
-            because `wrap_to_ref_line()` needs the velocity grid.
+            Common line-centered velocity grid in km/s. Required in both modes.
 
         line_bundle :
             Line container. Required in both modes. Expected attributes:
@@ -97,9 +91,7 @@ class OpticalDepthCalculator:
             `line_profile.compute_line_profiles`.
 
         optical_depth : array, optional, shape (N_lines, N_sk, N_v)
-            If provided, activate loading mode. The input optical-depth array
-            is stored directly in `self.optical_depth`. In this mode,
-            `skewer_bundle` and `fields` are not required.
+            If provided, activate loading mode.
 
         a_dagger : scalar or array, optional
             Reference scale factor for the velocity coordinate. Accepted forms:
@@ -107,11 +99,14 @@ class OpticalDepthCalculator:
             (N_sk * N_ppsk,). If None, uses `skewer_bundle.a0`.
 
         debug_memory : bool
-            If True, log visual process-memory checkpoints.
+            If True, log process-memory checkpoints.
 
         sync_memory : bool
             If True, call `.block_until_ready()` before memory checkpoints.
-            This is useful because JAX execution is often asynchronous.
+
+        release_inputs_after_compute : bool
+            If True, release `skewer_bundle` and `fields` after compute().
+            `line_bundle` and `a_dagger` are always kept.
         """
         if velocities_kms is None:
             raise ValueError("`velocities_kms` is required in both compute and loading modes.")
@@ -119,32 +114,65 @@ class OpticalDepthCalculator:
         if line_bundle is None:
             raise ValueError("`line_bundle` is required in both compute and loading modes.")
 
-        # Store external containers and numerical options.
-        self.skewer_bundle = skewer_bundle
-        self.line_bundle = line_bundle
-        self.fields = fields
+        # --------------------------------------------------------------
+        # Mode flag
+        # --------------------------------------------------------------
+        self.loaded_mode = optical_depth is not None
 
+        # --------------------------------------------------------------
+        # Persistent lightweight / needed metadata
+        # --------------------------------------------------------------
+        self.line_bundle = line_bundle
         self.velocities_kms = jnp.asarray(velocities_kms)
         self.a_dagger = a_dagger
+
         self.ii_cosmology = ii_cosmology
         self.voigt_implementation_mode = voigt_implementation_mode
         self.mode_integration = mode_integration
 
-        # Memory-debugging state.
+        self.release_inputs_after_compute = release_inputs_after_compute
+        self._inputs_released = False
+        self._computed_once = False
+
+        # --------------------------------------------------------------
+        # Memory-debugging state
+        # --------------------------------------------------------------
         self.debug_memory = debug_memory
         self.sync_memory = sync_memory
         self._proc = psutil.Process(os.getpid()) if psutil is not None else None
         self._last_rss_bytes = None
 
-        # Mode flag.
-        self.loaded_mode = optical_depth is not None
-
-        # Dimensions from line bundle and velocity grid.
+        # --------------------------------------------------------------
+        # Dimensions and cached small arrays from line_bundle
+        # --------------------------------------------------------------
         self.N_lines = int(line_bundle.n_lines)
         self.N_species = int(getattr(line_bundle, "n_species", 0))
         self.N_v = int(self.velocities_kms.size)
 
-        # Filled either now, in loading mode, or later by compute().
+        self.delta_v = jnp.asarray(line_bundle.delta_v)
+        self.f_osc = jnp.asarray(line_bundle.f_osc)
+        self.species_keys = tuple(getattr(line_bundle, "species_keys", ()))
+
+        if self.delta_v.shape != (self.N_lines,):
+            raise ValueError(
+                f"`line_bundle.delta_v` has shape {self.delta_v.shape}; "
+                f"expected {(self.N_lines,)}."
+            )
+
+        if self.f_osc.shape[0] != self.N_lines:
+            raise ValueError(
+                "`line_bundle.f_osc` must have one entry per line. "
+                f"Got shape {self.f_osc.shape}, N_lines={self.N_lines}."
+            )
+
+        self.indices_for_species: Mapping[str, jnp.ndarray] = {
+            sp: jnp.asarray(line_bundle.indices_for_species(sp))
+            for sp in self.species_keys
+        }
+
+        # --------------------------------------------------------------
+        # Main result
+        # --------------------------------------------------------------
         self.optical_depth = None
 
         if self.loaded_mode:
@@ -173,7 +201,13 @@ class OpticalDepthCalculator:
             self.N_sk = int(tau.shape[1])
             self.N_ppsk = None
             self.N_points = None
+
             self.optical_depth = tau
+
+            # No compute-mode heavy inputs needed in loading mode.
+            self.skewer_bundle = None
+            self.fields = None
+            self._inputs_released = True
 
             logger.info(
                 "[OPTICAL_DEPTH] initialized in loading mode: optical_depth.shape=%s",
@@ -182,11 +216,14 @@ class OpticalDepthCalculator:
             self._log_mem("initialized from precomputed optical_depth", self.optical_depth)
 
         else:
-            if self.skewer_bundle is None:
+            if skewer_bundle is None:
                 raise ValueError("`skewer_bundle` is required when `optical_depth` is not provided.")
 
-            if self.fields is None:
+            if fields is None:
                 raise ValueError("`fields` is required when `optical_depth` is not provided.")
+
+            self.skewer_bundle = skewer_bundle
+            self.fields = fields
 
             self.N_sk = int(skewer_bundle.N_sk)
             self.N_ppsk = int(skewer_bundle.N_ppsk)
@@ -202,6 +239,37 @@ class OpticalDepthCalculator:
                 self.N_v,
             )
             self._log_mem("initialized")
+
+    # ------------------------------------------------------------------
+    # Memory cleanup helpers
+    # ------------------------------------------------------------------
+
+    def release_inputs(self):
+        """
+        Release references to heavy compute-mode input containers.
+
+        This intentionally keeps:
+            - self.line_bundle
+            - self.a_dagger
+            - self.velocities_kms
+            - self.optical_depth
+        """
+        self.skewer_bundle = None
+        self.fields = None
+        self._inputs_released = True
+
+        logger.info(
+            "[OPTICAL_DEPTH] released heavy input containers: skewer_bundle and fields."
+        )
+
+    def clear_optical_depth(self):
+        """
+        Explicitly release the stored optical-depth result.
+
+        Use this only after downstream objects no longer need it.
+        """
+        self.optical_depth = None
+        logger.info("[OPTICAL_DEPTH] cleared stored optical_depth.")
 
     # ------------------------------------------------------------------
     # Small utilities
@@ -253,7 +321,6 @@ class OpticalDepthCalculator:
         if not self.debug_memory:
             return
 
-        # Force previous JAX work to finish before measuring memory.
         if self.sync_memory and hasattr(arr, "block_until_ready"):
             arr.block_until_ready()
 
@@ -262,6 +329,7 @@ class OpticalDepthCalculator:
             return
 
         mem, vm = self._proc.memory_info(), psutil.virtual_memory()
+
         rss_bytes = mem.rss
         rss_gb = self._gb(mem.rss)
         total_gb = self._gb(vm.total)
@@ -312,14 +380,24 @@ class OpticalDepthCalculator:
         if self.loaded_mode:
             raise RuntimeError("`_prepare_a_dagger()` is unavailable in loading mode.")
 
-        a = jnp.asarray(self.skewer_bundle.a0 if self.a_dagger is None else self.a_dagger)
+        if self.skewer_bundle is None:
+            raise RuntimeError(
+                "Cannot prepare `a_dagger`: skewer inputs have been released."
+            )
+
+        a = jnp.asarray(
+            self.skewer_bundle.a0 if self.a_dagger is None else self.a_dagger
+        )
 
         if a.ndim == 0:
             return a
+
         if a.shape == (self.N_sk,):
             return jnp.repeat(a[:, None], self.N_ppsk, axis=1).reshape(self.N_points)
+
         if a.shape == (self.N_sk, self.N_ppsk):
             return a.reshape(self.N_points)
+
         if a.shape == (self.N_points,):
             return a
 
@@ -334,7 +412,7 @@ class OpticalDepthCalculator:
 
     def compute(self) -> jnp.ndarray:
         """
-        Compute or return optical depth and store it in `self.optical_depth`.
+        Compute or return optical depth.
 
         Returns
         -------
@@ -350,18 +428,39 @@ class OpticalDepthCalculator:
             )
             return self.optical_depth
 
+        if self.optical_depth is not None and self._inputs_released:
+            logger.info(
+                "[OPTICAL_DEPTH] returning cached optical_depth.shape=%s "
+                "because heavy inputs have been released.",
+                self.optical_depth.shape,
+            )
+            return self.optical_depth
+
+        if self.skewer_bundle is None or self.fields is None:
+            raise RuntimeError(
+                "Cannot compute optical depth because compute-mode inputs are missing. "
+                "This usually means `release_inputs_after_compute=True` and compute() "
+                "has already been called. Create a new calculator or set "
+                "`release_inputs_after_compute=False`."
+            )
+
         logger.info(
             "[OPTICAL_DEPTH] start: ii_cosmology=%d, voigt=%s",
             self.ii_cosmology,
             self.voigt_implementation_mode,
         )
 
+        # --------------------------------------------------------------
         # 1. Load skewer geometry for the requested cosmology.
-        qv = self.skewer_bundle.quadri_vectors[self.ii_cosmology]  # (N_sk, N_ppsk, 4)
-        los = self.skewer_bundle.los_directions                    # (N_sk, N_ppsk, 3)
+        # --------------------------------------------------------------
+        qv = self.skewer_bundle.quadri_vectors[self.ii_cosmology]
+        los = self.skewer_bundle.los_directions
+
         self._log_mem("loaded quadri_vectors", qv)
 
+        # --------------------------------------------------------------
         # 2. Compute line profiles phi(line, skewer, point, velocity).
+        # --------------------------------------------------------------
         phi = line_profile.compute_line_profiles(
             quadri_vectors=qv,
             LoS_directions=los,
@@ -371,66 +470,102 @@ class OpticalDepthCalculator:
             fields=self.fields,
             voigt_implementation_mode=self.voigt_implementation_mode,
         )
+
         self._log_mem("after compute_line_profiles", phi)
 
+        # --------------------------------------------------------------
         # 3. Accept either flattened or expanded profile shapes.
+        # --------------------------------------------------------------
         flat_shape = (self.N_lines, self.N_sk, self.N_ppsk * self.N_v)
         full_shape = (self.N_lines, self.N_sk, self.N_ppsk, self.N_v)
 
         if phi.shape == flat_shape:
             phi = phi.reshape(full_shape)
         elif phi.shape != full_shape:
-            raise ValueError(f"Unexpected phi shape {phi.shape}. Expected {flat_shape} or {full_shape}.")
+            raise ValueError(
+                f"Unexpected phi shape {phi.shape}. "
+                f"Expected {flat_shape} or {full_shape}."
+            )
 
         self._log_mem("after phi reshape", phi)
 
+        # --------------------------------------------------------------
         # 4. Tile species-level number-density fields onto line-level arrays.
-        indices: Mapping[str, jnp.ndarray] = {
-            sp: self.line_bundle.indices_for_species(sp)
-            for sp in self.line_bundle.species_keys
-        }
-
+        # --------------------------------------------------------------
         n_cm3 = self.fields.tile_field_to_lines(
             "number_density",
             qv.reshape(self.N_points, 4),
-            indices_for_species=indices,
+            indices_for_species=self.indices_for_species,
         ).reshape(self.N_lines, self.N_sk, self.N_ppsk)
 
         self._log_mem("after number_density tiling", n_cm3)
 
+        # --------------------------------------------------------------
         # 5. Build d tau / dx.
-        #
-        # sigma = prefactor * f_osc * phi
-        #
-        # Shapes:
-        #   sigma  : (N_lines, N_sk, N_ppsk, N_v)
-        #   n_cm3  : (N_lines, N_sk, N_ppsk)
-        #   a      : (N_sk, N_ppsk)
-        #
-        # The 1e2 factor keeps the same unit convention as the original function.
-        sigma = phys.cross_section_prefactor * self.line_bundle.f_osc[:, None, None, None] * phi
-        dtau_dx = sigma * n_cm3[..., None] * qv[..., 0][None, ..., None] ** -2 * 1e2
+        # --------------------------------------------------------------
+        sigma = (
+            phys.cross_section_prefactor
+            * self.f_osc[:, None, None, None]
+            * phi
+        )
+
+        dtau_dx = (
+            sigma
+            * n_cm3[..., None]
+            * qv[..., 0][None, ..., None] ** -2
+            * 1e2
+        )
 
         self._log_mem("after dtau_dx", dtau_dx)
 
+        # Release intermediate local references as soon as possible.
+        del phi, sigma, n_cm3
+
+        # --------------------------------------------------------------
         # 6. Reorient skewers so integration follows the photon path direction.
+        # --------------------------------------------------------------
         mask = self.skewer_bundle.array_direction == -1
 
         qv_oriented = jnp.where(mask[:, None, None], jnp.flip(qv, axis=1), qv)
         x_m = self.compute_comoving_distance(qv_oriented) * phys.Mpc_to_m
 
-        dtau_dx = jnp.where(mask[None, :, None, None], jnp.flip(dtau_dx, axis=2), dtau_dx)
+        dtau_dx = jnp.where(
+            mask[None, :, None, None],
+            jnp.flip(dtau_dx, axis=2),
+            dtau_dx,
+        )
 
         self._log_mem("after orientation", dtau_dx)
 
+        # --------------------------------------------------------------
         # 7. Integrate along the skewer-point axis.
+        # --------------------------------------------------------------
         if self.mode_integration != "trapz":
-            raise NotImplementedError(f"Integration mode {self.mode_integration!r} not implemented.")
+            raise NotImplementedError(
+                f"Integration mode {self.mode_integration!r} not implemented."
+            )
 
-        self.optical_depth = trapezoid(dtau_dx, x=x_m[None, :, :, None], axis=2)
+        optical_depth = trapezoid(
+            dtau_dx,
+            x=x_m[None, :, :, None],
+            axis=2,
+        )
+
+        self.optical_depth = optical_depth
+        self._computed_once = True
 
         self._log_mem("after trapz integration / optical_depth", self.optical_depth)
-        logger.info("[OPTICAL_DEPTH] done: optical_depth.shape=%s", self.optical_depth.shape)
+
+        logger.info(
+            "[OPTICAL_DEPTH] done: optical_depth.shape=%s",
+            self.optical_depth.shape,
+        )
+
+        # Release remaining local heavy references before returning.
+        del dtau_dx, qv, los, qv_oriented, x_m, mask
+
+        if self.release_inputs_after_compute:
+            self.release_inputs()
 
         return self.optical_depth
 
@@ -450,21 +585,30 @@ class OpticalDepthCalculator:
             Optical depth wrapped onto the reference-line velocity frame.
         """
         if self.optical_depth is None:
-            raise ValueError("No optical depth stored. Run `.compute()` first or initialize with `optical_depth=`.")
+            raise ValueError(
+                "No optical depth stored. Run `.compute()` first or initialize "
+                "with `optical_depth=`."
+            )
 
         tau = jnp.asarray(self.optical_depth)
         delta_v = jnp.asarray(self.line_bundle.delta_v)
 
-        # Shape validation before interpolation.
         expected_shape = (self.N_lines, self.N_sk, self.N_v)
 
         if tau.shape != expected_shape:
-            raise ValueError(f"`optical_depth` has shape {tau.shape}; expected {expected_shape}.")
+            raise ValueError(
+                f"`optical_depth` has shape {tau.shape}; expected {expected_shape}."
+            )
 
         if delta_v.shape != (self.N_lines,):
-            raise ValueError(f"`line_bundle.delta_v` has shape {delta_v.shape}; expected {(self.N_lines,)}.")
+            raise ValueError(
+                f"`line_bundle.delta_v` has shape {delta_v.shape}; "
+                f"expected {(self.N_lines,)}."
+            )
 
+        # --------------------------------------------------------------
         # Uniform periodic velocity grid.
+        # --------------------------------------------------------------
         dv = self.velocities_kms[1] - self.velocities_kms[0]
         v0 = self.velocities_kms[0]
         period = self.N_v * dv
@@ -474,11 +618,16 @@ class OpticalDepthCalculator:
             vq = jnp.mod(self.velocities_kms - shift - v0, period) + v0
             return jnp.interp(vq, self.velocities_kms, tau_1d, period=period)
 
-        # vmap over skewers inside each line, then over lines.
-        self.optical_depth = vmap(
-            lambda tau_line, shift: vmap(lambda tau_sk: shift_profile(tau_sk, shift))(tau_line),
+        wrapped = vmap(
+            lambda tau_line, shift: vmap(
+                lambda tau_sk: shift_profile(tau_sk, shift)
+            )(tau_line),
             in_axes=(0, 0),
         )(tau, delta_v)
 
+        # Overwrite the unwrapped result. Do not keep both.
+        self.optical_depth = wrapped
+
         self._log_mem("after wrap_to_ref_line", self.optical_depth)
+
         return self.optical_depth
