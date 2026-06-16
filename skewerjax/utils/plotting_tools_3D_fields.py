@@ -22,6 +22,8 @@ verbatim so this file is self-contained.
 """
 
 import numpy as np
+import gc
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -1129,6 +1131,10 @@ def generate_all_simulation_plots(
     view_azim: float = -43.0,
     los_range=None,
     show: bool = False,
+    
+    plot_cylinders_R001=False,
+    plot_normalized_velocity_units=True,
+    plot_wrapped_velocity_units=True,
 ):
     """
     Generates all number density and transmittance plots for the simulation.
@@ -1144,7 +1150,7 @@ def generate_all_simulation_plots(
     # ----------- PLOTS FOR NUMBER DENSITY FIELDS ------------ #
     # -------------------------------------------------------- #
 
-    # ------------------ plot cylinder HI (R=0.01) ----------------------- #
+
     ii_line = 0
     key_line_plot = line_bundle.lines[ii_line].species
 
@@ -1154,30 +1160,33 @@ def generate_all_simulation_plots(
     field_plot = np.stack([np.asarray(fields.number_density(quad_all[i]))[ii_line] for i in range(quad_all.shape[0])])       # (N_sk, N_x)
     y_dict = {key_line_plot: field_plot}
     colors = {key_line_plot: "#00FFFF"}
-
+    
     skewer_index, n_samples_plot = 0, 1
-    R_plot = 0.01
-    clouds = [
-        sample_cylinder_cloud(
-            quad_all[i], fields.number_density, R_plot, los_axis=1,
-            component=ii_line, n_axis=512, n_perp=512,
-            a_index=0, xyz_index=(1, 2, 3), length_fraction=1.0, seed=0,
-        ) for i in range(skewer_index, skewer_index + n_samples_plot)
-    ]
+    
+    if plot_cylinders_R001:
+        # ------------------ plot cylinder HI (R=0.01) ----------------------- #
+        R_plot = 0.01
+        clouds = [
+            sample_cylinder_cloud(
+                quad_all[i], fields.number_density, R_plot, los_axis=1,
+                component=ii_line, n_axis=512, n_perp=512,
+                a_index=0, xyz_index=(1, 2, 3), length_fraction=1.0, seed=0,
+            ) for i in range(skewer_index, skewer_index + n_samples_plot)
+        ]
 
-    fig, ax = plot_3d_radar_cylinder(
-        points=points, y_dict=y_dict, los_axis=1, skewer_index=skewer_index, n_samples_plot=n_samples_plot,
-        cylinder_radius=13.0, cylinder_separation=26.0, field_logscale=True, normalization="global",
-        field_units=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim, los_range=los_range,
-        surrounding_field=clouds, surrounding_cmap="berlin", surrounding_logscale=True,
-        surrounding_clim=(np.min(np.log10(field_plot)), np.max(np.log10(field_plot))), surrounding_radius_fill=0.1,
-        surrounding_alpha_max=0.3, surrounding_alpha_gamma=1.2,
-        surrounding_core_size=1.0, surrounding_softness=2, surrounding_size_growth=4.0, surrounding_alpha_falloff=0.7,
-        surrounding_colorbar=True, surrounding_colorbar_label=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        colors=colors, show=show
-    )
-    figures.append(fig)
+        fig, ax = plot_3d_radar_cylinder(
+            points=points, y_dict=y_dict, los_axis=1, skewer_index=skewer_index, n_samples_plot=n_samples_plot,
+            cylinder_radius=13.0, cylinder_separation=26.0, field_logscale=True, normalization="global",
+            field_units=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
+            x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim, los_range=los_range,
+            surrounding_field=clouds, surrounding_cmap="berlin", surrounding_logscale=True,
+            surrounding_clim=(np.min(np.log10(field_plot)), np.max(np.log10(field_plot))), surrounding_radius_fill=0.1,
+            surrounding_alpha_max=0.3, surrounding_alpha_gamma=1.2,
+            surrounding_core_size=1.0, surrounding_softness=2, surrounding_size_growth=4.0, surrounding_alpha_falloff=0.7,
+            surrounding_colorbar=True, surrounding_colorbar_label=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
+            colors=colors, show=show
+        )
+        figures.append(fig)
 
     # ------------------ plot cylinder HI (R=5.0) ----------------------- #
     R_plot = 5.0
@@ -1203,64 +1212,67 @@ def generate_all_simulation_plots(
     )
     figures.append(fig)
 
-    # ------------------ plot cylinder SiIII (R=0.01) ----------------------- #
-    ii_line = 1
-    key_line_plot = line_bundle.lines[ii_line].species
+    if line_bundle.n_lines > 1:
+        
+        ii_line = 1
+        key_line_plot = line_bundle.lines[ii_line].species
 
-    quad_all = np.asarray(skewer_bundle.quadri_vectors[0])
-    points   = quad_all[..., 1:4]          
+        quad_all = np.asarray(skewer_bundle.quadri_vectors[0])
+        points   = quad_all[..., 1:4]          
 
-    field_plot = np.stack([np.asarray(fields.number_density(quad_all[i]))[ii_line] for i in range(quad_all.shape[0])])
-    y_dict = {key_line_plot: field_plot}
-    colors = {key_line_plot: "#FF00FF"}
+        field_plot = np.stack([np.asarray(fields.number_density(quad_all[i]))[ii_line] for i in range(quad_all.shape[0])])
+        y_dict = {key_line_plot: field_plot}
+        colors = {key_line_plot: "#FF00FF"}
 
-    skewer_index, n_samples_plot = 0, 1
-    R_plot = 0.01
-    clouds = [
-        sample_cylinder_cloud(
-            quad_all[i], fields.number_density, R_plot, los_axis=1,
-            component=ii_line, n_axis=512, n_perp=512,
-            a_index=0, xyz_index=(1, 2, 3), length_fraction=1.0, seed=0,
-        ) for i in range(skewer_index, skewer_index + n_samples_plot)
-    ]
+        skewer_index, n_samples_plot = 0, 1
+        
+        if plot_cylinders_R001:
+            # ------------------ plot cylinder SiIII (R=0.01) ----------------------- #
+            R_plot = 0.01
+            clouds = [
+                sample_cylinder_cloud(
+                    quad_all[i], fields.number_density, R_plot, los_axis=1,
+                    component=ii_line, n_axis=512, n_perp=512,
+                    a_index=0, xyz_index=(1, 2, 3), length_fraction=1.0, seed=0,
+                ) for i in range(skewer_index, skewer_index + n_samples_plot)
+            ]
+            fig, ax = plot_3d_radar_cylinder(
+                points=points, y_dict=y_dict, los_axis=1, skewer_index=skewer_index, n_samples_plot=n_samples_plot,
+                cylinder_radius=13.0, cylinder_separation=26.0, field_logscale=True, normalization="global",
+                field_units=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
+                x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim, los_range=los_range,
+                surrounding_field=clouds, surrounding_cmap="berlin", surrounding_logscale=True,
+                surrounding_clim=(np.min(np.log10(field_plot)), np.max(np.log10(field_plot))), surrounding_radius_fill=0.1,
+                surrounding_alpha_max=0.3, surrounding_alpha_gamma=1.2,
+                surrounding_core_size=1.0, surrounding_softness=2, surrounding_size_growth=4.0, surrounding_alpha_falloff=0.7,
+                surrounding_colorbar=True, surrounding_colorbar_label=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
+                colors=colors, show=show
+            )
+            figures.append(fig)
 
-    fig, ax = plot_3d_radar_cylinder(
-        points=points, y_dict=y_dict, los_axis=1, skewer_index=skewer_index, n_samples_plot=n_samples_plot,
-        cylinder_radius=13.0, cylinder_separation=26.0, field_logscale=True, normalization="global",
-        field_units=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim, los_range=los_range,
-        surrounding_field=clouds, surrounding_cmap="berlin", surrounding_logscale=True,
-        surrounding_clim=(np.min(np.log10(field_plot)), np.max(np.log10(field_plot))), surrounding_radius_fill=0.1,
-        surrounding_alpha_max=0.3, surrounding_alpha_gamma=1.2,
-        surrounding_core_size=1.0, surrounding_softness=2, surrounding_size_growth=4.0, surrounding_alpha_falloff=0.7,
-        surrounding_colorbar=True, surrounding_colorbar_label=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        colors=colors, show=show
-    )
-    figures.append(fig)
+        # ------------------ plot cylinder SiIII (R=5.0) ----------------------- #
+        R_plot = 5.0
+        clouds = [
+            sample_cylinder_cloud(
+                quad_all[i], fields.number_density, R_plot, los_axis=1,
+                component=ii_line, n_axis=512, n_perp=512,
+                a_index=0, xyz_index=(1, 2, 3), length_fraction=1.0, seed=0,
+            ) for i in range(skewer_index, skewer_index + n_samples_plot)
+        ]
 
-    # ------------------ plot cylinder SiIII (R=5.0) ----------------------- #
-    R_plot = 5.0
-    clouds = [
-        sample_cylinder_cloud(
-            quad_all[i], fields.number_density, R_plot, los_axis=1,
-            component=ii_line, n_axis=512, n_perp=512,
-            a_index=0, xyz_index=(1, 2, 3), length_fraction=1.0, seed=0,
-        ) for i in range(skewer_index, skewer_index + n_samples_plot)
-    ]
-
-    fig, ax = plot_3d_radar_cylinder(
-        points=points, y_dict=y_dict, los_axis=1, skewer_index=skewer_index, n_samples_plot=n_samples_plot,
-        cylinder_radius=13.0, cylinder_separation=26.0, field_logscale=True, normalization="global",
-        field_units=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim, los_range=los_range,
-        surrounding_field=clouds, surrounding_cmap="berlin", surrounding_logscale=True,
-        surrounding_clim=(np.min(np.log10(field_plot)), np.max(np.log10(field_plot))), surrounding_radius_fill=1.0,
-        surrounding_alpha_max=0.15, surrounding_alpha_gamma=1.2,
-        surrounding_core_size=3.0, surrounding_softness=2, surrounding_size_growth=4.0, surrounding_alpha_falloff=0.7,
-        surrounding_colorbar=True, surrounding_colorbar_label=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        colors=colors, show=show
-    )
-    figures.append(fig)
+        fig, ax = plot_3d_radar_cylinder(
+            points=points, y_dict=y_dict, los_axis=1, skewer_index=skewer_index, n_samples_plot=n_samples_plot,
+            cylinder_radius=13.0, cylinder_separation=26.0, field_logscale=True, normalization="global",
+            field_units=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
+            x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim, los_range=los_range,
+            surrounding_field=clouds, surrounding_cmap="berlin", surrounding_logscale=True,
+            surrounding_clim=(np.min(np.log10(field_plot)), np.max(np.log10(field_plot))), surrounding_radius_fill=1.0,
+            surrounding_alpha_max=0.15, surrounding_alpha_gamma=1.2,
+            surrounding_core_size=3.0, surrounding_softness=2, surrounding_size_growth=4.0, surrounding_alpha_falloff=0.7,
+            surrounding_colorbar=True, surrounding_colorbar_label=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
+            colors=colors, show=show
+        )
+        figures.append(fig)
 
     # ------------------ plot box ----------------------- #
     cloud = sample_box_cloud(
@@ -1290,46 +1302,48 @@ def generate_all_simulation_plots(
     colors = _neon_colors(line_bundle.species_keys)
     linestyles = ['-', '--', ':', '-.']
 
-    # --------------------------------------------- Normalized Velocity Units --------------------------------------------- #
-    fig, ax = plt.subplots(1, 1, figsize=(14, 4.5), sharex=True, sharey=True, facecolor="black")
-    ax.set_facecolor("black")
-
-    kk = 0
-    handles = []
-    for ii, key_species in enumerate(line_bundle.species_keys):
-        color = colors[key_species]
-        for jj, key_line in enumerate(line_bundle.lines_for_species(key_species)):
-            ls = linestyles[jj]
-            
-            ax.plot(velocities_kms, jnp.exp(-optical_depth[kk, ii_skewer]), color=color, lw=6, ls=ls, alpha=0.2, zorder=2)
-            ax.plot(velocities_kms, jnp.exp(-optical_depth[kk, ii_skewer]), color=color, lw=1.5, ls=ls, alpha=0.9, zorder=3)
-            
-            handles.append(Line2D([0], [0], color=color, lw=4, ls=ls, label=line_bundle.lines[kk].id))
-            kk += 1
-            
-    ax.set_xlim([v_min-100, v_max+100])
-    ax.set_ylim([-0.05, 1.05])
-    ax.axvline(0, color='white', lw=4, ls=':', zorder=1)
-    ax.axvline(phys.c_kms*jnp.log(a_dagger / a_em), color='white', lw=4, ls=':', zorder=2)
-            
-    leg = fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.965), ncols=min(len(handles), 7),
-        frameon=True, fontsize=16, handlelength=2.6, facecolor="black", edgecolor="white", framealpha=0.9,
-    )
-    for text in leg.get_texts():
-        text.set_color("white")
-            
-    ax.tick_params(axis="both", which="major", labelsize=20, colors="white", length=6, width=1.1)
-    for side in ["top", "right", "bottom", "left"]:
-        ax.spines[side].set_color("white")
-        ax.spines[side].set_linewidth(1.0)
+    if plot_normalized_velocity_units:
         
-    ax.set_ylabel(r"Transmittance $\; \left[\mathrm{adim}\right]$", fontsize=20, color="white")
-    ax.set_xlabel(r"Normalized Velocity Units $v \; \left[\mathrm{km}/\mathrm{s}\right]$", fontsize=20, color="white")
+        # --------------------------------------------- Normalized Velocity Units --------------------------------------------- #
+        fig, ax = plt.subplots(1, 1, figsize=(14, 4.5), sharex=True, sharey=True, facecolor="black")
+        ax.set_facecolor("black")
 
-    fig.tight_layout()
-    figures.append(fig)
-    if show:
-        plt.show()
+        kk = 0
+        handles = []
+        for ii, key_species in enumerate(line_bundle.species_keys):
+            color = colors[key_species]
+            for jj, key_line in enumerate(line_bundle.lines_for_species(key_species)):
+                ls = linestyles[jj]
+                
+                ax.plot(velocities_kms, jnp.exp(-optical_depth[kk, ii_skewer]), color=color, lw=6, ls=ls, alpha=0.2, zorder=2)
+                ax.plot(velocities_kms, jnp.exp(-optical_depth[kk, ii_skewer]), color=color, lw=1.5, ls=ls, alpha=0.9, zorder=3)
+                
+                handles.append(Line2D([0], [0], color=color, lw=4, ls=ls, label=line_bundle.lines[kk].id))
+                kk += 1
+                
+        ax.set_xlim([v_min-100, v_max+100])
+        ax.set_ylim([-0.05, 1.05])
+        ax.axvline(0, color='white', lw=4, ls=':', zorder=1)
+        ax.axvline(phys.c_kms*jnp.log(a_dagger / a_em), color='white', lw=4, ls=':', zorder=2)
+                
+        leg = fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.965), ncols=min(len(handles), 7),
+            frameon=True, fontsize=16, handlelength=2.6, facecolor="black", edgecolor="white", framealpha=0.9,
+        )
+        for text in leg.get_texts():
+            text.set_color("white")
+                
+        ax.tick_params(axis="both", which="major", labelsize=20, colors="white", length=6, width=1.1)
+        for side in ["top", "right", "bottom", "left"]:
+            ax.spines[side].set_color("white")
+            ax.spines[side].set_linewidth(1.0)
+            
+        ax.set_ylabel(r"Transmittance $\; \left[\mathrm{adim}\right]$", fontsize=20, color="white")
+        ax.set_xlabel(r"Normalized Velocity Units $v \; \left[\mathrm{km}/\mathrm{s}\right]$", fontsize=20, color="white")
+
+        fig.tight_layout()
+        figures.append(fig)
+        if show:
+            plt.show()
 
     # --------------------------------------------- Observed wavelength --------------------------------------------- #
     fig, ax = plt.subplots(1, 1, figsize=(14, 4.5), sharex=True, sharey=True, facecolor="black")
@@ -1472,48 +1486,69 @@ def generate_all_simulation_plots(
     if show:
         plt.show()
 
-    # --------------------------------------------- Wrapped Velocity Units --------------------------------------------- #
-    fig, ax = plt.subplots(1, 1, figsize=(14, 4.5), sharex=True, sharey=True, facecolor="black")
-    ax.set_facecolor("black")
+    if plot_wrapped_velocity_units:
+            
+        # --------------------------------------------- Wrapped Velocity Units --------------------------------------------- #
+        fig, ax = plt.subplots(1, 1, figsize=(14, 4.5), sharex=True, sharey=True, facecolor="black")
+        ax.set_facecolor("black")
 
-    kk = 0
-    handles = []
-    for ii, key_species in enumerate(line_bundle.species_keys):
-        color = colors[key_species]
-        for jj, line in enumerate(line_bundle.lines_for_species(key_species)):
-            ls = linestyles[jj]
-            
-            ax.plot(velocities_kms, jnp.exp(-optical_depth_wrapped[kk, ii_skewer]), color=color, lw=6, ls=ls, alpha=0.2, zorder=2)
-            ax.plot(velocities_kms, jnp.exp(-optical_depth_wrapped[kk, ii_skewer]), color=color, lw=1.5, ls=ls, alpha=0.9, zorder=3)
-            
-            handles.append(Line2D([0], [0], color=color, lw=4, ls=ls, label=line_bundle.lines[kk].id))
-            kk += 1
-            
-    ax.set_xlim([v_min-100, v_max+100])
-    ax.set_ylim([-0.05, 1.05])
+        kk = 0
+        handles = []
+        for ii, key_species in enumerate(line_bundle.species_keys):
+            color = colors[key_species]
+            for jj, line in enumerate(line_bundle.lines_for_species(key_species)):
+                ls = linestyles[jj]
+                
+                ax.plot(velocities_kms, jnp.exp(-optical_depth_wrapped[kk, ii_skewer]), color=color, lw=6, ls=ls, alpha=0.2, zorder=2)
+                ax.plot(velocities_kms, jnp.exp(-optical_depth_wrapped[kk, ii_skewer]), color=color, lw=1.5, ls=ls, alpha=0.9, zorder=3)
+                
+                handles.append(Line2D([0], [0], color=color, lw=4, ls=ls, label=line_bundle.lines[kk].id))
+                kk += 1
+                
+        ax.set_xlim([v_min-100, v_max+100])
+        ax.set_ylim([-0.05, 1.05])
 
-    ax.axvline(0, color='white', lw=4, ls=':', zorder=1)
-    ax.axvline(phys.c_kms*jnp.log(a_dagger / a_em), color='white', lw=4, ls=':', zorder=2)
+        ax.axvline(0, color='white', lw=4, ls=':', zorder=1)
+        ax.axvline(phys.c_kms*jnp.log(a_dagger / a_em), color='white', lw=4, ls=':', zorder=2)
 
-    leg = fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.965), ncols=min(len(handles), 7),
-        frameon=True, fontsize=16, handlelength=2.6, facecolor="black", edgecolor="white", framealpha=0.9,
-    )
-    for text in leg.get_texts():
-        text.set_color("white")
+        leg = fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.965), ncols=min(len(handles), 7),
+            frameon=True, fontsize=16, handlelength=2.6, facecolor="black", edgecolor="white", framealpha=0.9,
+        )
+        for text in leg.get_texts():
+            text.set_color("white")
+                
+        ax.tick_params(axis="both", which="major", labelsize=20, colors="white", length=6, width=1.1)
+        for side in ["top", "right", "bottom", "left"]:
+            ax.spines[side].set_color("white")
+            ax.spines[side].set_linewidth(1.0)
             
-    ax.tick_params(axis="both", which="major", labelsize=20, colors="white", length=6, width=1.1)
-    for side in ["top", "right", "bottom", "left"]:
-        ax.spines[side].set_color("white")
-        ax.spines[side].set_linewidth(1.0)
+        ax.set_ylabel(r"Transmittance $\; \left[\mathrm{adim}\right]$", fontsize=20, color="white")
+        ax.set_xlabel(r"Wrapped Velocity Units $v \; \left[\mathrm{km}/\mathrm{s}\right]$", fontsize=20, color="white")
+
+        fig.tight_layout()
+        figures.append(fig)
+        if show:
+            plt.show()
         
-    ax.set_ylabel(r"Transmittance $\; \left[\mathrm{adim}\right]$", fontsize=20, color="white")
-    ax.set_xlabel(r"Wrapped Velocity Units $v \; \left[\mathrm{km}/\mathrm{s}\right]$", fontsize=20, color="white")
+    # Explicitly delete local references to intermediate JAX arrays 
+    # created during the plotting process (e.g., from fields.sample)
+    try: del quad_all
+    except NameError: pass
+    try: del field_plot
+    except NameError: pass
+    try: del clouds
+    except NameError: pass
+    try: del cloud
+    except NameError: pass
+    try: del sampled_fields
+    except NameError: pass
+    try: del plot_dict
+    except NameError: pass
 
-    fig.tight_layout()
-    figures.append(fig)
-    if show:
-        plt.show()
-
+    # Force Python garbage collection and clear JAX's compilation cache
+    gc.collect()
+    jax.clear_caches()
+        
     return figures
 
 
