@@ -62,10 +62,9 @@ def make_LoS(batch_shape, direction):
     return loS / jnp.linalg.norm(loS, axis=-1, keepdims=True)
 
 
-def make_skewer_grid_points(L_box, N_grid, N_ppsk, direction="y"):
+def make_skewer_grid_points(L_box, N_grid, N_ppsk, direction="y", half_shift=True):
     """
     Build a regular grid of skewers through a periodic box.
-
     Returns an array of spatial comoving positions (x, y, z) with shape:
         (N_grid, N_grid, N_ppsk, 3)
 
@@ -85,23 +84,38 @@ def make_skewer_grid_points(L_box, N_grid, N_ppsk, direction="y"):
         Number of points per skewer (samples along the LOS direction).
     direction : {"x","y","z"}
         Skewer direction / LOS axis.
+    half_shift : bool, optional
+        If False (default), the transverse grid runs linspace(0, L_box, N_grid),
+        so the first and last skewers sit exactly on the box boundaries.
+        If True, the grid is shifted by half a cell so no skewer falls on a
+        boundary:
+            step = L_box / N_grid
+            transverse positions = [0 + step/2, step + step/2, ..., L_box - step/2]
+        This is equivalent to the cell-centre convention of a periodic mesh and
+        avoids double-counting the boundary under periodic boundary conditions.
 
     Notes
     -----
-    Uses linspace(0, L_box, ...) including endpoints. If you prefer to avoid
-    duplicating the periodic boundary (0 and L_box), change to endpoint=False.
+    The LoS (skewer direction) always runs linspace(0, L_box, N_ppsk) including
+    both endpoints, which is independent of half_shift.
     """
     dir_idx = {"x": 0, "y": 1, "z": 2}[direction]
     # transverse axes for the 2D grid
     t1_idx, t2_idx = {0: (1, 2), 1: (0, 2), 2: (0, 1)}[dir_idx]
 
     # Transverse grid (N_grid x N_grid)
-    c1 = jnp.linspace(0.0, L_box, N_grid)
-    c2 = jnp.linspace(0.0, L_box, N_grid)
+    if half_shift:
+        step = L_box / N_grid
+        c1 = jnp.linspace(0.0, L_box, N_grid, endpoint=False) + 0.5 * step
+        c2 = jnp.linspace(0.0, L_box, N_grid, endpoint=False) + 0.5 * step
+    else:
+        c1 = jnp.linspace(0.0, L_box, N_grid)
+        c2 = jnp.linspace(0.0, L_box, N_grid)
+
     g1, g2 = jnp.meshgrid(c1, c2, indexing="ij")  # (N_grid, N_grid)
 
     # Coordinate along the skewer direction (N_ppsk)
-    s = jnp.linspace(0.0, L_box, N_ppsk)  # (N_ppsk,)
+    s = jnp.linspace(0.0, L_box, N_ppsk)           # (N_ppsk,)
 
     # Broadcast to (N_grid, N_grid, N_ppsk)
     g1b = g1[..., None]
@@ -113,5 +127,4 @@ def make_skewer_grid_points(L_box, N_grid, N_ppsk, direction="y"):
     xyz = xyz.at[..., dir_idx].set(sb)
     xyz = xyz.at[..., t1_idx].set(g1b)
     xyz = xyz.at[..., t2_idx].set(g2b)
-
     return xyz

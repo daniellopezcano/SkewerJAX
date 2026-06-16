@@ -535,6 +535,54 @@ def velocities_to_line_centered_wavelengths(
     return wavelengths_A
 
 
+def reference_velocities_to_line_centered(
+    velocities_kms: ArrayLike,
+    line_bundle,
+    reference_line_idx: int = 0,
+) -> jnp.ndarray:
+    """
+    Shift a reference velocity grid to be line-centered for all lines in the bundle.
+    
+    If `velocities_kms` is the line-centered velocity grid for a specific reference 
+    line (e.g., the first line), this function shifts it for all other lines based 
+    on the rest-frame wavelength differences, which are redshift-independent.
+    
+    v^(j) = v^(ref) + c * ln(lambda_ref / lambda_j)
+
+    Parameters
+    ----------
+    velocities_kms : array, shape (N_v,)
+        Reference velocity grid in km/s.
+    line_bundle : LineBundle-like
+        Must provide lambda0_A with shape (N_lines,).
+    reference_line_idx : int, default 0
+        Index of the line in the bundle that the input velocity grid is centered on.
+
+    Returns
+    -------
+    velocities_per_line : jnp.ndarray, shape (N_lines, N_v)
+        Line-centered velocity grid in km/s for each transition.
+    """
+    velocities_kms = jnp.asarray(velocities_kms)
+    lambda0_A = jnp.asarray(line_bundle.lambda0_A)
+    
+    N_lines = lambda0_A.shape[0]
+    lambda_ref = lambda0_A[reference_line_idx]
+    
+    # Calculate the redshift-independent shift for each line
+    # v^(j) = v^(ref) + c * ln(lambda_ref / lambda_j)
+    velocity_shifts = - phys.c_kms * jnp.log(lambda_ref / lambda0_A)
+    
+    # Ensure velocities_kms is 2D for broadcasting: (N_lines, N_v)
+    if velocities_kms.ndim == 1:
+        velocities_kms = velocities_kms[None, :]
+        
+    # Apply the shift to each line
+    velocities_per_line = velocities_kms + velocity_shifts[:, None]
+    
+    return velocities_per_line
+
+
 def compute_lambda_prime_wavelength_units(
     wavelengths_A: ArrayLike,        # (N_v,) or (N_lines, N_v)
     scale_factor_obs: ArrayLike,     # scalar, (N_lines,), (*batch_shape), or (N_lines, *batch_shape)

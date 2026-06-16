@@ -1,8 +1,8 @@
 import logging
 from itertools import product
 
-import jax.numpy as jnp
-from jax.numpy.fft import rfft, rfftfreq, irfft
+import numpy as jnp
+from numpy.fft import rfft, rfftfreq, irfft
 
 
 logger = logging.getLogger(__name__)
