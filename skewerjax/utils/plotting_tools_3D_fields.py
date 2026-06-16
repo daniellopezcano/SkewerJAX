@@ -27,6 +27,9 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib import cm
 from matplotlib.colors import Normalize
+import os
+import glob
+from PIL import Image
 
 from skewerjax.constants.physical_constants import phys
 
@@ -258,6 +261,7 @@ def plot_3d_radar_cylinder(
     factor_x_label=1.2,
     view_elev=18,
     view_azim=-40,
+    los_range=None,
     show_profile_points=False,
     profile_point_size=10.0,
     profile_linewidth=1.05,
@@ -371,8 +375,14 @@ def plot_3d_radar_cylinder(
     rings = cylinder_radius * np.linspace(1.0 / 6.0, 1.0, 6)
 
     x_selected = x_array[selected]
-    x_min = float(np.nanmin(x_selected))
-    x_max = float(np.nanmax(x_selected))
+    
+    # --- Use los_range if provided, otherwise fallback to data limits ---
+    if los_range is not None:
+        x_min, x_max = float(los_range[0]), float(los_range[1])
+    else:
+        x_min = float(np.nanmin(x_selected))
+        x_max = float(np.nanmax(x_selected))
+        
     x_span = x_max - x_min
     if x_span <= 0:
         x_span = 1.0; x_min -= 0.5; x_max += 0.5
@@ -394,7 +404,7 @@ def plot_3d_radar_cylinder(
                 alpha_falloff=surrounding_alpha_falloff, threshold=surrounding_threshold,
             )
 
-        y_slices = np.linspace(float(np.nanmin(x_los)), float(np.nanmax(x_los)), int(n_y_slices))
+        y_slices = np.linspace(x_min, x_max, int(n_y_slices))
 
         ax.plot(np.full_like(y_slices, x0), y_slices, np.zeros_like(y_slices),
                 color="white", lw=1.6, alpha=0.9, zorder=2)
@@ -404,7 +414,7 @@ def plot_3d_radar_cylinder(
                 ax.plot(x0 + rr * np.cos(phi), np.full_like(phi, yy), rr * np.sin(phi),
                         color="white", lw=0.85, alpha=0.18, zorder=2)
 
-        tick_vals = np.linspace(float(np.nanmin(x_los)), float(np.nanmax(x_los)), int(n_x_ticks))
+        tick_vals = np.linspace(x_min, x_max, int(n_x_ticks))
         ax.plot(np.full_like(tick_vals, x0), tick_vals, np.full_like(tick_vals, axis_z),
                 color="white", lw=1.2, alpha=0.75, zorder=2)
 
@@ -493,45 +503,6 @@ def plot_3d_radar_cylinder(
     if show:
         plt.show()
     return fig, ax
-
-
-
-
-
-
-
-
-"""
-plotting_tools_ridge_cube.py
-============================
-
-3D neon ridge-cube plot with an optional, sophisticated full-box background
-density rendering.
-
-The background field is no longer a naive multi-layer scatter.  It now borrows
-techniques from volume-rendering codes (e.g. bacco's visualization module):
-
-  * Fourier-space Gaussian smoothing of the sampled density grid, so discrete
-    samples become a continuous "nebula" instead of a lattice of dots.
-  * A colour + opacity TRANSFER FUNCTION: colour from a LogNorm-style mapping,
-    opacity from a gamma curve with a low-density floor, so dense filaments glow
-    while voids stay transparent and you can see through the volume.
-  * DEPTH-SORTED alpha compositing: points are drawn back-to-front relative to
-    the current camera (elev, azim), so the partial transparency composites
-    correctly from the chosen viewing angle.
-  * An optional soft emission "glow" halo layer for an additive-looking sheen.
-
-Public API
-----------
-sample_box_cloud(...)          sample + smooth a scalar field over the full box
-plot_3d_neon_ridge_cube(...)   ridge-cube + optional rendered density background
-
-Requires: numpy, matplotlib
-"""
-
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 
 # ============================================================
@@ -1156,6 +1127,8 @@ def generate_all_simulation_plots(
     # --- Plotting Aesthetics ---
     view_elev: float = 20.0,
     view_azim: float = -43.0,
+    los_range=None,
+    show: bool = False,
 ):
     """
     Generates all number density and transmittance plots for the simulation.
@@ -1196,13 +1169,13 @@ def generate_all_simulation_plots(
         points=points, y_dict=y_dict, los_axis=1, skewer_index=skewer_index, n_samples_plot=n_samples_plot,
         cylinder_radius=13.0, cylinder_separation=26.0, field_logscale=True, normalization="global",
         field_units=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim,
+        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim, los_range=los_range,
         surrounding_field=clouds, surrounding_cmap="berlin", surrounding_logscale=True,
         surrounding_clim=(np.min(np.log10(field_plot)), np.max(np.log10(field_plot))), surrounding_radius_fill=0.1,
         surrounding_alpha_max=0.3, surrounding_alpha_gamma=1.2,
         surrounding_core_size=1.0, surrounding_softness=2, surrounding_size_growth=4.0, surrounding_alpha_falloff=0.7,
         surrounding_colorbar=True, surrounding_colorbar_label=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        colors=colors,
+        colors=colors, show=show
     )
     figures.append(fig)
 
@@ -1220,13 +1193,13 @@ def generate_all_simulation_plots(
         points=points, y_dict=y_dict, los_axis=1, skewer_index=skewer_index, n_samples_plot=n_samples_plot,
         cylinder_radius=13.0, cylinder_separation=26.0, field_logscale=True, normalization="global",
         field_units=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim,
+        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim, los_range=los_range,
         surrounding_field=clouds, surrounding_cmap="berlin", surrounding_logscale=True,
         surrounding_clim=(np.min(np.log10(field_plot)), np.max(np.log10(field_plot))), surrounding_radius_fill=1.0,
         surrounding_alpha_max=0.15, surrounding_alpha_gamma=1.2,
         surrounding_core_size=3.0, surrounding_softness=2, surrounding_size_growth=4.0, surrounding_alpha_falloff=0.7,
         surrounding_colorbar=True, surrounding_colorbar_label=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        colors=colors,
+        colors=colors, show=show
     )
     figures.append(fig)
 
@@ -1255,13 +1228,13 @@ def generate_all_simulation_plots(
         points=points, y_dict=y_dict, los_axis=1, skewer_index=skewer_index, n_samples_plot=n_samples_plot,
         cylinder_radius=13.0, cylinder_separation=26.0, field_logscale=True, normalization="global",
         field_units=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim,
+        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim, los_range=los_range,
         surrounding_field=clouds, surrounding_cmap="berlin", surrounding_logscale=True,
         surrounding_clim=(np.min(np.log10(field_plot)), np.max(np.log10(field_plot))), surrounding_radius_fill=0.1,
         surrounding_alpha_max=0.3, surrounding_alpha_gamma=1.2,
         surrounding_core_size=1.0, surrounding_softness=2, surrounding_size_growth=4.0, surrounding_alpha_falloff=0.7,
         surrounding_colorbar=True, surrounding_colorbar_label=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        colors=colors,
+        colors=colors, show=show
     )
     figures.append(fig)
 
@@ -1279,13 +1252,13 @@ def generate_all_simulation_plots(
         points=points, y_dict=y_dict, los_axis=1, skewer_index=skewer_index, n_samples_plot=n_samples_plot,
         cylinder_radius=13.0, cylinder_separation=26.0, field_logscale=True, normalization="global",
         field_units=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim,
+        x_axis_label=r"$\mathrm{LoS}_{\parallel}\,[{\rm cMpc}]$", view_elev=view_elev, view_azim=view_azim, los_range=los_range,
         surrounding_field=clouds, surrounding_cmap="berlin", surrounding_logscale=True,
         surrounding_clim=(np.min(np.log10(field_plot)), np.max(np.log10(field_plot))), surrounding_radius_fill=1.0,
         surrounding_alpha_max=0.15, surrounding_alpha_gamma=1.2,
         surrounding_core_size=3.0, surrounding_softness=2, surrounding_size_growth=4.0, surrounding_alpha_falloff=0.7,
         surrounding_colorbar=True, surrounding_colorbar_label=r"$\log_{10}\left(n \, \left[\mathrm{cm}^{-3}\right] \right)$",
-        colors=colors,
+        colors=colors, show=show
     )
     figures.append(fig)
 
@@ -1306,7 +1279,7 @@ def generate_all_simulation_plots(
         n_axis_ticks=(4, 4, 4), ridge_scale=1.0, box_size=L_box, elev=view_elev, azim=view_azim,
         surrounding_field=cloud, surrounding_cmap="berlin", surrounding_clim_percentiles=(45.0, 99.7),
         surrounding_alpha_max=0.5, surrounding_alpha_gamma=2.0, surrounding_core_size=3.0, surrounding_threshold=0.1, surrounding_glow=True,
-        surrounding_glow_size_mult=3.5, surrounding_glow_alpha_mult=0.30,
+        surrounding_glow_size_mult=3.5, surrounding_glow_alpha_mult=0.30, show=show
     )
     figures.append(fig)
 
@@ -1335,6 +1308,7 @@ def generate_all_simulation_plots(
             kk += 1
             
     ax.set_xlim([v_min-100, v_max+100])
+    ax.set_ylim([-0.05, 1.05])
     ax.axvline(0, color='white', lw=4, ls=':', zorder=1)
     ax.axvline(phys.c_kms*jnp.log(a_dagger / a_em), color='white', lw=4, ls=':', zorder=2)
             
@@ -1354,7 +1328,8 @@ def generate_all_simulation_plots(
 
     fig.tight_layout()
     figures.append(fig)
-    plt.show()
+    if show:
+        plt.show()
 
     # --------------------------------------------- Observed wavelength --------------------------------------------- #
     fig, ax = plt.subplots(1, 1, figsize=(14, 4.5), sharex=True, sharey=True, facecolor="black")
@@ -1382,6 +1357,8 @@ def generate_all_simulation_plots(
             
             handles.append(Line2D([0], [0], color=color, lw=4, ls=ls, label=line_bundle.lines[kk].id))
             kk += 1
+            
+    ax.set_ylim([-0.05, 1.05])
 
     arrow_props = dict(arrowstyle="->", color="white", lw=3, mutation_scale=25)
     bbox_props = dict(boxstyle="round,pad=0.3", facecolor="black", edgecolor="white", alpha=1.0)
@@ -1420,8 +1397,9 @@ def generate_all_simulation_plots(
 
     fig.tight_layout()
     figures.append(fig)
-    plt.show()
-
+    if show:
+        plt.show()
+        
     # --------------------------------------------- Shifted Velocity Units --------------------------------------------- #
     fig, ax = plt.subplots(1, 1, figsize=(14, 4.5), sharex=True, sharey=True, facecolor="black")
     ax.set_facecolor("black")
@@ -1452,6 +1430,7 @@ def generate_all_simulation_plots(
             kk += 1
 
     ax.set_xlim([v_min-100, v_max+100])
+    ax.set_ylim([-0.05, 1.05])
 
     arrow_props = dict(arrowstyle="->", color="white", lw=3, mutation_scale=25)
     bbox_props = dict(boxstyle="round,pad=0.3", facecolor="black", edgecolor="white", alpha=1.0)
@@ -1490,7 +1469,8 @@ def generate_all_simulation_plots(
 
     fig.tight_layout()
     figures.append(fig)
-    plt.show()
+    if show:
+        plt.show()
 
     # --------------------------------------------- Wrapped Velocity Units --------------------------------------------- #
     fig, ax = plt.subplots(1, 1, figsize=(14, 4.5), sharex=True, sharey=True, facecolor="black")
@@ -1510,6 +1490,7 @@ def generate_all_simulation_plots(
             kk += 1
             
     ax.set_xlim([v_min-100, v_max+100])
+    ax.set_ylim([-0.05, 1.05])
 
     ax.axvline(0, color='white', lw=4, ls=':', zorder=1)
     ax.axvline(phys.c_kms*jnp.log(a_dagger / a_em), color='white', lw=4, ls=':', zorder=2)
@@ -1530,6 +1511,95 @@ def generate_all_simulation_plots(
 
     fig.tight_layout()
     figures.append(fig)
-    plt.show()
+    if show:
+        plt.show()
 
     return figures
+
+
+def create_animated_gifs_and_cleanup(save_dir, duration_ms=400, loop=0, delete_originals=True):
+    """
+    Reads PNG files from save_dir, groups them by figure type, 
+    creates an animated GIF for each type, and optionally deletes the original PNGs to save space.
+    
+    Parameters:
+    - save_dir: Directory containing the saved PNGs.
+    - duration_ms: Time each frame is displayed in milliseconds (e.g., 400 = 0.4s).
+    - loop: 0 means loop infinitely, 1 means play once, etc.
+    - delete_originals: bool, if True (default), deletes the original PNG frames after 
+                        successfully creating the GIF. If False, keeps them on disk.
+    """
+    # 1. Find all PNG files in the directory
+    png_files = glob.glob(os.path.join(save_dir, "*.png"))
+    
+    if not png_files:
+        print(f"No PNG files found in '{save_dir}'.")
+        return
+
+    # 2. Group files by figure index (idx)
+    # Structure: { idx: { iteration_ii: filepath } }
+    grouped_images = {}
+
+    for filepath in png_files:
+        filename = os.path.basename(filepath)
+        try:
+            # Expected format: iterXXXX_figY.png
+            name_without_ext = os.path.splitext(filename)[0]
+            iter_part, fig_part = name_without_ext.split('_')
+            
+            ii = int(iter_part.replace('iter', ''))
+            idx = int(fig_part.replace('fig', ''))
+            
+            if idx not in grouped_images:
+                grouped_images[idx] = {}
+            grouped_images[idx][ii] = filepath
+            
+        except ValueError:
+            # Skip files that don't match the expected naming convention
+            continue
+
+    # 3. Create a GIF for each figure type and clean up
+    print(f"Found {len(grouped_images)} unique figure types to animate.\n")
+    
+    for idx, iterations_dict in grouped_images.items():
+        # Sort by iteration index (ii) to ensure correct chronological order
+        sorted_iis = sorted(iterations_dict.keys())
+        sorted_filepaths = [iterations_dict[ii] for ii in sorted_iis]
+        
+        if len(sorted_filepaths) < 2:
+            print(f"⚠️ Skipping figure type {idx}: Not enough frames (found {len(sorted_filepaths)}) to make a GIF.")
+            continue
+
+        print(f"🎬 Creating GIF for figure type {idx} with {len(sorted_filepaths)} frames...")
+        
+        # Open all images for this figure type
+        images = [Image.open(fp) for fp in sorted_filepaths]
+        
+        # Define output GIF path
+        gif_filename = f"animation_fig{idx}.gif"
+        gif_filepath = os.path.join(save_dir, gif_filename)
+        
+        try:
+            # Save as animated GIF
+            images[0].save(
+                gif_filepath,
+                save_all=True,
+                append_images=images[1:],
+                duration=duration_ms,
+                loop=loop,
+                optimize=True # Reduces file size
+            )
+            print(f"✅ Successfully saved: {gif_filepath}")
+            
+            # --- CLEANUP STEP ---
+            if delete_originals:
+                print(f"🧹 Cleaning up {len(sorted_filepaths)} original PNG frames to save space...")
+                for fp in sorted_filepaths:
+                    os.remove(fp)
+                print(f"   🗑️ Deleted original frames for figure type {idx}.\n")
+            else:
+                print(f"   📂 Kept original frames for figure type {idx}.\n")
+            
+        except Exception as e:
+            print(f"❌ Error creating GIF for figure type {idx}: {e}")
+            print("   ⚠️ Skipping cleanup to preserve original frames.\n")
