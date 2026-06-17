@@ -1133,6 +1133,7 @@ def generate_all_simulation_plots(
     show: bool = False,
     
     plot_cylinders_R001=False,
+    plot_cube=False,
     plot_normalized_velocity_units=True,
     plot_wrapped_velocity_units=True,
 ):
@@ -1275,25 +1276,27 @@ def generate_all_simulation_plots(
         figures.append(fig)
 
     # ------------------ plot box ----------------------- #
-    cloud = sample_box_cloud(
-        skewer_bundle.quadri_vectors[ii_cosmology, 0],
-        fields.number_density, box_size=L_box,
-        component=0, n=150, a_index=0, xyz_index=(1, 2, 3), log10=True,
-    )
+    
+    if plot_cube:
+        cloud = sample_box_cloud(
+            skewer_bundle.quadri_vectors[ii_cosmology, 0],
+            fields.number_density, box_size=L_box,
+            component=0, n=150, a_index=0, xyz_index=(1, 2, 3), log10=True,
+        )
 
-    sampled_fields = fields.sample(skewer_bundle.quadri_vectors[ii_cosmology], skewer_bundle.los_directions)
-    plot_dict = {key: jnp.log10(sampled_fields[key]['number_density']) for key in sampled_fields.keys()}
+        sampled_fields = fields.sample(skewer_bundle.quadri_vectors[ii_cosmology], skewer_bundle.los_directions)
+        plot_dict = {key: jnp.log10(sampled_fields[key]['number_density']) for key in sampled_fields.keys()}
 
-    fig, ax = plot_3d_neon_ridge_cube(
-        points=points, y_dict=plot_dict, normalization="global", field_logscale=False, normalize_scales=False,
-        x_label=r"$x\,[{\rm cMpc}]$", y_label=r"$r_{\parallel}\,[{\rm cMpc}]$", z_label=r"$z\,[{\rm cMpc}]$",
-        axis_label_fontsize=22, x_label_pad=25.0, y_label_pad=25.0, z_label_pad=25.0,
-        n_axis_ticks=(4, 4, 4), ridge_scale=1.0, box_size=L_box, elev=view_elev, azim=view_azim,
-        surrounding_field=cloud, surrounding_cmap="berlin", surrounding_clim_percentiles=(45.0, 99.7),
-        surrounding_alpha_max=0.5, surrounding_alpha_gamma=2.0, surrounding_core_size=3.0, surrounding_threshold=0.1, surrounding_glow=True,
-        surrounding_glow_size_mult=3.5, surrounding_glow_alpha_mult=0.30, show=show
-    )
-    figures.append(fig)
+        fig, ax = plot_3d_neon_ridge_cube(
+            points=points, y_dict=plot_dict, normalization="global", field_logscale=False, normalize_scales=False,
+            x_label=r"$x\,[{\rm cMpc}]$", y_label=r"$r_{\parallel}\,[{\rm cMpc}]$", z_label=r"$z\,[{\rm cMpc}]$",
+            axis_label_fontsize=22, x_label_pad=25.0, y_label_pad=25.0, z_label_pad=25.0,
+            n_axis_ticks=(4, 4, 4), ridge_scale=1.0, box_size=L_box, elev=view_elev, azim=view_azim,
+            surrounding_field=cloud, surrounding_cmap="berlin", surrounding_clim_percentiles=(45.0, 99.7),
+            surrounding_alpha_max=0.5, surrounding_alpha_gamma=2.0, surrounding_core_size=3.0, surrounding_threshold=0.1, surrounding_glow=True,
+            surrounding_glow_size_mult=3.5, surrounding_glow_alpha_mult=0.30, show=show
+        )
+        figures.append(fig)
 
     # -------------------------------------------------------- #
     # --------------- PLOTS FOR TRANSMITTANCE ---------------- #
