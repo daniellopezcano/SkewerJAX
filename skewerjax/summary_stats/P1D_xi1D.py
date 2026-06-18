@@ -58,9 +58,9 @@ class OverfluxStatistics1D:
         self.delta_terms = {key: delta_terms[key][valid_mask] for key in overflux.subset_keys}
 
         self.subset_keys = overflux.subset_keys
-        self.Npix = self.total.shape[1]
-        self.k = 2.0 * jnp.pi * rfftfreq(self.Npix, d=self.dv) # 2 pi \frac{m}{Npix dv} with m \in \{0, ..., Npix/2\}
-        self.lags = (jnp.arange(self.Npix) - self.Npix // 2) * self.dv
+        self.N_v = self.total.shape[1]
+        self.k = 2.0 * jnp.pi * rfftfreq(self.N_v, d=self.dv) # 2 pi \frac{m}{N_v dv} with m \in \{0, ..., N_v/2\}
+        self.lags = (jnp.arange(self.N_v) - self.N_v // 2) * self.dv
         self.ordered_pairs = list(product(self.subset_keys, repeat=2))
 
         self.Pk_total_per_sample = None
@@ -84,7 +84,7 @@ class OverfluxStatistics1D:
         if self.Pk_total is not None:
             return self
 
-        prefactor = self.dv / self.Npix
+        prefactor = self.dv / self.N_v
 
         # -------------------- Total P1D -------------------- #
         f_total = rfft(self.total, axis=1)
@@ -121,7 +121,7 @@ class OverfluxStatistics1D:
         # -------------------- Total xi1D -------------------- #
         self.xi_total_per_sample = (
             jnp.fft.fftshift(
-                irfft(self.Pk_total_per_sample, n=self.Npix, axis=1).real, axes=1
+                irfft(self.Pk_total_per_sample, n=self.N_v, axis=1).real, axes=1
             ) / self.dv
         )
         self.xi_total = jnp.mean(self.xi_total_per_sample, axis=0)
@@ -129,10 +129,10 @@ class OverfluxStatistics1D:
         # -------------------- Component xi1D -------------------- #
         self.xi_pair_per_sample = {}
         self.xi_pair = {}
-        self.xi_total_from_terms = jnp.zeros(self.Npix, dtype=self.xi_total.dtype)
+        self.xi_total_from_terms = jnp.zeros(self.N_v, dtype=self.xi_total.dtype)
 
         for pair in self.ordered_pairs:
-            xi_ab_per_sample = irfft(self.Pk_pair_per_sample[pair], n=self.Npix, axis=1) / self.dv
+            xi_ab_per_sample = irfft(self.Pk_pair_per_sample[pair], n=self.N_v, axis=1) / self.dv
 
             self.xi_pair_per_sample[pair] = xi_ab_per_sample
             self.xi_pair[pair] = jnp.mean(xi_ab_per_sample, axis=0).real

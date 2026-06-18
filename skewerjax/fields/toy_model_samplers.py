@@ -1,6 +1,209 @@
+from __future__ import annotations
+
+from typing import Callable, Optional, Tuple
+
 import jax
 import jax.numpy as jnp
-from typing import Callable, Optional, Tuple
+
+
+# ---------------------------------------------------------------------------
+# Core: resolution-consistent GRF
+# ---------------------------------------------------------------------------
+def _band_limited_white_noise(u_ref: jnp.ndarray, n_grid: int) -> jnp.ndarray:
+    """Keep the low-|k| central block of a reference Fourier-space field.
+
+    ``u_ref`` is a cubic ``(n_ref, n_ref, n_ref)`` complex array in standard FFT
+    order.  Returns the ``(n_grid, n_grid, n_grid)`` block of modes with integer
+    frequencies in ``[-n_grid/2, n_grid/2)`` -- i.e. an ideal low-pass filter.
+    """
+    n_ref = u_ref.shape[0]
+    if n_grid == n_ref:
+        return u_ref
+    shifted = jnp.fft.fftshift(u_ref)           # DC -> centre
+    c = n_ref // 2
+    lo = c - n_grid // 2
+    block = shifted[lo:lo + n_grid, lo:lo + n_grid, lo:lo + n_grid]
+    return jnp.fft.ifftshift(block)             # DC -> corner (FFT order)
+
+
+def _isotropic_pk_on_grid(pk_of_k, n_grid: int, L_box: float):
+    """Evaluate the (clipped, DC-removed) power spectrum on a size-n_grid grid."""
+    k1d = 2.0 * jnp.pi * jnp.fft.fftfreq(n_grid, d=L_box / n_grid)
+    KX, KY, KZ = jnp.meshgrid(k1d, k1d, k1d, indexing="ij")
+    K = jnp.sqrt(KX ** 2 + KY ** 2 + KZ ** 2)
+    Pk = jnp.clip(pk_of_k(K), 0.0, None)
+    Pk = jnp.where(K == 0.0, 0.0, Pk)           # no DC / mean mode
+    return K, Pk
+
+
+def generate_gaussian_random_field(
+    key: jax.Array,
+    n_grid: int,
+    L_box: float,
+    pk_of_k: Callable[[jnp.ndarray], jnp.ndarray],
+    *,
+    n_ref: Optional[int] = None,
+    normalize: str = "analytic",
+) -> jnp.ndarray:
+    """Generate a real 3D Gaussian random field delta(x) with isotropic P(k).
+
+    Parameters
+    ----------
+    key : jax PRNG key
+        Fix this (with ``n_ref``) to get fields that converge as ``n_grid`` grows.
+    n_grid : int (even)
+        Resolution of the returned field.  Must be even and ``<= n_ref``.
+    L_box : float
+        Box side length (sets the physical meaning of k = 2*pi*freq).
+    pk_of_k : callable
+        ``P(|k|)`` evaluated on angular wavenumbers (2*pi/L units).
+    n_ref : int (even), optional
+        Master resolution of the reference white-noise field.  Defaults to
+        ``n_grid``.  Set it once to the FINEST resolution you intend to study and
+        keep it fixed; all coarser ``n_grid`` then refine into the finer ones.
+    normalize : {"analytic", "none", "realized"}
+        "analytic"  -> divide by the resolution-INDEPENDENT expected std computed
+                       from the full reference k-grid (recommended: delta has
+                       ~unit variance, controlled, and converges with n_grid).
+        "none"      -> physical normalization only (variance grows with n_grid as
+                       small-scale power is added; large scales still converge).
+        "realized"  -> the old (NOT recommended) divide-by-sample-std behaviour;
+                       this rescaling is resolution- and realization-dependent.
+
+    Returns
+    -------
+    delta : (n_grid, n_grid, n_grid) real array
+    """
+    if n_ref is None:
+        n_ref = int(n_grid)
+    n_grid = int(n_grid)
+    n_ref = int(n_ref)
+    if n_grid > n_ref:
+        raise ValueError(f"n_grid ({n_grid}) must be <= n_ref ({n_ref}).")
+    if (n_grid % 2) or (n_ref % 2):
+        raise ValueError("n_grid and n_ref must both be even.")
+
+    # 1) ONE reference white-noise field, fixed by (key, n_ref).
+    #    FFT of real white noise -> Hermitian complex spectrum automatically.
+    g = jax.random.normal(key, (n_ref, n_ref, n_ref))
+    u_ref = jnp.fft.fftn(g) / (n_ref ** 1.5)            # unit-variance per mode
+
+    # 2) Band-limit to the requested resolution (shared low-k modes identical).
+    u = _band_limited_white_noise(u_ref, n_grid)
+
+    # 3) Colour by sqrt(P(k)):  delta(x) = sum_k u_k sqrt(P(k)) e^{i k.x}
+    _, Pk = _isotropic_pk_on_grid(pk_of_k, n_grid, L_box)
+    delta = jnp.fft.ifftn(u * jnp.sqrt(Pk)).real * (n_grid ** 3)
+
+    # 4) Controlled normalization.
+    if normalize == "analytic":
+        _, Pk_ref = _isotropic_pk_on_grid(pk_of_k, n_ref, L_box)
+        sigma_ref = jnp.sqrt(jnp.sum(Pk_ref))          # resolution-independent
+        delta = delta / (sigma_ref + 1e-30)
+    elif normalize == "realized":
+        delta = (delta - jnp.mean(delta)) / (jnp.std(delta) + 1e-12)
+    elif normalize != "none":
+        raise ValueError("normalize must be 'analytic', 'none', or 'realized'.")
+
+    return delta
+
+
+# ---------------------------------------------------------------------------
+# Trilinear periodic sampling (kept; correct as-is)
+# ---------------------------------------------------------------------------
+def _trilinear_periodic_sample(field: jnp.ndarray, pos_xyz: jnp.ndarray,
+                               L_box: float) -> jnp.ndarray:
+    """Periodic trilinear interpolation of ``field`` at world positions.
+
+    field   : (Nx, Ny, Nz) real
+    pos_xyz : (M, 3) positions, periodic in [0, L_box)
+    returns : (M,) sampled values
+    """
+    Nx, Ny, Nz = field.shape
+    N = jnp.array([Nx, Ny, Nz], dtype=pos_xyz.dtype)
+    u = (jnp.mod(pos_xyz, L_box) / L_box) * N
+    i0 = jnp.floor(u).astype(jnp.int32)
+    f = u - i0.astype(u.dtype)
+
+    ix0 = jnp.mod(i0[:, 0], Nx); ix1 = jnp.mod(ix0 + 1, Nx)
+    iy0 = jnp.mod(i0[:, 1], Ny); iy1 = jnp.mod(iy0 + 1, Ny)
+    iz0 = jnp.mod(i0[:, 2], Nz); iz1 = jnp.mod(iz0 + 1, Nz)
+    fx, fy, fz = f[:, 0], f[:, 1], f[:, 2]
+
+    c000 = field[ix0, iy0, iz0]; c100 = field[ix1, iy0, iz0]
+    c010 = field[ix0, iy1, iz0]; c110 = field[ix1, iy1, iz0]
+    c001 = field[ix0, iy0, iz1]; c101 = field[ix1, iy0, iz1]
+    c011 = field[ix0, iy1, iz1]; c111 = field[ix1, iy1, iz1]
+
+    c00 = c000 * (1 - fx) + c100 * fx
+    c10 = c010 * (1 - fx) + c110 * fx
+    c01 = c001 * (1 - fx) + c101 * fx
+    c11 = c011 * (1 - fx) + c111 * fx
+    c0 = c00 * (1 - fy) + c10 * fy
+    c1 = c01 * (1 - fy) + c11 * fy
+    return c0 * (1 - fz) + c1 * fz
+
+
+# ---------------------------------------------------------------------------
+# Number-density sampler built on the robust GRF
+# ---------------------------------------------------------------------------
+def number_density_sampler_gaussian_3d(
+    key: jax.Array,
+    pk_of_k: Callable[[jnp.ndarray], jnp.ndarray],
+    *,
+    n0_min: float = 1e0,
+    n0_max: float = 1e6,
+    L_box: float = 1.0,
+    n_grid: int = 64,
+    n_ref: Optional[int] = None,
+    contrast: float = 1.0,
+    normalize: str = "analytic",
+) -> Callable[[jnp.ndarray], jnp.ndarray]:
+    """Build a callable n(x,y,z) from a resolution-consistent 3D GRF.
+
+    Mapping (unchanged from your version):
+        s = tanh(delta / contrast)            in [-1, 1]
+        log10 n = log_mid + log_amp * s       => n in [n0_min, n0_max]
+
+    Because ``delta`` now uses the ``"analytic"`` normalization, its variance is
+    controlled and resolution-independent, so the tanh saturation -- and hence the
+    density statistics -- behave consistently as you vary ``n_grid``.
+
+    Convergence contract: fix ``key`` and ``n_ref`` (the finest resolution you
+    will test) and vary ``n_grid <= n_ref``.
+
+    Parameters mirror your original signature; ``grid_shape`` is replaced by the
+    scalar ``n_grid`` (cubic) plus the master resolution ``n_ref``.
+    """
+    if n_ref is None:
+        n_ref = int(n_grid)
+
+    delta_grid = generate_gaussian_random_field(
+        key, n_grid, L_box, pk_of_k, n_ref=n_ref, normalize=normalize)
+
+    log_min = jnp.log10(n0_min)
+    log_max = jnp.log10(n0_max)
+    log_mid = 0.5 * (log_min + log_max)
+    log_amp = 0.5 * (log_max - log_min)
+
+    def _sample(x: jnp.ndarray) -> jnp.ndarray:
+        *batch_dims, _ = x.shape
+        x_flat = x.reshape(-1, x.shape[-1])
+        pos = jnp.mod(x_flat[:, 1:4], L_box)               # (M, 3) spatial cols
+        delta = _trilinear_periodic_sample(delta_grid, pos, L_box)
+        s = jnp.tanh(delta / contrast)
+        n_flat = 10.0 ** (log_mid + log_amp * s)
+        return n_flat.reshape(batch_dims)
+
+    # expose the underlying field for diagnostics / convergence checks
+    _sample.delta_grid = delta_grid
+    return _sample
+
+
+# =====================================================================
+# ====================== simple field generators ======================
+# ===================================================================== 
+
 
 def temperature_sampler(T0_min: float = 1e0, T0_max: float = 1e6, L_box: float = 1.0):
     def _sample(x: jnp.ndarray) -> jnp.ndarray:
@@ -59,132 +262,6 @@ def number_density_sampler(n0_min: float = 1e0, n0_max: float = 1e6, L_box: floa
         log_n0_max = jnp.log10(n0_max)
         n_flat = 10**(log_n0_min + (log_n0_max - log_n0_min) * (y / L_box))
         return n_flat.reshape(batch_dims)
-    return _sample
-
-def _trilinear_periodic_sample(field: jnp.ndarray, pos_xyz: jnp.ndarray, L_box: float) -> jnp.ndarray:
-    """
-    field: (Nx, Ny, Nz) real
-    pos_xyz: (M, 3) positions in same units as L_box, assumed periodic in [0, L_box)
-    returns: (M,) sampled values
-    """
-    Nx, Ny, Nz = field.shape
-    N = jnp.array([Nx, Ny, Nz], dtype=jnp.float32)
-
-    # convert to grid coordinates in [0, N)
-    u = (pos_xyz / L_box) * N
-    i0 = jnp.floor(u).astype(jnp.int32)
-    f = u - i0.astype(jnp.float32)
-
-    # periodic wrap
-    ix0 = jnp.mod(i0[:, 0], Nx); ix1 = jnp.mod(ix0 + 1, Nx)
-    iy0 = jnp.mod(i0[:, 1], Ny); iy1 = jnp.mod(iy0 + 1, Ny)
-    iz0 = jnp.mod(i0[:, 2], Nz); iz1 = jnp.mod(iz0 + 1, Nz)
-
-    fx, fy, fz = f[:, 0], f[:, 1], f[:, 2]
-
-    # gather the 8 corners
-    c000 = field[ix0, iy0, iz0]
-    c100 = field[ix1, iy0, iz0]
-    c010 = field[ix0, iy1, iz0]
-    c110 = field[ix1, iy1, iz0]
-    c001 = field[ix0, iy0, iz1]
-    c101 = field[ix1, iy0, iz1]
-    c011 = field[ix0, iy1, iz1]
-    c111 = field[ix1, iy1, iz1]
-
-    # interpolate
-    c00 = c000 * (1 - fx) + c100 * fx
-    c10 = c010 * (1 - fx) + c110 * fx
-    c01 = c001 * (1 - fx) + c101 * fx
-    c11 = c011 * (1 - fx) + c111 * fx
-
-    c0 = c00 * (1 - fy) + c10 * fy
-    c1 = c01 * (1 - fy) + c11 * fy
-
-    return c0 * (1 - fz) + c1 * fz
-
-
-def _gaussian_field_from_pk(
-    key: jax.random.PRNGKey,
-    shape: Tuple[int, int, int],
-    L_box: float,
-    pk_of_k: Callable[[jnp.ndarray], jnp.ndarray],
-) -> jnp.ndarray:
-    """
-    Build a real 3D Gaussian random field delta(x) with target isotropic P(k)
-    using Fourier synthesis with rfftn/irfftn.
-    """
-    Nx, Ny, Nz = shape
-
-    # k-grids (cycles per unit) -> angular k = 2π * freq
-    kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Nx, d=L_box / Nx)
-    ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Ny, d=L_box / Ny)
-    kz = 2.0 * jnp.pi * jnp.fft.rfftfreq(Nz, d=L_box / Nz)
-
-    KX, KY, KZ = jnp.meshgrid(kx, ky, kz, indexing="ij")
-    K = jnp.sqrt(KX**2 + KY**2 + KZ**2)
-
-    Pk = pk_of_k(K)
-    Pk = jnp.where(K == 0.0, 0.0, Pk)  # remove DC mode
-
-    # Draw complex Fourier modes with variance ~ P(k)
-    # For rfft half-spectrum, a standard choice is:
-    #   delta_k = sqrt(Pk/2) * (a + i b) with a,b ~ N(0,1)
-    key_a, key_b = jax.random.split(key)
-    a = jax.random.normal(key_a, (Nx, Ny, Nz // 2 + 1))
-    b = jax.random.normal(key_b, (Nx, Ny, Nz // 2 + 1))
-
-    amp = jnp.sqrt(jnp.maximum(Pk, 0.0) / 2.0)
-    delta_k = amp * (a + 1j * b)
-
-    # Inverse transform to real space
-    delta_x = jnp.fft.irfftn(delta_k, s=(Nx, Ny, Nz)).real
-
-    # Normalize to zero mean, unit std (handy for controlled mapping later)
-    delta_x = delta_x - jnp.mean(delta_x)
-    delta_x = delta_x / (jnp.std(delta_x) + 1e-12)
-    return delta_x
-
-
-def number_density_sampler_gaussian_3d(
-    key: jax.random.PRNGKey,
-    pk_of_k: Callable[[jnp.ndarray], jnp.ndarray],
-    n0_min: float = 1e0,
-    n0_max: float = 1e6,
-    L_box: float = 1.0,
-    grid_shape: Tuple[int, int, int] = (64, 64, 64),
-    contrast: float = 1.0,
-) -> Callable[[jnp.ndarray], jnp.ndarray]:
-    """
-    Creates a sampler n(x,y,z) based on a 3D Gaussian random field with power spectrum P(k).
-
-    Mapping to density:
-      s = tanh(delta/contrast)  in [-1,1]
-      log10 n = log_mid + log_amp * s   => n in [n0_min, n0_max]
-    """
-    delta_grid = _gaussian_field_from_pk(key, grid_shape, L_box, pk_of_k)
-
-    log_min = jnp.log10(n0_min)
-    log_max = jnp.log10(n0_max)
-    log_mid = 0.5 * (log_min + log_max)
-    log_amp = 0.5 * (log_max - log_min)
-
-    def _sample(x: jnp.ndarray) -> jnp.ndarray:
-        *batch_dims, _ = x.shape
-        x_flat = x.reshape(-1, x.shape[-1])
-
-        # spatial positions (x,y,z), periodic in [0,L_box)
-        pos = x_flat[:, 1:4]
-        pos = jnp.mod(pos, L_box)
-
-        delta = _trilinear_periodic_sample(delta_grid, pos, L_box)  # (M,)
-
-        s = jnp.tanh(delta / contrast)  # bounded [-1,1]
-        logn = log_mid + log_amp * s
-        n_flat = 10.0 ** logn
-
-        return n_flat.reshape(batch_dims)
-
     return _sample
 
 # =====================================================================
