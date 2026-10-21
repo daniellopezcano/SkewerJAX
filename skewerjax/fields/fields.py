@@ -1,6 +1,7 @@
 # skewerjax/fields.py
 from __future__ import annotations
 from typing import Callable, Protocol, Any, Union
+import numpy as np
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
@@ -70,6 +71,33 @@ class VectorField:
 
         # Actual projection
         return jnp.sum(v * directions, axis=-1)
+
+
+class SampledField:
+    """
+    Field given by its values at the points of a ``SkewerBundle`` (pipeline order).
+
+    Deposition layers (``skewerjax.fields.deposition``) compute the fields of a simulation at the
+    sampling points; this wrapper hands them to ``Fields`` with the usual sampler interface. It is
+    called with the bundle's quadri-vectors flattened, (N_sk * N_ppsk, 4), and returns the stored
+    values reshaped to that batch.
+
+    Parameters
+    ----------
+    values : (N_sk, N_ppsk) scalar or (N_sk, N_ppsk, 3) vector values.
+    """
+    def __init__(self, values: ArrayLike):
+        self.values = jnp.asarray(values)
+        if self.values.ndim < 2:
+            raise ValueError(f"values must be (N_sk, N_ppsk[, 3]), got {self.values.shape}.")
+        self.n_points = int(np.prod(self.values.shape[:2]))
+        self.tail = tuple(self.values.shape[2:])
+
+    def __call__(self, x: ArrayLike) -> ArrayLike:
+        batch = tuple(x.shape[:-1])
+        if int(np.prod(batch)) != self.n_points:
+            raise ValueError(f"SampledField holds {self.n_points} points, called with batch {batch}.")
+        return self.values.reshape(batch + self.tail)
 
 
 class LoSProjector:

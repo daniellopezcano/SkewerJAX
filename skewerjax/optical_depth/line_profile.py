@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Mapping, Optional
 from math import prod
 from jax.typing import ArrayLike
 
@@ -111,32 +111,36 @@ def compute_lambda_prime(
     return lambdas_A_prime
 
 
+def line_centre_velocity_kms(a_dagger: ArrayLike, scale_factor: ArrayLike, LoS_velocity: ArrayLike) -> jnp.ndarray:
+    """Spectral coordinate v_c [km/s] at which each point absorbs at line centre.
+
+    Parameters
+    ----------
+    a_dagger : scalar or (N_points,)
+    scale_factor : (N_points,)
+    LoS_velocity : (N_lines, N_points) [km/s], v . d_photon
+
+    Returns
+    -------
+    (N_lines, N_points) [km/s]
+    """
+    a_dagger = jnp.asarray(a_dagger)
+    beta = jnp.asarray(LoS_velocity) / phys.c_kms
+    ratio = a_dagger / jnp.asarray(scale_factor) if a_dagger.ndim == 0 else a_dagger / jnp.asarray(scale_factor)
+    return phys.c_kms * (jnp.log(ratio)[None, :] + 0.5 * (jnp.log1p(-beta) - jnp.log1p(beta)))
+
+
 def compute_nu_offset_GHz(
     velocities_kms: ArrayLike,
     lambda0_A: ArrayLike,
     a_dagger: ArrayLike,
     scale_factor: ArrayLike,
     LoS_velocity: ArrayLike,
+    velocity_period: Optional[float] = None,
+    detuning: str = "exact",
 ) -> jnp.ndarray:
     """
-    Memory-lighter frequency-offset computation.
-
-    Instead of materializing
-
-        lambda_prime = lambda0 * exp(v/c) * a/a_dagger * D^{-1},
-
-    and then computing
-
-        nu = (1/lambda_prime - 1/lambda0) * c * 10,
-
-    this computes the reciprocal directly:
-
-        1/lambda_prime
-        =
-        1/lambda0
-        * exp(-v/c)
-        * a_dagger/a
-        * sqrt((1 - beta)/(1 + beta)).
+    Frequency offset nu [GHz] of every (line, point, velocity) from the detuning v - v_c.
 
     Parameters
     ----------
@@ -145,11 +149,14 @@ def compute_nu_offset_GHz(
     a_dagger : scalar or shape (N_points,)
     scale_factor : array, shape (N_points,)
     LoS_velocity : array, shape (N_lines, N_points)
+    velocity_period : float or None
+        If given [km/s], the detuning is replaced by its minimum image in [-P/2, P/2)
+        (periodic boxes; see the module docstring).
+    detuning : "exact" (default, exp mapping) or "linear" (first order, fake_spectra).
 
     Returns
     -------
     nu_GHz : array, shape (N_lines, N_points, N_v)
-        Frequency offset in GHz.
     """
     velocities_kms = jnp.asarray(velocities_kms)
     lambda0_A = jnp.asarray(lambda0_A)
@@ -162,55 +169,73 @@ def compute_nu_offset_GHz(
             "`compute_nu_offset_GHz` expects flattened scale_factor "
             f"with shape (N_points,), got {scale_factor.shape}."
         )
-
     if LoS_velocity.ndim != 2:
         raise ValueError(
             "`compute_nu_offset_GHz` expects flattened LoS_velocity "
             f"with shape (N_lines, N_points), got {LoS_velocity.shape}."
         )
-
     if LoS_velocity.shape[1] != scale_factor.shape[0]:
         raise ValueError(
             f"LoS_velocity.shape[1]={LoS_velocity.shape[1]} does not match "
             f"scale_factor.shape[0]={scale_factor.shape[0]}."
         )
-
     if a_dagger.ndim != 0 and a_dagger.shape != scale_factor.shape:
         raise ValueError(
             f"a_dagger must be scalar or have shape {scale_factor.shape}; "
             f"got {a_dagger.shape}."
         )
+    if detuning not in ("exact", "linear"):
+        raise ValueError(f"detuning must be 'exact' or 'linear', got {detuning!r}.")
 
-    inv_lambda0 = 1.0 / lambda0_A[:, None, None]
+    v_c = line_centre_velocity_kms(a_dagger, scale_factor, LoS_velocity)       # (N_lines, N_points)
+    delta = velocities_kms[None, None, :] - v_c[..., None]
+    if velocity_period is not None:
+        P = float(velocity_period)
+        delta = jnp.mod(delta + 0.5 * P, P) - 0.5 * P
+    x = -delta / phys.c_kms
+    factor = jnp.expm1(x) if detuning == "exact" else x
+    # c / lambda [GHz]: (m/s) / (1e-10 m) = 1e10 Hz = 10 GHz per (m/s / A)
+    return factor * (phys.c * 10.0) / lambda0_A[:, None, None]
 
-    velocity_factor_inv = jnp.exp(
-        -velocities_kms[None, None, :] / phys.c_kms
-    )
 
-    if a_dagger.ndim == 0:
-        scale_factor_ratio_inv = a_dagger / scale_factor[None, :, None]
-    else:
-        scale_factor_ratio_inv = (
-            a_dagger[None, :, None]
-            / scale_factor[None, :, None]
-        )
+def voigt_line_profiles(
+    nu_GHz: ArrayLike,
+    sigma_GHz: ArrayLike,
+    gamma_GHz: ArrayLike,
+    voigt_implementation_mode: str = "ExoJAX",
+) -> jnp.ndarray:
+    """
+    Voigt profile phi [ns] for arrays of offsets and widths (pure, jit-able).
 
-    beta = LoS_velocity[..., None] / phys.c_kms
-    doppler_forward = jnp.sqrt((1.0 - beta) / (1.0 + beta))
+    Parameters
+    ----------
+    nu_GHz : (N, N_v) frequency offsets.
+    sigma_GHz : (N,) Gaussian standard deviations, b / (sqrt(2) lambda).
+    gamma_GHz : (N,) Lorentzian half widths, (A_21 + collisional) / (4 pi).
 
-    nu_GHz = (
-        inv_lambda0
-        * (
-            velocity_factor_inv
-            * scale_factor_ratio_inv
-            * doppler_forward
-            - 1.0
-        )
-        * phys.c
-        * 10.0
-    )
+    Returns
+    -------
+    (N, N_v) profile [1/GHz = ns], normalised to unit area in nu.
+    """
+    log10_phi = vmap(
+        lambda x, s, g: log10_voigt(x, s, g, mode=voigt_implementation_mode),
+        in_axes=(0, 0, 0),
+    )(nu_GHz, sigma_GHz, gamma_GHz)
+    return 10.0 ** log10_phi
 
-    return nu_GHz
+
+def voigt_widths_GHz(temperature, turbulence, collisional, lambda0_A, A21_GHz, mass_amu):
+    """Gaussian sigma and Lorentzian gamma [GHz] per (line, point).
+
+    b_th = sqrt(2 k_B T / m) [m/s] (``phys.kB`` is k_B / u in m^2 s^-2 K^-1), b = b_th + b_turb
+    (linear sum, as in the current implementation; the notes add them in quadrature, see the
+    reply), sigma = b / (sqrt(2) lambda), gamma = (A_21 + A_coll) / (4 pi).
+    All inputs (N_lines, N_points) except the per-line arrays (N_lines,).
+    """
+    gamma = (A21_GHz[:, None] + collisional) / (4.0 * jnp.pi)
+    v_th_ms = jnp.sqrt(2.0 * phys.kB * temperature / mass_amu[:, None])
+    sigma = (v_th_ms + turbulence) * 10.0 / (jnp.sqrt(2.0) * lambda0_A[:, None])
+    return sigma, gamma
 
 
 def compute_line_profiles(
@@ -221,50 +246,23 @@ def compute_line_profiles(
     line_bundle,
     fields,
     voigt_implementation_mode: str = "ExoJAX",
+    velocity_period: Optional[float] = None,
+    detuning: str = "exact",
 ) -> jnp.ndarray:
     """
     Compute Voigt line profiles using line-centered velocity units.
 
-    Parameters
-    ----------
-    quadri_vectors : array, shape (..., 4)
-        Sampling events in the form [a, x, y, z].
-        The leading dimensions define the spatial batch shape.
-
-    LoS_directions : array, shape (..., 3)
-        Line-of-sight direction vectors at each spatial point.
-
-    velocities_kms : array, shape (N_v,)
-        Common line-centered velocity grid in km/s.
-
-    a_dagger : scalar or array
-        Reference scale factor.
-        Accepted shapes:
-            - scalar
-            - same as quadri_vectors.shape[:-1]
-            - flattened shape (N_points,)
-
-    line_bundle : LineBundle-like
-        Object describing the set of lines.
-
-    fields : Fields-like
-        Field container.
-
-    voigt_implementation_mode : str
-        Passed through to `log10_voigt`.
+    Same interface and result as before, plus ``velocity_period`` and ``detuning``
+    (see ``compute_nu_offset_GHz``). The fields are sampled first; the profile itself is the pure
+    function ``voigt_line_profiles``.
 
     Returns
     -------
     phi : array, shape (N_lines, *batch_shape, N_v)
         Line profiles in time units [ns].
     """
-
-    # ------------------------------------------------------------------
-    # 0. Basic validation and bookkeeping
-    # ------------------------------------------------------------------
     velocities_kms = jnp.asarray(velocities_kms)
     a_dagger = jnp.asarray(a_dagger)
-
     N_v = int(velocities_kms.size)
 
     if quadri_vectors.ndim < 2 or quadri_vectors.shape[-1] != 4:
@@ -272,61 +270,43 @@ def compute_line_profiles(
             "`quadri_vectors` must have shape (..., 4) with last axis [a,x,y,z]. "
             f"Got shape {quadri_vectors.shape}."
         )
-
     batch_shape = quadri_vectors.shape[:-1]
     N_points = int(prod(batch_shape))
 
     species_fields = set(fields.species_keys)
     species_lines = set(line_bundle.species_keys)
-
     if species_fields != species_lines:
         raise ValueError(
             "Species keys mismatch between fields and line_bundle. "
             f"fields={species_fields}, line_bundle={species_lines}"
         )
-
     N_lines = int(line_bundle.n_lines)
     N_species = int(line_bundle.n_species)
-
     if N_lines < N_species:
-        raise ValueError(
-            f"More species than lines: N_lines={N_lines}, N_species={N_species}"
-        )
+        raise ValueError(f"More species than lines: N_lines={N_lines}, N_species={N_species}")
 
     LoS_directions = jnp.asarray(LoS_directions)
-
     if LoS_directions.shape != batch_shape + (3,):
         raise ValueError(
             f"`LoS_directions` shape {LoS_directions.shape} is incompatible with "
             f"batch_shape={batch_shape}; expected {batch_shape + (3,)}"
         )
-
-    required_scalar_fields = ("temperature", "collisional", "turbulence")
-    required_vector_field = "velocity"
-
     for sp in line_bundle.species_keys:
         available = set(fields.field_keys[sp])
-
-        missing = [f for f in required_scalar_fields if f not in available]
+        missing = [f for f in ("temperature", "collisional", "turbulence") if f not in available]
         if missing:
             raise ValueError(
                 f"Missing fields for species '{sp}': {missing}. "
                 "These are required for line-profile computation."
             )
-
-        if required_vector_field not in available:
+        if "velocity" not in available:
             raise ValueError(
-                f"Missing 'velocity' field for species '{sp}', "
-                "required to build LoS_velocity."
+                f"Missing 'velocity' field for species '{sp}', required to build LoS_velocity."
             )
 
-    # ------------------------------------------------------------------
-    # 1. Flatten spatial dimensions
-    # ------------------------------------------------------------------
     quadri_vectors_flat = quadri_vectors.reshape(N_points, 4)
     LoS_flat = LoS_directions.reshape(N_points, 3)
     scale_factors_flat = quadri_vectors_flat[:, 0]
-
     if a_dagger.ndim == 0:
         a_dagger_flat = a_dagger
     elif a_dagger.shape == batch_shape:
@@ -339,131 +319,23 @@ def compute_line_profiles(
             f"or have shape ({N_points},). Got {a_dagger.shape}."
         )
 
-    # ------------------------------------------------------------------
-    # 2. Map species -> line indices, and tile fields to lines
-    # ------------------------------------------------------------------
     indices_for_species: Mapping[str, jnp.ndarray] = {
-        sp: line_bundle.indices_for_species(sp)
-        for sp in line_bundle.species_keys
+        sp: line_bundle.indices_for_species(sp) for sp in line_bundle.species_keys
     }
+    tile = lambda name, **kw: fields.tile_field_to_lines(name, quadri_vectors_flat,
+                                                          indices_for_species=indices_for_species, **kw)
+    collisional, temperature, turbulence = tile("collisional"), tile("temperature"), tile("turbulence")
+    LoS_velocity = tile("LoS_velocity", LoS_directions=LoS_flat)
 
-    collisional = fields.tile_field_to_lines(
-        "collisional",
-        quadri_vectors_flat,
-        indices_for_species=indices_for_species,
-    )
-
-    temperature = fields.tile_field_to_lines(
-        "temperature",
-        quadri_vectors_flat,
-        indices_for_species=indices_for_species,
-    )
-
-    turbulence = fields.tile_field_to_lines(
-        "turbulence",
-        quadri_vectors_flat,
-        indices_for_species=indices_for_species,
-    )
-
-    LoS_velocity = fields.tile_field_to_lines(
-        "LoS_velocity",
-        quadri_vectors_flat,
-        indices_for_species=indices_for_species,
-        LoS_directions=LoS_flat,
-    )
-
-    # LoS_flat is no longer needed after LoS_velocity is built.
-    del LoS_flat
-
-    # ------------------------------------------------------------------
-    # 3. Extract line parameters
-    # ------------------------------------------------------------------
     lambda0_A = jnp.asarray(line_bundle.lambda0_A)
-    A21_GHz = jnp.asarray(line_bundle.A21_GHz)
-    mass_amu = jnp.asarray(line_bundle.mass_amu)
-
-    # ------------------------------------------------------------------
-    # 4. Compute Voigt width parameters
-    # ------------------------------------------------------------------
-    gamma_GHz = (A21_GHz[:, None] + collisional) / (4.0 * jnp.pi)
-
-    v_th_kms = jnp.sqrt(
-        2.0 * phys.kB * temperature / mass_amu[:, None]
-    )
-
-    v_eff_A_GHz = (v_th_kms + turbulence) * 10.0
-
-    sigma_GHz = (
-        v_eff_A_GHz
-        / (jnp.sqrt(2.0) * lambda0_A[:, None])
-    )
-
-    # These heavy tiled fields are no longer needed.
-    del collisional, temperature, turbulence, v_th_kms, v_eff_A_GHz
-
-    # ------------------------------------------------------------------
-    # 5. Frequency offsets from line-centered velocity units
-    # ------------------------------------------------------------------
-    nu_GHz = compute_nu_offset_GHz(
-        velocities_kms=velocities_kms,
-        lambda0_A=lambda0_A,
-        a_dagger=a_dagger_flat,
-        scale_factor=scale_factors_flat,
-        LoS_velocity=LoS_velocity,
-    )
-
-    # These are no longer needed after nu_GHz is built.
-    del scale_factors_flat, LoS_velocity, a_dagger_flat
-
-    # ------------------------------------------------------------------
-    # 6. Flatten for Voigt evaluation
-    # ------------------------------------------------------------------
+    sigma_GHz, gamma_GHz = voigt_widths_GHz(temperature, turbulence, collisional, lambda0_A,
+                                            jnp.asarray(line_bundle.A21_GHz), jnp.asarray(line_bundle.mass_amu))
+    nu_GHz = compute_nu_offset_GHz(velocities_kms, lambda0_A, a_dagger_flat, scale_factors_flat, LoS_velocity,
+                                   velocity_period=velocity_period, detuning=detuning)
     N_total = N_lines * N_points
-
-    nu_flat = nu_GHz.reshape(N_total, N_v)
-    sigma_flat = sigma_GHz.reshape(N_total)
-    gamma_flat = gamma_GHz.reshape(N_total)
-
-    # The unflattened arrays are no longer needed.
-    del nu_GHz, sigma_GHz, gamma_GHz
-
-    def _eval_voigt_batch(nu_batch, sigma_batch, gamma_batch):
-        return vmap(
-            lambda x, s, g: log10_voigt(
-                x,
-                s,
-                g,
-                mode=voigt_implementation_mode,
-            ),
-            in_axes=(0, 0, 0),
-        )(nu_batch, sigma_batch, gamma_batch)
-
-    log10_phi_flat = _eval_voigt_batch(
-        nu_flat,
-        sigma_flat,
-        gamma_flat,
-    )
-
-    # Inputs to Voigt are no longer needed after log10_phi_flat is computed.
-    del nu_flat, sigma_flat, gamma_flat
-
-    # ------------------------------------------------------------------
-    # 7. Convert back and reshape to the natural batch shape
-    # ------------------------------------------------------------------
-    phi_flat = 10.0 ** log10_phi_flat
-
-    # Drop log version before keeping the linear profile.
-    del log10_phi_flat
-
-    phi = phi_flat.reshape(
-        N_lines,
-        *batch_shape,
-        N_v,
-    )
-
-    del phi_flat, quadri_vectors_flat
-
-    return phi
+    phi = voigt_line_profiles(nu_GHz.reshape(N_total, N_v), sigma_GHz.reshape(N_total), gamma_GHz.reshape(N_total),
+                              voigt_implementation_mode)
+    return phi.reshape(N_lines, *batch_shape, N_v)
 
 
 def velocities_to_line_centered_wavelengths(
@@ -541,13 +413,14 @@ def reference_velocities_to_line_centered(
     reference_line_idx: int = 0,
 ) -> jnp.ndarray:
     """
-    Shift a reference velocity grid to be line-centered for all lines in the bundle.
-    
-    If `velocities_kms` is the line-centered velocity grid for a specific reference 
-    line (e.g., the first line), this function shifts it for all other lines based 
-    on the rest-frame wavelength differences, which are redshift-independent.
-    
-    v^(j) = v^(ref) + c * ln(lambda_ref / lambda_j)
+    Line-centred velocity of every line at the observed wavelengths of a reference-line grid.
+
+    If `velocities_kms` is the line-centred grid of a reference line, the same observed wavelength
+    lambda_ref exp(v^(ref)/c) = lambda_j exp(v^(j)/c) gives, for every line j,
+
+        v^(j) = v^(ref) + c * ln(lambda_ref / lambda_j),
+
+    which is redshift independent.
 
     Parameters
     ----------
@@ -565,22 +438,11 @@ def reference_velocities_to_line_centered(
     """
     velocities_kms = jnp.asarray(velocities_kms)
     lambda0_A = jnp.asarray(line_bundle.lambda0_A)
-    
-    N_lines = lambda0_A.shape[0]
     lambda_ref = lambda0_A[reference_line_idx]
-    
-    # Calculate the redshift-independent shift for each line
-    # v^(j) = v^(ref) + c * ln(lambda_ref / lambda_j)
-    velocity_shifts = - phys.c_kms * jnp.log(lambda_ref / lambda0_A)
-    
-    # Ensure velocities_kms is 2D for broadcasting: (N_lines, N_v)
+    velocity_shifts = phys.c_kms * jnp.log(lambda_ref / lambda0_A)
     if velocities_kms.ndim == 1:
         velocities_kms = velocities_kms[None, :]
-        
-    # Apply the shift to each line
-    velocities_per_line = velocities_kms + velocity_shifts[:, None]
-    
-    return velocities_per_line
+    return velocities_kms + velocity_shifts[:, None]
 
 
 def compute_lambda_prime_wavelength_units(

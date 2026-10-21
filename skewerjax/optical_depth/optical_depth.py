@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from functools import partial
 from typing import Optional, Mapping
 from jax.typing import ArrayLike
 
 import os
 import logging
+import warnings
 
 logger = logging.getLogger(__name__)
 
@@ -13,12 +15,126 @@ try:
 except ImportError:
     psutil = None
 
-from jax import vmap
+import numpy as np
+from jax import vmap, jit
 import jax.numpy as jnp
-from jax.scipy.integrate import trapezoid
 
 from skewerjax.constants.physical_constants import phys
 from skewerjax.optical_depth import line_profile
+
+
+# ----------------------------------------------------------------------------------------------
+# Quadrature along the skewer, and the pure optical-depth kernel
+# ----------------------------------------------------------------------------------------------
+def trapezoid_line_elements(points: jnp.ndarray) -> jnp.ndarray:
+    """Line element of every point of a polyline: half the distance to each neighbour.
+
+    For points x_0 ... x_{N-1} with segment lengths d_k = |x_{k+1} - x_k|, the element of point i
+    is w_i = (d_{i-1} + d_i) / 2 (w_0 = d_0 / 2, w_{N-1} = d_{N-2} / 2): the length of the
+    *dual segment* between the midpoints that surround x_i. sum_i w_i f_i is exactly the
+    trapezoid rule on the path length, and sum_i w_i = path length.
+
+    Parameters
+    ----------
+    points : (..., N, 3) positions (any unit).
+
+    Returns
+    -------
+    (..., N) line elements, same unit.
+    """
+    d = jnp.linalg.norm(jnp.diff(points, axis=-2), axis=-1)
+    z = jnp.zeros(d.shape[:-1] + (1,), d.dtype)
+    return 0.5 * (jnp.concatenate([z, d], axis=-1) + jnp.concatenate([d, z], axis=-1))
+
+
+@partial(jit, static_argnames=("voigt_implementation_mode", "detuning", "velocity_period"))
+def optical_depth_kernel(velocities_kms, lambda0_A, A21_GHz, mass_amu, f_osc, a_dagger, scale_factor,
+                         los_velocity, temperature, turbulence, collisional, number_density, weights_m,
+                         voigt_implementation_mode: str = "ExoJAX", detuning: str = "exact",
+                         velocity_period: Optional[float] = None):
+    """tau = sum_i w_i C f n_i a_i^-2 phi_i(v): the discretised notes' Eq. ``tau_straight_los``.
+
+    Pure function of arrays (jit-compiled, differentiable in every float input).
+
+    Parameters
+    ----------
+    velocities_kms : (N_v,)
+    lambda0_A, A21_GHz, mass_amu, f_osc : (N_lines,)
+    a_dagger : scalar or (N_points,)
+    scale_factor : (N_points,)
+    los_velocity, temperature [K], turbulence [m/s], collisional [GHz], number_density
+        [comoving cm^-3] : (N_lines, N_points)
+    weights_m : (N_points,) line element of each point [comoving m]
+
+    Returns
+    -------
+    (N_lines, N_v) optical depth, summed over the points.
+    """
+    sigma, gamma = line_profile.voigt_widths_GHz(temperature, turbulence, collisional, lambda0_A, A21_GHz, mass_amu)
+    nu = line_profile.compute_nu_offset_GHz(velocities_kms, lambda0_A, a_dagger, scale_factor, los_velocity,
+                                            velocity_period=velocity_period, detuning=detuning)
+    n_l, n_p, n_v = nu.shape
+    phi = line_profile.voigt_line_profiles(nu.reshape(n_l * n_p, n_v), sigma.reshape(-1), gamma.reshape(-1),
+                                           voigt_implementation_mode).reshape(n_l, n_p, n_v)
+    # dtau/dx [1/m] = sigma_0 f phi n a^-2 (x comoving); 1e2 converts the cm^2 cm^-3 m to a number
+    amp = phys.cross_section_prefactor * f_osc[:, None] * number_density * scale_factor[None, :] ** -2 * 1e2 * weights_m[None, :]
+    return jnp.einsum("lp,lpv->lv", amp, phi)
+
+
+def voigt_width_kms(sigma_GHz, gamma_GHz, lambda0_A):
+    """Width of a Voigt profile in velocity, expressed as an equivalent Doppler parameter [km/s].
+
+    The Gaussian part has Doppler parameter b_G = sqrt(2) sigma lambda and FWHM f_G = 2 sqrt(ln 2) b_G;
+    the Lorentzian part has FWHM f_L = 2 gamma lambda. The Voigt FWHM is approximated by
+    f_V = 0.5346 f_L + sqrt(0.2166 f_L^2 + f_G^2) (better than 0.02 % for any f_L / f_G), and the
+    returned width is f_V / (2 sqrt(ln 2)): b_G for a thermal line, and a finite width for a
+    natural line (T -> 0), where b_G alone vanishes.
+
+    Parameters
+    ----------
+    sigma_GHz, gamma_GHz : (N_lines, ...) Gaussian standard deviation and Lorentzian half width
+        (``line_profile.voigt_widths_GHz``); lambda0_A : (N_lines,) rest wavelength [A].
+    """
+    lam = jnp.reshape(jnp.asarray(lambda0_A), (-1,) + (1,) * (jnp.ndim(sigma_GHz) - 1))
+    to_kms = lam * 1e-4                                  # GHz x A -> km/s
+    f_G = 2.0 * jnp.sqrt(jnp.log(2.0)) * jnp.sqrt(2.0) * sigma_GHz * to_kms
+    f_L = 2.0 * gamma_GHz * to_kms
+    f_V = 0.5346 * f_L + jnp.sqrt(0.2166 * f_L ** 2 + f_G ** 2)
+    return f_V / (2.0 * jnp.sqrt(jnp.log(2.0)))
+
+
+def sampling_resolution_report(line_centre_kms, b_kms, weight, tolerance: float = 0.25) -> dict:
+    """Is the spacing of the points fine enough to resolve the lines? (notes
+    ``app_numerical_resolution.tex``).
+
+    The quadrature places point i's absorption at its line centre v_c,i. Consecutive points of a
+    skewer must therefore be closer in v_c than a fraction of the line width:
+    |v_c,i+1 - v_c,i| <= tolerance x min(b_i, b_i+1). For a top hat of width W replaced by a delta,
+    the peak of a Gaussian of Doppler parameter b changes by W^2 / (12 b^2): 0.5 % for W = b/4.
+
+    Parameters
+    ----------
+    line_centre_kms, b_kms, weight : (N_lines, N_sk, N_ppsk) arrays (weight = n w, the column of
+        each point, to report the fraction of absorbers affected). ``b_kms`` is the width of the
+        whole profile (``voigt_width_kms``): the thermal b for a Doppler-dominated line, the
+        Lorentzian width for a natural one.
+
+    Returns
+    -------
+    dict(max_ratio (N_lines,), column_fraction (N_lines,) of the column in under-resolved intervals,
+    ok (bool), b_min (N_lines,)).
+    """
+    dv = np.abs(np.diff(np.asarray(line_centre_kms), axis=-1))
+    b = np.asarray(b_kms)
+    bmin = np.maximum(np.minimum(b[..., 1:], b[..., :-1]), 1e-30)
+    ratio = dv / bmin
+    w = np.asarray(weight)
+    wm = 0.5 * (w[..., 1:] + w[..., :-1])
+    bad = ratio > tolerance
+    tot = np.maximum(wm.sum(axis=(-2, -1)), 1e-300)
+    frac = (wm * bad).sum(axis=(-2, -1)) / tot
+    return dict(max_ratio=ratio.max(axis=(-2, -1)), column_fraction=frac, ok=bool(np.all(frac < 1e-3)),
+                b_min=b.min(axis=(-2, -1)))
 
 
 class OpticalDepthCalculator:
@@ -68,6 +184,11 @@ class OpticalDepthCalculator:
         sync_memory: bool = True,
         *,
         release_inputs_after_compute: bool = True,
+        line_elements: Optional[ArrayLike] = None,
+        velocity_period: Optional[float] = None,
+        detuning: str = "exact",
+        resolution_tolerance: Optional[float] = 0.25,
+        v_chunk: Optional[int] = None,
     ):
         """
         Parameters
@@ -107,7 +228,43 @@ class OpticalDepthCalculator:
         release_inputs_after_compute : bool
             If True, release `skewer_bundle` and `fields` after compute().
             `line_bundle` and `a_dagger` are always kept.
+
+        line_elements : array, optional, shape (N_sk, N_ppsk)
+            Comoving length [Mpc] that each point represents in the quadrature
+            tau = sum_i w_i dtau/dx_i. None (default, ``mode_integration="trapz"``) takes the
+            trapezoid weights of the points, ``SkewerBundle.line_elements``: identical to the
+            previous ``jax.scipy.integrate.trapezoid`` for point-sampled fields. Explicit elements
+            are used when the fields are segment averages (e.g. the column of a cell inside the
+            segment, ``skewerjax.fields.deposition``), which conserves the column whatever the
+            sampling.
+
+        velocity_period : float, optional
+            Period [km/s] of a periodic box. Each point then absorbs only through the nearest
+            periodic image of its detuning (``line_profile.compute_nu_offset_GHz``).
+
+        detuning : "exact" (default) or "linear" (fake_spectra's first-order mapping; validation).
+
+        resolution_tolerance : float or None
+            Warn when consecutive points are farther apart in line-centre velocity than this
+            fraction of the local width of the Voigt profile (``voigt_width_kms``: the thermal b,
+            or the natural width for T -> 0; ``sampling_resolution_report``). None disables.
+
+        v_chunk : int or None
+            Velocities per kernel call (bounds memory by N_lines x N_points x v_chunk).
         """
+        if mode_integration not in ("trapz", "line_elements"):
+            raise NotImplementedError(f"Integration mode {mode_integration!r} not implemented.")
+        if mode_integration == "line_elements" and line_elements is None and optical_depth is None:
+            raise ValueError("mode_integration='line_elements' needs explicit `line_elements` (N_sk, N_ppsk); "
+                             "with line_elements=None the trapezoid weights of the points are used ('trapz').")
+        if detuning not in ("exact", "linear"):
+            raise ValueError(f"detuning must be 'exact' or 'linear', got {detuning!r}.")
+        self.line_elements = None if line_elements is None else jnp.asarray(line_elements)
+        self.velocity_period = None if velocity_period is None else float(velocity_period)
+        self.detuning = detuning
+        self.resolution_tolerance = resolution_tolerance
+        self.v_chunk = v_chunk
+        self.resolution_report = None
         if velocities_kms is None:
             raise ValueError("`velocities_kms` is required in both compute and loading modes.")
 
@@ -414,6 +571,9 @@ class OpticalDepthCalculator:
         """
         Compute or return optical depth.
 
+        The fields are sampled at the points (any Python callables), then the pure kernel
+        ``optical_depth_kernel`` evaluates tau = sum_i w_i dtau/dx_i, in velocity chunks.
+
         Returns
         -------
         optical_depth : array, shape (N_lines, N_sk, N_v)
@@ -421,19 +581,9 @@ class OpticalDepthCalculator:
         if self.loaded_mode:
             if self.optical_depth is None:
                 raise ValueError("Loaded mode is active, but `self.optical_depth` is None.")
-
-            logger.info(
-                "[OPTICAL_DEPTH] loaded mode: returning precomputed optical_depth.shape=%s",
-                self.optical_depth.shape,
-            )
             return self.optical_depth
 
         if self.optical_depth is not None and self._inputs_released:
-            logger.info(
-                "[OPTICAL_DEPTH] returning cached optical_depth.shape=%s "
-                "because heavy inputs have been released.",
-                self.optical_depth.shape,
-            )
             return self.optical_depth
 
         if self.skewer_bundle is None or self.fields is None:
@@ -444,129 +594,71 @@ class OpticalDepthCalculator:
                 "`release_inputs_after_compute=False`."
             )
 
-        logger.info(
-            "[OPTICAL_DEPTH] start: ii_cosmology=%d, voigt=%s",
-            self.ii_cosmology,
-            self.voigt_implementation_mode,
-        )
+        logger.info("[OPTICAL_DEPTH] start: ii_cosmology=%d, voigt=%s", self.ii_cosmology, self.voigt_implementation_mode)
 
-        # --------------------------------------------------------------
-        # 1. Load skewer geometry for the requested cosmology.
-        # --------------------------------------------------------------
+        # 1. Geometry: quadri-vectors, photon directions, line elements [comoving m].
         qv = self.skewer_bundle.quadri_vectors[self.ii_cosmology]
         los = self.skewer_bundle.los_directions
+        if self.line_elements is not None:
+            w = self.line_elements
+            if w.shape != (self.N_sk, self.N_ppsk):
+                raise ValueError(f"line_elements must be ({self.N_sk}, {self.N_ppsk}), got {w.shape}.")
+        else:
+            w = trapezoid_line_elements(qv[..., 1:])
+        w_m = (w * phys.Mpc_to_m).reshape(self.N_points)
 
-        self._log_mem("loaded quadri_vectors", qv)
+        # 2. Sample the fields once (tiled to lines).
+        qv_flat = qv.reshape(self.N_points, 4)
+        los_flat = los.reshape(self.N_points, 3)
+        tile = lambda name, **kw: self.fields.tile_field_to_lines(
+            name, qv_flat, indices_for_species=self.indices_for_species, **kw)
+        temperature, turbulence, collisional = tile("temperature"), tile("turbulence"), tile("collisional")
+        los_velocity = tile("LoS_velocity", LoS_directions=los_flat)
+        n_cm3 = tile("number_density")
+        a = qv_flat[:, 0]
+        a_dagger = self._prepare_a_dagger()
+        lb = self.line_bundle
+        lam, A21, mass = (jnp.asarray(lb.lambda0_A), jnp.asarray(lb.A21_GHz), jnp.asarray(lb.mass_amu))
+        self._log_mem("sampled fields", n_cm3)
 
-        # --------------------------------------------------------------
-        # 2. Compute line profiles phi(line, skewer, point, velocity).
-        # --------------------------------------------------------------
-        phi = line_profile.compute_line_profiles(
-            quadri_vectors=qv,
-            LoS_directions=los,
-            velocities_kms=self.velocities_kms,
-            a_dagger=self._prepare_a_dagger(),
-            line_bundle=self.line_bundle,
-            fields=self.fields,
-            voigt_implementation_mode=self.voigt_implementation_mode,
-        )
+        # 3. Optional sampling check (line-centre spacing vs the width of the Voigt profile).
+        if self.resolution_tolerance is not None:
+            v_c = line_profile.line_centre_velocity_kms(a_dagger, a, los_velocity)
+            sigma, gamma = line_profile.voigt_widths_GHz(temperature, turbulence, collisional, lam, A21, mass)
+            b = voigt_width_kms(sigma, gamma, lam)
+            shp = (self.N_lines, self.N_sk, self.N_ppsk)
+            rep = sampling_resolution_report(v_c.reshape(shp), b.reshape(shp),
+                                             (n_cm3 * w_m[None, :]).reshape(shp), self.resolution_tolerance)
+            self.resolution_report = rep
+            if not rep["ok"]:
+                warnings.warn(
+                    "OpticalDepthCalculator: the points are too sparse for the line widths: "
+                    + ", ".join(f"line {j}: max dv_c / width = {rep['max_ratio'][j]:.2f}, column fraction "
+                                f"{rep['column_fraction'][j]:.1e} above tolerance {self.resolution_tolerance}"
+                                for j in range(self.N_lines))
+                    + ". Sample more densely (spacing <= tolerance x b_min / (dv/dx)).", stacklevel=2)
 
-        self._log_mem("after compute_line_profiles", phi)
-
-        # --------------------------------------------------------------
-        # 3. Accept either flattened or expanded profile shapes.
-        # --------------------------------------------------------------
-        flat_shape = (self.N_lines, self.N_sk, self.N_ppsk * self.N_v)
-        full_shape = (self.N_lines, self.N_sk, self.N_ppsk, self.N_v)
-
-        if phi.shape == flat_shape:
-            phi = phi.reshape(full_shape)
-        elif phi.shape != full_shape:
-            raise ValueError(
-                f"Unexpected phi shape {phi.shape}. "
-                f"Expected {flat_shape} or {full_shape}."
-            )
-
-        self._log_mem("after phi reshape", phi)
-
-        # --------------------------------------------------------------
-        # 4. Tile species-level number-density fields onto line-level arrays.
-        # --------------------------------------------------------------
-        n_cm3 = self.fields.tile_field_to_lines(
-            "number_density",
-            qv.reshape(self.N_points, 4),
-            indices_for_species=self.indices_for_species,
-        ).reshape(self.N_lines, self.N_sk, self.N_ppsk)
-
-        self._log_mem("after number_density tiling", n_cm3)
-
-        # --------------------------------------------------------------
-        # 5. Build d tau / dx.
-        # --------------------------------------------------------------
-        sigma = (
-            phys.cross_section_prefactor
-            * self.f_osc[:, None, None, None]
-            * phi
-        )
-
-        dtau_dx = (
-            sigma
-            * n_cm3[..., None]
-            * qv[..., 0][None, ..., None] ** -2
-            * 1e2
-        )
-
-        self._log_mem("after dtau_dx", dtau_dx)
-
-        # Release intermediate local references as soon as possible.
-        del phi, sigma, n_cm3
-
-        # --------------------------------------------------------------
-        # 6. Reorient skewers so integration follows the photon path direction.
-        # --------------------------------------------------------------
-        mask = self.skewer_bundle.array_direction == -1
-
-        qv_oriented = jnp.where(mask[:, None, None], jnp.flip(qv, axis=1), qv)
-        x_m = self.compute_comoving_distance(qv_oriented) * phys.Mpc_to_m
-
-        dtau_dx = jnp.where(
-            mask[None, :, None, None],
-            jnp.flip(dtau_dx, axis=2),
-            dtau_dx,
-        )
-
-        self._log_mem("after orientation", dtau_dx)
-
-        # --------------------------------------------------------------
-        # 7. Integrate along the skewer-point axis.
-        # --------------------------------------------------------------
-        if self.mode_integration != "trapz":
-            raise NotImplementedError(
-                f"Integration mode {self.mode_integration!r} not implemented."
-            )
-
-        optical_depth = trapezoid(
-            dtau_dx,
-            x=x_m[None, :, :, None],
-            axis=2,
-        )
-
-        self.optical_depth = optical_depth
+        # 4. Kernel, per skewer and velocity chunk (memory ~ N_lines x N_ppsk x v_chunk).
+        nv = self.N_v if self.v_chunk is None else int(self.v_chunk)
+        per_point = lambda arr: arr.reshape(arr.shape[:-1] + (self.N_sk, self.N_ppsk))
+        T_s, tb_s, co_s, lv_s, n_s = (per_point(x) for x in (temperature, turbulence, collisional, los_velocity, n_cm3))
+        a_s, w_s = a.reshape(self.N_sk, self.N_ppsk), w_m.reshape(self.N_sk, self.N_ppsk)
+        a_d = jnp.broadcast_to(jnp.asarray(a_dagger), (self.N_points,)).reshape(self.N_sk, self.N_ppsk)
+        taus = []
+        for k in range(self.N_sk):
+            chunks = []
+            for v0 in range(0, self.N_v, nv):
+                chunks.append(optical_depth_kernel(
+                    self.velocities_kms[v0:v0 + nv], lam, A21, mass, self.f_osc, a_d[k], a_s[k], lv_s[:, k], T_s[:, k],
+                    tb_s[:, k], co_s[:, k], n_s[:, k], w_s[k], voigt_implementation_mode=self.voigt_implementation_mode,
+                    detuning=self.detuning, velocity_period=self.velocity_period))
+            taus.append(jnp.concatenate(chunks, axis=-1))
+        self.optical_depth = jnp.stack(taus, axis=1)                      # (N_lines, N_sk, N_v)
         self._computed_once = True
-
-        self._log_mem("after trapz integration / optical_depth", self.optical_depth)
-
-        logger.info(
-            "[OPTICAL_DEPTH] done: optical_depth.shape=%s",
-            self.optical_depth.shape,
-        )
-
-        # Release remaining local heavy references before returning.
-        del dtau_dx, qv, los, qv_oriented, x_m, mask
+        self._log_mem("after optical_depth_kernel", self.optical_depth)
 
         if self.release_inputs_after_compute:
             self.release_inputs()
-
         return self.optical_depth
 
     # ------------------------------------------------------------------
@@ -575,7 +667,12 @@ class OpticalDepthCalculator:
 
     def wrap_to_ref_line(self) -> jnp.ndarray:
         """
-        Periodically shift each line optical-depth field by `line_bundle.delta_v`.
+        Put each line's optical depth on the reference line's velocity frame (periodic shift).
+
+        A feature at v_j in line j's own frame appears at v_ref = v_j - delta_v_j, with
+        delta_v_j = c ln(lambda_ref / lambda_j): tau_j^ref(v) = tau_j(v + delta_v_j). Lines bluer than
+        the reference (delta_v_j > 0, e.g. Si III 1206.5 for Lya) move to lower velocities. The
+        velocity grid is treated as periodic with period N_v dv (snapshot boxes).
 
         This method overwrites `self.optical_depth`.
 
@@ -594,40 +691,32 @@ class OpticalDepthCalculator:
         delta_v = jnp.asarray(self.line_bundle.delta_v)
 
         expected_shape = (self.N_lines, self.N_sk, self.N_v)
-
         if tau.shape != expected_shape:
             raise ValueError(
                 f"`optical_depth` has shape {tau.shape}; expected {expected_shape}."
             )
-
         if delta_v.shape != (self.N_lines,):
             raise ValueError(
                 f"`line_bundle.delta_v` has shape {delta_v.shape}; "
                 f"expected {(self.N_lines,)}."
             )
 
-        # --------------------------------------------------------------
         # Uniform periodic velocity grid.
-        # --------------------------------------------------------------
         dv = self.velocities_kms[1] - self.velocities_kms[0]
         v0 = self.velocities_kms[0]
         period = self.N_v * dv
 
         def shift_profile(tau_1d, shift):
-            # Evaluate tau(v - shift) periodically on the original velocity grid.
-            vq = jnp.mod(self.velocities_kms - shift - v0, period) + v0
+            # Evaluate tau(v + shift) periodically on the original velocity grid.
+            vq = jnp.mod(self.velocities_kms + shift - v0, period) + v0
             return jnp.interp(vq, self.velocities_kms, tau_1d, period=period)
 
         wrapped = vmap(
-            lambda tau_line, shift: vmap(
-                lambda tau_sk: shift_profile(tau_sk, shift)
-            )(tau_line),
+            lambda tau_line, shift: vmap(lambda tau_sk: shift_profile(tau_sk, shift))(tau_line),
             in_axes=(0, 0),
         )(tau, delta_v)
 
         # Overwrite the unwrapped result. Do not keep both.
         self.optical_depth = wrapped
-
         self._log_mem("after wrap_to_ref_line", self.optical_depth)
-
         return self.optical_depth

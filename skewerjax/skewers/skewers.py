@@ -11,6 +11,66 @@ from skewerjax.cosmology.cosmology import Cosmology
 # Set up module-level logger
 logger = logging.getLogger(__name__)
 
+
+def path_geometry(points) -> dict:
+    """Line elements, path length, tangents and segment midpoints of polylines.
+
+    Parameters
+    ----------
+    points : (..., N, 3) positions [comoving Mpc], N >= 2, unwrapped along the path.
+
+    Returns
+    -------
+    dict of
+        ``s`` (..., N): path length from the first point;
+        ``line_elements`` (..., N): w_i, sum_i w_i = total path length (trapezoid weights);
+        ``tangents`` (..., N, 3): unit tangent (central difference, one-sided at the ends);
+        ``mid_lo``, ``mid_hi`` (..., N, 3): m_{i-1/2} and m_{i+1/2} (= x_i at the two ends).
+    """
+    x = jnp.asarray(points)
+    if x.ndim < 2 or x.shape[-1] != 3 or x.shape[-2] < 2:
+        raise ValueError(f"points must be (..., N >= 2, 3), got {x.shape}.")
+    d = jnp.linalg.norm(jnp.diff(x, axis=-2), axis=-1)
+    z = jnp.zeros(d.shape[:-1] + (1,), d.dtype)
+    s = jnp.concatenate([z, jnp.cumsum(d, axis=-1)], axis=-1)
+    w = 0.5 * (jnp.concatenate([z, d], axis=-1) + jnp.concatenate([d, z], axis=-1))
+    mid = 0.5 * (x[..., 1:, :] + x[..., :-1, :])
+    mid_lo = jnp.concatenate([x[..., :1, :], mid], axis=-2)
+    mid_hi = jnp.concatenate([mid, x[..., -1:, :]], axis=-2)
+    t = mid_hi - mid_lo
+    t = t / jnp.maximum(jnp.linalg.norm(t, axis=-1, keepdims=True), 1e-300)
+    return dict(s=s, line_elements=w, tangents=t, mid_lo=mid_lo, mid_hi=mid_hi)
+
+
+def axis_aligned_skewer_points(cofm, axis, box: float, spacing: float, extend: float = 0.0):
+    """Points of straight skewers parallel to a box axis (fake_spectra's sightlines), [cMpc].
+
+    Parameters
+    ----------
+    cofm : (N_sk, 3) a point of each skewer [cMpc]; its coordinate along ``axis`` is ignored.
+    axis : (N_sk,) 1, 2 or 3 (x, y, z), as fake_spectra.
+    box : box side [cMpc]; spacing : target spacing [cMpc] (rounded so that it divides the box).
+    extend : extra path [cMpc] before 0 and after ``box`` (extended sampling, e.g. box / 2).
+
+    Returns
+    -------
+    (N_sk, N + 1, 3) points from -extend to box + extend, unwrapped (the first and last points of a
+    non-extended skewer are the same place of the periodic box: together their two half segments
+    cover it once).
+    """
+    import numpy as np
+    cofm = np.atleast_2d(np.asarray(cofm, dtype=np.float64))
+    axis = np.atleast_1d(np.asarray(axis, dtype=int))
+    n = int(round(box / spacing))
+    ds = box / n
+    m = int(round(extend / ds))
+    s = (np.arange(-m, n + m + 1)) * ds
+    pts = np.repeat(cofm[:, None, :], s.size, axis=1)
+    for k, ax in enumerate(axis):
+        pts[k, :, ax - 1] = s
+    return pts
+
+
 class SkewerBundle:
     """
     Collection of line-of-sight skewers through a cosmological volume.
@@ -25,14 +85,14 @@ class SkewerBundle:
     - All skewers must have the same number of sampling points (N_ppsk) for batched operations
     
     Geometry:
-    - spatial_points: comoving spatial coordinates in [Gpc]
-    - x0: comoving distance of the IC point in [Gpc]
+    - spatial_points: comoving spatial coordinates in [Mpc]
+    - x0: comoving distance of the IC point in [Mpc]
     - a0: scale factor at the IC point
     - The direction vector points from the IC point toward the observer
     
     Units:
     - Spatial coordinates: comoving 
-    - Distances: comoving Gpc
+    - Distances: comoving Mpc
     - Scale factors: dimensionless (a = 1/(1+z))
     """
     
@@ -53,7 +113,7 @@ class SkewerBundle:
         Parameters
         ----------
         spatial_points : ArrayLike, shape (N_sk, N_ppsk, 3)
-            Comoving spatial coordinates along each skewer in [Gpc].
+            Comoving spatial coordinates along each skewer in [Mpc].
             N_sk = number of skewers, N_ppsk = points per skewer.
             Last dimension contains [x, y, z] comoving positions.
             
@@ -62,7 +122,7 @@ class SkewerBundle:
             are defined. Determines the reference redshift for each skewer.
             
         x0 : ArrayLike, broadcastable to (N_sk,), default 0.0
-            Comoving distance [Gpc] from observer to the IC point along the
+            Comoving distance [Mpc] from observer to the IC point along the
             LoS. Used as offset for distance calculations.
             
         ICs_defined_at_index : ArrayLike, broadcastable to (N_sk,), default -1
@@ -205,6 +265,29 @@ class SkewerBundle:
 
         logger.info("SkewerBundle initialization complete")
 
+
+    @property
+    def path_lengths(self) -> jnp.ndarray:
+        """(N_sk, N_ppsk) comoving path length [Mpc] from the first point of each skewer."""
+        return path_geometry(self.spatial_points)["s"]
+
+    @property
+    def line_elements(self) -> jnp.ndarray:
+        """(N_sk, N_ppsk) comoving line element w_i [Mpc] of each point (dual-segment length;
+        the trapezoid weights used by ``OpticalDepthCalculator``)."""
+        return path_geometry(self.spatial_points)["line_elements"]
+
+    @property
+    def tangents(self) -> jnp.ndarray:
+        """(N_sk, N_ppsk, 3) unit tangent of the path, in the order of the points."""
+        return path_geometry(self.spatial_points)["tangents"]
+
+    @property
+    def segment_midpoints(self) -> tuple:
+        """(m_{i-1/2}, m_{i+1/2}), each (N_sk, N_ppsk, 3) [comoving Mpc]: the dual segment of point i."""
+        g = path_geometry(self.spatial_points)
+        return g["mid_lo"], g["mid_hi"]
+
     @staticmethod
     def _compute_los_directions_single(
         spatial_points: jnp.ndarray,
@@ -216,7 +299,7 @@ class SkewerBundle:
         Parameters
         ----------
         spatial_points : jnp.ndarray, shape (N_ppsk, 3)
-            Comoving coordinates [Gpc] for one skewer
+            Comoving coordinates [Mpc] for one skewer
         direction : int, ±1
             Integration direction: +1 from IC to observer, -1 from observer to IC
             

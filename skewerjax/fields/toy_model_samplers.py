@@ -1,122 +1,304 @@
 from __future__ import annotations
 
-from typing import Callable, Optional, Tuple
+import warnings
+from functools import partial
+from typing import Callable, Tuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 
 # ---------------------------------------------------------------------------
-# Core: resolution-consistent GRF
+# Gaussian random field with a power-law spectrum (1D / 2D / 3D)
 # ---------------------------------------------------------------------------
-def _band_limited_white_noise(u_ref: jnp.ndarray, n_grid: int) -> jnp.ndarray:
-    """Keep the low-|k| central block of a reference Fourier-space field.
-
-    ``u_ref`` is a cubic ``(n_ref, n_ref, n_ref)`` complex array in standard FFT
-    order.  Returns the ``(n_grid, n_grid, n_grid)`` block of modes with integer
-    frequencies in ``[-n_grid/2, n_grid/2)`` -- i.e. an ideal low-pass filter.
-    """
-    n_ref = u_ref.shape[0]
-    if n_grid == n_ref:
-        return u_ref
-    shifted = jnp.fft.fftshift(u_ref)           # DC -> centre
-    c = n_ref // 2
-    lo = c - n_grid // 2
-    block = shifted[lo:lo + n_grid, lo:lo + n_grid, lo:lo + n_grid]
-    return jnp.fft.ifftshift(block)             # DC -> corner (FFT order)
+def _as_axes(x, name: str):
+    """Scalar -> (x,), sequence of length 1-3 -> tuple; anything else raises."""
+    if x is None:
+        return None
+    t = tuple(np.atleast_1d(np.asarray(x, dtype=float)).tolist())
+    if not 1 <= len(t) <= 3:
+        raise ValueError(f"`{name}` must be a scalar or a tuple of length 2 or 3, got {x!r}.")
+    return t
 
 
-def _isotropic_pk_on_grid(pk_of_k, n_grid: int, L_box: float):
-    """Evaluate the (clipped, DC-removed) power spectrum on a size-n_grid grid."""
-    k1d = 2.0 * jnp.pi * jnp.fft.fftfreq(n_grid, d=L_box / n_grid)
-    KX, KY, KZ = jnp.meshgrid(k1d, k1d, k1d, indexing="ij")
-    K = jnp.sqrt(KX ** 2 + KY ** 2 + KZ ** 2)
-    Pk = jnp.clip(pk_of_k(K), 0.0, None)
-    Pk = jnp.where(K == 0.0, 0.0, Pk)           # no DC / mean mode
-    return K, Pk
+def _broadcast_axes(named: dict) -> dict:
+    """Broadcast scalar entries to the common tuple length; mismatched lengths raise."""
+    given = {k: v for k, v in named.items() if v is not None}
+    ndims = {len(v) for v in given.values()}
+    ndim = max(ndims)
+    if ndims - {1, ndim}:
+        raise ValueError(f"Inconsistent dimensionality between inputs: "
+                         f"{ {k: len(v) for k, v in given.items()} }.")
+    return {k: (None if v is None else (v * ndim if len(v) == 1 else v)) for k, v in named.items()}
 
 
-def generate_gaussian_random_field(
-    key: jax.Array,
-    n_grid: int,
-    L_box: float,
-    pk_of_k: Callable[[jnp.ndarray], jnp.ndarray],
-    *,
-    n_ref: Optional[int] = None,
-    normalize: str = "analytic",
-) -> jnp.ndarray:
-    """Generate a real 3D Gaussian random field delta(x) with isotropic P(k).
+def _as_int(x: float, name: str) -> int:
+    n = int(round(x))
+    if not np.isclose(x, n, rtol=0.0, atol=1e-6 * max(1.0, abs(x))):
+        raise ValueError(f"`{name}` must be an integer, got {x}.")
+    return n
+
+
+@jax.tree_util.register_pytree_node_class
+class PowerLawGRF:
+    r"""Real, periodic Gaussian random field with a power-law spectrum in 1D, 2D or 3D.
+
+        P(k) = A_s (k / k_0)^(n_s - 1),   P(0) := 0.
+
+    Grid
+    ----
+    The dimensionality d is inferred from the grid inputs: scalars give d = 1, tuples of
+    length 2 or 3 give d = 2 or 3 (a scalar mixed with a tuple is broadcast to every axis).
+    Boxes and cells may be anisotropic (L_i and N_i differ per axis). Exactly one mode:
+
+    (a) ``L`` and ``N``: box side(s) [length units] and number of cells per axis.
+    (b) any two (or all three) of ``k_min``, ``k_max``, ``N_k``, per axis, with
+
+            k_min = 2 pi / L                (fundamental mode)
+            k_max = pi N / L = N_k k_min    (Nyquist frequency of the axis)
+            N_k   = N / 2                   (number of positive Fourier modes on the axis)
+
+        so mode (b) always gives an even N. If k_max / k_min is not an integer, or if all
+        three values are given and k_max != N_k k_min, a ``ValueError`` is raised.
+
+    Positions are x_j = j L / N (j = 0..N-1), and wavenumbers are angular,
+    k = 2 pi fftfreq(N, d=L/N) [1 / length units], as in ``P1D_xi1D.py``.
+
+    FFT and normalisation (notes, ``subsec_P1D.tex``, Eqs. P1D_delta_tilde_sample,
+    P1D_sample_definition and xi1D_from_P1D_ensemble, generalised to d dimensions with
+    dV = prod(L_i / N_i), V = prod(L_i), N_pix = prod(N_i))
+    ------------------------------------------------------------------------------------
+    Finite-box transform (forward sign e^{-i k.x}, as ``jnp.fft``):
+
+        delta_k = \int_V d^dx e^{-i k.x} delta(x)  ~=  dV * rfftn(delta),
+
+    which is the notes' tilde-delta times (2 pi)^{d/2}. Periodogram:
+
+        P_hat(k) = |delta_k|^2 / V = (dV / N_pix) |FFT(delta)|^2,
+
+    (the d-dimensional version of the ``dv / N_v`` prefactor in ``P1D_xi1D.py``). The
+    sampler gives <P_hat(k)> = P(k) for every k != 0, and the real-space variance is
+
+        sigma^2 = xi(0) = (1 / V) sum_{k != 0} P(k)   (discrete form of
+                  \int d^dk / (2 pi)^d P(k); see ``variance``).
+
+    Algorithm: real unit white noise w(x) -> rfftn -> multiply by sqrt(P(|k|) / dV)
+    -> irfftn. The filter is real and even in k, so the result is real; the k = 0 mode is
+    set to zero, so the field has zero mean and no divergence when n_s < 1.
 
     Parameters
     ----------
-    key : jax PRNG key
-        Fix this (with ``n_ref``) to get fields that converge as ``n_grid`` grows.
-    n_grid : int (even)
-        Resolution of the returned field.  Must be even and ``<= n_ref``.
-    L_box : float
-        Box side length (sets the physical meaning of k = 2*pi*freq).
-    pk_of_k : callable
-        ``P(|k|)`` evaluated on angular wavenumbers (2*pi/L units).
-    n_ref : int (even), optional
-        Master resolution of the reference white-noise field.  Defaults to
-        ``n_grid``.  Set it once to the FINEST resolution you intend to study and
-        keep it fixed; all coarser ``n_grid`` then refine into the finer ones.
-    normalize : {"analytic", "none", "realized"}
-        "analytic"  -> divide by the resolution-INDEPENDENT expected std computed
-                       from the full reference k-grid (recommended: delta has
-                       ~unit variance, controlled, and converges with n_grid).
-        "none"      -> physical normalization only (variance grows with n_grid as
-                       small-scale power is added; large scales still converge).
-        "realized"  -> the old (NOT recommended) divide-by-sample-std behaviour;
-                       this rescaling is resolution- and realization-dependent.
+    A_s : float
+        Amplitude, P(k_0) = A_s [length^d].
+    k_0 : float
+        Pivot wavenumber [1 / length].
+    n_s : float
+        Spectral index; the slope of P(k) is n_s - 1.
+    L, N : float or tuple, int or tuple
+        Grid mode (a).
+    k_min, k_max, N_k : float or tuple, float or tuple, int or tuple
+        Grid mode (b).
 
-    Returns
-    -------
-    delta : (n_grid, n_grid, n_grid) real array
+    Notes
+    -----
+    * JAX pytree: ``A_s, k_0, n_s`` are leaves (traceable, differentiable); the grid
+      (shape, L) is static. Changing the spectrum does not recompile ``sample``; changing
+      the grid does.
+    * dtype: float64 when ``jax_enable_x64`` is on (recommended: P(k) spans many decades
+      for |n_s - 1| >~ 2), else float32 with a warning.
+    * Memory: one real field plus one rfft half-spectrum (complex, ~N_pix/2 entries).
     """
-    if n_ref is None:
-        n_ref = int(n_grid)
-    n_grid = int(n_grid)
-    n_ref = int(n_ref)
-    if n_grid > n_ref:
-        raise ValueError(f"n_grid ({n_grid}) must be <= n_ref ({n_ref}).")
-    if (n_grid % 2) or (n_ref % 2):
-        raise ValueError("n_grid and n_ref must both be even.")
 
-    # 1) ONE reference white-noise field, fixed by (key, n_ref).
-    #    FFT of real white noise -> Hermitian complex spectrum automatically.
-    g = jax.random.normal(key, (n_ref, n_ref, n_ref))
-    u_ref = jnp.fft.fftn(g) / (n_ref ** 1.5)            # unit-variance per mode
+    def __init__(self, A_s, k_0, n_s, *, L=None, N=None, k_min=None, k_max=None, N_k=None):
+        mode_a = L is not None or N is not None
+        mode_b = any(v is not None for v in (k_min, k_max, N_k))
+        if mode_a == mode_b:
+            raise ValueError("Specify the grid either with (L, N) or with two or three of "
+                             "(k_min, k_max, N_k), not both and not neither.")
 
-    # 2) Band-limit to the requested resolution (shared low-k modes identical).
-    u = _band_limited_white_noise(u_ref, n_grid)
+        if mode_a:
+            if L is None or N is None:
+                raise ValueError("Mode (a) needs both `L` and `N`.")
+            ax = _broadcast_axes({"L": _as_axes(L, "L"), "N": _as_axes(N, "N")})
+            L_ax = ax["L"]
+            N_ax = tuple(_as_int(n, "N") for n in ax["N"])
+        else:
+            ax = _broadcast_axes({"k_min": _as_axes(k_min, "k_min"),
+                                  "k_max": _as_axes(k_max, "k_max"),
+                                  "N_k": _as_axes(N_k, "N_k")})
+            if sum(v is not None for v in ax.values()) < 2:
+                raise ValueError("Mode (b) needs at least two of (k_min, k_max, N_k).")
+            for name in ("k_min", "k_max", "N_k"):
+                if ax[name] is not None and not all(np.isfinite(v) and v > 0 for v in ax[name]):
+                    raise ValueError(f"`{name}` must be finite and > 0, got {ax[name]}.")
+            ndim = len(next(v for v in ax.values() if v is not None))
+            L_ax, N_ax = [], []
+            for i in range(ndim):
+                kmin, kmax, nk = (None if ax[n] is None else ax[n][i] for n in ("k_min", "k_max", "N_k"))
+                if nk is None:
+                    nk = _as_int(kmax / kmin, f"k_max / k_min (axis {i})")
+                nk = _as_int(nk, f"N_k (axis {i})")
+                if kmin is None:
+                    kmin = kmax / nk
+                if kmax is not None and not np.isclose(kmax, nk * kmin, rtol=1e-8, atol=0.0):
+                    raise ValueError(f"Over-determined grid on axis {i} is inconsistent: "
+                                     f"k_max = {kmax} but N_k * k_min = {nk} * {kmin} = {nk * kmin} "
+                                     "(convention: k_max = Nyquist = N_k * k_min).")
+                L_ax.append(2.0 * np.pi / kmin)
+                N_ax.append(2 * nk)
+            L_ax, N_ax = tuple(L_ax), tuple(N_ax)
 
-    # 3) Colour by sqrt(P(k)):  delta(x) = sum_k u_k sqrt(P(k)) e^{i k.x}
-    _, Pk = _isotropic_pk_on_grid(pk_of_k, n_grid, L_box)
-    delta = jnp.fft.ifftn(u * jnp.sqrt(Pk)).real * (n_grid ** 3)
+        if any(n < 2 for n in N_ax):
+            raise ValueError(f"Need N >= 2 cells per axis (N_k >= 1), got N = {N_ax}.")
+        if any(not (np.isfinite(l) and l > 0) for l in L_ax):
+            raise ValueError(f"Box sides must be finite and > 0 (k_min > 0), got L = {L_ax}.")
+        if not isinstance(A_s, jax.core.Tracer) and not float(A_s) >= 0.0:
+            raise ValueError(f"`A_s` must be >= 0, got {A_s}.")
+        if not isinstance(k_0, jax.core.Tracer) and not float(k_0) > 0.0:
+            raise ValueError(f"`k_0` must be > 0, got {k_0}.")
+        if not jax.config.jax_enable_x64:
+            warnings.warn("jax_enable_x64 is off: PowerLawGRF runs in float32.", stacklevel=2)
 
-    # 4) Controlled normalization.
-    if normalize == "analytic":
-        _, Pk_ref = _isotropic_pk_on_grid(pk_of_k, n_ref, L_box)
-        sigma_ref = jnp.sqrt(jnp.sum(Pk_ref))          # resolution-independent
-        delta = delta / (sigma_ref + 1e-30)
-    elif normalize == "realized":
-        delta = (delta - jnp.mean(delta)) / (jnp.std(delta) + 1e-12)
-    elif normalize != "none":
-        raise ValueError("normalize must be 'analytic', 'none', or 'realized'.")
+        self.A_s, self.k_0, self.n_s = A_s, k_0, n_s
+        self.shape: Tuple[int, ...] = N_ax
+        self.L: Tuple[float, ...] = L_ax
 
+    # -- pytree -------------------------------------------------------------
+    def tree_flatten(self):
+        return (self.A_s, self.k_0, self.n_s), (self.shape, self.L)
+
+    @classmethod
+    def tree_unflatten(cls, aux, leaves):
+        obj = object.__new__(cls)
+        obj.A_s, obj.k_0, obj.n_s = leaves
+        obj.shape, obj.L = aux
+        return obj
+
+    def __repr__(self):
+        return (f"PowerLawGRF(A_s={self.A_s}, k_0={self.k_0}, n_s={self.n_s}, "
+                f"L={self.L}, N={self.shape})")
+
+    # -- grid ---------------------------------------------------------------
+    @property
+    def ndim(self) -> int:
+        return len(self.shape)
+
+    @property
+    def dx(self) -> Tuple[float, ...]:
+        """Cell sizes L_i / N_i [length]."""
+        return tuple(l / n for l, n in zip(self.L, self.shape))
+
+    @property
+    def cell_volume(self) -> float:
+        """dV = prod(dx_i) [length^d]."""
+        return float(np.prod(self.dx))
+
+    @property
+    def volume(self) -> float:
+        """V = prod(L_i) [length^d]."""
+        return float(np.prod(self.L))
+
+    @property
+    def k_min(self) -> Tuple[float, ...]:
+        """Fundamental mode per axis, 2 pi / L_i [1 / length]."""
+        return tuple(2.0 * np.pi / l for l in self.L)
+
+    @property
+    def k_max(self) -> Tuple[float, ...]:
+        """Largest |k_i| on each axis, 2 pi (N_i // 2) / L_i (= Nyquist for even N_i)."""
+        return tuple(2.0 * np.pi * (n // 2) / l for l, n in zip(self.L, self.shape))
+
+    def x_grid(self) -> Tuple[np.ndarray, ...]:
+        """1D position axes x_j = j * dx_i, one per dimension [length]."""
+        return tuple(np.arange(n) * d for n, d in zip(self.shape, self.dx))
+
+    def k_grid(self, real: bool = True):
+        """Wavevector components and |k| on the FFT grid [1 / length].
+
+        Parameters
+        ----------
+        real : bool
+            True: ``rfftn`` layout (last axis has N_last // 2 + 1 entries), matching the
+            modes returned by ``sample``. False: full ``fftn`` layout.
+
+        Returns
+        -------
+        k_vec : tuple of d arrays
+            Sparse (broadcastable) components k_i, standard FFT order (not shifted).
+        k_mod : array, shape = ``self.shape`` (or its rfft version)
+            |k| = sqrt(sum_i k_i^2).
+        """
+        axes = [2.0 * jnp.pi * jnp.fft.fftfreq(n, d=d) for n, d in zip(self.shape, self.dx)]
+        if real:
+            axes[-1] = 2.0 * jnp.pi * jnp.fft.rfftfreq(self.shape[-1], d=self.dx[-1])
+        k_vec = tuple(jnp.meshgrid(*axes, indexing="ij", sparse=True))
+        return k_vec, jnp.sqrt(sum(k ** 2 for k in k_vec))
+
+    # -- spectrum -----------------------------------------------------------
+    def power(self, k):
+        """P(k) = A_s (k / k_0)^(n_s - 1) for k > 0, and 0 at k = 0 [length^d].
+
+        Uses the double-``where`` pattern, so no inf / NaN appears for n_s < 1, in the
+        value or in its gradient.
+        """
+        k = jnp.asarray(k)
+        pos = k > 0
+        k_safe = jnp.where(pos, k, self.k_0)
+        return jnp.where(pos, self.A_s * (k_safe / self.k_0) ** (self.n_s - 1.0), 0.0)
+
+    def variance(self):
+        """Expected real-space variance sigma^2 = (1/V) sum_{k != 0} P(|k|) on this grid."""
+        _, k_mod = self.k_grid(real=True)
+        n_last = self.shape[-1]
+        w = jnp.full(n_last // 2 + 1, 2.0).at[0].set(1.0)   # rfft half-axis -> full-grid weights
+        if n_last % 2 == 0:
+            w = w.at[-1].set(1.0)
+        return jnp.sum(w * self.power(k_mod)) / self.volume
+
+    # -- sampling -----------------------------------------------------------
+    def sample(self, key: jax.Array, return_modes: bool = False):
+        """Draw one realisation (jitted; ``jax.vmap`` over keys for a batch).
+
+        Parameters
+        ----------
+        key : jax PRNG key
+        return_modes : bool
+            Also return the Fourier modes delta_k = dV * rfftn(delta) [field x length^d],
+            so that |delta_k|^2 / V is the periodogram (see class docstring).
+
+        Returns
+        -------
+        delta : real array, shape ``self.shape``, zero mean.
+        delta_k : complex array, rfft shape (only if ``return_modes``), layout of
+            ``k_grid(real=True)``.
+        """
+        return _sample_power_law_grf(self, key, return_modes)
+
+
+@partial(jax.jit, static_argnames=("return_modes",))
+def _sample_power_law_grf(grf: PowerLawGRF, key: jax.Array, return_modes: bool):
+    dtype = jnp.result_type(float)                      # float64 under x64
+    white_k = jnp.fft.rfftn(jax.random.normal(key, grf.shape, dtype=dtype))
+    _, k_mod = grf.k_grid(real=True)
+    # <|white_k|^2> = N_pix  ->  <|FFT(delta)|^2> = N_pix P / dV  ->  <P_hat> = P
+    fft_delta = white_k * jnp.sqrt(grf.power(k_mod) / grf.cell_volume)
+    delta = jnp.fft.irfftn(fft_delta, s=grf.shape)
+    if return_modes:
+        return delta, fft_delta * grf.cell_volume
     return delta
 
 
 # ---------------------------------------------------------------------------
-# Trilinear periodic sampling (kept; correct as-is)
+# Trilinear periodic sampling
 # ---------------------------------------------------------------------------
 def _trilinear_periodic_sample(field: jnp.ndarray, pos_xyz: jnp.ndarray,
-                               L_box: float) -> jnp.ndarray:
+                               L_box) -> jnp.ndarray:
     """Periodic trilinear interpolation of ``field`` at world positions.
 
     field   : (Nx, Ny, Nz) real
     pos_xyz : (M, 3) positions, periodic in [0, L_box)
+    L_box   : float or (3,) array, box side(s) (anisotropic boxes allowed)
     returns : (M,) sampled values
     """
     Nx, Ny, Nz = field.shape
@@ -145,41 +327,48 @@ def _trilinear_periodic_sample(field: jnp.ndarray, pos_xyz: jnp.ndarray,
 
 
 # ---------------------------------------------------------------------------
-# Number-density sampler built on the robust GRF
+# Number-density sampler built on PowerLawGRF
 # ---------------------------------------------------------------------------
 def number_density_sampler_gaussian_3d(
     key: jax.Array,
-    pk_of_k: Callable[[jnp.ndarray], jnp.ndarray],
+    grf: PowerLawGRF,
     *,
     n0_min: float = 1e0,
     n0_max: float = 1e6,
-    L_box: float = 1.0,
-    n_grid: int = 64,
-    n_ref: Optional[int] = None,
     contrast: float = 1.0,
-    normalize: str = "analytic",
+    normalize: bool = True,
 ) -> Callable[[jnp.ndarray], jnp.ndarray]:
-    """Build a callable n(x,y,z) from a resolution-consistent 3D GRF.
+    """Build a callable n(x,y,z) from one 3D ``PowerLawGRF`` realisation.
 
-    Mapping (unchanged from your version):
+    Mapping:
         s = tanh(delta / contrast)            in [-1, 1]
         log10 n = log_mid + log_amp * s       => n in [n0_min, n0_max]
 
-    Because ``delta`` now uses the ``"analytic"`` normalization, its variance is
-    controlled and resolution-independent, so the tanh saturation -- and hence the
-    density statistics -- behave consistently as you vary ``n_grid``.
+    Parameters
+    ----------
+    key : jax PRNG key
+    grf : PowerLawGRF
+        3D field definition; its box ``grf.L`` (possibly anisotropic) is the periodic
+        domain of the sampler.
+    n0_min, n0_max : float
+        Density range [cm^-3].
+    contrast : float
+        tanh saturation scale, in units of delta (of sigma if ``normalize``).
+    normalize : bool
+        Divide delta by the expected sigma = sqrt(grf.variance()) (deterministic,
+        realisation-independent), so ``contrast`` is in units of sigma.
 
-    Convergence contract: fix ``key`` and ``n_ref`` (the finest resolution you
-    will test) and vary ``n_grid <= n_ref``.
-
-    Parameters mirror your original signature; ``grid_shape`` is replaced by the
-    scalar ``n_grid`` (cubic) plus the master resolution ``n_ref``.
+    Returns
+    -------
+    callable mapping x[..., 4] = (t, x, y, z) -> n[...]; the field is exposed as
+    ``_sample.delta_grid`` for diagnostics.
     """
-    if n_ref is None:
-        n_ref = int(n_grid)
-
-    delta_grid = generate_gaussian_random_field(
-        key, n_grid, L_box, pk_of_k, n_ref=n_ref, normalize=normalize)
+    if grf.ndim != 3:
+        raise ValueError(f"`grf` must be 3D, got ndim={grf.ndim}.")
+    delta_grid = grf.sample(key)
+    if normalize:
+        delta_grid = delta_grid / jnp.sqrt(grf.variance())
+    L_box = jnp.asarray(grf.L)
 
     log_min = jnp.log10(n0_min)
     log_max = jnp.log10(n0_max)
