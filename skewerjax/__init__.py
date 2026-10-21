@@ -1,16 +1,21 @@
-# skewerjax/_version.py
+"""SkewerJAX: absorption along skewers (tau, F = exp(-tau)) for many transitions, and their summary statistics, in JAX.
+
+Three blocks, with dependencies in one direction only (comparison -> simulations -> core):
+
+* ``skewerjax.core`` (A): lines, cosmology, skewers, field samplers, line profiles, the tau integral, the overflux
+  and the summary statistics; self-contained.
+* ``skewerjax.simulations`` (B): reading hydrodynamical (or N-body) snapshots into the inputs of the core.
+* ``skewerjax.comparison`` (C): fake_spectra's scheme and results, compared with SkewerJAX's.
+
+``skewerjax.utils.plotting`` holds the shared figure style.
+
+Precision: SkewerJAX never changes JAX's configuration. Arrays follow ``jax_enable_x64`` as set by the user before
+the first computation (``jax.config.update("jax_enable_x64", True)``, as the notebooks and scripts do; float32
+otherwise). ``PowerLawGRF`` warns when x64 is off; ``voigt_convolution`` works in float64 when x64 is on; the
+simulation and comparison blocks hold host arrays in float64 NumPy.
+"""
 __version__ = "0.0.1"
 
-# Eagerly expose lightweight namespaces
-from . import config as config
-from . import constants as constants
-from . import fields as fields
-from . import skewers as skewers
-from . import cosmology as cosmology
-from . import simulations as simulations
-from . import optical_depth as optical_depth
-from . import utils as utils
-from . import summary_stats as summary_stats
-from . import models as models
+from skewerjax import core, simulations, comparison, utils
 
-__all__ = ["__version__", "config", "constants", "optical_depth", "utils"]
+__all__ = ["__version__", "core", "simulations", "comparison", "utils"]

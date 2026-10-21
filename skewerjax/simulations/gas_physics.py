@@ -1,10 +1,9 @@
-"""Layer 3 — gas physics per cell: n_H, T, ion fractions and ion densities (JAX).
+"""Gas physics (layer 3): per-cell n_H, T, ion fractions and ion densities (JAX), and the CLOUDY tables.
 
 Everything here is a pure function of per-cell arrays (jit / vmap / grad friendly), except the
 reading of tables from disk.
 
-Conventions and choices (each is justified and quantified in
-``step_by_step_comparison_fake_spectra.ipynb``, Sec. 4):
+Conventions and choices (the fake_spectra choices are the matched options, ``skewerjax.comparison``):
 
 * **Mass unit.** n_X = rho X_X / (A_X m_u), with A_X the standard atomic weight
   (``lines_table.dat``) and m_u = 1.66053906660e-24 g the atomic mass unit (default,
@@ -38,6 +37,8 @@ Conventions and choices (each is justified and quantified in
 """
 from __future__ import annotations
 
+import re
+from importlib.resources import files
 from pathlib import Path
 from typing import Optional
 
@@ -45,8 +46,8 @@ import numpy as np
 import jax.numpy as jnp
 from jax.scipy.ndimage import map_coordinates
 
-from skewerjax.constants.lines import get_mass_amu
-from skewerjax.constants.physical_constants import phys
+from skewerjax.core.constants import phys
+from skewerjax.core.lines import get_mass_amu
 
 # ---------------------------------------------------------------------------- constants
 M_U_G = 1.0 / phys.g_to_amu                       # atomic mass unit [g]
@@ -100,6 +101,15 @@ class Ion:
 
 
 HI = Ion("H", 1)
+_ROMAN_VALUE = {r: i + 1 for i, r in enumerate(_ROMAN)}
+
+
+def ion_from_species(species: str) -> Ion:
+    """The ``Ion`` of a ``LineBundle`` species key ("HI" -> H I, "SiIII" -> Si III, "CIV" -> C IV)."""
+    m = re.fullmatch(r"([A-Z][a-z]?)([IVX]+)", species)
+    if m is None or m.group(2) not in _ROMAN_VALUE:
+        raise ValueError(f"cannot read an element and an ionisation stage from species {species!r}.")
+    return Ion(m.group(1), _ROMAN_VALUE[m.group(2)])
 
 
 # ---------------------------------------------------------------------------- densities, T, b
@@ -126,7 +136,7 @@ def temperature(u, n_e, *, X: float = 0.76, gamma: float = 5.0 / 3.0, constants:
 
 
 def doppler_b_kms(T, mass_amu: float):
-    """Thermal Doppler parameter b = sqrt(2 k_B T / (A m_u)) [km/s] (``line_profile.py`` L390)."""
+    """Thermal Doppler parameter b = sqrt(2 k_B T / (A m_u)) [km/s] (as ``core.optical_depth.voigt_widths_GHz``)."""
     return jnp.sqrt(2.0 * phys.kB * jnp.asarray(T) / mass_amu) / 1e3
 
 
@@ -143,10 +153,14 @@ def treecool_rates(redshift: float, path) -> dict:
     return dict(Gamma_HI=g[0], Gamma_HeI=g[1], Gamma_HeII=g[2])
 
 
+def cloudy_table_dir(subdir: str = "ion_out_photo_atten") -> Path:
+    """Directory of a CLOUDY table shipped in ``simulations/cloudy_tables`` (default: photo-attenuated FG11)."""
+    return Path(str(files("skewerjax.simulations.cloudy_tables").joinpath(subdir)))
+
+
 def default_treecool_path() -> Path:
     """The FG09 Dec-2011 update used by TNG (``TreecoolFile = TREECOOL_fg_dec11``)."""
-    from skewerjax.simulations.simulations import get_default_cloudy_table_dir
-    return Path(get_default_cloudy_table_dir()).parent / "UVB_tables" / "TREECOOL_fg_dec11"
+    return cloudy_table_dir().parent / "UVB_tables" / "TREECOOL_fg_dec11"
 
 
 # Rahmati+12 (MNRAS 430, 2427) Table 2 / fake_spectra gas_properties.py L44-L46: FG09 Gamma and
@@ -265,8 +279,7 @@ class CloudyIonTable:
 
     def __init__(self, redshift: float, directory=None):
         if directory is None:
-            from skewerjax.simulations.simulations import get_default_cloudy_table_dir
-            directory = get_default_cloudy_table_dir()
+            directory = cloudy_table_dir()
         table = np.load(Path(directory) / "cloudy_table.npz")["table"]
         if table.shape[1:3] != (self.LOG_DENS.size, self.LOG_TEMP.size):
             raise ValueError(f"unexpected CLOUDY table shape {table.shape}")

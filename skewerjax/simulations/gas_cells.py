@@ -1,4 +1,4 @@
-"""Layer 2 — a generic container of gas elements in physical units.
+"""Gas cells (layer 2): a format-independent pytree of gas elements in physical units.
 
 :class:`GasCells` holds what every hydro (or FGPA-painted N-body) output reduces to: a position,
 a volume (hence a size) and a dictionary of per-cell fields, in SkewerJAX's units:

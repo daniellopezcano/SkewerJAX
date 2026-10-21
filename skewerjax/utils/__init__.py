@@ -1,2 +1,4 @@
-from . import plotting_tools
-from . import aux
+"""Utilities outside the three blocks: the shared plotting style and figure helpers."""
+from skewerjax.utils import plotting
+
+__all__ = ["plotting"]

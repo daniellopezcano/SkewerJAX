@@ -1,314 +1,152 @@
 #!/usr/bin/env python
-"""
-verify_stack.py — SkewerJAX environment smoke tests
-This script is safe on CPU-only or GPU machines. It auto-forces CPU for this
-process if no NVIDIA GPU is detected, to avoid noisy CUDA plugin logs.
+"""SkewerJAX environment smoke tests (safe on CPU-only or GPU hosts).
+
+Reports the environment, the JAX devices (with a jitted matmul), the scientific stack (NumPy, SciPy, h5py,
+matplotlib, iminuit, diffrax, ExoJAX), the optional fake_spectra, and imports the three SkewerJAX blocks and runs
+one tiny optical depth. Forces JAX to the CPU for this process if no NVIDIA GPU is found (quiet CUDA logs).
+Exit code 1 only if a core component (jax, skewerjax) is missing.
 """
 from __future__ import annotations
 
-import os
-import sys
-import time
 import math
-import tempfile
+import os
 import platform
 import shutil
 import subprocess
-from dataclasses import dataclass
+import sys
+import tempfile
+import time
 
-# ----------------------------- pretty printing --------------------------------
-def header(t: str) -> None:
-    print("\n" + "=" * len(t) + f"\n{t}\n" + "=" * len(t))
+RESULTS = []
 
-# We'll keep counters for a summary at the end
-class Counter:
-    ok = 0
-    fail = 0
 
-def report(ok: bool, msg: str) -> None:
-    tag = "[OK]" if ok else "[FAIL]"
-    if ok: Counter.ok += 1
-    else:  Counter.fail += 1
-    print(f"{tag} {msg}")
+def header(t: str):
+    print(f"\n{'=' * len(t)}\n{t}\n{'=' * len(t)}")
+
+
+def report(ok: bool, msg: str):
+    RESULTS.append(ok)
+    print(f"[{'OK' if ok else 'FAIL'}] {msg}")
+
 
 def try_import(name: str):
     try:
-        mod = __import__(name)
-        return True, mod, ""
-    except Exception as e:
-        return False, None, f"{type(e).__name__}: {e}"
+        return __import__(name, fromlist=["_"]), ""
+    except Exception as e:                                    # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
 
-# ----------------------------- helpers ----------------------------------------
-@dataclass
-class NvidiaInfo:
-    present: bool
-    driver: str | None
-    gpus: list[str]
 
-def detect_nvidia() -> NvidiaInfo:
-    """Check for nvidia-smi and parse driver / GPUs if available."""
+def nvidia_gpus():
+    """GPU names from nvidia-smi ([] if absent), and the driver version."""
     if shutil.which("nvidia-smi") is None:
-        return NvidiaInfo(False, None, [])
+        return None, []
+    q = lambda f: subprocess.run(["nvidia-smi", f"--query-gpu={f}", "--format=csv,noheader"], capture_output=True, text=True,
+                                 check=True).stdout.split("\n")
     try:
-        # Driver
-        drv = subprocess.run(
-            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
-            capture_output=True, text=True, check=True
-        ).stdout.strip().splitlines()
-        driver = drv[0].strip() if drv else "unknown"
-        # GPU names
-        names = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True, text=True, check=True
-        ).stdout.strip().splitlines()
-        gpus = [n.strip() for n in names if n.strip()]
-        return NvidiaInfo(True, driver, gpus)
-    except Exception:
-        # nvidia-smi exists but something's off (permissions/X not started/etc.)
-        return NvidiaInfo(True, None, [])
+        return q("driver_version")[0].strip(), [n.strip() for n in q("name") if n.strip()]
+    except Exception:                                         # noqa: BLE001
+        return "unknown", []
 
-def maybe_force_cpu_for_this_process(nv: NvidiaInfo) -> bool:
-    """
-    To keep logs clean on CPU-only hosts where CUDA wheels might be installed,
-    force JAX to CPU for THIS process if we detect no NVIDIA GPUs and the user
-    hasn't already chosen platforms.
-    """
-    if "JAX_PLATFORMS" in os.environ:
-        return False
-    if not nv.present or not nv.gpus:
-        os.environ["JAX_PLATFORMS"] = "cpu"
-        return True
-    return False
 
-# -------------------------------- main ----------------------------------------
+def section(name: str, test):
+    """Import ``name``, print its version and run ``test(module) -> (ok, message)``."""
+    header(name)
+    mod, err = try_import(name)
+    if mod is None:
+        report(False, f"import {name} -> {err}")
+        return None
+    print(f"{name:11s}: {getattr(mod, '__version__', 'unknown')}")
+    try:
+        report(*test(mod))
+    except Exception as e:                                    # noqa: BLE001
+        report(False, f"{name} test -> {type(e).__name__}: {e}")
+    return mod
+
+
+def test_jax(jax):
+    import jax.numpy as jnp
+    print(f"Backend    : {jax.default_backend()} | devices {jax.devices()}")
+    plugins = [p for p in ("jax_plugins.xla_cuda13", "jax_plugins.xla_cuda12") if try_import(p)[0] is not None]
+    print(f"Plugins    : {', '.join(plugins) or 'none'}")
+    try:
+        gpus = jax.devices("gpu")
+    except Exception:                                         # noqa: BLE001
+        gpus = []
+    dev = gpus[0] if gpus else jax.devices()[0]
+    if plugins and not gpus:
+        print("Info: CUDA plugin wheels are installed but no CUDA GPU is usable; set JAX_PLATFORMS=cpu to silence the logs.")
+    n = 1024 if dev.platform == "gpu" else 512
+    a = jax.device_put(jax.random.normal(jax.random.key(0), (n, n), dtype=jnp.float32), dev)
+    mm = jax.jit(lambda x, y: x @ y)
+    mm(a, a).block_until_ready()
+    t = time.time()
+    c = mm(a, a).block_until_ready()
+    return True, f"jitted matmul {c.shape} on {dev.platform.upper()} in {(time.time() - t) * 1e3:.1f} ms"
+
+
+def test_h5py(h5py):
+    import numpy as np
+    fd, path = tempfile.mkstemp(prefix="skewerjax_", suffix=".h5")
+    os.close(fd)
+    with h5py.File(path, "w") as f:
+        f["d"] = np.arange(5, dtype=np.int32)
+    with h5py.File(path, "r") as f:
+        ok = bool((f["d"][...] == np.arange(5)).all())
+    os.remove(path)
+    return ok, "HDF5 write/read round trip"
+
+
+def test_iminuit(iminuit):
+    import numpy as np
+    x = np.linspace(-1, 1, 50)
+    y = 2.5 * x - 0.4 + np.random.default_rng(0).normal(0, 0.05, x.size)
+    m = iminuit.Minuit(lambda a, b: np.sum(((y - a * x - b) / 0.05) ** 2), a=1.0, b=0.0)
+    m.errordef = iminuit.Minuit.LEAST_SQUARES
+    m.migrad()
+    return abs(m.values["a"] - 2.5) < 0.1 and abs(m.values["b"] + 0.4) < 0.1, f"linear fit a = {m.values['a']:.3f}, b = {m.values['b']:.3f}"
+
+
+def test_skewerjax(sjx):
+    import jax.numpy as jnp
+    from skewerjax.core import Constant, Fields, LineBundle, LogRamp, ScalarField, SkewerBundle, VectorField, VelocityRamp, compute_optical_depth
+    import skewerjax.simulations, skewerjax.comparison                       # noqa: F401, E401
+    pts = jnp.stack([jnp.linspace(0.0, 1e-3, 16), jnp.full(16, 5e-4), jnp.full(16, 5e-4)], -1)[None]
+    sb = SkewerBundle(spatial_points=pts, manual_scale_factors=jnp.ones((1, 1, 16)))
+    sp = {"temperature": ScalarField(LogRamp(1e4, 1e4)), "velocity": VectorField(VelocityRamp(0.0, 0.0)),
+          "number_density": ScalarField(LogRamp(1e-7, 1e-7)), "turbulence": ScalarField(Constant(0.0)),
+          "collisional": ScalarField(Constant(0.0))}
+    tau = compute_optical_depth(sb, jnp.linspace(-200, 200, 64), LineBundle(["HI-LyA"]), Fields({"HI": sp}), a_dagger=1.0)
+    return bool(jnp.all(jnp.isfinite(tau)) and float(tau.max()) > 0), f"blocks core / simulations / comparison import; tau {tuple(tau.shape)}"
+
+
 def main() -> int:
-    # Detect NVIDIA & optionally force CPU for this process
-    nv = detect_nvidia()
-    forced_cpu = maybe_force_cpu_for_this_process(nv)
-
-    # ----- Environment -----
+    driver, gpus = nvidia_gpus()
+    if "JAX_PLATFORMS" not in os.environ and not gpus:
+        os.environ["JAX_PLATFORMS"] = "cpu"
     header("Environment")
-    print(f"Python     : {platform.python_version()}")
-    print(f"Platform   : {platform.platform()}")
-    print(f"Executable : {sys.executable}")
-    print(f"JAX_PLATFORMS={os.getenv('JAX_PLATFORMS')!r} "
-          f"| XLA_PYTHON_CLIENT_PREALLOCATE={os.getenv('XLA_PYTHON_CLIENT_PREALLOCATE')!r} "
+    print(f"Python     : {platform.python_version()} | {platform.platform()}\nExecutable : {sys.executable}")
+    print(f"JAX_PLATFORMS={os.getenv('JAX_PLATFORMS')!r} | XLA_PYTHON_CLIENT_PREALLOCATE={os.getenv('XLA_PYTHON_CLIENT_PREALLOCATE')!r} "
           f"| XLA_PYTHON_CLIENT_MEM_FRACTION={os.getenv('XLA_PYTHON_CLIENT_MEM_FRACTION')!r}")
-    if nv.present:
-        print(f"NVIDIA     : driver={nv.driver or 'unknown'} | GPUs={nv.gpus or 'none'}")
-    else:
-        print("NVIDIA     : nvidia-smi not found (CPU-only host is okay)")
-    if forced_cpu:
-        print("Note       : Auto-set JAX_PLATFORMS='cpu' for this process (no NVIDIA GPU detected).")
-
-    # ----- SkewerJAX -----
-    header("SkewerJAX package")
-    ok, mod, err = try_import("skewerjax")
-    if not ok:
-        report(False, f"import skewerjax -> {err}")
-        print("Tip: from repo root, run `pip install -e .[dev]` inside your env.")
-    else:
-        ver = getattr(mod, "__version__", "unknown")
-        report(True, f"SkewerJAX imported (version {ver})")
-
-    # ----- JAX & devices -----
-    header("JAX")
-    ok, jax, err = try_import("jax")
-    if not ok:
-        report(False, f"import jax -> {err}")
-        print("Tip: CPU-only: `pip install -U jax`; "
-              "Linux+NVIDIA: `pip install -U 'jax[cuda13]'` or `'jax[cuda12]'`.")
-        backend = "unknown"
-        devices = []
-    else:
-        import jax.numpy as jnp  # noqa: F401
-        print(f"JAX        : {jax.__version__}")
-        try:
-            backend = getattr(jax, "default_backend", lambda: "?")()
-        except Exception:
-            backend = "?"
-        try:
-            devices = list(jax.devices())
-        except Exception:
-            devices = []
-        print(f"Backend    : {backend}")
-        print(f"All devices: {devices}")
-
-        # Plugin wheels presence (informational)
-        cuda13_present, _, _ = try_import("jax_plugins.xla_cuda13")
-        cuda12_present, _, _ = try_import("jax_plugins.xla_cuda12")
-        msg = []
-        if cuda13_present: msg.append("CUDA13 plugin")
-        if cuda12_present: msg.append("CUDA12 plugin")
-        report(True, f"JAX plugins detected: {', '.join(msg) if msg else 'none'}")
-
-        # Choose best available device (prefer GPU, else CPU)
-        chosen = None
-        gpu_devs = []
-        try:
-            gpu_devs = jax.devices("gpu")  # may raise if backend not registered
-        except Exception:
-            gpu_devs = []
-        if gpu_devs:
-            chosen = gpu_devs[0]
-        elif devices:
-            chosen = devices[0]
-
-        if chosen is None:
-            report(False, "No JAX devices visible")
-        else:
-            report(True, f"Selected device: {chosen}")
-            # Tiny JIT sanity test on chosen device
-            try:
-                import jax.numpy as jnp
-                import numpy as _np
-
-                N = 1024 if getattr(chosen, "platform", "") == "gpu" else 512
-                key = jax.random.key(0)
-                a = jax.random.normal(key, (N, N), dtype=jnp.float32)
-                b = jax.random.normal(key, (N, N), dtype=jnp.float32)
-                # Put on chosen device to avoid host<->device copies
-                a = jax.device_put(a, device=chosen)
-                b = jax.device_put(b, device=chosen)
-
-                @jax.jit
-                def mm(x, y): return x @ y
-
-                _ = mm(a, b).block_until_ready()  # compile + warmup
-                t0 = time.time()
-                c = mm(a, b).block_until_ready()
-                dt_ms = (time.time() - t0) * 1e3
-                
-                dev_attr = getattr(c, "device", None)
-                dev = dev_attr() if callable(dev_attr) else dev_attr  # may be None on some builds
-                plat = getattr((dev or chosen), "platform", "unknown").upper()
-                report(True, f"JIT matmul ran on {plat} in {dt_ms:.1f} ms (shape {c.shape})")
-
-            except Exception as e:
-                report(False, f"JAX JIT test -> {type(e).__name__}: {e}")
-
-            # Friendly note if CUDA plugin is present but no GPU found
-            if (cuda12_present or cuda13_present) and not gpu_devs:
-                print("Info: CUDA plugin wheels are installed but no CUDA-capable GPU is available.")
-                print("      This is fine on CPU-only hosts. To silence CUDA logs in general, you can:")
-                print("      - Uninstall CUDA wheels: pip uninstall -y jax-cuda13-plugin jax-cuda13-pjrt jax-cuda12-plugin jax-cuda12-pjrt")
-                print("      - Or set JAX_PLATFORMS=cpu when launching notebooks.")
-
-    # ----- NumPy -----
-    header("NumPy")
-    ok, np, err = try_import("numpy")
-    if not ok:
-        report(False, f"import numpy -> {err}")
-    else:
-        print(f"NumPy      : {np.__version__}")
-        try:
-            x = np.arange(10, dtype=np.float64)
-            y = np.sin(x)
-            report(np.isfinite(y).all(), "np.sin computed finite values")
-        except Exception as e:
-            report(False, f"NumPy ops -> {type(e).__name__}: {e}")
-
-    # ----- SciPy (optional but common) -----
-    header("SciPy")
-    ok, scipy, err = try_import("scipy")
-    if not ok:
-        report(False, f"import scipy -> {err}")
-    else:
-        print(f"SciPy      : {scipy.__version__}")
-        try:
-            from scipy import integrate
-            val, err_est = integrate.quad(lambda t: math.sin(t), 0.0, math.pi)
-            report(abs(val - 2.0) < 1e-8, f"integrate.quad sin(0..π)≈2 => {val:.12f}")
-        except Exception as e:
-            report(False, f"SciPy test -> {type(e).__name__}: {e}")
-
-    # ----- h5py (optional) -----
-    header("h5py")
-    ok, h5py, err = try_import("h5py")
-    if not ok:
-        report(False, f"import h5py -> {err}")
-    else:
-        print(f"h5py       : {h5py.__version__}")
-        try:
-            import numpy as _np
-            fd, path = tempfile.mkstemp(prefix="skewerjax_", suffix=".h5")
-            os.close(fd)
-            with h5py.File(path, "w") as f:
-                f["dset"] = _np.arange(5, dtype=_np.int32)
-            with h5py.File(path, "r") as f:
-                data = f["dset"][...]
-            os.remove(path)
-            report((data == _np.arange(5, dtype=_np.int32)).all(), "HDF5 write/read round-trip")
-        except Exception as e:
-            report(False, f"h5py test -> {type(e).__name__}: {e}")
-
-    # ----- matplotlib (optional) -----
-    header("matplotlib")
-    ok, mpl, err = try_import("matplotlib")
-    if not ok:
-        report(False, f"import matplotlib -> {err}")
-    else:
-        print(f"matplotlib : {mpl.__version__}")
-        try:
-            mpl.use("Agg")
-            import matplotlib.pyplot as plt  # noqa: F401
-            report(True, "Backend 'Agg' usable (headless plotting ok)")
-        except Exception as e:
-            report(False, f"matplotlib test -> {type(e).__name__}: {e}")
-
-    # ----- iminuit (optional) -----
-    header("iminuit")
-    ok, _iminuit, err = try_import("iminuit")
-    if not ok:
-        report(False, f"import iminuit -> {err}")
-    else:
-        from iminuit import Minuit
-        print(f"iminuit    : {_iminuit.__version__}")
-        try:
-            import numpy as _np
-            rng = _np.random.default_rng(0)
-            x = _np.linspace(-1, 1, 50)
-            m_true, c_true, sigma = 2.5, -0.4, 0.05
-            y = m_true * x + c_true + rng.normal(0, sigma, size=x.size)
-
-            def chi2(m, c):
-                y_model = m * x + c
-                return _np.sum(((y - y_model) / sigma) ** 2)
-
-            m = Minuit(chi2, m=1.0, c=0.0)
-            m.errordef = Minuit.LEAST_SQUARES
-            m.migrad(); m.hesse()
-            m_fit, c_fit = m.values["m"], m.values["c"]
-            report(abs(m_fit - m_true) < 0.1 and abs(c_fit - c_true) < 0.1,
-                   f"Linear fit recovered m≈{m_fit:.3f}, c≈{c_fit:.3f}")
-        except Exception as e:
-            report(False, f"iminuit test -> {type(e).__name__}: {e}")
-
-    # ----- diffrax (optional) -----
-    header("diffrax (optional)")
-    ok, diffrax, err = try_import("diffrax")
-    if not ok:
-        report(False, f"import diffrax -> {err}")
-    else:
-        print(f"diffrax    : {getattr(diffrax, '__version__', 'unknown')}")
-        report(True, "diffrax import ok")
-
-    # ----- Summary -----
+    print(f"NVIDIA     : driver={driver} | GPUs={gpus or 'none'}" if driver else "NVIDIA     : nvidia-smi not found (CPU-only is fine)")
+    jax = section("jax", test_jax)
+    section("numpy", lambda np: (bool(np.isfinite(np.sin(np.arange(10.0))).all()), "np.sin finite"))
+    section("scipy", lambda sp: (lambda v: (abs(v - 2) < 1e-8, f"quad sin(0..pi) = {v:.12f}"))(
+        __import__("scipy.integrate", fromlist=["quad"]).quad(math.sin, 0.0, math.pi)[0]))
+    section("h5py", test_h5py)
+    section("matplotlib", lambda mpl: (mpl.use("Agg") or True, "headless backend 'Agg'"))
+    section("iminuit", test_iminuit)
+    section("diffrax", lambda d: (True, "import ok"))
+    section("exojax", lambda e: (True, "import ok (ExoJAX Voigt, the default line profile)"))
+    section("fake_spectra", lambda f: (True, "import ok (optional: live comparisons, skewerjax.comparison.driver)"))
+    sjx = section("skewerjax", test_skewerjax)
     header("Summary")
-    total = Counter.ok + Counter.fail
-    print(f"Checks passed: {Counter.ok}/{total} "
-          f"(failures: {Counter.fail})")
-    if Counter.fail == 0:
-        print("SkewerJAX environment looks good ✅")
+    print(f"Checks passed: {sum(RESULTS)}/{len(RESULTS)}")
+    if all(RESULTS):
+        print("SkewerJAX environment looks good")
         return 0
-    else:
-        print("Some optional components failed. Core CPU/GPU functionality can still work.")
-        # Non-zero only if core components missing (jax or skewerjax)
-        core_missing = False
-        # Quick re-check for core bits
-        core_missing |= not try_import("skewerjax")[0]
-        core_missing |= not try_import("jax")[0]
-        return 1 if core_missing else 0
+    print("Some optional components failed; the core can still work.")
+    return 1 if jax is None or sjx is None else 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
