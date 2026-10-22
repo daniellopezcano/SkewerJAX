@@ -28,7 +28,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from skewerjax.core.constants import phys
-from skewerjax.core.optical_depth import LoSSamples, optical_depth_from_samples, optical_depth_kernel
+from skewerjax.core.optical_depth import LoSSamples, optical_depth_from_samples, optical_depth_kernel, optical_depth_sharded
 from skewerjax.core.skewers import path_geometry
 
 MPC_CM = 3.085678e24
@@ -261,8 +261,9 @@ def absorber_samples(ab: Absorbers, frame, skewer: int, n_lines: int, *, density
 def tau_absorbers(ab: Absorbers, line_bundle, velocities_kms, frame, *, density_scaling: str = "comoving",
                   T_scale: float = 1.0, n_scale: float = 1.0, detuning: str = "exact",
                   pixel_offsets=None, pixel_weights=None, chunk: int = 2048, v_chunk: Optional[int] = 4096,
-                  voigt: str = "ExoJAX", check: Optional[float] = 0.25, per_absorber: bool = False) -> np.ndarray:
-    """tau(v) of every skewer from its absorbers.
+                  voigt: str = "ExoJAX", check: Optional[float] = 0.25, per_absorber: bool = False,
+                  dtype: Optional[str] = None, devices=None, skewers=None) -> np.ndarray:
+    """tau(v) of every skewer (or of the ``skewers`` given) from its absorbers.
 
     Parameters
     ----------
@@ -275,10 +276,13 @@ def tau_absorbers(ab: Absorbers, line_bundle, velocities_kms, frame, *, density_
     chunk : absorbers per row of the samples (static shape); v_chunk : velocities per kernel call.
     check : tolerance of ``sampling_check`` (None: no check).
     per_absorber : True returns (N_lines, N_sk, M, N_v) contributions (memory!).
+    dtype : opt-in kernel precision, e.g. "float32" (``core.optical_depth_from_samples``; summed path only).
+    devices : None (one device) or devices to split the absorber rows of each skewer over (``core.optical_depth_sharded``).
+    skewers : optional indices of the skewers to integrate (default all); the output follows their order.
 
     Returns
     -------
-    (N_lines, N_sk, N_v) optical depth [float64].
+    (N_lines, N_sk, N_v) optical depth [float64] (N_sk = len(skewers) if given).
     """
     if ab.species not in tuple(line_bundle.species_keys) or len(tuple(line_bundle.species_keys)) != 1:
         raise ValueError(f"line_bundle must hold lines of {ab.species!r} only, got {tuple(line_bundle.species_keys)}.")
@@ -291,19 +295,36 @@ def tau_absorbers(ab: Absorbers, line_bundle, velocities_kms, frame, *, density_
     off = np.zeros(1) if pixel_offsets is None else np.asarray(pixel_offsets, float)
     wts = np.ones(1) if pixel_weights is None else np.asarray(pixel_weights, float)
     v_all = (v[:, None] + off[None, :]).ravel()
-    n_lines, n_sk, M = line_bundle.n_lines, ab.n_skewers, ab.s.shape[1]
+    n_lines, M = line_bundle.n_lines, ab.s.shape[1]
+    ks = range(ab.n_skewers) if skewers is None else [int(k) for k in np.atleast_1d(skewers)]
     nchunk = -(-M // chunk)
-    out = np.zeros((n_lines, n_sk, nchunk * chunk if per_absorber else 1, v.size))
-    for k in range(n_sk):
+    out = np.zeros((n_lines, len(ks), nchunk * chunk if per_absorber else 1, v.size))
+    for i, k in enumerate(ks):
         smp = absorber_samples(ab, frame, k, n_lines, density_scaling=density_scaling, T_scale=T_scale, n_scale=n_scale, chunk=chunk)
         if per_absorber:
             t = _tau_per_absorber(smp, line_bundle, v_all, frame, detuning, voigt, v_chunk)
-            out[:, k] = (t.reshape(n_lines, nchunk * chunk, v.size, off.size) * wts).sum(-1)
+            out[:, i] = (t.reshape(n_lines, nchunk * chunk, v.size, off.size) * wts).sum(-1)
         else:
-            t = np.asarray(optical_depth_from_samples(smp, jnp.asarray(v_all), line_bundle, voigt=voigt, detuning=detuning,
-                                                      velocity_period=frame.period_kms, v_chunk=v_chunk)).sum(axis=1)
-            out[:, k, 0] = (t.reshape(n_lines, v.size, off.size) * wts).sum(-1)
+            kw = dict(voigt=voigt, detuning=detuning, velocity_period=frame.period_kms, v_chunk=v_chunk, dtype=dtype)
+            t = (optical_depth_from_samples(smp, jnp.asarray(v_all), line_bundle, **kw) if devices is None else
+                 optical_depth_sharded(smp, v_all, line_bundle, devices=devices, **kw))
+            t = np.asarray(t).sum(axis=1)
+            out[:, i, 0] = (t.reshape(n_lines, v.size, off.size) * wts).sum(-1)
     return out if per_absorber else out[:, :, 0]
+
+
+def tau_by_path_bins(ab: Absorbers, line_bundle, velocities_kms, frame, s_edges, *, skewer: int = 0, **kw) -> np.ndarray:
+    """(N_bins, N_lines, N_v) tau of one skewer from the absorbers in each path interval [s_edges[i], s_edges[i + 1])
+    [cMpc]: which stretch of gas makes which absorption. tau is linear in the densities, so the bins add up to the
+    tau of the absorbers inside [s_edges[0], s_edges[-1]). ``kw`` go to ``tau_absorbers`` (default ``check=None``)."""
+    kw.setdefault("check", None)
+    e = np.asarray(s_edges, dtype=np.float64)
+    out = []
+    for lo, hi in zip(e[:-1], e[1:]):
+        inside = (ab.s >= lo) & (ab.s < hi)
+        out.append(tau_absorbers(ab.with_values(n=np.where(inside, ab.n, 0.0)), line_bundle, velocities_kms, frame,
+                                 skewers=[skewer], **kw)[:, 0])
+    return np.stack(out)
 
 
 def _tau_per_absorber(smp: LoSSamples, line_bundle, v_all, frame, detuning, voigt, v_chunk):

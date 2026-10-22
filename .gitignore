@@ -208,3 +208,17 @@ __marimo__/
 
 claude_agents
 .project_material
+
+# --- SkewerJAX: JAX / XLA caches and run outputs
+.jax_cache/
+jax_cache/
+*.xla_dump/
+xla_dump/
+# validation figures (scripts/validation --outdir) and benchmark results (scripts/benchmarks --results)
+validation_output/
+benchmark_results/
+fs_work/
+*.prof
+# result caches of SimulationSkewers / FakeSpectraSource
+sjx_cache*.h5
+fs_cache*/

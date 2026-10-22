@@ -1,122 +1,169 @@
 # SkewerJAX
 
-Minimal bootstrapped repository for **SkewerJAX** — a JAX-based pipeline to synthesize Ly-α
-and metal-line skewers and compute survey-facing statistics (e.g., P1D).
+SkewerJAX computes the optical depth τ(v) and the transmitted flux F = e^{−τ} of the Lyman-α forest and of metal
+lines (Si III λ1206 and any other transition in its line table) along arbitrary skewers, together with their summary
+statistics: the overflux decomposition by line, P1D, ξ1D, P3D and ξ3D. It is written in JAX, so the whole chain can
+be compiled, vectorised and differentiated, and it runs on CPUs and GPUs. Gas fields come either from analytic or
+Gaussian-random toy samplers, or from hydrodynamical snapshots (Arepo/IllustrisTNG HDF5). A dedicated block
+reproduces the scheme of fake_spectra, so that the two codes can be compared option by option.
 
----
+**Key features**
 
-## Installation (CUDA 12 • JAX 0.6.2 • NumPy < 2)
+- **Exact light-cone geometry.** a(x) is integrated along each skewer (diffrax), every line is integrated in its own
+  line-centred frame, and the detuning is exact. Voigt profiles come from ExoJAX, with an FFT convolution and SciPy's
+  Faddeeva function as alternatives.
+- **JAX-first containers and kernels.** Every container (`LineBundle`, `Cosmology`, `SkewerBundle`, `Fields`,
+  `LoSSamples`, `GasCells`) is a pytree, and `jit`, `vmap` and `grad` work throughout.
+- **Memory-bounded kernels.** `lax.map` over skewers, a velocity chunk per call, and optional batching.
+- **Optional speed-ups.** Sharding of the skewer axis over several devices (`optical_depth_sharded`), and an opt-in
+  float32 τ kernel (`dtype="float32"`).
+- **Simulation extraction.** Streamed snapshot I/O, k-d tree cell selection, and an exact Voronoi deposition of the
+  cells along each skewer. Gas physics: TNG's stored neutral fractions, Rahmati et al. self-shielding for
+  star-forming gas, and CLOUDY tables for metal ions.
+- **Comparison with fake_spectra.** A matched mode reproduces fake_spectra to |ΔF| ~ 1e-5. An effect chain switches
+  every difference on one at a time, and a benchmark harness measures both codes on identical skewers.
 
-This repo targets a **known-good GPU stack**:
+## Architecture
 
-- `jax==0.6.2`, `jaxlib==0.6.2`, `jax-cuda12-plugin==0.6.2`
-- `NumPy < 2` (required by `exojax==2.2.2`)
-- CUDA 12 runtime libs shipped via pip wheels (no system CUDA toolkit needed)
-- NVIDIA **driver ≥ 525** (check with `nvidia-smi`)
+```mermaid
+flowchart LR
+    C["<b>comparison</b> (Block C)<br/>fake_spectra scheme, matched mode,<br/>effect chain, benchmark"] --> B
+    B["<b>simulations</b> (Block B)<br/>readers, gas physics, selection,<br/>deposition, absorbers"] --> A
+    A["<b>core</b> (Block A)<br/>lines, cosmology, skewers, fields,<br/>Voigt, optical depth, statistics"]
+    U["utils.plotting"] -.-> A
+```
 
-> **Do not mix** `conda-forge` JAX with the pip CUDA12 plugin. We install JAX **only** via pip.
+Dependencies run one way only. `core` imports nothing from the other blocks, and the boundary between `simulations`
+and `core` is `core.LoSSamples`, every field at every sampling point. `docs/usage.md` lists the entry points of each
+block.
 
-### 1) Create and activate a conda environment
+## Quickstart
+
+```python
+import jax, jax.numpy as jnp, numpy as np
+jax.config.update("jax_enable_x64", True)          # SkewerJAX follows this flag; the validated tolerances are float64
+from skewerjax.core import (LineBundle, Cosmology, SkewerBundle, grid_skewer_points, phys, Fields, ScalarField, VectorField,
+                            PowerLawGRF, GaussianDensity, LogRamp, VelocityRamp, Constant, compute_optical_depth, wrap_to_ref_line)
+
+lines = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
+cosmo = Cosmology(H0=phys.H0, Omega_r_0=0.0, Omega_m_0=1.0, Omega_k_0=0.0, Omega_lambda_0=0.0)
+L, z = 50.0, 2.2                                                       # box [cMpc], redshift of the far end
+skewers = SkewerBundle(spatial_points=grid_skewer_points(L, 4, 1024, direction="y").reshape(16, 1024, 3),
+                       cosmologies=cosmo, a0=1 / (1 + z), x0=L)
+grf = PowerLawGRF(A_s=4.0, k_0=2.0, n_s=-1.25, L=(L,) * 3, N=(64,) * 3)
+gas = lambda n_max: {"temperature": ScalarField(LogRamp(1.5e4, 1.5e4, L)), "velocity": VectorField(VelocityRamp(0.0, 0.0, L)),
+                     "number_density": ScalarField(GaussianDensity(jax.random.PRNGKey(0), grf, n0_min=1e-16, n0_max=n_max, contrast=1.2)),
+                     "turbulence": ScalarField(Constant(0.0)), "collisional": ScalarField(Constant(0.0))}
+fields = Fields({"HI": gas(1.35e-11), "SiIII": gas(1.35e-11 / 250)})
+a_dagger = 1 / (1 + z)
+v = jnp.linspace(0.0, float(phys.c_kms * jnp.log(a_dagger / skewers.scale_factors[0, 0, 0])), 512)
+tau = wrap_to_ref_line(compute_optical_depth(skewers, v, lines, fields, a_dagger=a_dagger, resolution_tolerance=None), v, lines)
+print(tau.shape, np.exp(-np.asarray(tau)).mean(axis=(1, 2)))           # (2, 16, 512): <F> of Lya and Si III
+```
+
+Notebook `00_quickstart` runs the same chain step by step, and continues with the statistics.
+
+## Installation
 
 ```bash
-# Add conda-forge with strict priority (safe to re-run)
-conda config --add channels conda-forge || true
-conda config --set channel_priority strict
+pip install -e .            # CPU; add ".[gpu]" for NVIDIA GPUs (jax[cuda12]), ".[notebooks,comparison,dev]" for the rest
+python scripts/verify_install.py
+```
 
-# Create the environment with the GPU-agnostic scientific stack
-conda create -y -n skewerjax \
-  python=3.11 "numpy<2" "scipy>=1.11" "h5py>=3.10" "matplotlib>=3.7" \
-  "ipympl>=0.9" "ipywidgets>=8.1" "iminuit>=2.27" "ipdb>=0.13" "ipykernel>=6.29" pip
+Python ≥ 3.11 and JAX ≥ 0.6.2 are required, with NumPy < 2 (an ExoJAX constraint). `docs/installation.md` covers
+venv/conda environments, the JAX CPU/GPU builds (from the official JAX guide), the optional dependencies, the data
+paths and troubleshooting.
 
-# Activate it
-conda activate skewerjax
+## Notebooks
 
-### 2) Install the pinned CUDA12 JAX stack + libraries (pip)
-python -m pip install -U pip wheel
+| notebook | content |
+|---|---|
+| `00_quickstart` | the whole chain on a toy box: lines, skewers, fields, τ and F, P1D |
+| `01_fields_and_samplers` | samplers, `Fields`, Gaussian random fields and their recovered spectra |
+| `02_cosmology_and_skewers` | a(x) along light rays, `SkewerBundle` conventions, path geometry |
+| `03_line_profiles_and_optical_depth` | Voigt implementations, line profiles, τ against closed forms, option sweep |
+| `04_summary_statistics` | overflux decomposition, P1D/ξ1D by pair and order, metal models, 3D statistics |
+| `05_tng_extraction` | from a TNG50-4 snapshot to τ: physics, selection, deposition, precision options |
+| `06_fake_spectra_comparison` | matched mode against fake_spectra, and the effect chain from one code to the other |
+| `07_visualisations` | the gas around a skewer, how the absorption builds up, periodic wrapping, statistics tools |
+| `08_benchmark_skewerjax_vs_fake_spectra` | timing, memory and agreement of both codes (reads saved results) |
 
-python -m pip install --no-cache-dir -U \
-  "jax==0.6.2" "jaxlib==0.6.2" "jax-cuda12-plugin==0.6.2" \
-  "nvidia-cuda-runtime-cu12>=12.1" "nvidia-cublas-cu12>=12.1" \
-  "nvidia-cusparse-cu12>=12.1" "nvidia-cufft-cu12>=11.0" \
-  "nvidia-cusolver-cu12>=11.4" "nvidia-cudnn-cu12==9.12.0.46" \
-  "nvidia-nccl-cu12>=2.18"
+Each notebook opens with a schematic of the pipeline that highlights its step, and closes with a short summary.
+Notebooks 05–08 need TNG50 snapshots (see "Simulation data" in `docs/installation.md`).
 
-### 3) Install exojax and diffrax (GPU-compatible with this stack)
-python -m pip install --no-cache-dir -U "exojax==2.2.2" "diffrax>=0.6,<0.8"
+## Validation, tests and benchmarks
 
-### 4) Install SkewerJAX (editable)
+```bash
+python scripts/validation/run_all.py --quick --skip tng,fake    # toy-input checks (~2 min)
+python scripts/validation/run_all.py                            # every check, incl. TNG50-4 and live fake_spectra
+pytest                                                          # tests/ (CPU); SKEWERJAX_SLOW=1 adds the TNG checks
+python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick --results benchmark_results
+```
 
-From the repository root:
+The validation scripts compare against closed forms (static and expanding media, Voigt limits, cosmological a(x)),
+check the recovery of input power spectra, the JAX transformations, and the field extraction from TNG50-4, and run
+fake_spectra itself.
 
-pip install -e .
+## Benchmark
 
-### 5) Make CUDA12 wheel libraries visible (required once per shell)
+The two codes were run on identical skewers of TNG50 snapshot 25 (z = 3), computing Lyα and Si III λ1206 at 1 km/s
+pixels.
+- **Hardware:** Intel i9-13900KF (32 threads), 125 GB RAM, NVIDIA RTX 3060 12 GB.
+- **Software:** JAX 0.6.2, fake_spectra 2.2.4.
+- **Method:** one process per configuration, median of 2–3 repeats, all 32 threads, float64 unless stated.
 
-JAX’s CUDA plugin must see the NVIDIA CUDA12 wheel libraries. Export them to LD_LIBRARY_PATH:
+| configuration | fake_spectra | SkewerJAX CPU | SkewerJAX CPU float32 | SkewerJAX GPU | matched max \|ΔF\| Lyα / Si III |
+|---|---|---|---|---|---|
+| TNG50-4, 1 skewer | 1.6 s | 5.3 s | — | 6.9 s | 1.9e-5 / 8.5e-8 |
+| TNG50-4, 16 skewers | 2.6 s | 33 s | 17 s | 59 s | 2.3e-5 / 1.7e-7 |
+| TNG50-4, 64 skewers | 3.3 s | 114 s | 66 s | 219 s | 2.3e-5 / 1.7e-7 |
+| TNG50-4, 256 skewers | 6.5 s | 447 s | — | 858 s | 2.3e-5 / 1.7e-7 |
+| TNG50-3, 16 skewers | 16 s | 65 s | — | 94 s | 2.8e-5 / 6.2e-5 |
+| TNG50-2, 16 skewers | 206 s | 300 s | — | 325 s | 6.4e-5 / 1.2e-3 |
 
-export LD_LIBRARY_PATH="$(
-python - <<'PY'
-import site, glob, os
-sp = site.getsitepackages()[0]
-dirs = []
-for pkg in ("nvidia/cusparse","nvidia/cublas","nvidia/cudnn",
-            "nvidia/cufft","nvidia/cusolver","nvidia/cuda_runtime",
-            "nvidia/nccl","nvidia/nvjitlink"):
-    dirs += glob.glob(os.path.join(sp, pkg, "lib*"))
-print(":".join(dirs))
-PY
-):${LD_LIBRARY_PATH:-}"
+On this machine fake_spectra is faster in every configuration, from 1.5× to 69×.
+- **Where SkewerJAX's time goes:** mostly in the τ kernel, an exact Voigt profile for every absorber at every pixel
+  (about 1.6 s per skewer for the two lines). At TNG50-2 resolution its cell selection (248 s) dominates instead.
+- **GPU:** on this consumer GPU SkewerJAX is slower than on the CPU, in float32 as well. The cause has not been
+  profiled.
+- **Memory:** fake_spectra uses 0.5 GB of host memory. SkewerJAX grows by about 60 MB per skewer (16 GB at 256).
 
-### Make it persistent (optional): create env-activation hooks so this is automatic:
+Notebook `08_benchmark_skewerjax_vs_fake_spectra` has the stage breakdown, the thread and memory scaling, and the
+figures.
 
-mkdir -p "$CONDA_PREFIX/etc/conda/activate.d" "$CONDA_PREFIX/etc/conda/deactivate.d"
-python - <<'PY'
-import site, glob, os
-prefix = os.environ["CONDA_PREFIX"]; sp = site.getsitepackages()[0]
-dirs=[]; 
-for p in ("nvidia/cusparse","nvidia/cublas","nvidia/cudnn","nvidia/cufft",
-          "nvidia/cusolver","nvidia/cuda_runtime","nvidia/nccl","nvidia/nvjitlink"):
-    dirs += glob.glob(os.path.join(sp,p,"lib*"))
-LD=":".join(dirs)
-open(os.path.join(prefix,"etc/conda/activate.d","skewerjax_cuda_libs.sh"),"w").write(
-  "#!/usr/bin/env bash\nexport _SKEWERJAX_OLD_LD_LIBRARY_PATH=\"${LD_LIBRARY_PATH:-}\"\nexport LD_LIBRARY_PATH=\"%s:$LD_LIBRARY_PATH\"\n" % LD)
-open(os.path.join(prefix,"etc/conda/deactivate.d","skewerjax_cuda_libs.sh"),"w").write(
-  "#!/usr/bin/env bash\nexport LD_LIBRARY_PATH=\"${_SKEWERJAX_OLD_LD_LIBRARY_PATH}\"\nunset _SKEWERJAX_OLD_LD_LIBRARY_PATH\n")
-PY
-# Re-activate to apply:
-conda deactivate && conda activate skewerjax
+## Repository layout
 
-### 6) (Optional) Register a Jupyter kernel
-python -m ipykernel install --user --name skewerjax --display-name "SkewerJAX (CUDA)"
+```
+skewerjax/
+  core/            lines, constants, cosmology, skewers, fields and toy samplers, Voigt, spectral frames,
+                   optical depth (incl. sharding), overflux, analytic references
+    stats/         P1D/xi1D, P3D/xi3D, shared two-point kernels, metal-contamination models
+  simulations/     readers, gas cells, gas physics, selection, deposition, absorbers, SimulationSkewers, maps
+    cloudy_tables/ CLOUDY ionisation tables (git submodule)
+  comparison/      fake_spectra emulation, matched options and effect chain, fake_spectra driver and source, benchmark
+  utils/plotting.py  shared style, pipeline schematic, figure helpers
+notebooks/         00-08 tutorials (delivered with outputs cleared)
+scripts/
+  validation/      check_*.py and run_all.py
+  benchmarks/      benchmark_vs_fake_spectra.py
+  verify_install.py
+tests/             pytest suite (CPU, toy inputs)
+docs/              installation.md, usage.md
+```
 
-### 7) Verify GPU is detected
-python - <<'PY'
-import jax, importlib, numpy as np
-print("JAX:", jax.__version__)
-print("Devices:", jax.devices())
-assert any(d.platform=="gpu" for d in jax.devices()), "No GPU detected by JAX."
-print("exojax:", importlib.import_module("exojax").__version__)
-print("diffrax:", importlib.import_module("diffrax").__version__)
-print("✅ SkewerJAX GPU stack OK")
-PY
+## References and acknowledgements
 
-
-
----
-
-## Layout
-
-# Under developement
-- README.md
-- LICENSE
-- MANIFEST.in
-- pyproject.toml
-- .gitignore
-...
-
-
-
----
+- fake_spectra: S. Bird, *FSFE: Fake Spectra Flux Extractor*, Astrophysics Source Code Library, ascl:1710.012 (2017).
+  SkewerJAX's comparison block runs it and reproduces its scheme.
+- P. McDonald et al., *The Lyα Forest Power Spectrum from the Sloan Digital Sky Survey*, ApJS 163, 80 (2006),
+  doi:10.1086/444361. The Si III cross-term model (`core.stats.mcdonald_factor`).
+- K. Ma, J. S. Bolton, V. Iršič, P. Gaikwad, E. Puchwein, *An improved model for the effect of correlated Si III
+  absorption on the one-dimensional Lyman-α forest power spectrum*, MNRAS 546, staf2262 (2026),
+  doi:10.1093/mnras/staf2262 (`core.stats.ma_factor`).
+- N. G. Karaçaylı et al., *A framework to measure the properties of intergalactic metal systems with two-point flux
+  statistics*, MNRAS 522, 5980 (2023), doi:10.1093/mnras/stad1363.
+- Built on JAX, diffrax (the a(x) integration) and ExoJAX (the Voigt profile). Simulation data: IllustrisTNG (TNG50).
 
 ## License
-This project is released under the MIT License (see `LICENSE`).
+
+MIT (see `LICENSE`).

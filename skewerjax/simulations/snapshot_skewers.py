@@ -73,11 +73,13 @@ class IntegrationOptions:
     detuning : "exact" (nu = (c / lambda) expm1(-dv / c)) or "linear" (fake_spectra).
     periodic : True wraps every detuning to its nearest periodic image (period: the box length in velocity);
         False is the direct integral.
+    dtype : None (the input precision, float64 under x64) or "float32": opt-in faster kernel.
     """
     frame: str = "exact"
     normalisation: float = 1.0
     detuning: str = "exact"
     periodic: bool = True
+    dtype: Optional[str] = None
 
     def replace(self, **kw) -> "IntegrationOptions":
         return replace(self, **kw)
@@ -402,4 +404,4 @@ class SimulationSkewers:
         fr = self.frame(integ.frame, integ.periodic)
         A = self.absorbers(ion, ext, override)
         return ab_.tau_absorbers(A, line_bundle, np.asarray(velocities_kms, dtype=np.float64), fr, T_scale=T_scale,
-                                 n_scale=integ.normalisation, detuning=integ.detuning, check=check)[0]
+                                 n_scale=integ.normalisation, detuning=integ.detuning, check=check, dtype=integ.dtype)[0]

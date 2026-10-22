@@ -25,6 +25,8 @@ from typing import Optional
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.experimental.shard_map import shard_map
+from jax.sharding import Mesh, PartitionSpec
 from jax.typing import ArrayLike
 
 from skewerjax.core.constants import phys
@@ -215,16 +217,23 @@ def los_samples(skewer_bundle, fields, line_bundle, *, a_dagger: Optional[ArrayL
                       number_density=per_skewer(f["number_density"]))
 
 
-@partial(jax.jit, static_argnames=("voigt", "detuning", "velocity_period", "v_chunk", "batch_size", "per_point"))
+@partial(jax.jit, static_argnames=("voigt", "detuning", "velocity_period", "v_chunk", "batch_size", "per_point", "dtype"))
 def optical_depth_from_samples(samples: LoSSamples, velocities_kms, line_bundle, *, voigt: str = "ExoJAX", detuning: str = "exact",
                                velocity_period: Optional[float] = None, v_chunk: Optional[int] = None,
-                               batch_size: Optional[int] = None, per_point: bool = False) -> jnp.ndarray:
+                               batch_size: Optional[int] = None, per_point: bool = False,
+                               dtype: Optional[str] = None) -> jnp.ndarray:
     """tau (N_lines, N_sk, N_v) of every skewer of ``samples``: ``optical_depth_kernel`` mapped over skewers.
 
     v_chunk : velocities per kernel call (memory ~ N_lines x N_p x v_chunk); batch_size : skewers vmapped together
     inside the sequential map (None: one at a time, the lowest memory). per_point : (N_lines, N_sk, N_p, N_v).
+    dtype : None (default: the dtype of the inputs) or e.g. "float32": opt-in lower-precision kernel (2-3x faster on
+        the CPU; max |dF| ~1e-3 on TNG50-4 skewers); the result is cast back to the input dtype.
     """
-    lam, A21, mass, f_osc = line_bundle.lambda0_A, line_bundle.A21_GHz, line_bundle.mass_amu, line_bundle.f_osc
+    out_dtype = samples.temperature.dtype
+    if dtype is not None:
+        samples, velocities_kms = jax.tree_util.tree_map(lambda x: x.astype(dtype), (samples, velocities_kms))
+    lam, A21, mass, f_osc = (x if dtype is None else x.astype(dtype)
+                             for x in (line_bundle.lambda0_A, line_bundle.A21_GHz, line_bundle.mass_amu, line_bundle.f_osc))
     n_v = velocities_kms.shape[0]
     nv = n_v if v_chunk is None else int(v_chunk)
 
@@ -238,7 +247,31 @@ def optical_depth_from_samples(samples: LoSSamples, velocities_kms, line_bundle,
     sk = lambda x: jnp.moveaxis(x, 1, 0)                          # (N_lines, N_sk, N_p) -> (N_sk, N_lines, N_p)
     xs = (samples.a_dagger, samples.scale_factor, samples.weights_m, sk(samples.temperature), sk(samples.turbulence),
           sk(samples.collisional), sk(samples.los_velocity), sk(samples.number_density))
-    return jnp.moveaxis(jax.lax.map(one_skewer, xs, batch_size=batch_size), 0, 1)
+    return jnp.moveaxis(jax.lax.map(one_skewer, xs, batch_size=batch_size), 0, 1).astype(out_dtype)
+
+
+def optical_depth_sharded(samples: LoSSamples, velocities_kms, line_bundle, *, devices=None, **kw) -> jnp.ndarray:
+    """``optical_depth_from_samples`` with the skewers split over ``devices`` (default: all ``jax.devices()``).
+
+    The skewer axis is padded to a multiple of the number of devices (copies of the last skewer, dropped from the
+    result), split with ``shard_map`` over a 1D mesh, and every device maps its own skewers; the velocity grid and the
+    line data are replicated. Each skewer is computed exactly as on one device, so the result is the same; with one
+    device this is ``optical_depth_from_samples``. kw: its options (``voigt``, ``detuning``, ``v_chunk``, ``dtype``, ...).
+    CPU cores can be exposed as devices with ``XLA_FLAGS=--xla_force_host_platform_device_count=N`` (before importing JAX).
+    """
+    devices = list(jax.devices() if devices is None else devices)
+    velocities_kms = jnp.asarray(velocities_kms)
+    if len(devices) == 1:
+        return optical_depth_from_samples(samples, velocities_kms, line_bundle, **kw)
+    n_sk, n_dev = samples.scale_factor.shape[0], len(devices)
+    pad = -n_sk % n_dev
+    skewer_axis = lambda x: 0 if x.ndim == 2 else 1                 # (N_sk, N_p) or (N_lines, N_sk, N_p)
+    padded = jax.tree_util.tree_map(
+        lambda x: jnp.pad(x, [(0, pad) if i == skewer_axis(x) else (0, 0) for i in range(x.ndim)], mode="edge"), samples)
+    spec = jax.tree_util.tree_map(lambda x: PartitionSpec("sk") if x.ndim == 2 else PartitionSpec(None, "sk"), padded)
+    run = shard_map(lambda s, v, lb: optical_depth_from_samples(s, v, lb, **kw), mesh=Mesh(np.array(devices), ("sk",)),
+                    in_specs=(spec, PartitionSpec(), PartitionSpec()), out_specs=PartitionSpec(None, "sk"), check_rep=False)
+    return jax.jit(run)(padded, velocities_kms, line_bundle)[:, :n_sk]
 
 
 # --------------------------------------------------------------------------- sampling resolution
@@ -281,7 +314,7 @@ def compute_optical_depth(skewer_bundle, velocities_kms: ArrayLike, line_bundle,
                   ii_cosmology: int = 0, line_elements: Optional[ArrayLike] = None, voigt: str = "ExoJAX",
                   detuning: str = "exact", velocity_period: Optional[float] = None,
                   resolution_tolerance: Optional[float] = 0.25, v_chunk: Optional[int] = None,
-                  batch_size: Optional[int] = None) -> jnp.ndarray:
+                  batch_size: Optional[int] = None, dtype: Optional[str] = None, devices=None) -> jnp.ndarray:
     """tau (N_lines, N_sk, N_v) of every line along every skewer of ``skewer_bundle`` (F = exp(-tau)).
 
     Parameters
@@ -294,6 +327,8 @@ def compute_optical_depth(skewer_bundle, velocities_kms: ArrayLike, line_bundle,
     resolution_tolerance : warn when consecutive points are farther apart in line-centre velocity than this
         fraction of the line width (``resolution_report``); None disables the check.
     v_chunk, batch_size : memory controls of ``optical_depth_from_samples``.
+    dtype : opt-in kernel precision, e.g. "float32" (``optical_depth_from_samples``); None keeps the input precision.
+    devices : None (one device, the default) or a list of devices to split the skewers over (``optical_depth_sharded``).
     """
     samples = los_samples(skewer_bundle, fields, line_bundle, a_dagger=a_dagger, ii_cosmology=ii_cosmology,
                           line_elements=line_elements)
@@ -306,9 +341,11 @@ def compute_optical_depth(skewer_bundle, velocities_kms: ArrayLike, line_bundle,
                             f"{rep['column_fraction'][j]:.1e} above tolerance {resolution_tolerance}"
                             for j in range(line_bundle.n_lines))
                 + ". Sample more densely (spacing <= tolerance x b_min / (dv/dx)).", stacklevel=2)
-    return optical_depth_from_samples(samples, jnp.asarray(velocities_kms), line_bundle, voigt=voigt, detuning=detuning,
-                                      velocity_period=None if velocity_period is None else float(velocity_period),
-                                      v_chunk=v_chunk, batch_size=batch_size)
+    kw = dict(voigt=voigt, detuning=detuning, velocity_period=None if velocity_period is None else float(velocity_period),
+              v_chunk=v_chunk, batch_size=batch_size, dtype=dtype)
+    if devices is not None:
+        return optical_depth_sharded(samples, velocities_kms, line_bundle, devices=devices, **kw)
+    return optical_depth_from_samples(samples, jnp.asarray(velocities_kms), line_bundle, **kw)
 
 
 def wrap_to_ref_line(optical_depth: ArrayLike, velocities_kms: ArrayLike, line_bundle) -> jnp.ndarray:
