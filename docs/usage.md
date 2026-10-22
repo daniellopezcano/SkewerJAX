@@ -1,22 +1,22 @@
 # Usage guide
 
-This guide is the reference companion of the notebooks. It lists the entry points of each block, the conventions they
-share and the options that control speed and memory. The notebooks (`notebooks/00`–`08`) show the same tools at
+This guide is the reference companion of the notebooks. It lists the entry points of each subpackage, the conventions they
+share and the options that control speed and memory. The notebooks (`notebooks/00`–`09`) show the same tools at
 work, step by step.
 
 ```mermaid
 flowchart LR
-    subgraph A["core (Block A)"]
+    subgraph A["core"]
         L[LineBundle, Cosmology] --> S[SkewerBundle]
         S --> LS[los_samples]
         F[Fields] --> LS
         LS --> T["optical_depth_from_samples / _sharded"]
         T --> O[DeltaFieldBuilder] --> ST[OverfluxStatistics1D / 3D]
     end
-    subgraph B["simulations (Block B)"]
+    subgraph B["simulations"]
         R[ArepoHDF5Reader] --> SS[SimulationSkewers] --> AB[Absorbers] --> TA[tau_absorbers]
     end
-    subgraph C["comparison (Block C)"]
+    subgraph C["comparison"]
         FS[FakeSpectraSource] --- MT[matched_tau] --- BM[benchmark]
     end
     TA --> T
@@ -24,7 +24,7 @@ flowchart LR
 ```
 
 Dependencies run one way only: `comparison` uses `simulations`, `simulations` uses `core`, and nothing in `core`
-imports the other blocks. `skewerjax.utils.plotting` is outside the blocks.
+imports the other subpackages. `skewerjax.utils.plotting` is outside them.
 
 ## Conventions
 
@@ -41,7 +41,7 @@ imports the other blocks. `skewerjax.utils.plotting` is outside the blocks.
 - **Purity.** Every container is a JAX pytree, and every kernel can be traced with `jit`, `vmap` and `grad`. The
   host-side parts are NumPy: snapshot I/O, the k-d tree selection, the deposition bookkeeping and fake_spectra.
 
-## Block A: `skewerjax.core`
+## `skewerjax.core`
 
 | task | entry point | main options |
 |---|---|---|
@@ -50,13 +50,13 @@ imports the other blocks. `skewerjax.utils.plotting` is outside the blocks.
 | skewers | `SkewerBundle(spatial_points, cosmologies, a0, x0, ...)` | `ICs_defined_at_index`, `ICs_at_emission_or_absorption`, `manual_scale_factors` |
 | fields | `Fields({species: {name: ScalarField/VectorField}})` | samplers `LogRamp`, `VelocityRamp`, `Constant`, `GaussianDensity`, `SampledField` |
 | τ | `compute_optical_depth(bundle, v, lines, fields, a_dagger=...)` | `voigt`, `detuning`, `velocity_period`, `v_chunk`, `batch_size`, `dtype`, `devices` |
-| τ (layers) | `los_samples` → `optical_depth_from_samples` → `optical_depth_kernel` | `LoSSamples` is the boundary with Block B |
+| τ (layers) | `los_samples` → `optical_depth_from_samples` → `optical_depth_kernel` | `LoSSamples` is the boundary with `skewerjax.simulations` |
 | frames | `wrap_to_ref_line`, `velocities_in_line_frames`, `line_wavelength_grid_A` | |
 | overflux | `DeltaFieldBuilder(tau, labels=...).build()` | every line subset and the exact decomposition of the total |
 | statistics | `OverfluxStatistics1D(ov, dv).compute_p1d().compute_xi1d()`, `OverfluxStatistics3D` | pairs, orders, binning (`bin_p1d`, `bin_p3d_kperp`) |
 | metal models | `fit_mcdonald_a`, `fit_ma_model_profiled` | |
 
-## Block B: `skewerjax.simulations`
+## `skewerjax.simulations`
 
 ```python
 from skewerjax.core import LineBundle
@@ -79,9 +79,9 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 - **Figure tools:**
   - `slab_projection(reader, normal_axis, centre, thickness, n_pix)` gives the gas surface density and the
     mass-weighted temperature of a slab;
-  - `tau_by_path_bins(A, lines, v, frame, s_edges)` gives the τ made by each stretch of the path (notebook 07).
+  - `tau_by_path_bins(A, lines, v, frame, s_edges)` gives the τ made by each stretch of the path (notebook 09).
 
-## Block C: `skewerjax.comparison`
+## `skewerjax.comparison`
 
 - **Modes:** `FAKE_SPECTRA_EXTRACTION` + `FAKE_SPECTRA_INTEGRATION` reproduce fake_spectra (the matched mode), and
   `ExtractionOptions()` + `DEFAULT_INTEGRATION` are SkewerJAX's defaults. `matched_tau(sk, ion, lines, v, ext, integ)`
@@ -128,4 +128,22 @@ python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick --results be
 
 The benchmark runs every configuration in its own process with its own CPU set and thread count. It skips the
 configurations whose result already exists, and it caps each one at `--cap` seconds. The notebook
-`08_benchmark_skewerjax_vs_fake_spectra` only reads the results (`RESULTS_DIR`).
+`08_fake_spectra_comparison` (Part 2) only reads the results (`RESULTS_DIR`).
+
+## Figures: `skewerjax.utils.plotting`
+
+One call at the top of a notebook or script applies the style of every figure:
+
+```python
+from skewerjax.utils.plotting import use_style, ENTITY_COLORS as EC, PALETTE, FG, LABELS
+use_style()            # dark background, NeonGlow under every line, PALETTE (Paul Tol's colour-blind-safe "light" scheme)
+use_style("light")     # the previous white-background style (ENTITY_COLORS stay tuned for the dark one)
+```
+
+- Colours: `ENTITY_COLORS` (one per species, line, quantity and code), `PALETTE`, `PALETTE_CYCLE`, `FG`/`BG`;
+  line styles per mode: `MODE_STYLES`; labels with units: `LABELS`; sizes: `FIGSIZES`.
+- `plot_dag(highlight, external=False)`: the dependency graph of the ingredients (`DAG_NODES`, `DAG_EDGES`).
+- Tutorial figures: `plot_line_table`, `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
+  `plot_line_frames`, `plot_flux_vs_analytic`, `plot_raw_to_overflux`, `plot_terms_by_order`,
+  `plot_p1d_input_vs_measured` (+ `grf_p1d_along_axis`), `plot_cylinder(..., progress=p)` (one frame per call),
+  `plot_slab`, `plot_tau_buildup`, `plot_orders_superimposed`, `plot_pk_recovery`, the benchmark figures `plot_bench_*`.

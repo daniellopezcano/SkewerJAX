@@ -4,7 +4,7 @@ SkewerJAX computes the optical depth τ(v) and the transmitted flux F = e^{−τ
 lines (Si III λ1206 and any other transition in its line table) along arbitrary skewers, together with their summary
 statistics: the overflux decomposition by line, P1D, ξ1D, P3D and ξ3D. It is written in JAX, so the whole chain can
 be compiled, vectorised and differentiated, and it runs on CPUs and GPUs. Gas fields come either from analytic or
-Gaussian-random toy samplers, or from hydrodynamical snapshots (Arepo/IllustrisTNG HDF5). A dedicated block
+Gaussian-random toy samplers, or from hydrodynamical snapshots (Arepo/IllustrisTNG HDF5). A dedicated subpackage
 reproduces the scheme of fake_spectra, so that the two codes can be compared option by option.
 
 **Key features**
@@ -27,15 +27,15 @@ reproduces the scheme of fake_spectra, so that the two codes can be compared opt
 
 ```mermaid
 flowchart LR
-    C["<b>comparison</b> (Block C)<br/>fake_spectra scheme, matched mode,<br/>effect chain, benchmark"] --> B
-    B["<b>simulations</b> (Block B)<br/>readers, gas physics, selection,<br/>deposition, absorbers"] --> A
-    A["<b>core</b> (Block A)<br/>lines, cosmology, skewers, fields,<br/>Voigt, optical depth, statistics"]
+    C["<b>comparison</b><br/>fake_spectra scheme, matched mode,<br/>effect chain, benchmark"] --> B
+    B["<b>simulations</b><br/>readers, gas physics, selection,<br/>deposition, absorbers"] --> A
+    A["<b>core</b><br/>lines, cosmology, skewers, fields,<br/>Voigt, optical depth, statistics"]
     U["utils.plotting"] -.-> A
 ```
 
-Dependencies run one way only. `core` imports nothing from the other blocks, and the boundary between `simulations`
+Dependencies run one way only. `core` imports nothing from the other subpackages, and the boundary between `simulations`
 and `core` is `core.LoSSamples`, every field at every sampling point. `docs/usage.md` lists the entry points of each
-block.
+subpackage.
 
 ## Quickstart
 
@@ -78,18 +78,42 @@ paths and troubleshooting.
 
 | notebook | content |
 |---|---|
-| `00_quickstart` | the whole chain on a toy box: lines, skewers, fields, τ and F, P1D |
-| `01_fields_and_samplers` | samplers, `Fields`, Gaussian random fields and their recovered spectra |
-| `02_cosmology_and_skewers` | a(x) along light rays, `SkewerBundle` conventions, path geometry |
-| `03_line_profiles_and_optical_depth` | Voigt implementations, line profiles, τ against closed forms, option sweep |
-| `04_summary_statistics` | overflux decomposition, P1D/ξ1D by pair and order, metal models, 3D statistics |
-| `05_tng_extraction` | from a TNG50-4 snapshot to τ: physics, selection, deposition, precision options |
-| `06_fake_spectra_comparison` | matched mode against fake_spectra, and the effect chain from one code to the other |
-| `07_visualisations` | the gas around a skewer, how the absorption builds up, periodic wrapping, statistics tools |
-| `08_benchmark_skewerjax_vs_fake_spectra` | timing, memory and agreement of both codes (reads saved results) |
+The notebooks follow the dependency graph of the ingredients, derived from the code (an arrow points to what needs
+an ingredient; ingredients in one column are independent; dashed: optional):
 
-Each notebook opens with a schematic of the pipeline that highlights its step, and closes with a short summary.
-Notebooks 05–08 need TNG50 snapshots (see "Simulation data" in `docs/installation.md`).
+```mermaid
+flowchart LR
+    L["lines (01)"] --> T["optical depth τ, F (06)"]
+    TS["toy samplers (05)"] --> F["gas fields (05)"]
+    C["cosmology (02)"] -.-> K["skewers (03)"]
+    K --> SIM["simulation outputs → gas (04)"]
+    SIM --> F
+    F --> T
+    K --> T
+    L -.-> SIM
+    T --> O["overflux δ_F (07)"]
+    L -.-> O
+    O --> P["P1D, ξ1D, P3D, ξ3D (07)"]
+    SIM -. "fake_spectra, external (08)" .-> T
+```
+
+| notebook | content |
+|---|---|
+| `00_quickstart` | the whole chain on a toy box: lines, skewers, fields, τ and F, P1D |
+| `01_lines` | the line table, `Line` and `LineBundle` attributes, offsets Δv_j and line widths |
+| `02_cosmology` | a(x) along light rays against the closed forms |
+| `03_skewers` | `SkewerBundle` conventions, path geometry in 2D and 3D, what a bundle stores |
+| `04_simulation_outputs` | from a TNG50-4 snapshot to the gas along the skewers: per-cell physics, the three grids (Voronoi illustration), deposition, column conservation |
+| `05_fields_and_samplers` | samplers, `Fields`, Gaussian random fields and their recovered spectra |
+| `06_line_profiles_and_optical_depth` | Voigt implementations, line profiles, line-centred and global frames against the analytic results, τ options, τ from simulation outputs |
+| `07_summary_statistics` | from the raw τ to δ_F step by step (periodicity), P1D/ξ1D by order and term, input vs measured P1D, metal models, 3D statistics |
+| `08_fake_spectra_comparison` | the differences with fake_spectra step by step (matched mode, effect chain), and the benchmark (time, stages, memory, scaling; reads saved results) |
+| `09_visualisations` | the gas around a skewer, how the absorption builds up, periodic wrapping, statistics tools, the gas cylinder (`plot_cylinder`) |
+
+Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: dark, Paul Tol's colour-blind-safe light
+scheme), opens with the dependency graph highlighting its ingredients and the lines "Requires" / "Independent of",
+and closes with a short summary. Notebooks 04, 06, 08 and 09 need TNG50 snapshots (see "Simulation data" in
+`docs/installation.md`).
 
 ## Validation, tests and benchmarks
 
@@ -128,7 +152,7 @@ On this machine fake_spectra is faster in every configuration, from 1.5× to 69�
   profiled.
 - **Memory:** fake_spectra uses 0.5 GB of host memory. SkewerJAX grows by about 60 MB per skewer (16 GB at 256).
 
-Notebook `08_benchmark_skewerjax_vs_fake_spectra` has the stage breakdown, the thread and memory scaling, and the
+Notebook `08_fake_spectra_comparison` (Part 2) has the stage breakdown, the thread and memory scaling, and the
 figures.
 
 ## Repository layout
@@ -141,8 +165,8 @@ skewerjax/
   simulations/     readers, gas cells, gas physics, selection, deposition, absorbers, SimulationSkewers, maps
     cloudy_tables/ CLOUDY ionisation tables (git submodule)
   comparison/      fake_spectra emulation, matched options and effect chain, fake_spectra driver and source, benchmark
-  utils/plotting.py  shared style, pipeline schematic, figure helpers
-notebooks/         00-08 tutorials (delivered with outputs cleared)
+  utils/plotting.py  shared style, dependency graph (plot_dag), figure helpers
+notebooks/         00-09 tutorials (delivered with outputs cleared)
 scripts/
   validation/      check_*.py and run_all.py
   benchmarks/      benchmark_vs_fake_spectra.py
@@ -154,7 +178,7 @@ docs/              installation.md, usage.md
 ## References and acknowledgements
 
 - fake_spectra: S. Bird, *FSFE: Fake Spectra Flux Extractor*, Astrophysics Source Code Library, ascl:1710.012 (2017).
-  SkewerJAX's comparison block runs it and reproduces its scheme.
+  SkewerJAX's comparison subpackage runs it and reproduces its scheme.
 - P. McDonald et al., *The Lyα Forest Power Spectrum from the Sloan Digital Sky Survey*, ApJS 163, 80 (2006),
   doi:10.1086/444361. The Si III cross-term model (`core.stats.mcdonald_factor`).
 - K. Ma, J. S. Bolton, V. Iršič, P. Gaikwad, E. Puchwein, *An improved model for the effect of correlated Si III

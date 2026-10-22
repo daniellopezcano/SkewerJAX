@@ -3,6 +3,37 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — notebooks second pass: dependency graph, one dark style, pedagogical content (2026-10-22, session 20261022_1520)
+
+### Changed
+- **Notebooks renumbered along the dependency graph of the ingredients** (derived from the code): `00_quickstart`,
+  `01_lines`, `02_cosmology`, `03_skewers`, `04_simulation_outputs`, `05_fields_and_samplers`,
+  `06_line_profiles_and_optical_depth`, `07_summary_statistics`, `08_fake_spectra_comparison` (the former 06 and 08
+  merged), `09_visualisations`. The former `01_fields_and_samplers`, `02_cosmology_and_skewers`,
+  `03_line_profiles_and_optical_depth`, `04_summary_statistics`, `05_tng_extraction`, `06_fake_spectra_comparison`,
+  `07_visualisations` and `08_benchmark_skewerjax_vs_fake_spectra` are removed (their content moved). The τ sections
+  of the former 05 are now section 7 of 06.
+- **One style for every figure.** `use_style()` is dark by default: black background, a glow under every line
+  (`NeonGlow`, a path effect) and Paul Tol's colour-blind-safe "light" scheme (`PALETTE`), which stays luminous on
+  black. `ENTITY_COLORS`, `NEON_COLORS` and the benchmark colours use it; `use_style("light")` keeps the old style.
+  Helpers read the foreground colour from the style (`FG`, `BG`).
+- The "Block A/B/C" labels are gone from the diagrams and texts of the notebooks, `README.md` and `docs/`.
+
+### Added
+- `plot_dag` (`DAG_NODES`, `DAG_EDGES`): the dependency graph that opens every notebook, with its ingredients
+  highlighted, and the lines "Requires" / "Independent of" in every introduction. It replaces `plot_pipeline`
+  (removed, with `PIPELINE_STEPS` and `PIPELINE_SIDE`).
+- Figure functions for the new sections: `plot_line_table` (01), `plot_paths_3d`, `plot_skewer_anatomy` (03),
+  `plot_voronoi_discretisations` (04), `plot_line_frames`, `plot_flux_vs_analytic` (06), `plot_raw_to_overflux`,
+  `plot_terms_by_order`, `grf_p1d_along_axis`, `plot_p1d_input_vs_measured` (07), `plot_cylinder` (09; `progress=`
+  draws one frame of a future animation), `dark_3d`, `box_edges_3d`, `species_color`.
+- New notebook sections: the line classes (01); 3D paths and a bundle's attributes (03); the step-by-step extraction
+  with formulas, the three grids on a Voronoi mesh and the column against the sampling (04); line-centred and global
+  frames against the analytic profile and the radiation-dominated closed form (06); from the raw τ to δ_F with the
+  periodic treatment, P1D/ξ1D by term, input vs measured P1D (07); the differences with fake_spectra step by step and
+  the per-pixel column (08); the gas cylinder (09).
+- No numerical method changed.
+
 ## Unreleased — performance, sharding, benchmark, visualisations, documentation (2026-10-21, session 20261021_2330)
 
 ### Added

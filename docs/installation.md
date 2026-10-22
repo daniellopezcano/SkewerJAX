@@ -69,7 +69,7 @@ From the repository root:
 pip install -e .                    # core dependencies (JAX for the CPU included)
 pip install -e ".[gpu]"             # the same, plus jax[cuda12]
 pip install -e ".[notebooks]"       # Jupyter, ipympl and ipywidgets for the notebooks
-pip install -e ".[comparison]"      # fake-spectra (PyPI) and psutil for Block C and the benchmark
+pip install -e ".[comparison]"      # fake-spectra (PyPI) and psutil for the comparison with fake_spectra and the benchmark
 pip install -e ".[dev]"             # pytest, nbformat/nbconvert (headless notebook runs), psutil
 ```
 
@@ -80,7 +80,7 @@ Extras can be combined, e.g. `pip install -e ".[gpu,notebooks,comparison,dev]"`.
 - **fake_spectra** is needed only by `skewerjax.comparison`: its live mode, `scripts/validation/check_fake_spectra.py`
   and the benchmark. It is published on PyPI as `fake-spectra` (2.3.1 at the time of writing; the development
   environment uses an editable 2.2.4 clone).
-  - Without it, the comparison block still works from a reference HDF5 file (`FakeSpectraSource(reference=...)`).
+  - Without it, the comparison subpackage still works from a reference HDF5 file (`FakeSpectraSource(reference=...)`).
   - The rest of the package never imports it.
 - **jztree / jaxkd** (JAX neighbour search) are *not* used. The cell selection uses SciPy's `cKDTree`, which was the
   faster option on the CPU (see the reply of session 20261021_2330).
@@ -99,7 +99,7 @@ benchmark read their snapshots from one environment variable:
 export SKEWERJAX_DATA=/path/to/folder/with/TNG50-4   # holds TNG50-4/ (and TNG50-3/, TNG50-2/ for the benchmark)
 ```
 
-It defaults to `/home/STORAGE`. The notebooks 05–08 use the same default; edit the path in their first cell.
+It defaults to `/home/STORAGE`. The notebooks 04, 06, 08 and 09 read `SKEWERJAX_DATA` with the same default.
 
 ## 5. Verify the installation
 
