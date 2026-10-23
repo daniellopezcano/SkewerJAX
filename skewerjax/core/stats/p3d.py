@@ -28,7 +28,7 @@ class OverfluxStatistics3D:
         k_x, k_y = 2 pi fftfreq(N, d)    [1/cMpc];   k_par = 2 pi rfftfreq(N_pix, dv)  [s/km]
         r_x, r_y  [cMpc] and pi [km/s] lag axes, centred (fftshift).
 
-    Normalisation (d-dimensional form of notes ``subsec_P1D.tex`` Eq. P1D_sample_definition;
+    Normalisation (d-dimensional form of the review notes, Eq. P1D_sample_definition;
     dV = dx dy dv, N = Nx Ny N_pix, V = N dV)
     ---------------------------------------------------------------------------------------
         P_ab(k)  = (dV / N) F_a F_b^*,  F = rfftn(delta)          [cMpc^2 km/s]

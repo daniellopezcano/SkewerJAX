@@ -222,3 +222,4 @@ fs_work/
 # result caches of SimulationSkewers / FakeSpectraSource
 sjx_cache*.h5
 fs_cache*/
+notebooks/benchmark_records

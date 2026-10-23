@@ -67,3 +67,17 @@ def test_frames_overflux_and_cylinder():
     flux = dict(v=v, s_of_v=v / 10, edges=np.linspace(0, 10, 5), tau_bins={"Lya": (np.ones((4, 64)) * 0.1, "C0")})
     fig, (ax3, axf) = pl.plot_cylinder(s, {"n": (np.log10(1 + s), "C1")}, cloud=cloud, flux=flux, progress=0.5, radius=0.3)
     fig.canvas.draw()
+
+
+def test_palette_fonts_and_backend():
+    # every discrete colour is Tol's "bright" scheme (tol_colors colorsets["bright"]), in Tol's order
+    assert pl.PALETTE == pl._TOL_BRIGHT_VENDORED and list(pl.PALETTE) == ["blue", "red", "green", "yellow", "cyan", "purple", "grey"]
+    allowed = set(pl.PALETTE.values()) | {pl.FG, pl.BG}
+    assert set(pl.ENTITY_COLORS.values()) <= allowed
+    assert all(c in pl.PALETTE.values() for c in pl.ORDER_COLORS)
+    assert "tol_iridescent_r" in matplotlib.colormaps and plt.rcParams["image.cmap"] == pl.CMAPS["sequential"]
+    for hl, ext in ((("tau",), False), (("simulation", "fake_spectra"), True)):
+        fig, _ = pl.plot_dag(hl, external=ext)
+        assert pl.check_fonts(fig) == []
+    assert plt.rcParams["legend.fontsize"] >= pl.FONT_MIN["legend"] and plt.rcParams["xtick.labelsize"] >= pl.FONT_MIN["tick"]
+    assert pl.use_backend() == matplotlib.get_backend()      # outside IPython: unchanged

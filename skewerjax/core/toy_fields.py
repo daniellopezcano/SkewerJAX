@@ -64,7 +64,7 @@ class PowerLawGRF:
     Positions are x_j = j L / N (j = 0..N-1), and wavenumbers are angular,
     k = 2 pi fftfreq(N, d=L/N) [1 / length units], as in ``P1D_xi1D.py``.
 
-    FFT and normalisation (notes, ``subsec_P1D.tex``, Eqs. P1D_delta_tilde_sample,
+    FFT and normalisation (review notes, Eqs. P1D_delta_tilde_sample,
     P1D_sample_definition and xi1D_from_P1D_ensemble, generalised to d dimensions with
     dV = prod(L_i / N_i), V = prod(L_i), N_pix = prod(N_i))
     ------------------------------------------------------------------------------------

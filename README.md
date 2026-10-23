@@ -76,23 +76,27 @@ paths and troubleshooting.
 
 ## Notebooks
 
-| notebook | content |
-|---|---|
-The notebooks follow the dependency graph of the ingredients, derived from the code (an arrow points to what needs
-an ingredient; ingredients in one column are independent; dashed: optional):
+Two entry points: `00_quickstart` (the whole chain on a toy box, compact) and `00_quickstart_step_by_step` (one
+simulated skewer followed from the snapshot to the statistics, one figure and the equations per step). Notebooks
+01–08 then open one ingredient each, in the order of the dependency graph (derived from the code; an arrow points
+to what needs an ingredient; dashed: optional input or data only; the two field sources are interchangeable):
 
 ```mermaid
 flowchart LR
     L["lines (01)"] --> T["optical depth τ, F (06)"]
-    TS["toy samplers (05)"] --> F["gas fields (05)"]
-    C["cosmology (02)"] -.-> K["skewers (03)"]
-    K --> SIM["simulation outputs → gas (04)"]
+    C["cosmology (02)"] -. "a(x), or manual" .-> K["skewers (03)"]
+    subgraph SRC["field sources (interchangeable)"]
+        TS["toy samplers (04)"]
+        SIM["simulation outputs → gas (05)"]
+    end
+    K -- paths --> SIM
+    L -. "ion masses" .-> SIM
+    TS --> F["gas fields (04)"]
     SIM --> F
     F --> T
-    K --> T
-    L -.-> SIM
+    K -- "points, a(x), w" --> T
     T --> O["overflux δ_F (07)"]
-    L -.-> O
+    L -. "line offsets Δv" .-> O
     O --> P["P1D, ξ1D, P3D, ξ3D (07)"]
     SIM -. "fake_spectra, external (08)" .-> T
 ```
@@ -100,20 +104,21 @@ flowchart LR
 | notebook | content |
 |---|---|
 | `00_quickstart` | the whole chain on a toy box: lines, skewers, fields, τ and F, P1D |
+| `00_quickstart_step_by_step` | a TNG50-4 skewer step by step: the snapshot, the cells it crosses, the fields, line profiles, τ and F (Lyα, Si III) built up stretch by stretch, the lines on one axis, the gas cylinder (`plot_cylinder`), overflux and statistics, with the equations |
 | `01_lines` | the line table, `Line` and `LineBundle` attributes, offsets Δv_j and line widths |
-| `02_cosmology` | a(x) along light rays against the closed forms |
-| `03_skewers` | `SkewerBundle` conventions, path geometry in 2D and 3D, what a bundle stores |
-| `04_simulation_outputs` | from a TNG50-4 snapshot to the gas along the skewers: per-cell physics, the three grids (Voronoi illustration), deposition, column conservation |
-| `05_fields_and_samplers` | samplers, `Fields`, Gaussian random fields and their recovered spectra |
-| `06_line_profiles_and_optical_depth` | Voigt implementations, line profiles, line-centred and global frames against the analytic results, τ options, τ from simulation outputs |
-| `07_summary_statistics` | from the raw τ to δ_F step by step (periodicity), P1D/ξ1D by order and term, input vs measured P1D, metal models, 3D statistics |
-| `08_fake_spectra_comparison` | the differences with fake_spectra step by step (matched mode, effect chain), and the benchmark (time, stages, memory, scaling; reads saved results) |
-| `09_visualisations` | the gas around a skewer, how the absorption builds up, periodic wrapping, statistics tools, the gas cylinder (`plot_cylinder`) |
+| `02_cosmology` | a(x) along light rays against the closed forms, with each background's special point |
+| `03_skewers` | `SkewerBundle` conventions; the elements of a path (points, midpoints, dual segments, tangents, line elements) in 2D and 3D; what a bundle stores |
+| `04_fields_and_samplers` | toy samplers, `Fields`, Gaussian random fields in 1D/2D/3D and their recovered P(k), what `GaussianDensity` does |
+| `05_simulation_outputs` | from a TNG50-4 snapshot to the gas along the skewers: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, selection → deposition → integration on a Voronoi mesh, the cell crossings, column conservation |
+| `06_line_profiles_and_optical_depth` | Voigt implementations and their limits, line profiles, closed forms, line-centred frames vs the global axis and the observed wavelength, the detuning and precision options, JAX transformations, τ from simulation outputs, where periodicity enters |
+| `07_summary_statistics` | from the raw τ to δ_F, P1D/ξ1D by order and term (the two-line terms), recovering an input spectrum in 3D and 1D, P3D and ξ3D on a grid of skewers |
+| `08_fake_spectra_comparison` | the differences with fake_spectra one switch at a time (matched mode, effect chain, root causes) and the benchmark (strict single core, stages, memory, scaling, GPU; reads `notebooks/benchmark_records/`), with a summary per part |
 
-Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: dark, Paul Tol's colour-blind-safe light
-scheme), opens with the dependency graph highlighting its ingredients and the lines "Requires" / "Independent of",
-and closes with a short summary. Notebooks 04, 06, 08 and 09 need TNG50 snapshots (see "Simulation data" in
-`docs/installation.md`).
+Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: dark, Paul Tol's colour-blind-safe
+"bright" colours and colour maps, minimum font sizes) and `use_backend()` (interactive ipympl figures in a live
+notebook, inline when executed headless), and opens with the dependency graph highlighting its ingredients and the
+lines "Requires" / "Independent of". Notebooks `00_quickstart_step_by_step`, 05, 06 and 08 need TNG50 snapshots (see
+"Simulation data" in `docs/installation.md`).
 
 ## Validation, tests and benchmarks
 
@@ -166,7 +171,7 @@ skewerjax/
     cloudy_tables/ CLOUDY ionisation tables (git submodule)
   comparison/      fake_spectra emulation, matched options and effect chain, fake_spectra driver and source, benchmark
   utils/plotting.py  shared style, dependency graph (plot_dag), figure helpers
-notebooks/         00-09 tutorials (delivered with outputs cleared)
+notebooks/         00-08 tutorials (delivered with outputs cleared), benchmark_records/ (saved benchmark records read by 08)
 scripts/
   validation/      check_*.py and run_all.py
   benchmarks/      benchmark_vs_fake_spectra.py

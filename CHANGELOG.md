@@ -3,6 +3,34 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — notebooks third pass: clarity, consistency, two code items (2026-10-22, session 20261022_2120)
+
+### Added
+- `simulations.deposition.voronoi_segments(..., backend="jax")`: the Voronoi deposition in JAX with static shapes
+  (chunked candidate search with a provable completeness test, the same exact crossings, sort + segment-sum merging).
+  Identical cells and bit-identical lengths to the NumPy default on TNG50-4; slower on a CPU, so opt-in.
+- Voronoi-adapted segmentation: `deposition.CellCrossings` / `cell_crossings`, `SimulationSkewers.crossings()` (kept
+  alongside the points), `absorbers.absorbers_from_crossings` and `ExtractionOptions(deposition="voronoi_crossings")`
+  (opt-in): one absorber per sub-piece of each cell crossing, split so that W <= 0.25 b. The column is exact for any
+  split; τ converges to the default as the tolerance falls.
+- `scripts/benchmarks/single_cpu_modes.py`: one-core timing of SkewerJAX's modes on the inputs of the fake_spectra
+  benchmark; `notebooks/benchmark_records/` (the saved benchmark records read by notebook 08).
+- Plotting: `use_backend()` (ipympl in a live notebook, inline when headless), `FONT_MIN` and `check_fonts`, `CMAPS`
+  (Tol's maps registered as `tol_<name>[_r]`), `LINE_COLOR_ORDER`; figures `plot_scale_factor_solutions`,
+  `plot_path_elements`, `plot_path_elements_3d`, `plot_pk_recovery_nd`, `field_power_modes`, `binned_power`,
+  `plot_nH_T_fractions`, `plot_deposition_story`, `plot_voigt_limits`, `plot_frames_axes`, `plot_option_sweep`,
+  `plot_effect_fluxes`; `plot_orders_superimposed` marks k = 2πn/Δv on P1D.
+- Tests: `tests/test_deposition.py` (JAX back end vs NumPy, cell crossings), style checks in `tests/test_plotting.py`.
+
+### Changed
+- Notebooks restructured: `00_quickstart_step_by_step` (from `09_visualisations`, now a step-by-step story with the
+  equations), `04_fields_and_samplers` (was 05), `05_simulation_outputs` (was 04); the summary sections are gone
+  (except in 08). New content per notebook: see the reply of the session.
+- Style: every discrete colour from Tol's "bright" scheme (`tol_colors`), a fixed colour per line and quantity,
+  Tol's continuous maps, minimum font sizes; the dependency diagram redrawn (field sources side by side, labelled
+  edges, a legend, no overlapping arrows).
+- Docstrings, scripts and tests no longer cite note file names or pre-refactor notebooks.
+
 ## Unreleased — notebooks second pass: dependency graph, one dark style, pedagogical content (2026-10-22, session 20261022_1520)
 
 ### Changed

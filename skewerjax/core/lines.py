@@ -65,7 +65,7 @@ class LineBundle:
     ----------
     line_ids : ids of ``lines_table.dat``, e.g. ``["HI-LyA", "HI-LyB", "SiIII-1206"]``.
     ref_line_id : reference line of the relative offsets delta_v_j = c ln(lambda_ref / lambda_j)
-        (notes ``app_velocity_units.tex``, Sec. relative line-centred velocity units).
+        (review notes, Sec. relative line-centred velocity units).
 
     Notes
     -----

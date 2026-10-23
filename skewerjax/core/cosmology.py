@@ -1,4 +1,4 @@
-"""Background cosmology: the scale factor along a photon path, a(x) (notes ``sec_cosmology.tex``)."""
+"""Background cosmology: the scale factor along a photon path, a(x) (review notes)."""
 from __future__ import annotations
 
 import diffrax

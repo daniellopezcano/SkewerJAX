@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class OverfluxStatistics1D:
     r"""P1D and xi1D of a built ``DeltaFieldBuilder``: total, per line pair, and per order.
 
-    Conventions (notes ``subsec_P1D.tex``, Eqs. P1D_delta_tilde_sample, P1D_sample_definition,
+    Conventions (review notes, Eqs. P1D_delta_tilde_sample, P1D_sample_definition,
     xi1D_from_P1D_ensemble; periodic skewers of N_v pixels of width dv [km/s])
     -------------------------------------------------------------------------------------
         k = 2 pi rfftfreq(N_v, dv)                     [s/km], k >= 0
@@ -29,8 +29,8 @@ class OverfluxStatistics1D:
     not symmetric (xi_ba(Dv) = xi_ab(-Dv)); ``Pk_pair`` stores Re P_ab = (P_ab + P_ba)/2.
     Every statistic is the mean over the kept samples (skewers).
 
-    Decomposition (notes ``sec_flux.tex`` Eq. total_overflux_expansion_general;
-    ``subsec_xi1D.tex`` Eq. xi1D_ensemble_L2_decomposition)
+    Decomposition (review notes, Eq. total_overflux_expansion_general;
+    Eq. xi1D_ensemble_L2_decomposition)
     ---------------------------------------------------------------------------
     Per sample, delta_tot = sum_A w delta_A - c with w = 1/(1+C_s), c = C_s/(1+C_s) (exact
     for ``DeltaFieldBuilder``). The weighted terms (A, B), including the order-0 term

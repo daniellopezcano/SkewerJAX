@@ -10,8 +10,8 @@ from skewerjax.simulations.readers import ArepoHDF5Reader, SnapshotHeader
 from skewerjax.simulations.gas_cells import GasCells
 from skewerjax.simulations.gas_physics import HI, CloudyIonTable, Ion, ion_from_species, ion_properties
 from skewerjax.simulations.selection import select_cells_near_paths
-from skewerjax.simulations.deposition import SegmentComponents, tophat_segments, voronoi_segments
-from skewerjax.simulations.absorbers import (Absorbers, ExactFrame, SnapshotFrame, absorber_samples, sampling_check, tau_absorbers,
+from skewerjax.simulations.deposition import CellCrossings, SegmentComponents, cell_crossings, tophat_segments, voronoi_segments
+from skewerjax.simulations.absorbers import (Absorbers, ExactFrame, SnapshotFrame, absorber_samples, absorbers_from_crossings, sampling_check, tau_absorbers,
                                             tau_by_path_bins)
 from skewerjax.simulations.maps import slab_projection
 from skewerjax.simulations.snapshot_skewers import ExtractionOptions, IntegrationOptions, SimulationSkewers, cached

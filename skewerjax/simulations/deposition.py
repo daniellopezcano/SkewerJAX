@@ -124,7 +124,8 @@ def _crossing(A, D, ga, gb, t0, t1):
 
 
 def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=None, n_sub: Optional[int] = None,
-                     max_sub: int = 4096) -> SegmentComponents:
+                     max_sub: int = 4096, backend: str = "numpy", chunk: int = 64,
+                     k_chunk: int = 512) -> SegmentComponents:
     """Nearest-generating-point (Voronoi) deposition on the dual segments of ``points``.
 
     Every half-segment is sampled at ``n_sub`` + 1 sub-points; each sub-point is labelled with its
@@ -141,18 +142,23 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
     gas_positions : (M, 3) mesh-generating points [cMpc] in [0, box).
     box : periodic box [cMpc] or None.
     gas_size : (M,) cell sizes V^(1/3) [cMpc] (to choose ``n_sub``).
+    backend : "numpy" (default: SciPy k-d tree labels, NumPy merging) or "jax" (the same algorithm in
+        JAX with static shapes, ``_voronoi_segments_jax``; identical cells, lengths equal to round-off).
+    chunk, k_chunk : "jax" only: consecutive points of a path per chunk and candidate generators per chunk
+        (doubled automatically until the candidate sets are provably complete).
 
     Returns
     -------
     SegmentComponents (weight 1); ``diagnostics`` holds ``n_sub`` and the sub-interval relative to
-    the smallest cell.
+    the smallest cell (and, for "jax", the candidate sizes used).
     """
+    if backend not in ("numpy", "jax"):
+        raise ValueError(f"backend must be 'numpy' or 'jax', got {backend!r}.")
     pts = np.asarray(points, dtype=np.float64)
     n_sk, n_p = pts.shape[:2]
     A, Bl, Bh, _ = _halves(pts)
     P = A.shape[0]
     gpos = _wrap(gas_positions, box)
-    tree = cKDTree(gpos, boxsize=box) if box is not None else cKDTree(gpos)
     size = None if gas_size is None else np.asarray(gas_size, dtype=np.float64)
     L_half = np.stack([np.linalg.norm(Bl - A, axis=-1), np.linalg.norm(Bh - A, axis=-1)], axis=1)     # (P, 2)
     if n_sub is not None:
@@ -161,6 +167,12 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
         S = 8
     else:                                   # sub-interval <= 1/16 of the smallest cell near the paths
         S = int(np.clip(np.ceil(16.0 * L_half.max() / max(size.min(), 1e-12)), 8, max_sub))
+    if backend == "jax":
+        cell, length, offset, kd = _voronoi_segments_jax(A, Bl, Bh, L_half, gpos, box, S, n_sk, chunk, k_chunk)
+        diag = dict(n_sub=S, sub_over_min_cell=float(L_half.max() / S / size.min()) if size is not None else None, **kd)
+        shp = (n_sk, n_p, cell.shape[-1])
+        return SegmentComponents(cell.reshape(shp), length.reshape(shp), offset.reshape(shp), 1.0, "voronoi", diag).compact()
+    tree = cKDTree(gpos, boxsize=box) if box is not None else cKDTree(gpos)
     t = np.linspace(0.0, 1.0, S + 1)
     sub = np.stack([A[:, None, :] + t[None, :, None] * (B - A)[:, None, :] for B in (Bl, Bh)], axis=1)   # (P, 2, S+1, 3)
     lab = tree.query(_wrap(sub.reshape(-1, 3), box), k=1, workers=-1)[1].reshape(P, 2, S + 1)
@@ -196,6 +208,94 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
     diag = dict(n_sub=S, sub_over_min_cell=float(L_half.max() / S / size.min()) if size is not None else None)
     shp = (n_sk, n_p, K)
     return SegmentComponents(cell.reshape(shp), length.reshape(shp), offset.reshape(shp), 1.0, "voronoi", diag).compact()
+
+
+@partial(jax.jit, static_argnames=("S", "k_chunk"))
+def _voronoi_chunk(A, Bl, Bh, L_half, gpos, box, S: int, k_chunk: int):
+    """Voronoi pieces of the dual segments of one chunk of C consecutive points of one path (static shapes).
+
+    1. Candidates: the ``k_chunk`` generators nearest to the chunk centre c (``lax.top_k``).
+    2. Labels of the S + 1 sub-points of each half-segment (argmin over the candidates), exact crossings
+       (``_crossing``), and the merge of the pieces of equal cell (sort + segment sum).
+
+    Completeness: on a half-segment of length <= L_i the nearest generator of any sub-point is within
+    rho_i = 2 L_i + d1_i of x_i (d1_i: distance from x_i to its nearest generator). The candidates hold
+    every such generator if the k_chunk-th distance from c exceeds max_i (rho_i + |x_i - c|); the flag
+    is returned and the caller doubles ``k_chunk`` until it holds (labels = exact nearest generators).
+
+    Returns (cell (C, 4S) int, length (C, 4S), moment (C, 4S), complete).
+    """
+    mi = lambda d: d if box is None else d - box * jnp.round(d / box)
+    c = jnp.mean(A, axis=0)
+    neg, cand = jax.lax.top_k(-jnp.sum(mi(gpos - c) ** 2, axis=-1), k_chunk)
+    cut = jnp.sqrt(-neg[-1])
+    gimg = A[:, None, :] + mi(gpos[cand][None, :, :] - A[:, None, :])           # (C, K, 3) images near x_i
+    d1 = jnp.sqrt(jnp.min(jnp.sum((gimg - A[:, None, :]) ** 2, axis=-1), axis=-1))
+    rho = 2.0 * jnp.max(L_half, axis=-1) + d1
+    complete = cut > jnp.max(rho + jnp.linalg.norm(A - c, axis=-1))
+    t = jnp.linspace(0.0, 1.0, S + 1)
+    t0, t1 = t[:-1], t[1:]
+    cells, lens, moms = [], [], []
+    for h, (B, sign) in enumerate(((Bl, -1.0), (Bh, 1.0))):
+        D = B - A
+        sub = A[:, None, :] + t[None, :, None] * D[:, None, :]                   # (C, S+1, 3)
+        lab = jax.vmap(lambda sb, g: jnp.argmin(jnp.sum((sb[:, None, :] - g[None]) ** 2, -1), axis=-1))(sub, gimg)
+        la, lb = lab[:, :-1], lab[:, 1:]
+        ga = jnp.take_along_axis(gimg, la[..., None], axis=1)
+        gb = jnp.take_along_axis(gimg, lb[..., None], axis=1)
+        tc = _crossing(A, D, ga, gb, t0, t1)
+        Lh = L_half[:, h][:, None]
+        for lab_, lo, hi in ((la, t0[None, :], tc), (lb, tc, t1[None, :])):
+            cells.append(cand[lab_])
+            lens.append((hi - lo) * Lh)
+            moms.append(sign * 0.5 * (hi ** 2 - lo ** 2) * Lh ** 2)
+    cell, ln, mo = (jnp.concatenate(x, axis=1) for x in (cells, lens, moms))    # (C, 4S)
+    M = gpos.shape[0]
+    key = jnp.where(ln > 0, cell, M)                                             # zero-length pieces: sentinel
+    order = jnp.argsort(key, axis=1)
+    key, ln, mo = (jnp.take_along_axis(x, order, axis=1) for x in (key, ln, mo))
+    new = jnp.concatenate([jnp.ones_like(key[:, :1], bool), key[:, 1:] != key[:, :-1]], axis=1)
+    grp = jnp.cumsum(new, axis=1) - 1                                            # group of every piece
+    seg_sum = jax.vmap(lambda g, x: jnp.zeros(x.shape, x.dtype).at[g].add(x))
+    L_, M_ = seg_sum(grp, ln), seg_sum(grp, mo)
+    lab_g = jax.vmap(lambda g, k: jnp.full(k.shape, M, k.dtype).at[g].set(k))(grp, key)
+    cell_out = jnp.where((lab_g < M) & (L_ > 0), lab_g, -1)
+    return cell_out, jnp.where(cell_out >= 0, L_, 0.0), jnp.where(cell_out >= 0, M_, 0.0), complete
+
+
+def _voronoi_segments_jax(A, Bl, Bh, L_half, gpos, box, S: int, n_sk: int, chunk: int, k_chunk: int):
+    """``voronoi_segments`` with JAX labels and merging: (cell, length, offset) (P, 4S) and diagnostics.
+
+    Each path is cut into chunks of ``chunk`` consecutive points (padded by repeating its last point), so a
+    chunk stays local; the chunks run through ``lax.map``. ``k_chunk`` is doubled (and the chunks recomputed)
+    until every candidate set is provably complete, so the labels are those of an exact nearest-generator
+    search. Only the trimming of the empty slots (``SegmentComponents.compact``) runs on the host, because
+    its output size depends on the data.
+    """
+    P, M = A.shape[0], gpos.shape[0]
+    n_p = P // n_sk
+    nch = -(-n_p // chunk)
+    pad = nch * chunk - n_p
+
+    def per_path(x):
+        x = x.reshape((n_sk, n_p) + x.shape[1:])
+        if pad:
+            x = np.concatenate([x, np.repeat(x[:, -1:], pad, axis=1)], axis=1)
+        return jnp.asarray(x.reshape((n_sk * nch, chunk) + x.shape[2:]))
+
+    Aj, Blj, Bhj, Lj = (per_path(x) for x in (A, Bl, Bh, L_half))
+    g = jnp.asarray(gpos)
+    bx = None if box is None else float(box)
+    k = min(k_chunk, M)
+    while True:
+        cell, ln, mo, ok = jax.lax.map(lambda xs: _voronoi_chunk(*xs, g, bx, S, k), (Aj, Blj, Bhj, Lj))
+        if bool(jnp.all(ok)) or k == M:
+            break
+        k = min(2 * k, M)
+    back = lambda x: np.asarray(x).reshape(n_sk, nch * chunk, -1)[:, :n_p].reshape(P, -1)
+    cell, ln, mo = back(cell), back(ln), back(mo)
+    off = np.where(ln > 0, mo / np.where(ln > 0, ln, 1.0), 0.0)
+    return cell.astype(np.int64), ln, off, dict(k_chunk=k)
 
 
 # --------------------------------------------------------------------------- top hat
@@ -298,6 +398,67 @@ def tophat_point_values(points, gas_positions, gas_size, box: Optional[float], n
     v_m = np.where(ntot > 0, (w * vv).sum(1) / safe_n, 0.0)
     shp = pts.shape[:2]
     return dict(n=ntot.reshape(shp), T=T_m.reshape(shp), v_los=v_m.reshape(shp))
+
+
+# --------------------------------------------------------------------------- cell crossings (Voronoi-adapted segmentation)
+@dataclass
+class CellCrossings:
+    """The path cut at the Voronoi cell boundaries: one interval per crossing of a cell (host arrays).
+
+    Derived from a Voronoi ``SegmentComponents`` by joining the pieces of the same cell in consecutive dual
+    segments, so the boundaries are the cell crossings only (the midpoints between sampling points are gone).
+    It is a property of the geometry: the same for any spacing of the points that resolves the cells.
+
+    Attributes
+    ----------
+    s_lo, s_hi : (N_sk, M) path coordinates [cMpc] of the ends of every crossing (padded: s_lo = s_hi = 0).
+    cell : (N_sk, M) int, index into the GasCells (-1: padding).
+    diagnostics : dict (``max_gap``: largest mismatch [cMpc] between consecutive ends, 0 for straight paths).
+    """
+    s_lo: np.ndarray
+    s_hi: np.ndarray
+    cell: np.ndarray
+    diagnostics: dict
+
+    @property
+    def length(self) -> np.ndarray:
+        return np.where(self.cell >= 0, self.s_hi - self.s_lo, 0.0)
+
+    @property
+    def n_crossings(self) -> np.ndarray:
+        return (self.cell >= 0).sum(axis=-1)
+
+
+def cell_crossings(seg: SegmentComponents, points) -> CellCrossings:
+    """``CellCrossings`` of a Voronoi deposition along ``points`` (N_sk, N, 3) [cMpc].
+
+    Every piece p of the dual segment of point i is the interval s_i + offset_p -+ length_p / 2 of the path
+    (a straight piece of one convex cell); consecutive intervals of the same cell are joined. Exact for
+    straight paths; on a polyline, a cell that holds both arms of a bend but not its vertex would make two
+    pieces of one point, and ``diagnostics["max_gap"]`` reports the mismatch.
+    """
+    if seg.kind != "voronoi":
+        raise ValueError(f"cell crossings need a Voronoi deposition, got {seg.kind!r}.")
+    g = path_geometry(jnp.asarray(points, dtype=jnp.float64))
+    s_pt = np.asarray(g["s"])
+    rows_lo, rows_hi, rows_c = [], [], []
+    gap = 0.0
+    for k in range(seg.cell.shape[0]):
+        pi, ki = np.nonzero(seg.cell[k] >= 0)
+        mid = s_pt[k][pi] + seg.offset[k][pi, ki]
+        half = 0.5 * seg.length[k][pi, ki]
+        c = seg.cell[k][pi, ki]
+        order = np.lexsort((mid, pi))
+        lo, hi, c = (mid - half)[order], (mid + half)[order], c[order]
+        if lo.size > 1:
+            gap = max(gap, float(np.max(np.abs(lo[1:] - hi[:-1]))))
+        new = np.concatenate([[True], c[1:] != c[:-1]])
+        start = np.nonzero(new)[0]
+        end = np.concatenate([start[1:], [c.size]]) - 1
+        rows_lo.append(lo[start]); rows_hi.append(hi[end]); rows_c.append(c[start])
+    m = max(max(len(r) for r in rows_c), 1)
+    pad = lambda rows, f: np.stack([np.concatenate([r, np.full(m - len(r), f)]) for r in rows])
+    return CellCrossings(pad(rows_lo, 0.0), pad(rows_hi, 0.0), pad(rows_c, -1).astype(np.int64), dict(max_gap=gap))
 
 
 # --------------------------------------------------------------------------- along-skewer fields

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """The Voigt function: ExoJAX and FFT-convolution implementations against scipy's Faddeeva ``wofz``, unit area, the
-Gaussian and Lorentzian limits, and finite gradients (notes ``sec_flux.tex``, Eq. line_profile)."""
+Gaussian and Lorentzian limits, and finite gradients (review notes, Eq. line_profile)."""
 from _common import Checks, figure_backend
 
 C = Checks("check_voigt", __doc__)

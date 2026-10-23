@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """a(x) along a photon path: the diffrax solution against the closed forms of radiation, matter and Lambda domination
-(notes ``sec_cosmology.tex``, Eq. dadx_general, Fig. a_of_x)."""
+(review notes, Eq. dadx_general, Fig. a_of_x)."""
 from _common import Checks, figure_backend
 
 C = Checks("check_cosmology", __doc__)

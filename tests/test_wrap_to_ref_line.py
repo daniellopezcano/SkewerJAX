@@ -1,8 +1,7 @@
 """Sign of the reference-line shift (``core.wrap_to_ref_line``, ``core.velocities_in_line_frames``): a feature at v0
 in a line's own frame lands at v0 - delta_v on the reference frame, delta_v = c ln(lambda_ref / lambda_j).
 
-Ported from the pre-refactor version of this file (``OpticalDepthCalculator``, ``reference_velocities_to_line_centered``
-no longer exist); the same checks are in ``scripts/validation/check_line_frames.py``."""
+The same checks are in ``scripts/validation/check_line_frames.py``."""
 import numpy as np
 import jax.numpy as jnp
 

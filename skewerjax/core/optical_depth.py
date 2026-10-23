@@ -1,4 +1,4 @@
-"""Line profiles and the optical depth tau(v) along skewers (notes ``sec_flux.tex``, Eqs. line_profile, tau_straight_los).
+"""Line profiles and the optical depth tau(v) along skewers (review notes, Eqs. line_profile, tau_straight_los).
 
     tau_j(v) = C_j f_j sum_i w_i n_com,i a_i^-2 phi_ij(v),   C_j = q_e^2 / (4 eps_0 m_e c),   F = exp(-tau)
 
@@ -277,7 +277,7 @@ def optical_depth_sharded(samples: LoSSamples, velocities_kms, line_bundle, *, d
 # --------------------------------------------------------------------------- sampling resolution
 def sampling_resolution_report(line_centre_kms, b_kms, weight, tolerance: float = 0.25) -> dict:
     """Are consecutive points closer in line-centre velocity than ``tolerance`` x the line width? (notes
-    ``app_numerical_resolution.tex``; NumPy, diagnostics only).
+    review notes on the numerical resolution; NumPy, diagnostics only).
 
     The quadrature puts point i's absorption at its line centre v_c,i; for a top hat of width W replaced by a delta
     the peak of a Gaussian of Doppler parameter b changes by W^2 / (12 b^2) (0.5 % for W = b / 4).

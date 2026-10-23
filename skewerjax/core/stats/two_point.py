@@ -1,6 +1,6 @@
 """Shared JAX kernels of the two-point statistics (FFT spectra, Wiener-Khinchin, binning, exact decomposition).
 
-Conventions (notes ``subsec_P1D.tex`` Eqs. P1D_delta_tilde_sample, P1D_sample_definition,
+Conventions (review notes, Eqs. P1D_delta_tilde_sample, P1D_sample_definition,
 P1D_ensemble_translation_invariant, xi1D_from_P1D_ensemble; generalised to d FFT axes)
 -----------------------------------------------------------------------------------
 Grid: N = prod(N_i) cells of size dV = prod(d_i) per realisation, V = N dV; forward FFT
@@ -13,7 +13,7 @@ sign e^{-i k.x} (``jnp.fft``), angular wavenumbers k = 2 pi fftfreq(N_i, d_i).
 so that P_ab(k) = dV sum_r xi_ab(r) e^{+i k.r}, the notes' sign (P = int xi e^{+i w Delta}).
 Cross spectra are complex; P_ab + P_ba = 2 Re P_ab is the notes' ``sym`` combination.
 
-Decomposition (notes ``sec_flux.tex`` Eqs. total_overflux_expansion_general,
+Decomposition (review notes, Eqs. total_overflux_expansion_general,
 overflux_denominator_expansion_general, Table overflux_subset_pairings_L2)
 ------------------------------------------------------------------------------
 With ``core.overflux.DeltaFieldBuilder`` normalising every sample s by its own spectral mean,

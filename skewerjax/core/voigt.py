@@ -1,4 +1,4 @@
-"""The Voigt function V(x; sigma, gamma) = (G * L)(x) (notes ``sec_flux.tex``, Eq. line_profile), three implementations."""
+"""The Voigt function V(x; sigma, gamma) = (G * L)(x) (review notes, Eq. line_profile), three implementations."""
 from __future__ import annotations
 
 from typing import Any, Literal

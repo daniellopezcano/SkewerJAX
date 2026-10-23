@@ -42,7 +42,10 @@ class ExtractionOptions:
     """Field extraction (layers 3 and 5). Defaults: SkewerJAX.
 
     deposition : "voronoi" (cells of the mesh-generating points), "tophat" (spheres of radius
-        V^(1/3), fake_spectra) or "points" (summed sphere values at the points; previous default).
+        V^(1/3), fake_spectra), "points" (summed sphere values at the points; previous default) or
+        "voronoi_crossings" (opt-in: the Voronoi pieces joined into one interval per cell crossing,
+        ``SimulationSkewers.crossings``, each split so that its velocity width is <= 0.25 b;
+        ``absorbers.absorbers_from_crossings``).
     mass_unit : "amu" (A m_u) or "proton" (A m_p, fake_spectra) in n_X = rho X / (A m).
     T_constants : "codata" or "fake_spectra" (its m_p, k_B) in T = (gamma - 1) mu m_p u / k_B.
     b_constants : "codata" (b^2 = 2 k_B T / (A m_u)) or "fake_spectra" (2 k T / (A m_p) with the C
@@ -252,9 +255,23 @@ class SimulationSkewers:
             self._seg[kind] = build(np.asarray(self.cells.positions), np.asarray(self.cells.size_cMpc))
         return self._seg[kind]
 
-    def absorbers(self, ion: gp.Ion, ext: ExtractionOptions = ExtractionOptions(), override: Optional[dict] = None) -> ab_.Absorbers:
-        """Deposited absorbers of every skewer (one per piece of cell in each dual segment)."""
+    def crossings(self) -> dep.CellCrossings:
+        """The Voronoi-adapted segmentation of these skewers, kept alongside ``points``: one interval per cell
+        crossing (``deposition.cell_crossings`` of the Voronoi deposition); cached for the selected cells."""
+        if "crossings" not in self._seg:
+            self._seg["crossings"] = dep.cell_crossings(self.segments("voronoi"), self.points)
+        return self._seg["crossings"]
+
+    def absorbers(self, ion: gp.Ion, ext: ExtractionOptions = ExtractionOptions(), override: Optional[dict] = None,
+                  frame=None) -> ab_.Absorbers:
+        """Deposited absorbers of every skewer (one per piece of cell in each dual segment; for
+        ``deposition="voronoi_crossings"`` one per sub-piece of each cell crossing, split with ``frame``'s Hubble rate)."""
         ci = self.cell_inputs(ion, ext, override)
+        if ext.deposition == "voronoi_crossings":
+            if override and "pos" in override:
+                raise ValueError("deposition='voronoi_crossings' uses the selected cells' own positions.")
+            return ab_.absorbers_from_crossings(self.crossings(), self.points, ci["n"], ci["T"], ci["vel"], self.header.a,
+                                                ci["species"], ci["mass"], frame=frame)
         if ext.deposition == "points":
             tan = self.tangents.reshape(-1, 3)
             vel = ci["vel"]
@@ -402,6 +419,6 @@ class SimulationSkewers:
         """``tau`` without the cache: the deposited absorbers through ``absorbers.tau_absorbers``."""
         T_scale = gp.FAKE_SPECTRA_B2_RATIO if ext.b_constants == "fake_spectra" else 1.0
         fr = self.frame(integ.frame, integ.periodic)
-        A = self.absorbers(ion, ext, override)
+        A = self.absorbers(ion, ext, override, frame=fr)
         return ab_.tau_absorbers(A, line_bundle, np.asarray(velocities_kms, dtype=np.float64), fr, T_scale=T_scale,
                                  n_scale=integ.normalisation, detuning=integ.detuning, check=check, dtype=integ.dtype)[0]

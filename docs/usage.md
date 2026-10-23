@@ -1,8 +1,8 @@
 # Usage guide
 
 This guide is the reference companion of the notebooks. It lists the entry points of each subpackage, the conventions they
-share and the options that control speed and memory. The notebooks (`notebooks/00`–`09`) show the same tools at
-work, step by step.
+share and the options that control speed and memory. The notebooks (`notebooks/00_quickstart`, `00_quickstart_step_by_step`, `01`–`08`) show
+the same tools at work, step by step.
 
 ```mermaid
 flowchart LR
@@ -70,8 +70,12 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 - **Skewers:** `SimulationSkewers.axis_aligned` (straight, along a box axis) or `SimulationSkewers.from_bundle` (any
   `SkewerBundle`, with its own a(x)). The constructor selects the cells near the paths, streaming the snapshot in
   blocks of `max_rows` cells. Host memory is therefore set by the block size, not by the snapshot size.
-- **Physics options** (`ExtractionOptions`): `deposition`, `mass_unit`, `T_constants`, `b_constants`, `x_HI_model`,
-  `cloudy_density`, `cloudy_interpolation`.
+- **Physics options** (`ExtractionOptions`): `deposition` (`"voronoi"` default, `"tophat"`, `"points"`, or the opt-in
+  `"voronoi_crossings"`: one absorber per sub-piece of each cell crossing, split so that its velocity width stays below
+  0.25 b), `mass_unit`, `T_constants`, `b_constants`, `x_HI_model`, `cloudy_density`, `cloudy_interpolation`.
+- **Deposition back ends:** `deposition.voronoi_segments(..., backend="jax")` computes the same Voronoi pieces in JAX
+  with static shapes (identical cells and lengths; slower on a CPU, so the NumPy path is the default).
+  `SimulationSkewers.crossings()` keeps the cell crossings of the skewers alongside their points (`CellCrossings`).
 - **Integration options** (`IntegrationOptions`): `frame`, `normalisation`, `detuning`, `periodic`, `dtype`.
 - **Lower layers:** `sk.absorbers(ion)` gives the deposited pieces, `tau_absorbers(A, lines, v, frame)` the τ (options
   `chunk`, `v_chunk`, `dtype`, `devices`, `skewers`), and `sk.tau(...)` the τ cached in an HDF5 file when the object
@@ -79,7 +83,8 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 - **Figure tools:**
   - `slab_projection(reader, normal_axis, centre, thickness, n_pix)` gives the gas surface density and the
     mass-weighted temperature of a slab;
-  - `tau_by_path_bins(A, lines, v, frame, s_edges)` gives the τ made by each stretch of the path (notebook 09).
+  - `tau_by_path_bins(A, lines, v, frame, s_edges)` gives the τ made by each stretch of the path
+    (`00_quickstart_step_by_step`).
 
 ## `skewerjax.comparison`
 
@@ -103,6 +108,7 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 | `dtype="float32"` | `compute_optical_depth`, `tau_absorbers`, `IntegrationOptions` | opt-in: 2.4× faster on 16 TNG50-4 skewers on the CPU, max \|ΔF\| 1.6e-3 |
 | `devices=` | `compute_optical_depth`, `tau_absorbers`, `optical_depth_sharded` | shards the skewer axis (or a skewer's absorber rows) over devices |
 | `max_rows` | `SimulationSkewers` | cells per streamed block of the selection |
+| `deposition="voronoi_crossings"` | `ExtractionOptions` | one absorber per (sub-piece of a) cell crossing instead of per piece of every dual segment: ~10× fewer H I absorbers at 0.25 km/s spacing, independent of the spacing |
 
 Sharding uses one call for any number of devices:
 
@@ -123,7 +129,8 @@ single CPU device.
 python scripts/validation/run_all.py [--quick] [--skip tng,fake] [--outdir validation_output]
 pytest                                                                  # tests/, CPU, seconds per test
 SKEWERJAX_SLOW=1 pytest                                                 # also the TNG50-4 / fake_spectra checks
-python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick --results benchmark_results
+python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick --results benchmark_results/suite
+python scripts/benchmarks/single_cpu_modes.py --results benchmark_results/single_cpu    # one core, every integration mode
 ```
 
 The benchmark runs every configuration in its own process with its own CPU set and thread count. It skips the
@@ -135,15 +142,26 @@ configurations whose result already exists, and it caps each one at `--cap` seco
 One call at the top of a notebook or script applies the style of every figure:
 
 ```python
-from skewerjax.utils.plotting import use_style, ENTITY_COLORS as EC, PALETTE, FG, LABELS
-use_style()            # dark background, NeonGlow under every line, PALETTE (Paul Tol's colour-blind-safe "light" scheme)
-use_style("light")     # the previous white-background style (ENTITY_COLORS stay tuned for the dark one)
+from skewerjax.utils.plotting import use_style, use_backend, ENTITY_COLORS as EC, PALETTE, CMAPS, FG, LABELS
+use_backend()          # interactive figures (ipympl, "%matplotlib widget") in a live notebook; inline when headless
+use_style()            # dark background, NeonGlow under every line, Paul Tol's colour-blind-safe "bright" scheme
+use_style("light")     # the white-background variant (same colours)
 ```
 
-- Colours: `ENTITY_COLORS` (one per species, line, quantity and code), `PALETTE`, `PALETTE_CYCLE`, `FG`/`BG`;
-  line styles per mode: `MODE_STYLES`; labels with units: `LABELS`; sizes: `FIGSIZES`.
+- Colours: every discrete colour is Tol's "bright" scheme (`PALETTE` = `tol_colors.colorsets["bright"]`, vendored with
+  identical values when `tol_colors` is not installed), in Tol's order (blue, red, green, yellow, cyan, purple, grey).
+  `ENTITY_COLORS` fixes the colour of every line and quantity in every notebook (Lyα blue, Si III red, density green,
+  temperature purple, velocity yellow, ...). Continuous maps are Tol's (`CMAPS`, registered as `tol_<name>[_r]`).
+- Text: minimum font sizes `FONT_MIN` (ticks 16, labels 20, legends / annotations / text boxes 15, floor 13);
+  `check_fonts(fig)` lists any text below the floor.
+- `SKEWERJAX_HEADLESS=1` forces the inline backend (e.g. when executing notebooks with nbconvert).
+
+- Line styles per mode: `MODE_STYLES`; labels with units: `LABELS`; sizes: `FIGSIZES`.
 - `plot_dag(highlight, external=False)`: the dependency graph of the ingredients (`DAG_NODES`, `DAG_EDGES`).
-- Tutorial figures: `plot_line_table`, `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
+- Tutorial figures: `plot_line_table`, `plot_scale_factor_solutions`, `plot_path_elements`, `plot_path_elements_3d`,
+  `plot_pk_recovery_nd` (+ `field_power_modes`, `binned_power`), `plot_nH_T_fractions`, `plot_deposition_story`,
+  `plot_voigt_limits`, `plot_frames_axes`, `plot_option_sweep`, `plot_effect_fluxes`,
+  `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
   `plot_line_frames`, `plot_flux_vs_analytic`, `plot_raw_to_overflux`, `plot_terms_by_order`,
   `plot_p1d_input_vs_measured` (+ `grf_p1d_along_axis`), `plot_cylinder(..., progress=p)` (one frame per call),
   `plot_slab`, `plot_tau_buildup`, `plot_orders_superimposed`, `plot_pk_recovery`, the benchmark figures `plot_bench_*`.

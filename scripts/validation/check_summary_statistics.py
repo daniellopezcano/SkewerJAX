@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Summary statistics: P1D / xi1D / P3D recovery of Gaussian random fields, the exact decomposition by order and line
-pair, the shift signature of a second line, and the McDonald / Ma contamination fits (notes ``subsec_P1D.tex``,
-``subsec_xi1D.tex``, ``sec_flux.tex`` Sec. Overflux)."""
+pair, the shift signature of a second line, and the McDonald / Ma contamination fits (review notes, P1D, xi1D and
+Sec. Overflux)."""
 from _common import Checks, figure_backend
 
 C = Checks("check_summary_statistics", __doc__)

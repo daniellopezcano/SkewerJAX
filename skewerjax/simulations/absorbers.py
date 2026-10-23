@@ -1,6 +1,6 @@
 """Absorbers (layer 6): the deposited pieces of every skewer, their frame a(s), and tau through the core kernel.
 
-What the optical-depth integral needs (notes ``sec_flux.tex`` Eq. tau_straight_los) is, along the path, the
+What the optical-depth integral needs (review notes, Eq. tau_straight_los) is, along the path, the
 comoving density of the absorbing ion, its temperature, its *peculiar* velocity and the line element. The Hubble
 flow is not a field: it enters through the scale factor a(s) of every point, set by the frame.
 
@@ -61,7 +61,7 @@ class SnapshotFrame:
 
 @dataclass
 class ExactFrame:
-    """a(s) from the cosmology along each path (notes ``app_velocity_units.tex``).
+    """a(s) from the cosmology along each path (review notes).
 
     Parameters
     ----------
@@ -199,6 +199,53 @@ def absorbers_from_point_values(points, pv: dict, a_data: float, species: str, m
                      T=np.asarray(pv["T"], float), v_los=np.asarray(pv["v_los"], float),
                      cell=-np.ones((n_sk, n_p), int), point=np.broadcast_to(np.arange(n_p), (n_sk, n_p)).copy(),
                      a_data=float(a_data), species=species, mass_amu=float(mass_amu), meta=dict(kind="points"))
+
+
+def absorbers_from_crossings(cross, points, n_cell, T_cell, velocity_cell, a_data: float, species: str, mass_amu: float,
+                             *, frame=None, tolerance: Optional[float] = 0.25, max_split: int = 64) -> Absorbers:
+    """Absorbers of the Voronoi-adapted segmentation: every cell crossing, split into equal sub-pieces.
+
+    A crossing of length l holds one cell, so n, T and v_pec are constant on it; only a(s) and the Hubble
+    flow vary. It is split into q equal sub-pieces at their midpoints (midpoint rule), with
+    q = ceil(W / (tolerance b)), W = (dv/ds) l its velocity width and b the thermal width (the criterion of
+    ``sampling_check``), capped at ``max_split``; ``frame=None`` or ``tolerance=None`` keeps q = 1. The
+    column sum_p n_p l_p is exact for any q; the profile of each crossing converges as q grows.
+
+    Parameters
+    ----------
+    cross : ``CellCrossings`` of ``points`` (N_sk, N, 3) [cMpc]; n_cell, T_cell, velocity_cell : as
+        ``absorbers_from_components``; frame : the frame of the integral (its ``hubble_rate``).
+    """
+    g = path_geometry(jnp.asarray(points, dtype=jnp.float64))
+    s_pt, tan = np.asarray(g["s"]), np.asarray(g["tangents"])
+    n_cell, T_cell, vel = (np.asarray(x, dtype=np.float64) for x in (n_cell, T_cell, velocity_cell))
+    rows = {k: [] for k in ("s", "n", "length", "T", "v_los", "cell", "point")}
+    n_split = []
+    for k in range(cross.cell.shape[0]):
+        live = cross.cell[k] >= 0
+        lo, hi, c = cross.s_lo[k][live], cross.s_hi[k][live], cross.cell[k][live]
+        l = hi - lo
+        if frame is None or tolerance is None:
+            q = np.ones(c.size, np.int64)
+        else:
+            b = np.sqrt(2.0 * phys.kB * T_cell[c] / mass_amu) / 1e3
+            W = frame.hubble_rate(k, 0.5 * (lo + hi)) * l
+            q = np.clip(np.ceil(W / (tolerance * np.maximum(b, 1e-30))), 1, max_split).astype(np.int64)
+        n_split.append(q)
+        rep = np.repeat(np.arange(c.size), q)
+        j = np.arange(rep.size) - np.repeat(np.cumsum(q) - q, q)
+        s = lo[rep] + (j + 0.5) * l[rep] / q[rep]
+        pt = np.clip(np.searchsorted(0.5 * (s_pt[k][1:] + s_pt[k][:-1]), s), 0, s_pt.shape[1] - 1)
+        cc = c[rep]
+        rows["s"].append(s); rows["n"].append(n_cell[cc]); rows["length"].append(l[rep] / q[rep])
+        rows["T"].append(T_cell[cc]); rows["v_los"].append(np.sum(vel[cc] * tan[k][pt], axis=-1))
+        rows["cell"].append(cc); rows["point"].append(pt)
+    fills = dict(s=0.0, n=0.0, length=0.0, T=1e4, v_los=0.0, cell=-1, point=-1)
+    q_all = np.concatenate(n_split) if n_split else np.zeros(0, np.int64)
+    meta = dict(kind="voronoi_crossings", max_split=int(q_all.max()) if q_all.size else 0,
+                mean_split=float(q_all.mean()) if q_all.size else 0.0)
+    return Absorbers(**{k: _pad_stack(v, fills[k]) for k, v in rows.items()}, a_data=float(a_data),
+                     species=species, mass_amu=float(mass_amu), meta=meta)
 
 
 # --------------------------------------------------------------------------- sampling check

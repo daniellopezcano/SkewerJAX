@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-"""Line-centred velocity frames: the sign of ``wrap_to_ref_line`` and ``velocities_in_line_frames`` (notes
-``app_velocity_units.tex``, relative line-centred velocity units). Ports ``tests/test_wrap_to_ref_line.py``."""
+"""Line-centred velocity frames: the sign of ``wrap_to_ref_line`` and ``velocities_in_line_frames`` (review
+notes, relative line-centred velocity units). Ports ``tests/test_wrap_to_ref_line.py``."""
 from _common import Checks
 
 C = Checks("check_line_frames", __doc__)

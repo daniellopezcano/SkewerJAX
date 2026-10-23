@@ -82,8 +82,11 @@ Extras can be combined, e.g. `pip install -e ".[gpu,notebooks,comparison,dev]"`.
   environment uses an editable 2.2.4 clone).
   - Without it, the comparison subpackage still works from a reference HDF5 file (`FakeSpectraSource(reference=...)`).
   - The rest of the package never imports it.
-- **jztree / jaxkd** (JAX neighbour search) are *not* used. The cell selection uses SciPy's `cKDTree`, which was the
-  faster option on the CPU (see the reply of session 20261021_2330).
+- **jztree / jaxkd** (JAX neighbour search) are *not* used. The cell selection uses SciPy's `cKDTree`, the faster
+  option on the CPU; JZ-TREE (CUDA only, kNN with periodic boxes) could serve as an optional GPU back end.
+- **tol_colors** (Paul Tol's colour schemes) is optional: `skewerjax.utils.plotting` takes its "bright" scheme from it
+  when it is installed and otherwise uses a vendored copy with the same values.
+- **ipympl** gives interactive figures in a live notebook (`plotting.use_backend()`); without it, figures are inline.
 - **CLOUDY ionisation tables** for metal ions:
   - the tables are expected in `skewerjax/simulations/cloudy_tables/ion_out_photo_atten`;
   - `cloudy_tables` is a git submodule (`git submodule update --init`);

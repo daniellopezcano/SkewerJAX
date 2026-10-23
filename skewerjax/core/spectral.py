@@ -1,4 +1,4 @@
-"""Spectral coordinates: the observer's velocity v_dagger, local wavelengths lambda' and detunings nu (notes ``sec_flux.tex`` Sec. 2.2)."""
+"""Spectral coordinates: the observer's velocity v_dagger, local wavelengths lambda' and detunings nu (review notes, Sec. 2.2)."""
 from __future__ import annotations
 
 from typing import Optional
@@ -152,7 +152,7 @@ def velocities_in_line_frames(velocities_kms: ArrayLike, line_bundle, reference_
     """v^(j) = v^(ref) + c ln(lambda_ref / lambda_j): the velocity grid of a reference line in every line's own frame.
 
     The same observed wavelength lambda_ref exp(v_ref / c) = lambda_j exp(v_j / c), independent of redshift
-    (notes ``app_velocity_units.tex``). velocities_kms : (N_v,) [km/s]; returns (N_lines, N_v).
+    (review notes). velocities_kms : (N_v,) [km/s]; returns (N_lines, N_v).
     """
     velocities_kms = jnp.asarray(velocities_kms)
     lambda0_A = jnp.asarray(line_bundle.lambda0_A)

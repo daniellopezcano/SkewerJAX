@@ -1,4 +1,4 @@
-"""Closed-form optical depths of uniform gas (notes ``app_analytical_solutions.tex``): the validation targets of tau."""
+"""Closed-form optical depths of uniform gas (review notes): the validation targets of tau."""
 from __future__ import annotations
 
 import jax

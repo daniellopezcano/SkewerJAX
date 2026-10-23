@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""tau of uniform gas against the closed forms of the notes (``app_analytical_solutions.tex``): static natural and
+"""tau of uniform gas against the closed forms of the review notes: static natural and
 thermal lines (Sec. analytic_no_expansion) and radiation domination with natural and thermal broadening."""
 from _common import Checks, figure_backend
 
