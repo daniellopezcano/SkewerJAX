@@ -48,7 +48,7 @@ imports the other subpackages. `skewerjax.utils.plotting` is outside them.
 | lines | `LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id=...)` | any id of `core/lines_table.dat` (`LINES`) |
 | background | `Cosmology(H0, Omega_r_0, Omega_m_0, Omega_k_0, Omega_lambda_0)` | batches of cosmologies; `solve_a_of_x(rtol, atol)` |
 | skewers | `SkewerBundle(spatial_points, cosmologies, a0, x0, ...)` | `ICs_defined_at_index`, `ICs_at_emission_or_absorption`, `manual_scale_factors` |
-| fields | `Fields({species: {name: ScalarField/VectorField}})` | samplers `LogRamp`, `VelocityRamp`, `Constant`, `GaussianDensity`, `SampledField` |
+| fields | `Fields({species: {name: ScalarField/VectorField}})` | samplers `LogRamp`, `VelocityRamp`, `Constant`, `GRFDensity` (n = n̄(1 + δ) of a `PowerLawGRF`), `SampledField` |
 | τ | `compute_optical_depth(bundle, v, lines, fields, a_dagger=...)` | `voigt`, `detuning`, `velocity_period`, `v_chunk`, `batch_size`, `dtype`, `devices` |
 | τ (layers) | `los_samples` → `optical_depth_from_samples` → `optical_depth_kernel` | `LoSSamples` is the boundary with `skewerjax.simulations` |
 | frames | `wrap_to_ref_line`, `velocities_in_line_frames`, `line_wavelength_grid_A` | |
@@ -73,6 +73,10 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 - **Physics options** (`ExtractionOptions`): `deposition` (`"voronoi"` default, `"tophat"`, `"points"`, or the opt-in
   `"voronoi_crossings"`: one absorber per sub-piece of each cell crossing, split so that its velocity width stays below
   0.25 b), `mass_unit`, `T_constants`, `b_constants`, `x_HI_model`, `cloudy_density`, `cloudy_interpolation`.
+- **Selection back ends:** `selection.select_cells_near_paths(..., backend="cpu" | "jztree" | "auto")` and
+  `SimulationSkewers(..., selection_backend=...)`: `"cpu"` (default, SciPy's periodic `cKDTree`); `"jztree"` (CUDA GPU,
+  needs the optional package jztree; borderline cells re-checked in float64 so the set is the CPU one); `"auto"` (the
+  GPU when jztree and a CUDA device are present, else the CPU).
 - **Deposition back ends:** `deposition.voronoi_segments(..., backend="jax")` computes the same Voronoi pieces in JAX
   with static shapes (identical cells and lengths; slower on a CPU, so the NumPy path is the default).
   `SimulationSkewers.crossings()` keeps the cell crossings of the skewers alongside their points (`CellCrossings`).
@@ -142,11 +146,16 @@ configurations whose result already exists, and it caps each one at `--cap` seco
 One call at the top of a notebook or script applies the style of every figure:
 
 ```python
-from skewerjax.utils.plotting import use_style, use_backend, ENTITY_COLORS as EC, PALETTE, CMAPS, FG, LABELS
+from skewerjax.utils.plotting import use_style, use_backend
 use_backend()          # interactive figures (ipympl, "%matplotlib widget") in a live notebook; inline when headless
-use_style()            # dark background, NeonGlow under every line, Paul Tol's colour-blind-safe "bright" scheme
-use_style("light")     # the white-background variant (same colours)
+use_style()            # "paper" (default): white background, publication look, Paul Tol's colour-blind-safe "bright" scheme
+use_style("dark")      # black background, NeonGlow under every line (the same colours, in the same order)
+from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG, DIM, LABELS   # FG, BG, DIM follow the style
 ```
+
+- Only the background, the foreground (`FG`, `BG`, `DIM`, `ENTITY_COLORS["total"]`) and the direction of the
+  sequential maps (`CMAPS["sequential"]`, `"hot"`, `"line"`: low values merge with the background) change between the
+  two styles. Import `FG`, `BG` after `use_style`.
 
 - Colours: every discrete colour is Tol's "bright" scheme (`PALETTE` = `tol_colors.colorsets["bright"]`, vendored with
   identical values when `tol_colors` is not installed), in Tol's order (blue, red, green, yellow, cyan, purple, grey).
@@ -158,10 +167,13 @@ use_style("light")     # the white-background variant (same colours)
 
 - Line styles per mode: `MODE_STYLES`; labels with units: `LABELS`; sizes: `FIGSIZES`.
 - `plot_dag(highlight, external=False)`: the dependency graph of the ingredients (`DAG_NODES`, `DAG_EDGES`).
-- Tutorial figures: `plot_line_table`, `plot_scale_factor_solutions`, `plot_path_elements`, `plot_path_elements_3d`,
-  `plot_pk_recovery_nd` (+ `field_power_modes`, `binned_power`), `plot_nH_T_fractions`, `plot_deposition_story`,
-  `plot_voigt_limits`, `plot_frames_axes`, `plot_option_sweep`, `plot_effect_fluxes`,
-  `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
-  `plot_line_frames`, `plot_flux_vs_analytic`, `plot_raw_to_overflux`, `plot_terms_by_order`,
+- Tutorial figures: `plot_line_table`, `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,
+  `plot_pk_recovery_nd` (+ `field_power_modes`, `binned_power`, `power_map_kpar_kperp`), `plot_nH_T_fractions`,
+  `plot_deposition_story`, `plot_voigt_limits`, `plot_frames_axes`, `plot_two_elements`, `plot_linear_detuning`,
+  `plot_periodicity_options`, `plot_effect_fluxes`, `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
+  `plot_line_frames`, `plot_flux_vs_analytic`, `plot_terms_by_order`,
   `plot_p1d_input_vs_measured` (+ `grf_p1d_along_axis`), `plot_cylinder(..., progress=p)` (one frame per call),
   `plot_slab`, `plot_tau_buildup`, `plot_orders_superimposed`, `plot_pk_recovery`, the benchmark figures `plot_bench_*`.
+- `skewerjax.utils.tutorial`: the small toy set-ups of the notebooks (`two_elements`, `linear_detuning`,
+  `periodic_box_demo`) and the expected spectra of a GRF along skewers (`p1d_expected`, `p3d_expected_on_skewer_grid`,
+  `binned_input_power`).

@@ -19,14 +19,18 @@ def teardown_function():
 
 
 def test_style_and_dag():
-    assert plt.rcParams["axes.facecolor"] == pl.BG and isinstance(plt.rcParams["path.effects"][0], pl.NeonGlow)
+    # default: the paper style (white, no glow); "dark": black with the glow; same palette, FG / BG follow the style
+    assert pl.THEME == "paper" and plt.rcParams["axes.facecolor"] == pl.BG == "white" and plt.rcParams["path.effects"] == []
     fig, ax = pl.plot_dag(("tau",))
     fig.canvas.draw()
+    palette = dict(pl.PALETTE)
+    pl.use_style("dark")
+    assert pl.FG == "white" and pl.BG == "black" and isinstance(plt.rcParams["path.effects"][0], pl.NeonGlow)
+    assert pl.ENTITY_COLORS["total"] == "white" and pl.CMAPS["sequential"] == "tol_iridescent_r" and pl.PALETTE == palette
     fig, ax = pl.plot_dag(("simulation", "fake_spectra"), external=True)
     fig.canvas.draw()
-    pl.use_style("light")
-    assert plt.rcParams["path.effects"] == []
     pl.use_style()
+    assert pl.FG == "black" and pl.ENTITY_COLORS["total"] == "black" and pl.CMAPS["sequential"] == "tol_iridescent"
 
 
 def test_line_table_and_skewer_figures():
@@ -59,7 +63,6 @@ def test_frames_overflux_and_cylinder():
     lines = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
     v = np.linspace(0, 100, 64)
     tau = np.exp(-((v - 50) / 5) ** 2)[None, None] * np.ones((2, 3, 1))
-    pl.plot_raw_to_overflux(v, tau, tau, ["HI-LyA", "SiIII-1206"], period=100.0)[0].canvas.draw()
     phi = 1.0 / (1 + (v - 30) ** 2)[None] * np.ones((2, 1))
     pl.plot_line_frames(v, phi, phi, lines, 30.0, a_dagger=0.5)[0].canvas.draw()
     s = np.linspace(0, 10, 40)
@@ -75,9 +78,31 @@ def test_palette_fonts_and_backend():
     allowed = set(pl.PALETTE.values()) | {pl.FG, pl.BG}
     assert set(pl.ENTITY_COLORS.values()) <= allowed
     assert all(c in pl.PALETTE.values() for c in pl.ORDER_COLORS)
-    assert "tol_iridescent_r" in matplotlib.colormaps and plt.rcParams["image.cmap"] == pl.CMAPS["sequential"]
+    assert {"tol_iridescent", "tol_iridescent_r", "tol_iridescentline"} <= set(matplotlib.colormaps)
+    assert plt.rcParams["image.cmap"] == pl.CMAPS["sequential"]
     for hl, ext in ((("tau",), False), (("simulation", "fake_spectra"), True)):
         fig, _ = pl.plot_dag(hl, external=ext)
         assert pl.check_fonts(fig) == []
     assert plt.rcParams["legend.fontsize"] >= pl.FONT_MIN["legend"] and plt.rcParams["xtick.labelsize"] >= pl.FONT_MIN["tick"]
     assert pl.use_backend() == matplotlib.get_backend()      # outside IPython: unchanged
+
+
+def test_fourth_pass_figures():
+    from skewerjax.utils import tutorial as tu
+    t = np.linspace(0, 1, 12)
+    pts = np.stack([np.cos(3 * t), np.sin(3 * t), t], -1)
+    fig = plt.figure()
+    ax = fig.add_subplot(projection="3d")
+    assert pl.plot_skewer_geometry_3d(ax, pts, scale_factors=1 - 0.01 * t, highlight=5) is not None
+    fig.canvas.draw()
+    pl.plot_two_elements(tu.two_elements(pieces=(1, 4), n_fine=2001, n_v=301))[0].canvas.draw()
+    pl.plot_linear_detuning(tu.linear_detuning(n_v=801))[0].canvas.draw()
+    pl.plot_periodicity_options(tu.periodic_box_demo())[0].canvas.draw()
+    g = PowerLawGRF(A_s=1.0, k_0=1.0, n_s=-1.0, L=(10.0, 10.0), N=(16, 16))
+    d = np.random.default_rng(0).normal(size=(2, 16, 16))
+    fig, axs, out = pl.plot_pk_recovery_nd({"2D": (g, d)})
+    fig.canvas.draw()
+    assert "map_chi2_dof" in out["2D"]
+    for theme in ("dark", "paper"):
+        pl.use_style(theme)
+        pl.plot_dag(("lines", "cosmology", "skewers"))[0].canvas.draw()

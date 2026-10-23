@@ -82,8 +82,11 @@ Extras can be combined, e.g. `pip install -e ".[gpu,notebooks,comparison,dev]"`.
   environment uses an editable 2.2.4 clone).
   - Without it, the comparison subpackage still works from a reference HDF5 file (`FakeSpectraSource(reference=...)`).
   - The rest of the package never imports it.
-- **jztree / jaxkd** (JAX neighbour search) are *not* used. The cell selection uses SciPy's `cKDTree`, the faster
-  option on the CPU; JZ-TREE (CUDA only, kNN with periodic boxes) could serve as an optional GPU back end.
+- **jztree** (JZ-TREE, CUDA-only neighbour search with periodic boxes) is optional: the GPU back end of the cell
+  selection (`select_cells_near_paths(..., backend="jztree" | "auto")`). It is not installed by default, and CPU-only
+  installations never import it; the default is SciPy's `cKDTree`. Its CUDA 12 wheels (`pip install "jztree[cuda12]"`,
+  jztree 1.1.0) require jax ≥ 0.8 and NumPy ≥ 2.2.6, which conflict with this environment (jax 0.6.2, NumPy < 2 for
+  ExoJAX): check with `pip install --dry-run` first, or use a separate environment.
 - **tol_colors** (Paul Tol's colour schemes) is optional: `skewerjax.utils.plotting` takes its "bright" scheme from it
   when it is installed and otherwise uses a vendored copy with the same values.
 - **ipympl** gives interactive figures in a live notebook (`plotting.use_backend()`); without it, figures are inline.

@@ -43,18 +43,19 @@ subpackage.
 import jax, jax.numpy as jnp, numpy as np
 jax.config.update("jax_enable_x64", True)          # SkewerJAX follows this flag; the validated tolerances are float64
 from skewerjax.core import (LineBundle, Cosmology, SkewerBundle, grid_skewer_points, phys, Fields, ScalarField, VectorField,
-                            PowerLawGRF, GaussianDensity, LogRamp, VelocityRamp, Constant, compute_optical_depth, wrap_to_ref_line)
+                            PowerLawGRF, GRFDensity, LogRamp, VelocityRamp, Constant, compute_optical_depth, wrap_to_ref_line)
 
 lines = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
 cosmo = Cosmology(H0=phys.H0, Omega_r_0=0.0, Omega_m_0=1.0, Omega_k_0=0.0, Omega_lambda_0=0.0)
 L, z = 50.0, 2.2                                                       # box [cMpc], redshift of the far end
 skewers = SkewerBundle(spatial_points=grid_skewer_points(L, 4, 1024, direction="y").reshape(16, 1024, 3),
                        cosmologies=cosmo, a0=1 / (1 + z), x0=L)
-grf = PowerLawGRF(A_s=4.0, k_0=2.0, n_s=-1.25, L=(L,) * 3, N=(64,) * 3)
-gas = lambda n_max: {"temperature": ScalarField(LogRamp(1.5e4, 1.5e4, L)), "velocity": VectorField(VelocityRamp(0.0, 0.0, L)),
-                     "number_density": ScalarField(GaussianDensity(jax.random.PRNGKey(0), grf, n0_min=1e-16, n0_max=n_max, contrast=1.2)),
+grf = PowerLawGRF(A_s=0.04, k_0=2.0, n_s=-1.25, L=(L,) * 3, N=(64,) * 3)            # sigma_delta = 0.2
+delta = grf.sample(jax.random.PRNGKey(0))
+gas = lambda n_bar: {"temperature": ScalarField(LogRamp(1.5e4, 1.5e4, L)), "velocity": VectorField(VelocityRamp(0.0, 0.0, L)),
+                     "number_density": ScalarField(GRFDensity(None, grf, n_bar=n_bar, delta_grid=delta)),   # n = n_bar (1 + delta)
                      "turbulence": ScalarField(Constant(0.0)), "collisional": ScalarField(Constant(0.0))}
-fields = Fields({"HI": gas(1.35e-11), "SiIII": gas(1.35e-11 / 250)})
+fields = Fields({"HI": gas(1e-12), "SiIII": gas(1e-12 / 50)})
 a_dagger = 1 / (1 + z)
 v = jnp.linspace(0.0, float(phys.c_kms * jnp.log(a_dagger / skewers.scale_factors[0, 0, 0])), 512)
 tau = wrap_to_ref_line(compute_optical_depth(skewers, v, lines, fields, a_dagger=a_dagger, resolution_tolerance=None), v, lines)
@@ -107,17 +108,18 @@ flowchart LR
 | `00_quickstart_step_by_step` | a TNG50-4 skewer step by step: the snapshot, the cells it crosses, the fields, line profiles, τ and F (Lyα, Si III) built up stretch by stretch, the lines on one axis, the gas cylinder (`plot_cylinder`), overflux and statistics, with the equations |
 | `01_lines` | the line table, `Line` and `LineBundle` attributes, offsets Δv_j and line widths |
 | `02_cosmology` | a(x) along light rays against the closed forms, with each background's special point |
-| `03_skewers` | `SkewerBundle` conventions; the elements of a path (points, midpoints, dual segments, tangents, line elements) in 2D and 3D; what a bundle stores |
-| `04_fields_and_samplers` | toy samplers, `Fields`, Gaussian random fields in 1D/2D/3D and their recovered P(k), what `GaussianDensity` does |
-| `05_simulation_outputs` | from a TNG50-4 snapshot to the gas along the skewers: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, selection → deposition → integration on a Voronoi mesh, the cell crossings, column conservation |
-| `06_line_profiles_and_optical_depth` | Voigt implementations and their limits, line profiles, closed forms, line-centred frames vs the global axis and the observed wavelength, the detuning and precision options, JAX transformations, τ from simulation outputs, where periodicity enters |
-| `07_summary_statistics` | from the raw τ to δ_F, P1D/ξ1D by order and term (the two-line terms), recovering an input spectrum in 3D and 1D, P3D and ξ3D on a grid of skewers |
+| `03_skewers` | `SkewerBundle` conventions; one skewer in 3D with its points, midpoints, dual segments, tangents and line elements, coloured by a(x), and everything the bundle stores for it |
+| `04_fields_and_samplers` | toy samplers, `Fields`, Gaussian random fields in 1D/2D/3D and their recovered P(k) (isotropic and in the (k∥, k⊥) plane), densities n = n̄(1 + δ) (`GRFDensity`), what a pytree is |
+| `05_simulation_outputs` | from a TNG50-4 snapshot to the gas along the skewers: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, selection → deposition → integration on a Voronoi mesh (the sum of 06), the cell crossings |
+| `06_line_profiles_and_optical_depth` | the derivation from the τ integral to the sum the code evaluates (two-element test), Voigt implementations, line profiles, closed forms, line-centred frames vs the global axis and the observed wavelength, the linear detuning, periodicity (no wrap, wrapped detunings, buffer, the shift onto a reference line), τ from simulation outputs |
+| `07_summary_statistics` | δ_F of several lines, P1D/ξ1D by order and term (the two-line terms), and a systematic study of a GRF density n = n̄(1 + δ): 3D fields, 1D overdensities (discrete projection, interpolation window), 1D overfluxes (bias, thermal kernel, line offset), P3D and ξ3D, each against its expectation |
 | `08_fake_spectra_comparison` | the differences with fake_spectra one switch at a time (matched mode, effect chain, root causes) and the benchmark (strict single core, stages, memory, scaling, GPU; reads `notebooks/benchmark_records/`), with a summary per part |
 
-Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: dark, Paul Tol's colour-blind-safe
-"bright" colours and colour maps, minimum font sizes) and `use_backend()` (interactive ipympl figures in a live
-notebook, inline when executed headless), and opens with the dependency graph highlighting its ingredients and the
-lines "Requires" / "Independent of". Notebooks `00_quickstart_step_by_step`, 05, 06 and 08 need TNG50 snapshots (see
+Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: the white "paper" style by default,
+`use_style("dark")` for the dark one; Paul Tol's colour-blind-safe "bright" colours and colour maps in both, minimum
+font sizes). `use_backend()` (interactive ipympl figures in a live notebook) is left commented out in the setup cell.
+Every notebook opens with the dependency graph highlighting the ingredients it uses and the lines "Requires" /
+"Independent of". Notebooks `00_quickstart_step_by_step`, 05, 06 and 08 need TNG50 snapshots (see
 "Simulation data" in `docs/installation.md`).
 
 ## Validation, tests and benchmarks

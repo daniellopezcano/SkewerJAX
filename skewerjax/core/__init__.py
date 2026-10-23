@@ -10,7 +10,7 @@ from skewerjax.core.cosmology import Cosmology
 from skewerjax.core.skewers import (SkewerBundle, axis_aligned_skewer_points, grid_skewer_points, line_elements, path_geometry,
                                     plane_points)
 from skewerjax.core.fields import Fields, SampledField, ScalarField, VectorField
-from skewerjax.core.toy_fields import Constant, GaussianDensity, LogRamp, PowerLawGRF, VelocityRamp
+from skewerjax.core.toy_fields import Constant, GRFDensity, LogRamp, PowerLawGRF, VelocityRamp
 from skewerjax.core.voigt import gaussian, log10_voigt, lorentzian, voigt_convolution, voigt_exojax, voigt_scipy
 from skewerjax.core.spectral import (frequency_offset_GHz, line_centre_velocity_kms, line_wavelength_grid_A, local_wavelength_A,
                                      local_wavelength_from_observed_A, velocities_in_line_frames)

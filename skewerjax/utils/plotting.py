@@ -1,11 +1,14 @@
 """Shared plotting style and figure helpers.
 
-The style is dark (black background, a soft glow under every line) with Paul Tol's colour-blind-safe "bright"
-qualitative scheme (package ``tol_colors``, ``colorsets["bright"]``; vendored below with identical values when the
-package is not installed) and Tol's sequential / diverging colour maps. ``use_style()`` at the top of a notebook
-applies it, with minimum font sizes for every kind of text (``FONT_MIN``); ``use_backend()`` picks the interactive
-backend (ipympl) in a live notebook and inline otherwise. Every colour of a quantity or line comes from
-``ENTITY_COLORS`` (a fixed assignment, the same in every notebook) and every unit-carrying label from ``LABELS``.
+Two styles, switched with one call at the top of a notebook or script: ``use_style("paper")`` (the default: white
+background, black text and axes, publication look) and ``use_style("dark")`` (black background, white text, a soft glow
+under every line). Both use Paul Tol's colour-blind-safe "bright" qualitative scheme (package ``tol_colors``,
+``colorsets["bright"]``; vendored below with identical values when the package is not installed) in the same order, and
+Tol's sequential / diverging colour maps: only the background, the foreground (``FG``, ``BG``) and the direction of the
+sequential maps (low values merge with the background) change. ``use_style`` also sets minimum font sizes for every kind
+of text (``FONT_MIN``); ``use_backend()`` picks the interactive backend (ipympl) in a live notebook and inline otherwise.
+Every colour of a quantity or line comes from ``ENTITY_COLORS`` (a fixed assignment, the same in every notebook) and
+every unit-carrying label from ``LABELS``. Import ``FG``, ``BG`` after ``use_style`` (they follow the style).
 """
 from __future__ import annotations
 
@@ -31,8 +34,10 @@ except Exception:                      # ImportError, or an API change: the vend
 TOL_BRIGHT_CYCLE = list(TOL_BRIGHT.values())
 PALETTE = TOL_BRIGHT                   # keyed by hue: blue, red, green, yellow, cyan, purple, grey
 PALETTE_CYCLE = TOL_BRIGHT_CYCLE       # fixed order of the colour cycle
-FG, BG = "white", "black"              # foreground (text, axes, totals) and background of the dark style
-DIM = PALETTE["grey"]                  # secondary elements (guide lines, inactive boxes), drawn with alpha
+THEMES = {"paper": dict(FG="black", BG="white", DIM="#8C8C8C"), "dark": dict(FG="white", BG="black", DIM=PALETTE["grey"])}
+FG, BG = THEMES["paper"]["FG"], THEMES["paper"]["BG"]   # foreground (text, axes, totals) and background; set by use_style
+THEME = "paper"
+DIM = THEMES["paper"]["DIM"]           # secondary elements (guide lines, inactive boxes); a darker grey on white
 _TOL_CMAPS = {      # Tol's sequential and diverging schemes (https://personal.sron.nl/~pault/, Figs. 12-20), "bad" colour
     "iridescent": (["#FEFBE9", "#FCF7D5", "#F5F3C1", "#EAF0B5", "#DDECBF", "#D0E7CA", "#C2E3D2", "#B5DDD8", "#A8D8DC",
                     "#9BD2E1", "#8DCBE4", "#81C4E7", "#7BBCE7", "#7EB2E4", "#88A5DD", "#9398D2", "#9B8AC4", "#9D7DB2",
@@ -47,8 +52,14 @@ _TOL_CMAPS = {      # Tol's sequential and diverging schemes (https://personal.s
     "BuRd": (["#2166AC", "#4393C3", "#92C5DE", "#D1E5F0", "#F7F7F7", "#FDDBC7", "#F4A582", "#D6604D", "#B2182B"], "#FFEE99"),
     "PRGn": (["#762A83", "#9970AB", "#C2A5CF", "#E7D4E8", "#F7F7F7", "#D9F0D3", "#ACD39E", "#5AAE61", "#1B7837"], "#FFEE99"),
 }
-# Sequential maps for the dark style run from dark to bright (low values merge with the background).
-CMAPS = {"sequential": "tol_iridescent_r", "hot": "tol_incandescent_r", "diverging": "tol_sunset", "diverging_alt": "tol_BuRd"}
+_TOL_CMAPS["iridescentline"] = (_TOL_CMAPS["iridescent"][0][7:-1], "#999999")          # visible on white
+_TOL_CMAPS["iridescentline_dark"] = (_TOL_CMAPS["iridescent"][0][1:-7], "#999999")     # visible on black (reversed)
+# Sequential maps run from the background colour to the strongest one (low values merge with the background): light to
+# dark in the paper style, dark to bright in the dark style (``use_style`` switches them); diverging maps are the same.
+# "line": the sequential map for coloured lines and markers, without the end that would vanish on the background.
+_CMAPS_THEME = {"paper": {"sequential": "tol_iridescent", "hot": "tol_incandescent", "line": "tol_iridescentline"},
+                "dark": {"sequential": "tol_iridescent_r", "hot": "tol_incandescent_r", "line": "tol_iridescentline_dark_r"}}
+CMAPS = {**_CMAPS_THEME["paper"], "diverging": "tol_sunset", "diverging_alt": "tol_BuRd"}
 # Fixed colour of every entity (species and lines, quantities, codes, modes), the same in every notebook. Lines take
 # the bright colours in Tol's order (Lya blue, Si III red, ...); field quantities take the remaining ones.
 ENTITY_COLORS = {
@@ -118,11 +129,27 @@ def matplotlib_tol_config():
     return font, rc
 
 
+def matplotlib_paper_config():
+    """``matplotlib_tol_config`` on a white background with black text, ticks and axes, no glow: (font, rc). The
+    default look of every figure."""
+    font, rc = matplotlib_tol_config()
+    fg, bg, dim = (THEMES["paper"][k] for k in ("FG", "BG", "DIM"))
+    rc.update({"image.cmap": _CMAPS_THEME["paper"]["sequential"],
+               "figure.facecolor": bg, "axes.facecolor": bg, "savefig.facecolor": bg, "figure.edgecolor": bg,
+               "text.color": fg, "axes.labelcolor": fg, "axes.edgecolor": fg, "axes.titlecolor": fg,
+               "xtick.color": fg, "ytick.color": fg, "xtick.labelcolor": fg, "ytick.labelcolor": fg,
+               "legend.facecolor": bg, "legend.edgecolor": dim, "legend.labelcolor": fg, "legend.framealpha": 0.9,
+               "grid.color": dim, "grid.alpha": 0.5, "hatch.color": fg, "patch.edgecolor": fg,
+               "boxplot.flierprops.markeredgecolor": fg, "path.effects": []})
+    return font, rc
+
+
 def matplotlib_dark_config(glow: bool = True):
     """``matplotlib_tol_config`` on a black background, white text and axes and the ``NeonGlow`` under every line:
-    (font, rc). The look of every figure."""
+    (font, rc). The optional dark look."""
     font, rc = matplotlib_tol_config()
-    rc.update({"image.cmap": CMAPS["sequential"],
+    FG, BG, DIM = (THEMES["dark"][k] for k in ("FG", "BG", "DIM"))
+    rc.update({"image.cmap": _CMAPS_THEME["dark"]["sequential"],
                "figure.facecolor": BG, "axes.facecolor": BG, "savefig.facecolor": BG, "figure.edgecolor": BG,
                "text.color": FG, "axes.labelcolor": FG, "axes.edgecolor": FG, "axes.titlecolor": FG,
                "xtick.color": FG, "ytick.color": FG, "xtick.labelcolor": FG, "ytick.labelcolor": FG,
@@ -141,21 +168,27 @@ def _register_tol_cmaps():
                 mpl.colormaps.register(cm)
 
 
-def use_style(theme: str = "dark"):
+def use_style(theme: str = "paper"):
     """Apply the package style globally: one call at the top of a notebook or script.
 
-    theme : "dark" (default: ``matplotlib_dark_config``, the style of every notebook) or "light" (the white-background
-        ``matplotlib_tol_config``; ``ENTITY_COLORS`` are the same).
+    theme : "paper" (default: ``matplotlib_paper_config``, white background, publication look) or "dark"
+        (``matplotlib_dark_config``: black background and a glow under the lines). The palette, its order and
+        ``ENTITY_COLORS`` are the same in both; ``FG``, ``BG``, the ``"total"`` / ``"input"`` entity colours and the
+        sequential entries of ``CMAPS`` follow the theme ("light" is accepted as an alias of "paper").
     """
-    if theme not in ("dark", "light"):
-        raise ValueError(f"theme must be 'dark' or 'light', got {theme!r}.")
+    global FG, BG, DIM, THEME
+    theme = "paper" if theme == "light" else theme
+    if theme not in THEMES:
+        raise ValueError(f"theme must be 'paper' or 'dark', got {theme!r}.")
     _register_tol_cmaps()
     plt.rcdefaults()
-    font, rc = matplotlib_dark_config() if theme == "dark" else matplotlib_tol_config()
-    if theme == "light":
-        rc.update({"xtick.color": BG, "ytick.color": BG})
+    font, rc = matplotlib_dark_config() if theme == "dark" else matplotlib_paper_config()
+    THEME, FG, BG, DIM = theme, THEMES[theme]["FG"], THEMES[theme]["BG"], THEMES[theme]["DIM"]
+    ENTITY_COLORS.update(total=FG, input=FG)
+    CMAPS.update(_CMAPS_THEME[theme])
     plt.rc("font", **font)
     plt.rcParams.update(rc)
+    return theme
 
 
 def _interactive_frontend() -> bool:
@@ -438,7 +471,8 @@ def _dag_route(a, b, route, nodes, lane):
 
 
 def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, notebooks: bool = True):
-    """The dependency graph (DAG) of SkewerJAX's ingredients, ``highlight`` (keys of ``DAG_NODES``) filled and glowing.
+    """The dependency graph (DAG) of SkewerJAX's ingredients; ``highlight`` (keys of ``DAG_NODES``: the ingredients a
+    notebook uses) are drawn with one light fill and a coloured edge, and the edges into them in the same colour.
 
     Arrows point from an ingredient to what needs it. Solid: a required input. Dashed: optional, or data only (the
     cosmology can be replaced by manual a(x); the simulation reads only ion masses from the line table; the overflux
@@ -453,6 +487,7 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
     ax.set_axis_off()
     ax.set(xlim=(-0.5, 6.5), ylim=(-1.62, 1.86))
     fg, on, ext_c = plt.rcParams["text.color"], PALETTE["cyan"], PALETTE["yellow"]
+    on_fill = mpl.colors.to_rgba(on, 0.30)                      # the one highlight: a light fill and a coloured edge
     w, h = _DAG_W, _DAG_H
     nodes = {k: v for k, v in DAG_NODES.items() if external or k != "fake_spectra"}
     lanes = {("lines", "tau"): -0.2, ("lines", "overflux"): 0.2, ("lines", "simulation"): 0.12,
@@ -478,11 +513,16 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
             pts = _dag_route(a, b, route, nodes, lanes.get((a, b), 0.0))
         hot = b in hl                                           # the inputs of a highlighted ingredient light up
         col = on if hot else (ext_c if kind == "external" else DIM)
-        ls = "--" if kind in ("optional", "external") else "-"
+        dashed = kind in ("optional", "external")
         lw = 2.4 if hot else 1.6
         xs, ys = zip(*pts)
-        ax.plot(xs[:-1] + (xs[-1],), ys[:-1] + (ys[-1],), color=col, lw=lw, ls=ls, path_effects=[], solid_capstyle="butt")
-        ax.annotate("", pts[-1], pts[-2], arrowprops=dict(arrowstyle="-|>", color=col, mutation_scale=18, lw=lw,
+        # one polyline with a fixed dash pattern (in points: the same in every orientation and segment length)
+        ax.plot(xs, ys, color=col, lw=lw, path_effects=[], solid_capstyle="butt", dash_capstyle="butt",
+                **(dict(ls=(0, (4.0, 3.0))) if dashed else dict(ls="-")))
+        (xe0, ye0), (xe1, ye1) = pts[-2], pts[-1]               # the arrow head only, on a short stub of the last segment
+        d = np.hypot(xe1 - xe0, ye1 - ye0)
+        stub = (xe1 - 0.06 * (xe1 - xe0) / d, ye1 - 0.06 * (ye1 - ye0) / d)
+        ax.annotate("", (xe1, ye1), stub, arrowprops=dict(arrowstyle="-|>", color=col, mutation_scale=18, lw=lw,
                     ls="-", shrinkA=0, shrinkB=1))
         if label:                                               # on the longest segment (above the boxes if it is short)
             seg = max(range(len(pts) - 1), key=lambda k: np.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]))
@@ -500,24 +540,23 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
         hit = key in hl
         ext = key == "fake_spectra"
         ec = on if hit else (ext_c if ext else DIM)
-        if hit:
-            for k, a_ in ((0.10, 0.10), (0.05, 0.18)):          # glow halo
-                ax.add_patch(mpl.patches.FancyBboxPatch((x - w / 2 - k, y - h / 2 - k), w + 2 * k, h + 2 * k,
-                             boxstyle="round,pad=0.02,rounding_size=0.14", facecolor=on, edgecolor="none", alpha=a_, path_effects=[]))
         ax.add_patch(mpl.patches.FancyBboxPatch((x - w / 2, y - h / 2), w, h, boxstyle="round,pad=0.02,rounding_size=0.12",
-                     facecolor=on if hit else plt.rcParams["axes.facecolor"], edgecolor=ec, lw=2.4 if hit else 1.4,
-                     ls="--" if ext else "-", path_effects=[], zorder=3))
-        tc = BG if hit else (ext_c if ext else fg)
+                     facecolor=on_fill if hit else plt.rcParams["axes.facecolor"], edgecolor=ec, lw=2.6 if hit else 1.4,
+                     ls=(0, (4.0, 3.0)) if ext else "-", path_effects=[], zorder=3))
+        tc = fg if hit else (ext_c if ext else fg)
         ax.text(x, y + 0.1, name, ha="center", va="center", fontsize=FONT_MIN["legend"], color=tc, fontweight="bold", zorder=4)
         ax.text(x, y - 0.13, sub, ha="center", va="center", fontsize=FONT_MIN["floor"], color=tc, zorder=4)
         if notebooks and key in DAG_NOTEBOOKS:
             ax.text(x + w / 2, y - h / 2 - 0.03, f"nb {DAG_NOTEBOOKS[key]}", ha="right", va="top", fontsize=FONT_MIN["floor"],
                     color=on if hit else DIM, zorder=4)
     handles = [Line2D([], [], color=DIM, lw=1.8, ls="-", label="required input"),
-               Line2D([], [], color=DIM, lw=1.8, ls="--", label="optional / data only"),
-               Line2D([], [], color=on, lw=0, marker="s", ms=13, label="this notebook (and its inputs)")]
+               Line2D([], [], color=DIM, lw=1.8, ls=(0, (4.0, 3.0)), label="optional / data only"),
+               Line2D([], [], lw=0, marker="s", ms=13, markerfacecolor=on_fill, markeredgecolor=on, markeredgewidth=2.0,
+                      label="used in this notebook")]
     if external:
-        handles.append(Line2D([], [], color=ext_c, lw=1.8, ls="--", label="external reference"))
+        handles.append(Line2D([], [], color=ext_c, lw=1.8, ls=(0, (4.0, 3.0)), label="external reference"))
+    for hd in handles:
+        hd.set_path_effects([])
     ax.legend(handles=handles, loc="lower right", ncol=len(handles), frameon=False, fontsize=FONT_MIN["floor"],
               bbox_to_anchor=(1.0, -0.04), handlelength=2.4)
     return ax.figure, ax
@@ -572,7 +611,8 @@ NEON_CYCLE = PALETTE_CYCLE
 
 
 def dark_axes(axs, fig=None):
-    """Black background with white ticks, labels and spines on every axis of ``axs`` (and on ``fig``)."""
+    """The style's background (``BG``) with ``FG`` ticks, labels and spines on every axis of ``axs`` (and on ``fig``);
+    the name is historical: it follows the current style."""
     for ax in np.ravel(axs):
         ax.set_facecolor(BG)
         ax.tick_params(axis="both", which="both", colors=FG)
@@ -586,8 +626,10 @@ def dark_axes(axs, fig=None):
 
 
 def neon_line(ax, x, y, color, *, lw: float = 1.6, glow: float = 7.0, label=None, **kw):
-    """A line with a soft glow underneath (two strokes; the global ``NeonGlow`` is switched off for them)."""
-    ax.plot(x, y, color=color, lw=glow, alpha=0.18, solid_capstyle="round", zorder=2, path_effects=[], **kw)
+    """A line with a soft glow underneath in the dark style (two strokes; the global ``NeonGlow`` is switched off for
+    them); a plain line in the paper style."""
+    if THEME == "dark":
+        ax.plot(x, y, color=color, lw=glow, alpha=0.18, solid_capstyle="round", zorder=2, path_effects=[], **kw)
     return ax.plot(x, y, color=color, lw=lw, alpha=0.95, zorder=3, label=label, path_effects=[], **kw)[0]
 
 
@@ -877,7 +919,7 @@ def box_edges_3d(ax, L, **kw):
             ax.plot([a, a], [b, b], [0, L], **kw)
 
 
-def plot_paths_3d(ax, points, *, values=None, cmap=CMAPS["sequential"], vmin=None, vmax=None, color=None, lw: float = 2.5,
+def plot_paths_3d(ax, points, *, values=None, cmap=None, vmin=None, vmax=None, color=None, lw: float = 2.5,
                   box: Optional[float] = None, markers: bool = False):
     """Skewer trajectories (N_sk, N, 3) [cMpc] on a 3D axis, each coloured along its length by ``values`` (N_sk, N)
     (e.g. the scale factor a(x)) or in one ``color``; ``box`` draws the cube edges. Returns the ScalarMappable."""
@@ -889,7 +931,7 @@ def plot_paths_3d(ax, points, *, values=None, cmap=CMAPS["sequential"], vmin=Non
     if values is not None:
         V = np.asarray(values, dtype=float)
         norm = mpl.colors.Normalize(np.min(V) if vmin is None else vmin, np.max(V) if vmax is None else vmax)
-        cm_ = plt.get_cmap(cmap)
+        cm_ = plt.get_cmap(CMAPS["line"] if cmap is None else cmap)
         for p, v in zip(P, V):
             seg = np.stack([p[:-1], p[1:]], 1)
             ax.add_collection3d(Line3DCollection(seg, colors=cm_(norm(0.5 * (v[1:] + v[:-1]))), lw=lw))
@@ -907,13 +949,14 @@ def plot_paths_3d(ax, points, *, values=None, cmap=CMAPS["sequential"], vmin=Non
 
 
 def dark_3d(ax):
-    """Black panes, white ticks and labels on a 3D axis."""
+    """Transparent panes, the style's ticks and labels and a faint grid on a 3D axis (follows the current style)."""
     ax.set_facecolor(plt.rcParams["axes.facecolor"])
+    grid = (1, 1, 1, 0.08) if THEME == "dark" else (0, 0, 0, 0.10)
     for a in (ax.xaxis, ax.yaxis, ax.zaxis):
         a.set_pane_color((0, 0, 0, 0))
         a.line.set_color(DIM)
         a.label.set_color(plt.rcParams["text.color"])
-        a._axinfo["grid"]["color"] = (1, 1, 1, 0.08)
+        a._axinfo["grid"]["color"] = grid
     ax.tick_params(colors=plt.rcParams["text.color"], labelsize=FONT_MIN["tick"])
 
 
@@ -1137,51 +1180,6 @@ def plot_flux_vs_analytic(v, F, F_analytic, line_bundle, lam_obs, lam_centre, *,
     return fig, (main, zoom, resid)
 
 
-def plot_raw_to_overflux(v, tau_own, tau_ref, line_ids, *, skewer: int = 0, period: Optional[float] = None, figsize=(22, 15)):
-    """From the integrator's raw output to the overflux, one panel per step (notebook 07).
-
-    v (N_v,) [km/s]; tau_own (N_lines, N_sk, N_v): every line in its own line-centred frame (the output of
-    ``compute_optical_depth``); tau_ref: the same on the reference frame (``wrap_to_ref_line``).
-    (a) F_j = e^{-tau_j} in each own frame; (b) on the reference frame, every line moved by -delta_v_j modulo the
-    period (the box tiled three times when ``period`` is given); (c) the total F = prod_j F_j; (d) the overflux
-    delta_F = F / <F> - 1 of every line and of the total, <F> over all skewers and pixels. Returns (fig, axs).
-    """
-    v = np.asarray(v)
-    Fo, Fr = np.exp(-np.asarray(tau_own)), np.exp(-np.asarray(tau_ref))
-    F_tot = Fr.prod(0)
-    mF, mT = Fr.mean(axis=(1, 2)), F_tot.mean()
-    cols = [species_color(l, j) for j, l in enumerate(line_ids)]
-    fig, axs = plt.subplots(4, 1, figsize=figsize, sharex=False, layout="constrained")
-    for j, l in enumerate(line_ids):
-        axs[0].plot(v, Fo[j, skewer], color=cols[j], label=f"{l} (own frame)")
-    axs[0].set(ylabel=LABELS["F"], xlabel=LABELS["v_dagger"] + " — each line in its own frame", xlim=(v[0], v[-1]))
-    tiles = (-1, 0, 1) if period is not None else (0,)
-    for n in tiles:
-        for j, l in enumerate(line_ids):
-            axs[1].plot(v + n * (period or 0), Fr[j, skewer], color=cols[j], alpha=1.0 if n == 0 else 0.35,
-                        label=f"{l} on the {line_ids[0]} frame" if n == 0 else None)
-        if period is not None:
-            axs[1].axvline(v[0] - 0.5 * (v[1] - v[0]) + n * period, color=DIM, ls=":", lw=1.2)
-    axs[1].set(ylabel=LABELS["F"], xlabel=LABELS["v_ref"] + (" — three periods of the box" if period else ""),
-               xlim=((v[0] - period, v[-1] + period) if period else (v[0], v[-1])))
-    for j, l in enumerate(line_ids):
-        axs[2].plot(v, Fr[j, skewer], color=cols[j], lw=1.0, alpha=0.5)
-    axs[2].plot(v, F_tot[skewer], color=ENTITY_COLORS["total"], lw=1.8, label=r"$F_{\rm tot} = \prod_j F_j$")
-    axs[2].set(ylabel=LABELS["F"], xlabel=LABELS["v_ref"], xlim=(v[0], v[-1]))
-    for j, l in enumerate(line_ids):
-        axs[3].plot(v, Fr[j, skewer] / mF[j] - 1, color=cols[j], lw=1.2, label=rf"$\delta_F$ {l}, $\langle F\rangle$ = {mF[j]:.4f}")
-    axs[3].plot(v, F_tot[skewer] / mT - 1, color=ENTITY_COLORS["total"], lw=1.6, label=rf"$\delta_F$ total, $\langle F\rangle$ = {mT:.4f}")
-    axs[3].set(ylabel=LABELS["delta"], xlabel=LABELS["v_ref"], xlim=(v[0], v[-1]))
-    titles = ["(a) the integrator's output: one F per line, each in its own line-centred frame",
-              "(b) wrap_to_ref_line: every line moved by −Δv_j onto the reference frame, modulo the period",
-              "(c) the total flux: the product of the lines",
-              r"(d) the overflux $\delta_F = F/\langle F\rangle - 1$ ($\langle F\rangle$ over every skewer and pixel)"]
-    for ax, t in zip(axs, titles):
-        ax.set_title(t, fontsize=17, loc="left")
-        ax.legend(fontsize=FONT_MIN["legend"], loc="lower right", ncol=len(line_ids) + 1)
-    return fig, axs
-
-
 def _pair_label(pair):
     from skewerjax.core.stats.two_point import ZERO_ORDER_KEY
     a, b = (r"$\mathcal{C}$" if t == ZERO_ORDER_KEY else t for t in pair)
@@ -1285,7 +1283,8 @@ def plot_p1d_input_vs_measured(k, curves: dict, reference, *, ref_label: str = "
 
 
 def plot_cylinder(s, profiles: dict, *, cloud=None, flux=None, progress: float = 1.0, radius: float = 1.0, view=(14.0, -62.0),
-                  cloud_cmap: str = CMAPS["sequential"], cloud_clim=None, n_rings: int = 5, fig=None, figsize=(22, 13)):
+                  cloud_cmap: str = None, cloud_clim=None, n_rings: int = 5, flux_on_cylinder: bool = False, fig=None,
+                  figsize=(22, 13)):
     """The gas around a skewer wrapped in a cylinder, and the flux it has absorbed so far (notebook
     00_quickstart_step_by_step).
 
@@ -1295,8 +1294,9 @@ def plot_cylinder(s, profiles: dict, *, cloud=None, flux=None, progress: float =
     cloud : optional dict(axis (M,), s_perp (M,), t_perp (M,), value (M,)) of the gas around the skewer (e.g. the
         selected cells: along-axis coordinate, transverse offsets [cMpc], density), drawn as a soft point cloud.
     flux : optional dict(v (N_v,), s_of_v (N_v,), edges (n_bins + 1,), tau_bins {label: ((n_bins, N_v), colour)}): the
-        tau of every stretch of the path (``tau_by_path_bins``); the absorbed flux is drawn on the cylinder surface
-        (radius ∝ 1 - F) at the position s(v) of every pixel, and in a panel below against v.
+        tau of every stretch of the path (``tau_by_path_bins``); the absorbed flux is drawn in a panel below against v
+        (and, with ``flux_on_cylinder``, also on the cylinder surface, radius ∝ 1 - F, at the position s(v) of every
+        pixel; by default the cylinder shows only the ``profiles`` and the ``cloud``).
     progress : 0..1, the fraction of the path already crossed by the light: gas beyond s = s_0 + progress (s_N - s_0)
         is dimmed and only the stretches before it absorb (one call per frame drives an animation).
     Returns (fig, (ax3d, ax_flux)).
@@ -1309,6 +1309,7 @@ def plot_cylinder(s, profiles: dict, *, cloud=None, flux=None, progress: float =
     ax = fig.add_axes((-0.12, 0.26, 1.24, 0.80), projection="3d", computed_zorder=False)
     axf = fig.add_axes((0.07, 0.06, 0.88, 0.25)) if flux is not None else None
     ax.set_facecolor(BG)
+    cloud_cmap = CMAPS["sequential"] if cloud_cmap is None else cloud_cmap
     phi = np.linspace(0, 2 * np.pi, 180)
     for y in np.linspace(s0, s1, n_rings):
         for rr in radius * np.array([0.5, 1.0]):
@@ -1330,7 +1331,7 @@ def plot_cylinder(s, profiles: dict, *, cloud=None, flux=None, progress: float =
                        lw=0, depthshade=False, zorder=1)
             rgba = rgba.copy()
             rgba[:, 3] = np.minimum(1.0, rgba[:, 3] * 1.8)
-    n_prof = len(profiles) + (len(flux["tau_bins"]) if flux is not None else 0)
+    n_prof = len(profiles) + (len(flux["tau_bins"]) if (flux is not None and flux_on_cylinder) else 0)
     angles = np.pi / 2 + 2 * np.pi * np.arange(max(n_prof, 1)) / max(n_prof, 1)
     for (lab, (y, c)), th in zip(profiles.items(), angles):
         y = np.asarray(y, dtype=float)
@@ -1342,11 +1343,12 @@ def plot_cylinder(s, profiles: dict, *, cloud=None, flux=None, progress: float =
     if flux is not None:
         v, s_of_v, e = (np.asarray(flux[k], dtype=float) for k in ("v", "s_of_v", "edges"))
         frac = np.clip((s_p - e[:-1]) / np.maximum(np.diff(e), 1e-30), 0.0, 1.0)      # how much of each stretch is crossed
-        for (lab, (tb, c)), th in zip(flux["tau_bins"].items(), angles[len(profiles):]):
+        for (lab, (tb, c)), th in zip(flux["tau_bins"].items(), list(angles[len(profiles):]) + [0.0] * len(flux["tau_bins"])):
             tb = np.asarray(tb, dtype=float)
             F_now, F_end = np.exp(-(frac[:, None] * tb).sum(0)), np.exp(-tb.sum(0))
-            r = radius * (1.0 - F_now)
-            ax.plot(s_of_v, r * np.cos(th), r * np.sin(th), color=c, lw=1.4, zorder=6, label=f"1 − F, {lab}")
+            if flux_on_cylinder:
+                r = radius * (1.0 - F_now)
+                ax.plot(s_of_v, r * np.cos(th), r * np.sin(th), color=c, lw=1.4, zorder=6, label=f"1 − F, {lab}")
             axf.plot(v, F_end, color=c, lw=1.0, alpha=0.3, path_effects=[])
             axf.plot(v, F_now, color=c, lw=1.6, label=f"{lab}: absorbed up to s = {s_p:.1f} cMpc")
         axf.set(xlim=(v[0], v[-1]), ylim=(-0.05, 1.1), xlabel=LABELS["v_dagger"] + ", each line in its own frame", ylabel=LABELS["F"])
@@ -1418,58 +1420,49 @@ def plot_scale_factor_solutions(x, a_num, exact: dict, colors: dict, *, x0: floa
     return ax.figure, np.array([ax, axr])
 
 
-def plot_path_elements(ax, points, *, annotate_w: bool = True):
-    """The geometry of a 2D polyline (z = 0): sampling points, midpoints m_{i+-1/2}, dual segments (alternating
-    colours), unit tangents and line elements w_i, every element named in the legend or a text box. Returns ax."""
+def plot_skewer_geometry_3d(ax, points, *, scale_factors=None, label_w=None, tangent_length: float = None,
+                            highlight: int = None):
+    """The geometry of one skewer in 3D (notebook 03): sampling points x_i, midpoints m_{i+-1/2}, the dual segment of
+    every point (from m_{i-1/2} to m_{i+1/2}; coloured by a(x) when ``scale_factors`` (N,) is given, else in
+    alternating colours), unit tangents t_i and the line elements w_i of the points ``label_w`` (default: about six).
+    ``highlight`` names one point whose dual segment is annotated. Returns the ScalarMappable of a(x) (or None).
+    """
     from skewerjax.core.skewers import path_geometry
     p = np.asarray(points, dtype=float)
     g = {k: np.asarray(v) for k, v in path_geometry(p).items()}
-    band = (PALETTE["blue"], PALETTE["cyan"])
+    n = len(p)
+    sm = None
+    if scale_factors is not None:
+        a = np.asarray(scale_factors, dtype=float)
+        norm = mpl.colors.Normalize(a.min(), a.max())
+        cm_ = plt.get_cmap(CMAPS["line"])
+        cols = [cm_(norm(x)) for x in a]
+        sm = mpl.cm.ScalarMappable(norm=norm, cmap=cm_)
+    else:
+        cols = [(PALETTE["blue"], PALETTE["cyan"])[i % 2] for i in range(n)]
     for i, (lo, x, hi) in enumerate(zip(g["mid_lo"], p, g["mid_hi"])):
-        ax.plot([lo[0], x[0], hi[0]], [lo[1], x[1], hi[1]], color=band[i % 2], lw=14, alpha=0.9, solid_capstyle="butt",
-                path_effects=[], label="dual segments (alternating colours), one per point" if i == 0 else None)
-    ax.plot(p[:, 0], p[:, 1], "-", color=FG, lw=1.2, zorder=3)
-    ax.plot(p[:, 0], p[:, 1], "o", color=FG, ms=11, zorder=4, label=r"sampling points $x_i$")
+        ax.plot(*np.stack([lo, x, hi]).T, color=cols[i], lw=9, alpha=0.9, solid_capstyle="butt", path_effects=[],
+                label=r"dual segment of $x_i$ (length $w_i$)" if i == 0 else None)
+    ax.scatter(*p.T, color=FG, s=45, depthshade=False, zorder=5, label=r"sampling points $x_i$")
     mids = 0.5 * (p[1:] + p[:-1])
-    ax.plot(mids[:, 0], mids[:, 1], "D", color=PALETTE["yellow"], ms=9, mec=BG, zorder=5, label=r"midpoints $m_{i\pm1/2}$")
-    ax.quiver(p[:, 0], p[:, 1], g["tangents"][:, 0], g["tangents"][:, 1], color=PALETTE["red"], scale=9, width=0.006,
-              zorder=6, label=r"unit tangents $\hat t_i$ (photon direction)")
-    if annotate_w:
-        span = np.ptp(p[:, :2], axis=0).max()
-        for i, (x, w) in enumerate(zip(p, g["line_elements"])):
-            t = _textbox(ax, x[0] + 0.03 * span, x[1] - 0.06 * span, rf"$w_{i}$ = {w:.3f}", fontsize=FONT_MIN["textbox"])
-            t.get_bbox_patch().set_edgecolor(band[i % 2]); t.get_bbox_patch().set_linewidth(2.0)
-        k = len(p) // 2
-        _textbox(ax, g["mid_lo"][k][0] - 0.02 * span, g["mid_lo"][k][1] + 0.09 * span,
-                 rf"dual segment of $x_{k}$: from $m_{{{k}-1/2}}$ to $m_{{{k}+1/2}}$, length $w_{k}$", ha="right", color=band[k % 2])
-    ax.margins(0.08)
-    ax.set(xlabel="x [cMpc]", ylabel="y [cMpc]", aspect="equal")
-    ax.legend(loc="upper left", fontsize=FONT_MIN["legend"])
-    return ax
-
-
-def plot_path_elements_3d(ax, points, *, every: int = 1, tangent_length: float = None, label: bool = True):
-    """The same elements as ``plot_path_elements`` on a 3D path (every ``every``-th point): points, midpoints,
-    dual segments (alternating colours), tangents, and the line element of a few points. Returns ax."""
-    from skewerjax.core.skewers import path_geometry
-    p = np.asarray(points, dtype=float)[::every]
-    g = {k: np.asarray(v) for k, v in path_geometry(p).items()}
-    band = (PALETTE["blue"], PALETTE["cyan"])
-    for i, (lo, x, hi) in enumerate(zip(g["mid_lo"], p, g["mid_hi"])):
-        ax.plot(*np.stack([lo, x, hi]).T, color=band[i % 2], lw=6, alpha=0.75, path_effects=[],
-                label="dual segments" if (i == 0 and label) else None)
-    ax.scatter(*p.T, color=FG, s=28, depthshade=False, label="points" if label else None)
-    mids = 0.5 * (p[1:] + p[:-1])
-    ax.scatter(*mids.T, color=PALETTE["yellow"], s=22, marker="D", depthshade=False, label="midpoints" if label else None)
-    L = tangent_length or 0.8 * np.median(g["line_elements"])
-    ax.quiver(*p.T, *(L * g["tangents"]).T, color=PALETTE["red"], lw=1.6, arrow_length_ratio=0.35,
-              label="unit tangents" if label else None)
-    for i in range(0, len(p), max(len(p) // 5, 1)):
-        ax.text(*p[i], f"  $w_{{{i}}}$ = {g['line_elements'][i]:.2f}", color=FG, fontsize=FONT_MIN["annotation"])
+    ax.scatter(*mids.T, color=PALETTE["yellow"], edgecolor=FG, linewidth=0.6, s=40, marker="D", depthshade=False, zorder=6,
+               label=r"midpoints $m_{i\pm1/2}$")
+    L = tangent_length or 0.9 * np.median(g["line_elements"])
+    ax.quiver(*p.T, *(L * g["tangents"]).T, color=PALETTE["red"], lw=1.8, arrow_length_ratio=0.3,
+              label=r"unit tangents $\hat t_i$")
+    for i in (np.linspace(0, n - 1, 6).round().astype(int) if label_w is None else label_w):
+        ax.text(*p[i], f"   $w_{{{i}}}$ = {g['line_elements'][i]:.2f}", color=FG, fontsize=FONT_MIN["annotation"], zorder=7)
+    if highlight is not None:
+        k = int(highlight)
+        ax.plot(*np.stack([g["mid_lo"][k], p[k], g["mid_hi"][k]]).T, color=FG, lw=2.2, ls=(0, (3, 2)), path_effects=[], zorder=8)
+        ax.text(*g["mid_hi"][k], f"  dual segment of $x_{{{k}}}$:\n  $m_{{{k}-1/2}} \\to m_{{{k}+1/2}}$", color=FG,
+                fontsize=FONT_MIN["annotation"], zorder=8)
     lo, hi = p.min(0), p.max(0)
-    pad = 0.15 * (hi - lo).max()
-    ax.set(xlim=(lo[0] - pad, hi[0] + pad), ylim=(lo[1] - pad, hi[1] + pad), zlim=(lo[2] - pad, hi[2] + pad))
-    return ax
+    pad = 0.12 * (hi - lo).max()
+    ax.set(xlim=(lo[0] - pad, hi[0] + pad), ylim=(lo[1] - pad, hi[1] + pad), zlim=(lo[2] - pad, hi[2] + pad),
+           xlabel="x [cMpc]", ylabel="y [cMpc]", zlabel="z [cMpc]")
+    dark_3d(ax)
+    return sm
 
 
 def _bin_modes(k, P, w, edges):
@@ -1486,14 +1479,36 @@ def _bin_modes(k, P, w, edges):
     return kb[keep], Pm[keep], err[keep], W[keep]
 
 
-def plot_pk_recovery_nd(cases: dict, *, n_bins: int = 18, figsize=(24, 14)):
-    """Isotropic P(|k|) recovered from GRF realisations in 1D, 2D and 3D, against the input, with residuals; for 2D
-    and 3D also the modes along the last axis (k_par, k_perp = 0) and across it (k_perp, k_par = 0), from which the
-    isotropic P(|k|) follows when the field is isotropic.
+def power_map_kpar_kperp(m, edges_par, edges_perp):
+    """Mean P over draws and modes in bins of (k_par = |k| along the last axis, k_perp = |k| across it).
 
-    cases : {title: (grf, deltas (N_real, *shape))}. Returns (fig, axs (4, n_cases), summary dict)."""
+    m : ``field_power_modes`` output. Returns (P (n_par, n_perp) with NaN where a bin has no mode, n_modes (weighted),
+    error of P (scatter between draws), n_indep (independent complex modes of the half space, for the Gaussian error))."""
+    kv = m["kvec"]
+    kpar, kperp = np.abs(kv[:, -1]), np.linalg.norm(kv[:, :-1], axis=-1)
+    ip = np.digitize(kpar, edges_par) - 1
+    iq = np.digitize(kperp, edges_perp) - 1
+    ok = (ip >= 0) & (ip < len(edges_par) - 1) & (iq >= 0) & (iq < len(edges_perp) - 1) & (m["k"] > 0)
+    flat = ip[ok] * (len(edges_perp) - 1) + iq[ok]
+    nb = (len(edges_par) - 1) * (len(edges_perp) - 1)
+    W = np.bincount(flat, weights=m["w"][ok], minlength=nb)
+    Pr = np.stack([np.bincount(flat, weights=(m["w"] * Pi)[ok], minlength=nb) for Pi in m["P"]]) / np.maximum(W, 1e-300)
+    Pm = np.where(W > 0, Pr.mean(0), np.nan)
+    err = Pr.std(0, ddof=1) / np.sqrt(Pr.shape[0]) if Pr.shape[0] > 1 else Pm * np.sqrt(2.0 / np.maximum(W, 1))
+    shp = (len(edges_par) - 1, len(edges_perp) - 1)
+    n_ind = np.bincount(flat, minlength=nb)
+    return Pm.reshape(shp), W.reshape(shp), np.where(W > 0, err, np.nan).reshape(shp), n_ind.reshape(shp)
+
+
+def plot_pk_recovery_nd(cases: dict, *, n_bins: int = 18, figsize=(24, 15)):
+    """P(k) recovered from GRF realisations in 1D, 2D and 3D. Top: the isotropic P(|k|) against the input, with
+    residuals. Bottom (2D and 3D): the measured power in the (k_par, k_perp) plane (k_par along the last axis), as
+    colour, with iso-power contours of the input on the same colour levels: for an isotropic spectrum the measured
+    colours follow circles, which is what justifies the isotropic average above.
+
+    cases : {title: (grf, deltas (N_real, *shape))}. Returns (fig, axs (3, n_cases), summary dict)."""
     n = len(cases)
-    fig, axs = plt.subplots(4, n, figsize=figsize, gridspec_kw={"height_ratios": [2.2, 1, 2.2, 1]}, layout="constrained", squeeze=False)
+    fig, axs = plt.subplots(3, n, figsize=figsize, gridspec_kw={"height_ratios": [2.2, 1, 2.6]}, layout="constrained", squeeze=False)
     out = {}
     for c, (title, (grf, deltas)) in enumerate(cases.items()):
         m = field_power_modes(deltas, grf.L)
@@ -1501,7 +1516,6 @@ def plot_pk_recovery_nd(cases: dict, *, n_bins: int = 18, figsize=(24, 14)):
         kmax = min(np.pi * N / L for N, L in zip(grf.shape, grf.L))
         edges = np.geomspace(0.999 * kmin, kmax, n_bins + 1)
         kb, Pb, eb, nb = _bin_modes(m["k"], m["P"], m["w"], edges)
-        Pin = np.asarray(grf.power(kb))
         Pin_b = _bin_modes(m["k"], np.asarray(grf.power(m["k"]))[None], m["w"], edges)[1]
         kk = np.geomspace(kb[0], kb[-1], 300)
         axs[0, c].plot(kk, np.asarray(grf.power(kk)), color=FG, lw=2, label="input P(k)")
@@ -1511,27 +1525,38 @@ def plot_pk_recovery_nd(cases: dict, *, n_bins: int = 18, figsize=(24, 14)):
         axs[0, c].set(xscale="log", yscale="log", title=title, ylabel="P(k)")
         axs[1, c].set(xscale="log", ylabel="measured / input − 1", xlabel=r"$|k|$ [Mpc$^{-1}$]")
         residual_band(axs[1, c], 0.05)
-        if grf.ndim == 1:
-            for r in (2, 3):
-                axs[r, c].set_axis_off()
-            axs[2, c].text(0.5, 0.5, "1D: the only direction is the line\nof sight, so P(|k|) = P(k$_\\parallel$)",
-                           ha="center", va="center", transform=axs[2, c].transAxes, fontsize=FONT_MIN["annotation"], color=DIM)
-        else:
-            kv = m["kvec"]
-            perp = np.linalg.norm(kv[:, :-1], axis=-1)
-            for sel, kx, col, lab in ((np.isclose(perp, 0.0), np.abs(kv[:, -1]), PALETTE["blue"], r"$k_\parallel$ (last axis), $k_\perp = 0$"),
-                                      (np.isclose(kv[:, -1], 0.0), perp, PALETTE["red"], r"$k_\perp$, $k_\parallel = 0$")):
-                kb2, Pb2, eb2, _ = _bin_modes(kx[sel], m["P"][:, sel], m["w"][sel], edges)
-                Pin2 = np.asarray(grf.power(kb2))
-                axs[2, c].errorbar(kb2, Pb2, eb2, fmt="o", ms=6, capsize=3, color=col, label=lab)
-                axs[3, c].errorbar(kb2, Pb2 / Pin2 - 1, eb2 / Pin2, fmt="o", ms=6, capsize=3, color=col)
-            axs[2, c].plot(kk, np.asarray(grf.power(kk)), color=FG, lw=2, label="input")
-            axs[2, c].set(xscale="log", yscale="log", ylabel="P(k)")
-            axs[3, c].set(xscale="log", ylabel="measured / input − 1", xlabel=r"$k$ [Mpc$^{-1}$]", ylim=(-0.6, 0.6))
-            residual_band(axs[3, c], 0.05)
-            axs[2, c].legend(fontsize=FONT_MIN["legend"])
         axs[0, c].legend(fontsize=FONT_MIN["legend"])
         axs[1, c].set_ylim(-0.3, 0.3)
+        ax = axs[2, c]
+        if grf.ndim == 1:
+            ax.set_axis_off()
+            ax.text(0.5, 0.5, "1D: the only direction is the line\nof sight, so P(|k|) = P(k$_\\parallel$)",
+                    ha="center", va="center", transform=ax.transAxes, fontsize=FONT_MIN["annotation"], color=DIM)
+            continue
+        dk = 2 * np.pi / min(grf.L)                                  # the coarsest fundamental mode
+        e = hybrid_k_edges(dk, kmax, n_lin=6, n_log=20)              # one mode per bin at low k, then log bins
+        Pm, W, Em, Nind = power_map_kpar_kperp(m, e, e)
+        kc = np.sqrt(e[1:] * e[:-1])
+        good = np.isfinite(Pm) & (Pm > 0)
+        norm = mpl.colors.LogNorm(np.nanmin(Pm[good]), np.nanmax(Pm[good]))
+        cmap_ = plt.get_cmap(CMAPS["sequential"]).copy()
+        cmap_.set_bad((0, 0, 0, 0))
+        im = ax.pcolormesh(e, e, np.ma.masked_invalid(Pm).T, cmap=cmap_, norm=norm, shading="flat")
+        kf = np.geomspace(e[0], e[-1], 300)
+        KP, KQ = np.meshgrid(kf, kf, indexing="ij")
+        levels = 10.0 ** np.arange(np.ceil(np.log10(norm.vmin)), np.log10(norm.vmax))
+        cs = ax.contour(kf, kf, np.asarray(grf.power(np.hypot(KP, KQ))).T, levels=levels, colors=FG, linewidths=1.3,
+                        linestyles="--")
+        ax.clabel(cs, fmt=lambda x: f"$10^{{{np.log10(x):.0f}}}$", fontsize=FONT_MIN["floor"], inline=False)
+        fig.colorbar(im, ax=ax, label="measured P [Mpc$^{d}$]", shrink=0.9)
+        Pin_map = np.asarray(grf.power(np.hypot(*np.meshgrid(kc, kc, indexing="ij"))))
+        # Gaussian expectation: |delta_k|^2 is exponential, so the mean of n independent modes has error P / sqrt(n)
+        sig = Pin_map / np.sqrt(np.maximum(Nind * deltas.shape[0], 1))
+        well = good & (Nind > 0)
+        out[title]["map_chi2_dof"] = float(np.mean(((Pm[well] - Pin_map[well]) / sig[well]) ** 2))
+        ax.set(xscale="log", yscale="log", xlim=(e[0], e[-1]), ylim=(e[0], e[-1]), aspect="equal",
+               xlabel=r"$k_\parallel$ (last axis) [Mpc$^{-1}$]",
+               ylabel=r"$k_\perp$ [Mpc$^{-1}$]", title="measured P in the $(k_\\parallel, k_\\perp)$ plane; dashed: input")
     return fig, axs, out
 
 
@@ -1600,9 +1625,10 @@ def plot_deposition_story(seed: int = 3, n_cells: int = 90, every: int = 25, H_k
         piece of a dual segment drawn in the colour of the cell that fills it;
     (b) along the path: the cell values (pieces, same colours), and the four ways to assign the gas to the points with
         their column: exact pieces (Voronoi default) = segment averages x w_i, point values x w_i, top-hat discs of
-        radius sqrt(A) (fake_spectra's spheres, in 2D), and the cell crossings (Voronoi-adapted);
-    (c) the spectral grid: every piece adds its own profile at v = H s (the cosmology maps the path to velocity), on a
-        pixel grid that knows nothing of the cells or the points.
+        radius sqrt(A) (top-hat spheres, in 2D), and the cell crossings (Voronoi-adapted);
+    (c) the integration: every piece p adds d tau_p(v) = C n_p l_p a_p^-2 phi_p(v), centred at the line centre of its
+        centroid (v = H s here: no peculiar velocity, a = 1), on a pixel grid that knows nothing of the cells or the
+        points (the derivation is notebook 06).
     Returns (fig, axs, columns).
     """
     from matplotlib.collections import LineCollection, PolyCollection
@@ -1678,7 +1704,7 @@ def plot_deposition_story(seed: int = 3, n_cells: int = 90, every: int = 25, H_k
         ax.fill_between([a, e], 0, dens[c], color=col(c), alpha=0.9, lw=0, step="pre", path_effects=[])
     ax.bar(s_sp, seg_mean, width=w, fill=False, edgecolor=PALETTE["green"], lw=2.2, label=rf"segment averages $\bar n_i$ over $w_i$: N = {cols['segments']:.3f}")
     ax.plot(s_sp, n_pts, "D", color=PALETTE["red"], ms=10, mec=BG, label=f"values at the points × $w_i$: N = {cols['points']:.3f}")
-    ax.plot(fine_s, n_top, color=PALETTE["yellow"], lw=1.6, label=f"top-hat discs (fake_spectra's kernel): N = {cols['tophat']:.3f}")
+    ax.plot(fine_s, n_top, color=PALETTE["yellow"], lw=1.6, label=f"top-hat discs (each cell a uniform disc): N = {cols['tophat']:.3f}")
     for a, e, c in cross:
         ax.plot([a, e], [-0.09 * dens.max()] * 2, color=col(c), lw=6, solid_capstyle="butt", path_effects=[])
         ax.plot([e, e], [-0.14 * dens.max(), -0.04 * dens.max()], color=FG, lw=1.0, path_effects=[])
@@ -1696,10 +1722,13 @@ def plot_deposition_story(seed: int = 3, n_cells: int = 90, every: int = 25, H_k
         prof = dens[c] * (e - a) * np.exp(-((vv - H_kms_per_unit * 0.5 * (a + e)) / b) ** 2) / (np.sqrt(np.pi) * b)
         tot += prof
         ax.plot(vv, prof, color=col(c), lw=1.6)
-    ax.plot(vv, tot, color=FG, lw=1.4, ls="--", label=r"sum of the pieces: $\tau(v)$ (schematic)")
+    ax.plot(vv, tot, color=FG, lw=1.6, ls="--", label=r"$\tau(v) = \sum_p d\tau_p(v)$")
+    ax.plot(H_kms_per_unit * np.array([0.5 * (a + e) for a, e, c, k in pieces]), np.full(len(pieces), -0.03 * tot.max()), "|",
+            color=FG, ms=12, mew=1.5, label=r"line centres $v_{c,p}$ of the piece centroids")
     ax.vlines(np.arange(vv[0], vv[-1], 2.2 * b), 0, 1.05 * tot.max(), color=DIM, lw=1, ls=":", path_effects=[], label="pixels of the spectral grid")
-    ax.set(xlabel=r"spectral coordinate $v$ [km s$^{-1}$]: $v_c = c\,\ln(a_\dagger/a(s)) + v_\parallel \approx H s$", ylabel=r"d$\tau$")
-    ax.set_title("(c) Integration: every piece adds its profile where the cosmology puts it; the pixel grid is independent")
+    ax.set(xlabel=r"$v$ [km s$^{-1}$]; piece $p$ at $v_{c,p} = c\,\ln(a_\dagger/a(s_p)) + v_{\parallel,p}$ ($= H s_p$ here)",
+           ylabel=r"$d\tau_p(v) = \mathcal{C}\, n_p\, \ell_p\, a_p^{-2}\, \phi_p(v)$", ylim=(-0.07 * tot.max(), None))
+    ax.set_title("(c) Integration: each piece adds its own profile, centred where its centroid absorbs; the pixels are independent")
     ax.legend(loc="upper right", fontsize=FONT_MIN["legend"])
     return fig, axs, cols
 
@@ -1742,7 +1771,7 @@ def plot_frames_axes(v, F_own, line_bundle, *, a_dagger: float, a_obs: float = 1
     the flux of every line in its own frame. (a) observed wavelength lambda_obs = lambda_j (a_obs / a_dagger) e^{v/c};
     (b) the global (reference-line) axis: ``wrap_to_ref_line`` (solid, periodic on the grid) against the unwrapped shift
     v - Delta v_j (dashed, outside the grid where it leaves it; the grid is shaded); (c, larger) the line-centred frames:
-    the same gas absorbs at the same v_dagger in every line, and arrows mark Delta v_j between the frames.
+    the same gas absorbs at the same v_dagger in every line (dotted: the absorber centres).
     ``centres`` : optional absorber centres [km/s] to mark. Returns (fig, axs).
     """
     from skewerjax.core.constants import phys
@@ -1767,10 +1796,6 @@ def plot_frames_axes(v, F_own, line_bundle, *, a_dagger: float, a_obs: float = 1
     if centres is not None:
         for c0 in np.atleast_1d(centres):
             axs[2].axvline(c0, color=FG, ls=":", lw=1.2, path_effects=[])
-            for j in range(1, len(lines)):
-                x_ref = c0 - dv_j[j]
-                axs[1].annotate("", (x_ref, 0.18), (c0, 0.18),
-                                arrowprops=dict(arrowstyle="-|>", color=cols[j], lw=1.6))
     for j in range(1, len(lines)):
         _textbox(axs[2], 0.02, 0.12 + 0.1 * j, f"{lines[j].id} sits Δv = {dv_j[j]:+.1f} km/s from {lines[0].id} on the global axis "
                  f"(c ln(λ_ref/λ_j)); in its own frame it absorbs at the same v† as {lines[0].id}", color=cols[j],
@@ -1784,51 +1809,122 @@ def plot_frames_axes(v, F_own, line_bundle, *, a_dagger: float, a_obs: float = 1
     return fig, axs
 
 
-def plot_option_sweep(v, taus: dict, ref: str, line_ids, *, colors=None, f_window=(0.05, 0.95), width_kms: float = 120.0,
-                      figsize=(22, 14)):
-    """What the detuning and precision options change, where it is visible.
+def plot_two_elements(r: dict, *, figsize=(22, 15)):
+    """Two gas elements on opposite sides of a reference point with opposite peculiar velocities (``tutorial.two_elements``):
+    (a) where they are and where they absorb (the Hubble line centre v_H(x) and the line centres with the peculiar
+    velocity); (b) tau from a fine quadrature of the integral, the package's sum and the two per-element parts;
+    (c) the error of the sum with K pieces per element. Returns (fig, axs)."""
+    fig, axs = plt.subplots(3, 1, figsize=figsize, gridspec_kw={"height_ratios": [1.2, 1.5, 1.0]}, layout="constrained")
+    cA, cB = PALETTE["blue"], PALETTE["red"]
+    ax = axs[0]
+    x, vH = r["x_grid"], r["v_hubble"]
+    sel = (x > r["x_c"][0] - 1.2) & (x < r["x_c"][1] + 1.2)
+    ax.plot(x[sel], vH[sel], color=DIM, lw=2, label=r"$v_H(x) = c\ln(a_\dagger/a(x))$: gas at rest")
+    for e, (c, name) in enumerate(((cA, "A"), (cB, "B"))):
+        xc, h = r["x_c"][e], 0.5 * r["length"]
+        ax.axvspan(xc - h, xc + h, color=c, alpha=0.25, lw=0)
+        vh = np.interp(xc, x, vH)
+        ax.annotate("", (xc, r["v_star"]), (xc, vh), arrowprops=dict(arrowstyle="-|>", color=c, lw=2.2))
+        ax.plot([xc], [r["v_star"]], "o", color=c, ms=11, mec=FG,
+                label=rf"{name}: $n$ = {r['n_com'][e]:.0e}, $T$ = {r['T'][e]:.0e} K, $u$ = {r['u'][e]:+.0f} km/s")
+    ax.axhline(r["v_star"], color=FG, ls=":", lw=1.2)
+    ax.text(r["x_c"].mean(), r["v_star"] + 8, rf"both line centres: $v_\dagger$ = {r['v_star']:.1f} km/s", ha="center",
+            va="bottom", color=FG, fontsize=FONT_MIN["annotation"])
+    ax.set(xlabel=r"comoving distance from the observer $x$ [cMpc]", ylabel=r"line centre $v_c$ [km s$^{-1}$]",
+           title="(a) A (nearer, receding) and B (farther, approaching): the arrows are their peculiar velocities")
+    ax.legend(loc="upper left", fontsize=FONT_MIN["legend"])
+    ax = axs[1]
+    v = r["v"]
+    Kmax = max(r["tau_sum"])
+    ax.plot(v, r["tau_ref"], color=FG, **MODE_STYLES["reference"], label="integral: fine quadrature (scipy wofz)")
+    ax.plot(v, r["tau_sum"][Kmax], color=FG, lw=1.8, label=rf"the code's sum, {Kmax} pieces per element")
+    for e, c, name in ((0, cA, "A"), (1, cB, "B")):
+        ax.plot(v, r["tau_ref_parts"][e], color=c, lw=4, alpha=0.35)
+        ax.plot(v, r["tau_sum_parts"][Kmax][e], color=c, ls="--", lw=1.8, label=f"element {name} alone")
+    ax.set(xlabel=r"$v_\dagger$ [km s$^{-1}$]", ylabel=r"$\tau$", yscale="log", ylim=(1e-3 * r["tau_ref"].max(), 2 * r["tau_ref"].max()),
+           title=r"(b) $\tau = \tau_A + \tau_B$: each element with its own $n$, $T$, $u$ and $a$, at the same $v_\dagger$")
+    ax.legend(loc="upper right", fontsize=FONT_MIN["legend"])
+    ax = axs[2]
+    for K, c in zip(sorted(r["tau_sum"]), (PALETTE["purple"], PALETTE["green"], PALETTE["cyan"], PALETTE["yellow"])):
+        err = (r["tau_sum"][K] - r["tau_ref"]) / r["tau_ref"].max()
+        ax.plot(v, err, color=c, lw=1.8, label=rf"$K$ = {K}: $W/b_A$ = {r['hubble_width_kms'] / K / r['b_kms'][0]:.2f}, max = {np.abs(err).max():.1e}")
+    ax.axhline(0, color=FG, lw=0.8)
+    ax.set(xlabel=r"$v_\dagger$ [km s$^{-1}$]", ylabel=r"(sum $-$ integral) / $\tau_{\max}$", yscale="symlog",
+           title=r"(c) The error of the sum: the midpoint rule on every piece, $\propto (W/b)^2$ with $W = (dv_H/dx)\,\ell_p$")
+    ax.yaxis.set_major_locator(mpl.ticker.SymmetricalLogLocator(base=10, linthresh=1e-5, subs=[1.0]))
+    ax.set_yscale("symlog", linthresh=1e-5)
+    ax.legend(loc="upper right", fontsize=FONT_MIN["legend"])
+    return fig, axs
 
-    taus : {option label: (N_lines, N_v) tau of one skewer}, ``ref`` the default. (a) F of the default, with the zoom
-    window marked; (b) the zoom on an unsaturated wing (the window of width ``width_kms`` where F is inside
-    ``f_window`` and the largest |dF| sits); (c) dF = F_option - F_default over the whole grid (symlog); (d) the
-    relative change of tau, tau_option / tau_default - 1, where tau > 1e-8 (symlog). Returns (fig, axs, window).
-    """
-    v = np.asarray(v, dtype=float)
-    F = {k: np.exp(-np.asarray(t)) for k, t in taus.items()}
-    cols = colors or [ENTITY_COLORS.get(l, species_color(l, j)) for j, l in enumerate(line_ids)]
-    others = [k for k in taus if k != ref]
-    styles = dict(zip(others, (MODE_STYLES["matched"], MODE_STYLES["alternative"], MODE_STYLES["isolated"])))
-    unsat = (F[ref] > f_window[0]) & (F[ref] < f_window[1])
-    score = np.max([np.where(unsat, np.abs(F[k] - F[ref]), 0.0).max(0) for k in others], axis=0)
-    c0 = v[int(np.argmax(score))]
-    win = (c0 - width_kms / 2, c0 + width_kms / 2)
-    fig = plt.figure(figsize=figsize, layout="constrained")
-    gs = fig.add_gridspec(3, 2, height_ratios=[1.3, 1, 1], width_ratios=[1.6, 1])
-    a0, az = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1])
-    adf, adt = fig.add_subplot(gs[1, :]), fig.add_subplot(gs[2, :], sharex=None)
-    for j, lid in enumerate(line_ids):
-        a0.plot(v, F[ref][j], color=cols[j], label=f"{lid} ({ref})")
-        m = (v >= win[0]) & (v <= win[1])
-        for k in others:
-            az.plot(v[m], F[k][j][m] - F[ref][j][m], color=cols[j], **styles[k])
-            adf.plot(v, F[k][j] - F[ref][j], color=cols[j], **styles[k], label=f"{lid}: {k} − {ref}")
-            pos = np.asarray(taus[ref])[j] > 1e-8
-            adt.plot(v[pos], np.asarray(taus[k])[j][pos] / np.asarray(taus[ref])[j][pos] - 1, color=cols[j], **styles[k])
-    a0.axvspan(*win, color=PALETTE["yellow"], alpha=0.18, lw=0)
-    a0.set(xlabel=LABELS["v_dagger"], ylabel=LABELS["F"], title="(a) default; the zoom window (yellow)")
-    az.axhline(0, color=FG, lw=0.8)
-    az.set(xlabel=LABELS["v_dagger"], ylabel=LABELS["dF"], title=f"(b) ΔF in the window: an unsaturated wing ({f_window[0]} < F < {f_window[1]})")
-    adf.set_yscale("symlog", linthresh=1e-8)
-    adf.set_yticks([-1e-4, -1e-6, -1e-8, 0, 1e-8, 1e-6, 1e-4])
-    adf.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(ten_power_formatter)); adf.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
-    adf.set(ylabel=LABELS["dF"], title="(c) the change of the flux")
-    adt.set_yscale("symlog", linthresh=1e-7)
-    adt.set_yticks([-1e-2, -1e-4, -1e-6, 0, 1e-6, 1e-4, 1e-2])
-    adt.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(ten_power_formatter)); adt.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
-    adt.set(xlabel=LABELS["v_dagger"], ylabel=r"$\tau/\tau_{\rm default} - 1$",
-                                                     title=r"(d) the relative change of $\tau$ (where $\tau > 10^{-8}$)")
-    a0.legend(fontsize=FONT_MIN["legend"]); adf.legend(fontsize=FONT_MIN["legend"], ncols=2)
-    return fig, (a0, az, adf, adt), win
+
+def plot_linear_detuning(d: dict, *, figsize=(22, 7.5)):
+    """The linear detuning against the exact one for one absorber (``tutorial.linear_detuning``): (a) F of the
+    strongest column, exact and linear; (b) tau_linear / tau_exact - 1 against v - v_c, with the wing prediction
+    -(v - v_c)/c; (c) |F_linear - F_exact| for every column. Returns (fig, axs)."""
+    from skewerjax.core.constants import phys
+    v, te, tl = d["v"], d["tau_exact"], d["tau_linear"]
+    cols = [PALETTE[k] for k in ("blue", "green", "red", "purple")]
+    fig, axs = plt.subplots(1, 3, figsize=figsize, layout="constrained")
+    axs[0].plot(v, np.exp(-te[-1]), color=FG, **MODE_STYLES["reference"], label="exact detuning")
+    axs[0].plot(v, np.exp(-tl[-1]), color=cols[2], ls="--", lw=1.8, label="linear detuning")
+    axs[0].set(xlabel=r"$v_\dagger - v_c$ [km s$^{-1}$]", ylabel=LABELS["F"], ylim=(-0.03, 1.05),
+               title=rf"(a) $\log_{{10}} N$ = {d['log_N'][-1]:.1f}: the damping wings")
+    rel = tl[0] / te[0] - 1
+    ok = te[0] > 1e-300
+    axs[1].plot(v[ok], rel[ok], color=cols[0], lw=2, label=r"$\tau_{\rm lin}/\tau_{\rm exact} - 1$ (any column)")
+    axs[1].plot(v, -v / phys.c_kms, color=FG, ls=":", lw=1.6, label=r"wings: $-(v_\dagger - v_c)/c$")
+    axs[1].set(xlabel=r"$v_\dagger - v_c$ [km s$^{-1}$]", ylabel="relative change of $\\tau$", yscale="symlog",
+               title="(b) the relative error of $\\tau$")
+    axs[1].set_yscale("symlog", linthresh=1e-4)
+    for i, lN in enumerate(d["log_N"]):
+        axs[2].semilogy(v, np.abs(np.exp(-tl[i]) - np.exp(-te[i])) + 1e-12, color=cols[i], lw=1.8, label=rf"$\log_{{10}} N$ = {lN:.1f}")
+    axs[2].set(xlabel=r"$v_\dagger - v_c$ [km s$^{-1}$]", ylabel=r"$|F_{\rm lin} - F_{\rm exact}|$", ylim=(1e-8, 1e-2),
+               title="(c) what it does to the flux")
+    for ax in axs:
+        ax.legend(loc="lower center" if ax is axs[1] else "lower right", fontsize=FONT_MIN["legend"])
+    return fig, axs
+
+
+def plot_periodicity_options(p: dict, *, figsize=(22, 17)):
+    """The periodicity options on one absorber near the far edge of a periodic box (``tutorial.periodic_box_demo``):
+    (a) no wrap, (b) detunings wrapped modulo P, (c) a buffer of periodic gas, (d) the post-processing shift of a
+    second line onto the reference frame (``wrap_to_ref_line``). Returns (fig, axs)."""
+    v, P, t = p["v"], p["period_kms"], p["tau"]
+    fig, axs = plt.subplots(4, 1, figsize=figsize, layout="constrained")
+    shade = lambda ax: ax.axvspan(0, P, color=DIM, alpha=0.12, lw=0)
+    ext = (p["v_ext"] >= -0.6 * P) & (p["v_ext"] <= 1.6 * P)
+    full = p["tau_full"]
+    ax = axs[0]; shade(ax)
+    ax.plot(p["v_full"], full, color=FG, ls=":", lw=1.4, label="the absorber's whole profile (it does not stop at $P$)")
+    ax.plot(v, t["none"], color=PALETTE["blue"], lw=2.4, label="no wrap: what lands on the grid $[0, P)$")
+    ax.set_title(r"(a) No wrap: the profile past $v = P$ falls off the grid and is lost")
+    ax = axs[1]; shade(ax)
+    ax.plot(v, t["wrapped"], color=PALETTE["green"], lw=2.4, label=r"detunings wrapped: $v_\dagger - v_c \to$ its image in $[-P/2, P/2)$")
+    ax.plot(v, t["none"], color=PALETTE["blue"], lw=1.2, ls="--", label="no wrap")
+    ax.annotate("", (0.03 * P, 0.6 * t["wrapped"].max()), (0.97 * P, 0.6 * t["wrapped"].max()),
+                arrowprops=dict(arrowstyle="-|>", color=FG, lw=1.6, connectionstyle="arc3,rad=0.12"))
+    ax.text(0.5 * P, 0.68 * t["wrapped"].max(), "the overflow re-enters at the near end", ha="center", color=FG,
+            fontsize=FONT_MIN["annotation"])
+    ax.set_title(r"(b) Detunings wrapped modulo the box period $P$ (velocity_period $= P$)")
+    ax = axs[2]; shade(ax)
+    ax.plot(p["v_ext"][ext], p["tau_ext"][ext], color=PALETTE["purple"], lw=1.4, label="buffer: the path extended by periodic copies of the gas")
+    ax.plot(v, t["buffer"], color=PALETTE["purple"], lw=2.6, label=r"read on $[0, P)$")
+    ax.plot(v, t["wrapped"], color=PALETTE["green"], lw=1.2, ls="--", label="detunings wrapped (b)")
+    for xc in p["copies"]:
+        ax.axvline(p["v_of_x"](xc), color=PALETTE["purple"], ls=":", lw=1.2)
+    ax.set_title("(c) A buffer: a longer, non-periodic path through the periodic gas, read on one period")
+    ax = axs[3]; shade(ax)
+    cH, cS = ENTITY_COLORS["HI-LyA"], ENTITY_COLORS["SiIII-1206"]
+    ax.plot(v, p["two_lines_own"][1], color=cS, lw=1.4, ls="--", label="Si III in its own frame")
+    ax.plot(v, p["two_lines_ref"][0], color=cH, lw=2.2, label=r"Ly$\alpha$ (reference frame)")
+    ax.plot(v, p["two_lines_ref"][1], color=cS, lw=2.4, label=r"Si III shifted by $-\Delta v$ modulo $P$ (wrap_to_ref_line)")
+    ax.plot(v - p["delta_v"], p["two_lines_own"][1], color=cS, lw=1.2, ls=":", label=r"the shift without the modulo")
+    ax.set_title(rf"(d) One axis for both lines: $-\Delta v$ = {-p['delta_v']:.0f} km/s is {abs(p['delta_v']) / P:.2f} periods")
+    for ax in axs:
+        ax.set(xlim=(-0.55 * P, 1.55 * P) if ax is not axs[3] else (-1.15 * P, 1.1 * P),
+               xlabel=r"$v_\dagger$ [km s$^{-1}$] (grey: the grid, one period $[0, P)$)", ylabel=r"$\tau$")
+        ax.legend(loc="upper left" if ax is not axs[3] else "upper right", fontsize=FONT_MIN["legend"])
+    return fig, axs
 
 
 def field_power_modes(deltas, L):

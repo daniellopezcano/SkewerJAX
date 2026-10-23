@@ -150,15 +150,17 @@ class SimulationSkewers:
         (both needed for caching).
     scale_factors : optional (N_sk, N) a(x) at the points (e.g. a ``SkewerBundle``'s); then the exact frame
         uses them instead of placing the snapshot's a at the centre of the box (``from_bundle``).
+    selection_backend : "cpu" (default), "jztree" or "auto": back end of ``select_cells_near_paths``.
     """
 
     def __init__(self, reader, points, *, cosmology=None, cells=None, s_origin: float = 0.0, max_rows: int = 4_000_000,
-                 name: Optional[str] = None, cache=None, scale_factors=None):
+                 name: Optional[str] = None, cache=None, scale_factors=None, selection_backend: str = "cpu"):
         self.reader, self.header = reader, reader.header
         self.box = self.header.box_cMpc
         self.points = np.asarray(points, dtype=np.float64)
         t = time.perf_counter()
-        self.cells = cells if cells is not None else sel.select_cells_near_paths(reader, self.points, mode="voronoi", max_rows=max_rows)
+        self.cells = cells if cells is not None else sel.select_cells_near_paths(reader, self.points, mode="voronoi", max_rows=max_rows,
+                                                                                   backend=selection_backend)
         self.selection_s = time.perf_counter() - t
         g = path_geometry(jnp.asarray(self.points))
         self.s = np.asarray(g["s"])

@@ -3,6 +3,55 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — notebooks fourth pass: paper/dark styles, τ derivation, periodicity, GRF study, selection back ends (2026-10-23, session 20261023_0530)
+
+### Added
+- `simulations.selection.select_cells_near_paths(..., backend="cpu" | "jztree" | "auto")`, `jztree_available`,
+  `resolve_backend`, and `SimulationSkewers(..., selection_backend=...)`:
+  - `"cpu"` is the default (unchanged);
+  - `"jztree"` is the CUDA back end through the optional package jztree, with borderline cells re-checked in float64;
+  - `"auto"` uses the GPU when jztree and a CUDA device are present.
+  - jztree is not installed in the development environment (its wheels need jax ≥ 0.8 and NumPy ≥ 2.2.6), so the GPU
+    path is untested and `"auto"` resolves to the CPU.
+- `core.GRFDensity(key, grf, n_bar, delta_grid=None)`: n = n̄(1 + δ) from one `PowerLawGRF` realisation, trilinear in
+  the periodic box, with no transform; `min_one_plus_delta`, and a warning when it is ≤ 0.
+- `skewerjax.utils.tutorial`: the toy set-ups of the notebooks:
+  - `two_elements`, `linear_detuning`, `periodic_box_demo`;
+  - the expected spectra of a GRF along skewers: `p1d_expected`, `p3d_expected_on_skewer_grid`, `binned_input_power`.
+- Plotting:
+  - `use_style("paper")` (new default: white, publication look) and `use_style("dark")`. Both use the same palette,
+    with `FG`, `BG`, `DIM`, `CMAPS` following the style (`THEMES`, `matplotlib_paper_config`).
+  - New figures: `plot_skewer_geometry_3d`, `power_map_kpar_kperp`, `plot_two_elements`, `plot_linear_detuning`,
+    `plot_periodicity_options`.
+  - `plot_cylinder(..., flux_on_cylinder=False)`.
+- Tests: `tests/test_selection_backend.py`, `tests/test_toy_fields.py`, `tests/test_tutorial.py`, and new figure and
+  style tests in `tests/test_plotting.py`.
+
+### Changed
+- **Default plotting style:** paper (white) instead of dark.
+- **The dependency graph:**
+  - one highlight (a light fill and a coloured edge; no halo);
+  - dashed edges with a fixed dash pattern, so that they look dashed in every orientation (the arrow heads no longer
+    stroke the last segment solid);
+  - highlight lists per notebook = the ingredients each one uses.
+- `plot_pk_recovery_nd`: the second row is the measured power in the (k∥, k⊥) plane with input iso-contours.
+- `plot_deposition_story` panel (c): the per-piece contributions dτ_p and their sum, as derived in notebook 06.
+- `plot_frames_axes`: no arrows in panel (b).
+- Notebooks 00–07 rebuilt:
+  - markdown maths in LaTeX throughout;
+  - no external code named;
+  - 03: one 3D figure of one skewer, plus its anatomy;
+  - 04: no `GaussianDensity` section; a pytree explanation;
+  - 05: no piecewise figure and no sampling section;
+  - 06: the derivation from the integral to the sum, the linear-detuning test, periodicity rewritten, and simulation τ
+    at the end;
+  - 07: a systematic GRF study.
+
+### Removed
+- `core.GaussianDensity` (the bounded tanh transform). Use `GRFDensity`.
+- Plotting: `plot_path_elements`, `plot_path_elements_3d` (replaced by `plot_skewer_geometry_3d`), `plot_option_sweep`,
+  `plot_raw_to_overflux` (no longer used).
+
 ## Unreleased — notebooks third pass: clarity, consistency, two code items (2026-10-22, session 20261022_2120)
 
 ### Added

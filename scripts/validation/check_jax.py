@@ -9,7 +9,7 @@ import numpy as np                                                        # noqa
 import jax
 import jax.numpy as jnp
 from skewerjax.core import (phys, LineBundle, Cosmology, SkewerBundle, Fields, ScalarField, VectorField, SampledField,
-                            PowerLawGRF, GaussianDensity, LogRamp, VelocityRamp, Constant, plane_points, path_geometry,
+                            PowerLawGRF, GRFDensity, LogRamp, VelocityRamp, Constant, plane_points, path_geometry,
                             line_elements, overflux_terms, equivalent_width_kms)
 from skewerjax.core import skewers as skw, voigt as V, spectral as sp_, optical_depth as od, analytic as an
 from skewerjax.core.stats import two_point as tp, contaminants as cm
@@ -90,10 +90,10 @@ vmap_check("PowerLawGRF.sample (keys)", lambda k: g3.sample(k), (jax.random.spli
 jit_check("PowerLawGRF.variance", lambda g: g.variance(), g3)
 vmap_check("PowerLawGRF.power (n_s batch)", lambda n: PowerLawGRF(A_s=2.0, k_0=1.0, n_s=n, L=10.0, N=32).power(jnp.linspace(0, 3, 9)),
            (jnp.array([-1.0, -0.5, 0.5]),))
-gd = GaussianDensity(key, PowerLawGRF(A_s=4.0, k_0=2.0, n_s=-1.25, L=(50.0,) * 3, N=(16,) * 3), n0_min=1e-16, n0_max=1e-11, contrast=1.2)
+gd = GRFDensity(key, PowerLawGRF(A_s=0.04, k_0=2.0, n_s=-1.25, L=(50.0,) * 3, N=(16,) * 3), n_bar=1e-12)   # sigma = 0.11
 ev = jnp.asarray(rng.uniform(-5, 60, size=(4, 9, 4)))
-jit_check("GaussianDensity", lambda s, e: s(e), gd, ev)
-vmap_check("GaussianDensity (skewers)", gd, (ev,))
+jit_check("GRFDensity", lambda s, e: s(e), gd, ev)
+vmap_check("GRFDensity (skewers)", gd, (ev,))
 # Voigt
 xv = jnp.linspace(-50.0, 50.0, 201)
 for nm, f in (("gaussian", V.gaussian), ("lorentzian", V.lorentzian), ("voigt_exojax", V.voigt_exojax), ("voigt_convolution", V.voigt_convolution)):

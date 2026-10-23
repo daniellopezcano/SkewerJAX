@@ -324,46 +324,53 @@ def _trilinear_periodic_sample(field: jnp.ndarray, pos_xyz: jnp.ndarray,
 
 # --------------------------------------------------------------------------- samplers of events (a, x, y, z)
 @jax.tree_util.register_pytree_node_class
-class GaussianDensity:
-    """n(x, y, z) from one 3D ``PowerLawGRF`` realisation, trilinearly interpolated in the periodic box.
+class GRFDensity:
+    """n(x, y, z) = n_bar (1 + delta(x, y, z)) from one 3D ``PowerLawGRF`` realisation, trilinearly interpolated in the
+    periodic box [cm^-3].
 
-        s = tanh(delta / contrast),   log10 n = log_mid + log_amp s,   so n in [n0_min, n0_max] [cm^-3].
+    No transform, clipping or threshold: delta is the realisation as drawn (its variance is ``grf.variance()``), so the
+    overdensity n / <n> - 1 has the input spectrum on the grid. The amplitude must keep 1 + delta > 0: trilinear
+    interpolation is a convex combination of the grid nodes, so ``min_one_plus_delta`` (the minimum over the nodes) is
+    the minimum anywhere; a warning is issued when it is <= 0.
 
     Parameters
     ----------
     key : PRNG key of the realisation; grf : 3D ``PowerLawGRF`` (its box ``grf.L`` is the periodic domain).
-    n0_min, n0_max : density range [cm^-3]; contrast : tanh saturation scale, in units of delta (of sigma if
-    ``normalize``); normalize : divide delta by the expected sigma = sqrt(grf.variance()).
+    n_bar : mean density [cm^-3]. delta_grid : optional (Nx, Ny, Nz) realisation to use instead of drawing one (e.g. the
+    same delta for several species); then ``grf`` only provides the box.
 
-    ``delta_grid`` holds the (normalised) field for diagnostics. JAX pytree (the grid and the mapping
-    constants are leaves).
+    JAX pytree (``delta_grid``, ``L_box`` and ``n_bar`` are leaves).
     """
 
-    def __init__(self, key: jax.Array, grf: PowerLawGRF, *, n0_min: float = 1e0, n0_max: float = 1e6,
-                 contrast: float = 1.0, normalize: bool = True):
+    def __init__(self, key: jax.Array, grf: PowerLawGRF, n_bar: float = 1.0, *, delta_grid: jnp.ndarray = None):
         if grf.ndim != 3:
             raise ValueError(f"`grf` must be 3D, got ndim={grf.ndim}.")
-        delta_grid = grf.sample(key)
-        if normalize:
-            delta_grid = delta_grid / jnp.sqrt(grf.variance())
-        log_min, log_max = jnp.log10(n0_min), jnp.log10(n0_max)
-        self.delta_grid, self.L_box, self.contrast = delta_grid, jnp.asarray(grf.L), contrast
-        self.log_mid, self.log_amp = 0.5 * (log_min + log_max), 0.5 * (log_max - log_min)
+        self.delta_grid = grf.sample(key) if delta_grid is None else jnp.asarray(delta_grid)
+        if self.delta_grid.shape != grf.shape:
+            raise ValueError(f"delta_grid must have the grid shape {grf.shape}, got {self.delta_grid.shape}.")
+        self.L_box, self.n_bar = jnp.asarray(grf.L), n_bar
+        if not isinstance(self.delta_grid, jax.core.Tracer) and float(self.min_one_plus_delta) <= 0.0:
+            warnings.warn(f"GRFDensity: min(1 + delta) = {float(self.min_one_plus_delta):.3f} <= 0, so the density is "
+                          "negative somewhere; lower A_s.", stacklevel=2)
+
+    @property
+    def min_one_plus_delta(self):
+        """min(1 + delta) over the grid nodes (= over the box, for trilinear interpolation)."""
+        return 1.0 + jnp.min(self.delta_grid)
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         x_flat = x.reshape(-1, x.shape[-1])
         pos = jnp.mod(x_flat[:, 1:4], self.L_box)
         delta = _trilinear_periodic_sample(self.delta_grid, pos, self.L_box)
-        n_flat = 10.0 ** (self.log_mid + self.log_amp * jnp.tanh(delta / self.contrast))
-        return n_flat.reshape(x.shape[:-1])
+        return (self.n_bar * (1.0 + delta)).reshape(x.shape[:-1])
 
     def tree_flatten(self):
-        return (self.delta_grid, self.L_box, self.contrast, self.log_mid, self.log_amp), None
+        return (self.delta_grid, self.L_box, self.n_bar), None
 
     @classmethod
     def tree_unflatten(cls, aux, leaves):
         obj = object.__new__(cls)
-        obj.delta_grid, obj.L_box, obj.contrast, obj.log_mid, obj.log_amp = leaves
+        obj.delta_grid, obj.L_box, obj.n_bar = leaves
         return obj
 
 

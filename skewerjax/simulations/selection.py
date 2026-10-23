@@ -15,6 +15,13 @@ Selection radius of a cell c with cube side h_c = V_c^(1/3), for a path sampled 
   but pathological cells; the deposition (layer 5) checks this a posteriori and the notebook
   verifies it against a brute-force nearest-generator search over the whole snapshot.
 
+Back ends (``backend``): ``"cpu"`` (default) queries a scipy ``cKDTree``; ``"jztree"`` computes the same
+nearest-path-point distance on a CUDA GPU with JZ-TREE (``jztree.knn.knn`` with ``boxsize``, periodic;
+https://jstuecker.github.io/jztree/api.html), re-checking in float64 on the host the cells whose distance is
+within a relative ``1e-6`` of their radius, so that the selected set does not depend on the back end;
+``"auto"`` takes ``"jztree"`` when jztree imports and JAX sees a CUDA device, otherwise ``"cpu"``. jztree is
+optional: CPU-only installations never import it.
+
 Spatial-index note: the tree is on the paths, not on the cells, because the paths are few
 (N_sk x N_pts points) and the cells are many and streamed. For multi-device runs, skewer batches
 are independent and can be distributed across devices or hosts; each worker streams the same
@@ -56,9 +63,59 @@ def selection_radius(size, mode: str, ds: float, voronoi_factor: float = 2.5, vo
     raise ValueError(f"mode must be 'tophat' or 'voronoi', got {mode!r}.")
 
 
+def jztree_available() -> bool:
+    """True if jztree imports and JAX sees a CUDA device (the conditions of ``backend="jztree"``)."""
+    try:
+        import jztree  # noqa: F401
+        import jax
+        return any(d.platform == "gpu" for d in jax.devices())
+    except Exception:                                   # ImportError, or no GPU platform initialised
+        return False
+
+
+def resolve_backend(backend: str) -> str:
+    """"cpu", "jztree" or "auto" -> "cpu" / "jztree"; "jztree" without jztree or a CUDA device raises."""
+    if backend not in ("cpu", "jztree", "auto"):
+        raise ValueError(f"backend must be 'cpu', 'jztree' or 'auto', got {backend!r}.")
+    if backend == "auto":
+        return "jztree" if jztree_available() else "cpu"
+    if backend == "jztree" and not jztree_available():
+        raise RuntimeError("backend='jztree' needs the optional package jztree (CUDA wheels, `pip install \"jztree[cuda12]\"`) "
+                           "and a CUDA device visible to JAX; use backend='cpu' or 'auto'.")
+    return backend
+
+
+def _nearest_distance_cpu(tree: cKDTree, pos: np.ndarray, rad: np.ndarray, workers: int) -> np.ndarray:
+    """Distance of every cell to its nearest path point, inf beyond the cell's radius (periodic cKDTree)."""
+    d = np.full(rad.size, np.inf)
+    edges = np.unique(np.geomspace(rad.min(), rad.max(), 33))          # radius bins: a tight bound per bin
+    which = np.clip(np.searchsorted(edges, rad, side="left"), 0, edges.size - 1)
+    for b in np.unique(which):
+        m = which == b
+        d[m] = tree.query(pos[m], k=1, distance_upper_bound=float(rad[m].max()), workers=workers)[0]
+    return d
+
+
+def _nearest_distance_jztree(pts: np.ndarray, pos: np.ndarray, box: float, tree: cKDTree, rad: np.ndarray,
+                             margin: float = 1e-6) -> np.ndarray:
+    """The same distance from JZ-TREE on the GPU (k = 1 nearest path point, periodic ``boxsize``).
+
+    jztree's working precision is not documented, so the cells within ``margin`` (relative) of their radius are
+    re-measured in float64 with the host tree: the decision d <= r is then the CPU back end's for every cell.
+    """
+    import jax.numpy as jnp
+    import jztree
+    rnn, _ = jztree.knn.knn(jnp.asarray(pts), 1, boxsize=box, part_query=jnp.asarray(pos))
+    d = np.asarray(rnn, dtype=np.float64).reshape(-1)
+    border = np.abs(d - rad) <= margin * np.maximum(rad, 1.0)
+    if border.any():
+        d[border] = tree.query(pos[border], k=1)[0]
+    return d
+
+
 def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_factor: float = 2.5,
                             voronoi_min: float = 0.0, datasets: Sequence[str] = None,
-                            max_rows: int = 4_000_000, workers: int = -1,
+                            max_rows: int = 4_000_000, workers: int = -1, backend: str = "cpu",
                             progress: Optional[Callable[[int, int, int], None]] = None) -> GasCells:
     """Stream the snapshot and keep the cells that can contribute to any of ``paths``.
 
@@ -71,6 +128,8 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_fac
     datasets : raw datasets to read for the selected cells (default: the GAS_DATASETS of the reader).
     max_rows : cells per streamed block (memory bound).
     workers : threads of the k-d tree queries (-1: all cores).
+    backend : "cpu" (default, scipy cKDTree), "jztree" (CUDA GPU; ImportError / RuntimeError if jztree or a CUDA
+        device is missing) or "auto" (``resolve_backend``). Every back end selects the same cells.
 
     Returns
     -------
@@ -87,6 +146,7 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_fac
     ds = max_path_spacing(paths)
     pts = wrap_positions(np.asarray(paths, dtype=np.float64).reshape(-1, 3), box)
     tree = cKDTree(pts, boxsize=box)
+    backend = resolve_backend(backend)
     parts = []
     n_sel = 0
     n_blocks = None
@@ -94,12 +154,10 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_fac
         pos = reader.positions_cMpc(base["Coordinates"])
         size = np.cbrt(reader.volumes_cMpc3(base["Masses"], base["Density"]))
         rad = selection_radius(size, mode, ds, voronoi_factor, voronoi_min)
-        d = np.full(rad.size, np.inf)
-        edges = np.unique(np.geomspace(rad.min(), rad.max(), 33))          # radius bins: a tight bound per bin
-        which = np.clip(np.searchsorted(edges, rad, side="left"), 0, edges.size - 1)
-        for b in np.unique(which):
-            m = which == b
-            d[m] = tree.query(pos[m], k=1, distance_upper_bound=float(rad[m].max()), workers=workers)[0]
+        if backend == "jztree":
+            d = _nearest_distance_jztree(pts, pos, box, tree, rad)
+        else:
+            d = _nearest_distance_cpu(tree, pos, rad, workers)
         sel = np.nonzero(d <= rad)[0]
         if sel.size:
             rest = [k for k in datasets if k not in GEOMETRY_DATASETS]
