@@ -6,11 +6,12 @@ columns along the skewers, ``core.Fields`` at the points, and tau(v), for
 
 * ``ExtractionOptions``: how the fields are extracted from the cells (deposition geometry, mass and temperature
   constants, ionisation model): layers 3 and 5;
-* ``IntegrationOptions``: how the optical-depth integral is evaluated (frame, normalisation, detuning,
-  periodicity): layer 6.
+* ``IntegrationOptions``: how the optical-depth integral is evaluated (frame, normalisation, detuning, precision):
+  layer 6.
 
 The defaults of both are SkewerJAX's (the physically most accurate choices); every other value is an isolated,
-named option. fake_spectra's per-cell integration scheme and the option sets that reproduce it are in
+named option. Periodicity is not one of them: a periodic spectrum is the opt-in ``velocity_period`` of
+``core.compute_optical_depth``, which ``tau``, ``optical_depth`` and ``compute_tau`` pass through (default: none). fake_spectra's per-cell integration scheme and the option sets that reproduce it are in
 ``skewerjax.comparison`` (which depends on this module, not the other way round).
 """
 from __future__ import annotations
@@ -41,11 +42,10 @@ from skewerjax.simulations import selection as sel
 class ExtractionOptions:
     """Field extraction (layers 3 and 5). Defaults: SkewerJAX.
 
-    deposition : "voronoi" (cells of the mesh-generating points), "tophat" (spheres of radius
-        V^(1/3), fake_spectra), "points" (summed sphere values at the points; previous default) or
-        "voronoi_crossings" (opt-in: the Voronoi pieces joined into one interval per cell crossing,
-        ``SimulationSkewers.crossings``, each split so that its velocity width is <= 0.25 b;
-        ``absorbers.absorbers_from_crossings``).
+    deposition : "voronoi" (cells of the mesh-generating points: one piece per cell and dual segment), "tophat"
+        (spheres of radius V^(1/3), fake_spectra) or "voronoi_crossings" (opt-in: the exact intersections of the
+        path with the cells, one interval per cell crossing, ``SimulationSkewers.crossings``, each split so that its
+        velocity width is <= 0.25 b; ``absorbers.absorbers_from_crossings``).
     mass_unit : "amu" (A m_u) or "proton" (A m_p, fake_spectra) in n_X = rho X / (A m).
     T_constants : "codata" or "fake_spectra" (its m_p, k_B) in T = (gamma - 1) mu m_p u / k_B.
     b_constants : "codata" (b^2 = 2 k_B T / (A m_u)) or "fake_spectra" (2 k T / (A m_p) with the C
@@ -74,14 +74,11 @@ class IntegrationOptions:
     frame : "exact" (a(x) along the path from the cosmology) or "snapshot" (one a, linear Hubble flow; matched).
     normalisation : multiplies every density (matched mode: 8/7 or 7/8 of fake_spectra's chords).
     detuning : "exact" (nu = (c / lambda) expm1(-dv / c)) or "linear" (fake_spectra).
-    periodic : True wraps every detuning to its nearest periodic image (period: the box length in velocity);
-        False is the direct integral.
     dtype : None (the input precision, float64 under x64) or "float32": opt-in faster kernel.
     """
     frame: str = "exact"
     normalisation: float = 1.0
     detuning: str = "exact"
-    periodic: bool = True
     dtype: Optional[str] = None
 
     def replace(self, **kw) -> "IntegrationOptions":
@@ -145,7 +142,6 @@ class SimulationSkewers:
     points : (N_sk, N, 3) sampling points [cMpc], unwrapped along each path (a ``SkewerBundle``'s points).
     cosmology : ``Cosmology`` for the exact frame (default: flat LCDM of the snapshot header).
     cells : ``GasCells`` already selected for these points (default: ``select_cells_near_paths``).
-    s_origin : path coordinate [cMpc] where the box starts (extended sampling; 0 otherwise).
     name, cache : a name for this set of skewers and an HDF5 file where tau results are cached
         (both needed for caching).
     scale_factors : optional (N_sk, N) a(x) at the points (e.g. a ``SkewerBundle``'s); then the exact frame
@@ -153,7 +149,7 @@ class SimulationSkewers:
     selection_backend : "cpu" (default), "jztree" or "auto": back end of ``select_cells_near_paths``.
     """
 
-    def __init__(self, reader, points, *, cosmology=None, cells=None, s_origin: float = 0.0, max_rows: int = 4_000_000,
+    def __init__(self, reader, points, *, cosmology=None, cells=None, max_rows: int = 4_000_000,
                  name: Optional[str] = None, cache=None, scale_factors=None, selection_backend: str = "cpu"):
         self.reader, self.header = reader, reader.header
         self.box = self.header.box_cMpc
@@ -166,7 +162,6 @@ class SimulationSkewers:
         self.s = np.asarray(g["s"])
         self.line_elements = np.asarray(g["line_elements"])
         self.tangents = np.asarray(g["tangents"])
-        self.s_origin = float(s_origin)
         if cosmology is None:
             H = self.header
             cosmology = Cosmology(100 * H.h * 1e6 * phys.Gyr_to_s / phys.Gpc_to_m, 0.0, H.omega_m, 0.0, H.omega_l)
@@ -190,14 +185,14 @@ class SimulationSkewers:
         return sk
 
     @classmethod
-    def axis_aligned(cls, reader, cofm_code, axis, spacing_kms: float, *, extend_cMpc: float = 0.0, **kw):
+    def axis_aligned(cls, reader, cofm_code, axis, spacing_kms: float, **kw):
         """Straight skewers along box axes (``axis`` 1/2/3 = x/y/z) through the code-unit points
-        ``cofm_code`` [ckpc/h], sampled every ``spacing_kms`` of Hubble flow (a H(z) ds);
-        ``extend_cMpc`` adds path before and after the box (periodic gas)."""
+        ``cofm_code`` [ckpc/h], across the box once (first and last points the same place), sampled every
+        ``spacing_kms`` of Hubble flow (a H(z) ds)."""
         H = reader.header
         pts = axis_aligned_skewer_points(np.atleast_2d(cofm_code) * H.code_length_cMpc, axis, H.box_cMpc,
-                                         spacing_kms / H.velfac_kms_per_cMpc, extend=extend_cMpc)
-        sk = cls(reader, pts, s_origin=extend_cMpc, **kw)
+                                         spacing_kms / H.velfac_kms_per_cMpc)
+        sk = cls(reader, pts, **kw)
         sk.axis = np.atleast_1d(np.asarray(axis))
         return sk
 
@@ -206,18 +201,17 @@ class SimulationSkewers:
         return self.points.shape[0]
 
     def spectral_grid(self, res_kms: float = 1.0, frame=None):
-        """A periodic pixel grid over one period of the box: pixel centres [km/s] and width.
+        """A pixel grid over [0, V): pixel centres [km/s] and width, n_bins = int(V / res), dv = V / n_bins.
 
-        The period is that of ``frame`` (``period_kms``; the exact frame's is c ln(a_0 / a_L)), or by
-        default the linear v_max = a H L of fake_spectra's grid: n_bins = int(P / res), dv = P / n_bins.
-        A non-periodic integral takes any grid instead."""
-        P = self.header.vmax_kms if frame is None else frame.period_kms
-        if P is None:
-            raise ValueError("a non-periodic frame has no period: choose the velocity grid freely.")
-        nbins = int(P / res_kms)
+        V is the velocity span of the skewers in ``frame`` (``velocity_span``, the mean over skewers; the exact
+        frame's is c ln(a_first / a_last)), or by default the linear v_max = a H L of fake_spectra's grid. The grid
+        implies no periodicity: the spectrum is periodic only with ``velocity_period`` (``tau``); any other grid
+        can be used as well."""
+        V = self.header.vmax_kms if frame is None else float(np.mean([frame.velocity_span(k) for k in range(self.n_skewers)]))
+        nbins = int(V / res_kms)
         if nbins < 2:
-            raise ValueError(f"res = {res_kms} km/s leaves fewer than 2 pixels in P = {P:.1f} km/s.")
-        dv = P / nbins
+            raise ValueError(f"res = {res_kms} km/s leaves fewer than 2 pixels in V = {V:.1f} km/s.")
+        dv = V / nbins
         return (np.arange(nbins) + 0.5) * dv, dv
 
     # ------------------------------------------------------------------ layers 3 and 5
@@ -274,12 +268,6 @@ class SimulationSkewers:
                 raise ValueError("deposition='voronoi_crossings' uses the selected cells' own positions.")
             return ab_.absorbers_from_crossings(self.crossings(), self.points, ci["n"], ci["T"], ci["vel"], self.header.a,
                                                 ci["species"], ci["mass"], frame=frame)
-        if ext.deposition == "points":
-            tan = self.tangents.reshape(-1, 3)
-            vel = ci["vel"]
-            pv = dep.tophat_point_values(self.points, ci["pos"], ci["size"], self.box, ci["n"], ci["T"],
-                                         lambda c, p: np.sum(vel[c] * tan[p], -1))
-            return ab_.absorbers_from_point_values(self.points, pv, self.header.a, ci["species"], ci["mass"])
         seg = self.segments(ext.deposition, ci if override and "pos" in override else None)
         return ab_.absorbers_from_components(seg, self.points, ci["n"], ci["T"], ci["vel"], self.header.a, ci["species"], ci["mass"])
 
@@ -289,11 +277,11 @@ class SimulationSkewers:
         ``weight="T"`` or ``"v_los"``, the column-weighted mean of that quantity per pixel instead."""
         nbins = nbins or self.header.pixel_grid(1.0)[0]
         A = self.absorbers(ion, ext, override)
-        N = ab_.column_per_pixel(A, self.box, nbins, s_origin=self.s_origin)
+        N = ab_.column_per_pixel(A, self.box, nbins)
         if weight is None:
             return N
         q = getattr(A, weight)
-        NQ = ab_.column_per_pixel(A.with_values(n=A.n * q), self.box, nbins, s_origin=self.s_origin)
+        NQ = ab_.column_per_pixel(A.with_values(n=A.n * q), self.box, nbins)
         return np.where(N > 0, NQ / np.maximum(N, 1e-300), 0.0)
 
     def point_values(self, ion: gp.Ion, ext: ExtractionOptions = ExtractionOptions()) -> dict:
@@ -331,10 +319,10 @@ class SimulationSkewers:
         ``["HI", "SiIII"]``, as in ``LineBundle.species_keys``).
 
         Every sampler is a ``SampledField`` of ``point_values``: ``temperature`` [K], ``velocity`` [km/s],
-        ``number_density`` [comoving cm^-3, what ``OpticalDepthCalculator`` takes], ``turbulence`` and
+        ``number_density`` [comoving cm^-3, what ``core.compute_optical_depth`` takes], ``turbulence`` and
         ``collisional`` (0). Call them with this bundle's quadri-vectors, e.g. ``fields.sample(qv, los)``.
-        With ``line_elements`` = the bundle's, ``OpticalDepthCalculator`` integrates the segment averages;
-        ``optical_depth`` integrates the pieces of every segment instead (the default, exact for any spacing).
+        ``core.compute_optical_depth(bundle, v, lines, fields)`` integrates one piece per dual segment with these
+        segment averages; ``optical_depth`` / ``tau`` integrate the deposited pieces instead (the default).
         """
         out = {}
         for sp in ([species] if isinstance(species, str) else list(species)):
@@ -346,59 +334,65 @@ class SimulationSkewers:
         return Fields(out)
 
     def optical_depth(self, line_bundle, velocities_kms=None, ext: ExtractionOptions = ExtractionOptions(),
-                      integ: IntegrationOptions = IntegrationOptions(), check: Optional[float] = 0.25):
+                      integ: IntegrationOptions = IntegrationOptions(), check: Optional[float] = 0.25, *,
+                      velocity_period=False, line_frame: str = "own"):
         """tau of every line of ``line_bundle`` (any species): (velocities [km/s], tau (N_lines, N_sk, N_v)).
 
-        Each line is integrated in its own line-centred frame, as ``OpticalDepthCalculator`` does. Without
-        ``velocities_kms`` the grid is one period of the box in 1 km/s pixels (``spectral_grid``).
+        ``line_frame="own"`` (default): each line on its own line-centred axis; ``"reference"``: every line evaluated
+        directly on the reference line's axis, at v + delta_v_j (``core.compute_optical_depth``). Without
+        ``velocities_kms`` the grid spans the box's velocity span in 1 km/s pixels (``spectral_grid``).
+        ``velocity_period`` as in ``tau``.
         """
+        if line_frame not in ("own", "reference"):
+            raise ValueError(f"line_frame must be 'own' or 'reference', got {line_frame!r}.")
         if velocities_kms is None:
-            velocities_kms = self.spectral_grid(1.0, self.frame(integ.frame, integ.periodic))[0]
+            velocities_kms = self.spectral_grid(1.0, self.frame(integ.frame))[0]
         v = np.asarray(velocities_kms, dtype=np.float64)
-        taus = [self.tau(gp.ion_from_species(line.species), LineBundle([line.id], ref_line_id=line.id), v, ext, integ, check=check)
-                for line in line_bundle.lines]
+        dV = np.asarray(line_bundle.delta_v) if line_frame == "reference" else np.zeros(line_bundle.n_lines)
+        taus = [self.tau(gp.ion_from_species(line.species), LineBundle([line.id], ref_line_id=line.id), v + dV[j], ext, integ,
+                         check=check, velocity_period=velocity_period)
+                for j, line in enumerate(line_bundle.lines)]
         return v, np.stack(taus)
 
     # ------------------------------------------------------------------ layer 6
-    def frame(self, kind: str = "exact", periodic: bool = True):
-        """``ExactFrame`` (a(s) with a_snap at the centre of the box, a_dagger = a at the box start) or
-        ``SnapshotFrame``; ``periodic`` sets the velocity period to the box length in velocity."""
-        key = (kind, periodic)
-        if key in self._frames:
-            return self._frames[key]
+    def frame(self, kind: str = "exact"):
+        """``ExactFrame`` (a(s) with a_snap at the centre of the box, a_dagger = a at the first point) or
+        ``SnapshotFrame``. A frame describes a(s) and the injected velocity only, not periodicity."""
+        if kind in self._frames:
+            return self._frames[kind]
         H = self.header
         if kind == "snapshot":
-            fr = ab_.SnapshotFrame(H.a, H.velfac_kms_per_cMpc, period_kms=H.vmax_kms if periodic else None, s_origin=self.s_origin)
+            fr = ab_.SnapshotFrame(H.a, H.velfac_kms_per_cMpc, path_length=self.s[:, -1].copy())
         elif kind == "exact" and self.scale_factors is not None:
             a = self.scale_factors
             if np.any(a[:, 0] < a[:, -1]):
                 raise ValueError("SimulationSkewers puts the observer before the first point, so a(x) must decrease along the "
                                  "points; reverse the points of the SkewerBundle or define its ICs at the observer's end.")
-            period = None
-            if periodic:
-                closed = (np.allclose(self.s[:, -1], self.box) and
-                          np.allclose(np.mod(self.points[:, -1] - self.points[:, 0] + self.box / 2, self.box) - self.box / 2, 0, atol=1e-9))
-                if not closed:
-                    raise ValueError("periodic=True needs skewers that cross the box once and close on themselves "
-                                     "(first and last points the same place of the box); use periodic=False.")
-                period = float(np.mean(phys.c_kms * np.log(a[:, 0] / a[:, -1])))
-            fr = ab_.ExactFrame(self.s, a, a_dagger_value=float(a[0, 0]), period_kms=period)
+            fr = ab_.ExactFrame(self.s, a, a_dagger_value=float(a[0, 0]))
         elif kind == "exact":
-            s_ref = np.full(self.n_skewers, self.s_origin + 0.5 * self.box)
+            s_ref = np.full(self.n_skewers, 0.5 * self.box)
             a = ab_.scale_factors_along_paths(self.s, H.a, self.cosmology, s_ref=s_ref)
-            a0 = np.exp([np.interp(self.s_origin, self.s[k], np.log(a[k])) for k in range(self.n_skewers)])
-            aL = np.exp([np.interp(self.s_origin + self.box, self.s[k], np.log(a[k])) for k in range(self.n_skewers)])
-            period = float(np.mean(phys.c_kms * np.log(a0 / aL))) if periodic else None
-            fr = ab_.ExactFrame(self.s, a, a_dagger_value=float(a0[0]), period_kms=period)
+            fr = ab_.ExactFrame(self.s, a, a_dagger_value=float(a[0, 0]))
         else:
             raise ValueError(f"frame must be 'exact' or 'snapshot', got {kind!r}.")
-        self._frames[key] = fr
+        self._frames[kind] = fr
         return fr
 
-    def tau_key(self, ion: gp.Ion, line_bundle, velocities_kms, ext: ExtractionOptions, integ, override_key: str = "") -> str:
+    def pieces(self, ion: gp.Ion, line_bundle, ext: ExtractionOptions = ExtractionOptions(),
+               integ: IntegrationOptions = IntegrationOptions(), skewers=None):
+        """The deposited pieces of ``ion`` as ``core.Pieces`` for the lines of ``line_bundle`` (that species only), in
+        the frame ``integ.frame``: what ``core.compute_optical_depth`` sums, e.g.
+        ``compute_optical_depth(sk.pieces(HI, lya), v, lya, velocity_period=True)``."""
+        fr = self.frame(integ.frame)
+        T_scale = gp.FAKE_SPECTRA_B2_RATIO if ext.b_constants == "fake_spectra" else 1.0
+        return ab_.absorber_pieces(self.absorbers(ion, ext, frame=fr), fr, line_bundle.n_lines, skewers=skewers, T_scale=T_scale,
+                                   n_scale=integ.normalisation)
+
+    def tau_key(self, ion: gp.Ion, line_bundle, velocities_kms, ext: ExtractionOptions, integ, override_key: str = "",
+                velocity_period=False) -> str:
         """Cache key of a tau result: skewers, ion, lines, velocity grid, override name and every option."""
         v = np.asarray(velocities_kms, dtype=np.float64)
-        opts = {**asdict(relevant_options(ext, ion)), **asdict(integ)}
+        opts = {**asdict(relevant_options(ext, ion)), **asdict(integ), "velocity_period": velocity_period}
         geo = hashlib.md5(self.points.tobytes() + (b"" if self.scale_factors is None else self.scale_factors.tobytes())).hexdigest()[:10]
         return "/".join(["tau", str(self.name), geo, ion.species, ",".join(map(str, line_bundle.lambda0_A)),
                          hashlib.md5(v.tobytes()).hexdigest()[:10], override_key,
@@ -406,21 +400,26 @@ class SimulationSkewers:
 
     def tau(self, ion: gp.Ion, line_bundle, velocities_kms, ext: ExtractionOptions = ExtractionOptions(),
             integ: IntegrationOptions = IntegrationOptions(), override: Optional[dict] = None, override_key: str = "",
-            check: Optional[float] = 0.25) -> np.ndarray:
+            check: Optional[float] = 0.25, velocity_period=False) -> np.ndarray:
         """(N_sk, N_v) optical depth of the first line of ``line_bundle`` (one species) for ``ext`` and ``integ``;
-        cached when the object has a ``name`` and a ``cache`` (``override_key`` names an override)."""
+        cached when the object has a ``name`` and a ``cache`` (``override_key`` names an override).
+
+        velocity_period : ``core.compute_optical_depth``'s option, passed through: False (default, no wrap), True
+            (each skewer periodic over its own velocity span) or a period [km/s]."""
         if override is not None and not override_key:
             override_key = "override"
         v = np.asarray(velocities_kms, dtype=np.float64)
-        build = lambda: dict(tau=self.compute_tau(ion, line_bundle, v, ext, integ, override, check))
-        return cached(self.cache, self.tau_key(ion, line_bundle, v, ext, integ, override_key), build, enabled=self.name is not None)["tau"]
+        build = lambda: dict(tau=self.compute_tau(ion, line_bundle, v, ext, integ, override, check, velocity_period=velocity_period))
+        return cached(self.cache, self.tau_key(ion, line_bundle, v, ext, integ, override_key, velocity_period), build,
+                      enabled=self.name is not None)["tau"]
 
     def compute_tau(self, ion: gp.Ion, line_bundle, velocities_kms, ext: ExtractionOptions = ExtractionOptions(),
                     integ: IntegrationOptions = IntegrationOptions(), override: Optional[dict] = None,
-                    check: Optional[float] = 0.25) -> np.ndarray:
+                    check: Optional[float] = 0.25, velocity_period=False) -> np.ndarray:
         """``tau`` without the cache: the deposited absorbers through ``absorbers.tau_absorbers``."""
         T_scale = gp.FAKE_SPECTRA_B2_RATIO if ext.b_constants == "fake_spectra" else 1.0
-        fr = self.frame(integ.frame, integ.periodic)
+        fr = self.frame(integ.frame)
         A = self.absorbers(ion, ext, override, frame=fr)
-        return ab_.tau_absorbers(A, line_bundle, np.asarray(velocities_kms, dtype=np.float64), fr, T_scale=T_scale,
-                                 n_scale=integ.normalisation, detuning=integ.detuning, check=check, dtype=integ.dtype)[0]
+        return ab_.tau_absorbers(A, line_bundle, np.asarray(velocities_kms, dtype=np.float64), fr, velocity_period=velocity_period,
+                                 T_scale=T_scale, n_scale=integ.normalisation, detuning=integ.detuning, check=check,
+                                 dtype=integ.dtype)[0]

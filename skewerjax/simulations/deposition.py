@@ -1,10 +1,12 @@
-"""Deposition (layer 5): which gas lies on the dual segment of every sampling point, and where.
+"""Deposition (layer 5): the pieces of the path, i.e. which gas lies on the dual segment of every sampling point, and where.
 
 The sampling points are those of the bundle (any spacing, straight or curved). Point i stands for
 its *dual segment* m_{i-1/2} -> x_i -> m_{i+1/2} (``core.skewers.path_geometry``), of comoving length
 w_i. A deposition answers one question: **which gas lies on that segment, and where?** It returns
-for every point up to K *components*: a cell index, the comoving length of the cell's piece of the
-segment, the signed path offset of that piece's centroid from x_i, and a density weight.
+for every point up to K *pieces*: a cell index, the comoving length of the cell's piece of the
+segment, the signed path offset of that piece's centroid from x_i, and a density weight. Inside a
+piece the gas properties are constant; the core sums the optical depth over the pieces
+(``core.optical_depth``).
 
 * ``voronoi_segments`` (SkewerJAX default): Arepo's own geometry. A point of space belongs to the
   cell of its nearest mesh-generating point (TNG ``Coordinates``), so along the segment the gas is
@@ -13,24 +15,21 @@ segment, the signed path offset of that piece's centroid from x_i, and a density
   and the last term is common to all generators, so the nearest generator is the lower envelope of
   *straight lines* in t. Every half-segment is sampled at ``n_sub`` sub-points labelled by a
   periodic k-d tree, and every change of label is located at the exact crossing of the two
-  lines. Weight 1.
+  lines. Weight 1. ``cell_crossings`` joins the pieces of one cell in consecutive dual segments:
+  the exact intersections of the path with the cells.
 * ``tophat_segments`` (fake_spectra's geometry): each cell is a sphere of radius h = V^(1/3) and
   uniform density (3 / 4 pi) n (``absorption.cpp:tophat_kern_frac`` L112-L118). The overlap of
   every sphere with every half-segment is solved exactly (a quadratic in t). Spheres overlap, so a
-  segment has several components with *different* T and v: the representation is multi-valued.
-* ``tophat_point_values`` (the previous "points" deposition): one value per point, n = sum of the
-  sphere densities containing x_i, and n-weighted T and v. It is a point sample (no line element:
-  the column is conserved only if the spacing resolves the cells) and it *merges* the overlapping
-  spheres into one profile per point, which is what broke Si III (narrow lines are displaced and
-  reshaped when components with different v are averaged). Kept only for comparison.
+  segment has several pieces with *different* T and v: the representation is multi-valued.
 
-Every deposition conserves the column by construction (sum of component lengths x density), for
-any spacing, because the lengths are exact segment integrals; only *where* inside the segment the
+Every deposition conserves the column by construction (sum of piece lengths x density), for
+any spacing, because the lengths are exact segment integrals; only *where* inside the piece the
 absorption sits is approximated (at the piece centroid). That approximation is what the sampling
 criterion of ``skewerjax.simulations.absorbers.sampling_check`` monitors.
 
-Periodicity: generator positions are always taken as the minimum image relative to each point,
-x_i + mi(g - x_i), mi(d) = d - L round(d / L), so paths may cross the box faces any number of times.
+Periodicity of the box (the gas, not the spectrum): generator positions are always taken as the minimum image
+relative to each point, x_i + mi(g - x_i), mi(d) = d - L round(d / L), so paths may cross the box faces any number
+of times.
 """
 from __future__ import annotations
 
@@ -50,7 +49,7 @@ TOPHAT_NORM = 3.0 / (4.0 * np.pi)          # density inside a sphere of radius V
 
 @dataclass
 class SegmentComponents:
-    """Components of the dual segment of every sampling point (host arrays).
+    """The pieces of the dual segment of every sampling point (host arrays).
 
     Attributes
     ----------
@@ -366,38 +365,6 @@ def tophat_segments(points, gas_positions, gas_size, box: Optional[float], *, ch
     shp = (n_sk, n_p, idx.shape[1])
     return SegmentComponents(cell.reshape(shp), length.reshape(shp), offset.reshape(shp), TOPHAT_NORM, "tophat",
                              dict(max_candidates=int(idx.shape[1]))).compact()
-
-
-def tophat_point_values(points, gas_positions, gas_size, box: Optional[float], n, T, v_los_of) -> dict:
-    """The previous "points" deposition: point values of the overlapping spheres, merged.
-
-    Parameters
-    ----------
-    n, T : (M,) per-cell ion density and temperature; v_los_of : callable(cell_idx, point_idx) ->
-        line-of-sight velocity of those cells projected on the tangent at those points [km/s].
-
-    Returns
-    -------
-    dict of (N_sk, N) arrays: ``n`` (sum of 3/4pi n_c over spheres containing x_i), ``T`` and
-    ``v_los`` (n-weighted means; T = 1e4 K and v = 0 where empty).
-    """
-    pts = np.asarray(points, dtype=np.float64)
-    A = pts.reshape(-1, 3)
-    gpos, size = _wrap(gas_positions, box), np.asarray(gas_size, dtype=np.float64)
-    idx = _tophat_pairs(A, np.zeros(A.shape[0]), gpos, size, box)
-    valid = idx >= 0
-    safe = np.maximum(idx, 0)
-    d = np.asarray(_min_image(jnp.asarray(gpos[safe]) - A[:, None, :], box))
-    inside = valid & (np.sum(d * d, axis=-1) <= size[safe] ** 2)
-    w = np.where(inside, TOPHAT_NORM * np.asarray(n)[safe], 0.0)
-    ntot = w.sum(axis=1)
-    pidx = np.broadcast_to(np.arange(A.shape[0])[:, None], idx.shape)
-    vv = np.where(inside, v_los_of(safe, pidx), 0.0)
-    safe_n = np.where(ntot > 0, ntot, 1.0)
-    T_m = np.where(ntot > 0, (w * np.asarray(T)[safe]).sum(1) / safe_n, 1e4)
-    v_m = np.where(ntot > 0, (w * vv).sum(1) / safe_n, 0.0)
-    shp = pts.shape[:2]
-    return dict(n=ntot.reshape(shp), T=T_m.reshape(shp), v_los=v_m.reshape(shp))
 
 
 # --------------------------------------------------------------------------- cell crossings (Voronoi-adapted segmentation)

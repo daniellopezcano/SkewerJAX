@@ -10,10 +10,13 @@ reproduces the scheme of fake_spectra, so that the two codes can be compared opt
 **Key features**
 
 - **Exact light-cone geometry.** a(x) is integrated along each skewer (diffrax), every line is integrated in its own
-  line-centred frame, and the detuning is exact. Voigt profiles come from ExoJAX, with an FFT convolution and SciPy's
+  line-centred frame (or directly on a reference line's axis), and the detuning is exact.
+- **One route for τ.** τ is a sum over pieces of the path within which the gas is constant (`core.Pieces`), each
+  evaluated at its centroid. Simulation outputs give the exact cell intersections; fields known everywhere give the
+  dual segments of the sampling points. Periodicity is one opt-in option, `velocity_period` (default: none). Voigt profiles come from ExoJAX, with an FFT convolution and SciPy's
   Faddeeva function as alternatives.
 - **JAX-first containers and kernels.** Every container (`LineBundle`, `Cosmology`, `SkewerBundle`, `Fields`,
-  `LoSSamples`, `GasCells`) is a pytree, and `jit`, `vmap` and `grad` work throughout.
+  `Pieces`, `GasCells`) is a pytree, and `jit`, `vmap` and `grad` work throughout.
 - **Memory-bounded kernels.** `lax.map` over skewers, a velocity chunk per call, and optional batching.
 - **Optional speed-ups.** Sharding of the skewer axis over several devices (`optical_depth_sharded`), and an opt-in
   float32 τ kernel (`dtype="float32"`).
@@ -34,7 +37,7 @@ flowchart LR
 ```
 
 Dependencies run one way only. `core` imports nothing from the other subpackages, and the boundary between `simulations`
-and `core` is `core.LoSSamples`, every field at every sampling point. `docs/usage.md` lists the entry points of each
+and `core` is `core.Pieces`, the constant-property pieces of every skewer. `docs/usage.md` lists the entry points of each
 subpackage.
 
 ## Quickstart
@@ -43,7 +46,7 @@ subpackage.
 import jax, jax.numpy as jnp, numpy as np
 jax.config.update("jax_enable_x64", True)          # SkewerJAX follows this flag; the validated tolerances are float64
 from skewerjax.core import (LineBundle, Cosmology, SkewerBundle, grid_skewer_points, phys, Fields, ScalarField, VectorField,
-                            PowerLawGRF, GRFDensity, LogRamp, VelocityRamp, Constant, compute_optical_depth, wrap_to_ref_line)
+                            PowerLawGRF, GRFDensity, LogRamp, VelocityRamp, Constant, compute_optical_depth)
 
 lines = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
 cosmo = Cosmology(H0=phys.H0, Omega_r_0=0.0, Omega_m_0=1.0, Omega_k_0=0.0, Omega_lambda_0=0.0)
@@ -57,8 +60,11 @@ gas = lambda n_bar: {"temperature": ScalarField(LogRamp(1.5e4, 1.5e4, L)), "velo
                      "turbulence": ScalarField(Constant(0.0)), "collisional": ScalarField(Constant(0.0))}
 fields = Fields({"HI": gas(1e-12), "SiIII": gas(1e-12 / 50)})
 a_dagger = 1 / (1 + z)
-v = jnp.linspace(0.0, float(phys.c_kms * jnp.log(a_dagger / skewers.scale_factors[0, 0, 0])), 512)
-tau = wrap_to_ref_line(compute_optical_depth(skewers, v, lines, fields, a_dagger=a_dagger, resolution_tolerance=None), v, lines)
+P = float(phys.c_kms * jnp.log(a_dagger / skewers.scale_factors[0, 0, 0]))   # the box in velocity
+v = (jnp.arange(512) + 0.5) * P / 512                                  # one period of the box
+tau = compute_optical_depth(skewers, v, lines, fields, a_dagger=a_dagger, resolution_tolerance=None,
+                            line_frame="reference",                    # both lines on the Lya axis
+                            velocity_period=True)                      # periodic over the box (default: no wrap)
 print(tau.shape, np.exp(-np.asarray(tau)).mean(axis=(1, 2)))           # (2, 16, 512): <F> of Lya and Si III
 ```
 
@@ -108,10 +114,10 @@ flowchart LR
 | `00_quickstart_step_by_step` | a TNG50-4 skewer step by step: the snapshot, the cells it crosses, the fields, line profiles, τ and F (Lyα, Si III) built up stretch by stretch, the lines on one axis, the gas cylinder (`plot_cylinder`), overflux and statistics, with the equations |
 | `01_lines` | the line table, `Line` and `LineBundle` attributes, offsets Δv_j and line widths |
 | `02_cosmology` | a(x) along light rays against the closed forms, with each background's special point |
-| `03_skewers` | `SkewerBundle` conventions; one skewer in 3D with its points, midpoints, dual segments, tangents and line elements, coloured by a(x), and everything the bundle stores for it |
-| `04_fields_and_samplers` | toy samplers, `Fields`, Gaussian random fields in 1D/2D/3D and their recovered P(k) (isotropic and in the (k∥, k⊥) plane), densities n = n̄(1 + δ) (`GRFDensity`), what a pytree is |
-| `05_simulation_outputs` | from a TNG50-4 snapshot to the gas along the skewers: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, selection → deposition → integration on a Voronoi mesh (the sum of 06), the cell crossings |
-| `06_line_profiles_and_optical_depth` | the derivation from the τ integral to the sum the code evaluates (two-element test), Voigt implementations, line profiles, closed forms, line-centred frames vs the global axis and the observed wavelength, the linear detuning, periodicity (no wrap, wrapped detunings, buffer, the shift onto a reference line), τ from simulation outputs |
+| `03_skewers` | `SkewerBundle` conventions; one skewer in 3D with its points, midpoints, dual segments, tangents and line elements, and everything the bundle stores for it |
+| `04_fields_and_samplers` | toy samplers, `Fields`, Gaussian random fields in 1D/2D/3D: the recovered P(k) and ξ(r) (isotropic), the (k∥, k⊥) plane with residuals, P(k) in μ wedges, densities n = n̄(1 + δ) (`GRFDensity`), what a pytree is |
+| `05_simulation_outputs` | from a TNG50-4 snapshot to the gas along the skewers: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, selection → deposition into pieces → τ step by step with the package's own classes on toy cells, the cell crossings |
+| `06_line_profiles_and_optical_depth` | the τ integral as a sum over pieces (with a subdivision test), Voigt implementations, line profiles, closed forms, line-centred frames, the global axis and the observed wavelength, periodicity as an option (`velocity_period`: its two effects and the nearest image), τ from simulation outputs |
 | `07_summary_statistics` | δ_F of several lines, P1D/ξ1D by order and term (the two-line terms), and a systematic study of a GRF density n = n̄(1 + δ): 3D fields, 1D overdensities (discrete projection, interpolation window), 1D overfluxes (bias, thermal kernel, line offset), P3D and ξ3D, each against its expectation |
 | `08_fake_spectra_comparison` | the differences with fake_spectra one switch at a time (matched mode, effect chain, root causes) and the benchmark (strict single core, stages, memory, scaling, GPU; reads `notebooks/benchmark_records/`), with a summary per part |
 

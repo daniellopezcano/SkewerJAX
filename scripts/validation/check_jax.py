@@ -142,20 +142,33 @@ args = (jnp.full((4, 10), 0.31), a_pts, vlos, T3, tb3, co3, n3, w_m)
 check("optical_depth_kernel (eager == jitted kernel)", "jit", lambda: (K(*[x[0] for x in args]),
       od.optical_depth_kernel.__wrapped__(vel, lam, lb.A21_GHz, lb.mass_amu, lb.f_osc, *[x[0] for x in args])))
 vmap_check("optical_depth_kernel (skewers)", K, args)
-S_ = od.LoSSamples(a_dagger=args[0], scale_factor=a_pts, weights_m=w_m, temperature=jnp.moveaxis(T3, 0, 1),
-                   turbulence=jnp.moveaxis(tb3, 0, 1), collisional=jnp.moveaxis(co3, 0, 1), los_velocity=jnp.moveaxis(vlos, 0, 1),
-                   number_density=jnp.moveaxis(n3, 0, 1))
+S_ = od.Pieces(a_dagger=args[0], scale_factor=a_pts, length_m=w_m, temperature=jnp.moveaxis(T3, 0, 1),
+               turbulence=jnp.moveaxis(tb3, 0, 1), collisional=jnp.moveaxis(co3, 0, 1), los_velocity=jnp.moveaxis(vlos, 0, 1),
+               number_density=jnp.moveaxis(n3, 0, 1), width_kms=jnp.zeros((3, 4, 10)), velocity_span_kms=jnp.full(4, 500.0))
 ref_tau = jnp.stack([K(*[x[i] for x in args]) for i in range(4)], axis=1)
-check("optical_depth_from_samples (lax.map == per-skewer kernel)", "vmap", lambda: (od.optical_depth_from_samples(S_, vel, lb), ref_tau))
-check("optical_depth_from_samples (batch_size=2 vmap)", "vmap", lambda: (od.optical_depth_from_samples(S_, vel, lb, batch_size=2), ref_tau))
-check("optical_depth_from_samples (v_chunk=20)", "jit", lambda: (od.optical_depth_from_samples(S_, vel, lb, v_chunk=20), ref_tau))
-sbq = SkewerBundle(spatial_points=pp, manual_scale_factors=jnp.full((1,) + pp.shape[:2], 0.9))
-jit_check("los_samples (bundle, fields, lines as pytrees)", lambda b, f, l: od.los_samples(b, f, l, a_dagger=0.88), sbq, F, lb)
+check("optical_depth_from_pieces (lax.map == per-skewer kernel)", "vmap", lambda: (od.optical_depth_from_pieces(S_, vel, lb), ref_tau))
+check("optical_depth_from_pieces (batch_size=2 vmap)", "vmap", lambda: (od.optical_depth_from_pieces(S_, vel, lb, batch_size=2), ref_tau))
+check("optical_depth_from_pieces (v_chunk=20)", "jit", lambda: (od.optical_depth_from_pieces(S_, vel, lb, v_chunk=20), ref_tau))
+P_ = jnp.full(4, 300.0)
+ref_P = jnp.stack([od.optical_depth_kernel(vel, lam, lb.A21_GHz, lb.mass_amu, lb.f_osc, *[x[i] for x in args], velocity_period=300.0)
+                   for i in range(4)], axis=1)
+check("optical_depth_from_pieces (per-skewer traced velocity_period)", "vmap",
+      lambda: (od.optical_depth_from_pieces(S_, vel, lb, velocity_period=P_), ref_P))
+check("compute_optical_depth (piece_chunk rows summed == all pieces)", "jit",
+      lambda: (od.compute_optical_depth(S_, vel, lb, piece_chunk=3, resolution_tolerance=None), ref_tau))
+sbq = SkewerBundle(spatial_points=pp, manual_scale_factors=jnp.broadcast_to(jnp.linspace(0.9, 0.9001, pp.shape[1]), (1,) + pp.shape[:2]))
+jit_check("pieces_from_fields (bundle, fields, lines as pytrees)", lambda b, f, l: od.pieces_from_fields(b, f, l, a_dagger=0.88), sbq, F, lb)
+jit_check("pieces_from_fields (subdivide=3)", lambda b, f, l: od.pieces_from_fields(b, f, l, a_dagger=0.88, subdivide=3), sbq, F, lb)
 jit_check("optical_depth (whole pipeline under jit)", lambda b, f, l: od.compute_optical_depth(b, vel, l, f, a_dagger=0.88, resolution_tolerance=None),
           sbq, F, lb)
+jit_check("optical_depth (reference line frame, velocity_period=True, under jit)",
+          lambda b, f, l: od.compute_optical_depth(b, vel, l, f, a_dagger=0.88, resolution_tolerance=None, line_frame="reference",
+                                                   velocity_period=250.0), sbq, F, lb)
 tau_b = jnp.asarray(rng.uniform(0, 2, size=(3, 4, 64)))
-jit_check("wrap_to_ref_line", lambda t, l: od.wrap_to_ref_line(t, vel, l), tau_b, lb)
-vmap_check("wrap_to_ref_line (skewer batches)", lambda t: od.wrap_to_ref_line(t, vel, lb), (tau_b[None].repeat(2, 0),))
+vel_p = (jnp.arange(64) + 0.5) * 600.0 / 64                 # one period of 600 km/s
+jit_check("wrap_to_ref_line (no wrap, zero fill)", lambda t, l: od.wrap_to_ref_line(t, vel, l, fill_value=0.0), tau_b, lb)
+jit_check("wrap_to_ref_line (periodic grid)", lambda t, l: od.wrap_to_ref_line(t, vel_p, l, velocity_period=600.0), tau_b, lb)
+vmap_check("wrap_to_ref_line (skewer batches)", lambda t: od.wrap_to_ref_line(t, vel, lb, fill_value=0.0), (tau_b[None].repeat(2, 0),))
 # analytic
 wl = sp_.line_wavelength_grid_A(vel, lb, 1.0)
 one = jnp.ones(2)

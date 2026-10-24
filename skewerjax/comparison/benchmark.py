@@ -175,7 +175,7 @@ def run_skewerjax(c: dict, out: Path) -> dict:
                 fr = sk.frame("exact")
                 v, dv = sk.spectral_grid(c["res"], fr)
             with T.stage("tau"):
-                taus[name] = tau_absorbers(A, lbs[name], v, fr, check=None, dtype=c.get("dtype"))[0]
+                taus[name] = tau_absorbers(A, lbs[name], v, fr, velocity_period=True, check=None, dtype=c.get("dtype"))[0]  # periodic, as fake_spectra
         reps.append(dict(stages=dict(T.t), total=time.perf_counter() - t0, n_cells=len(sk.cells), n_v=int(v.size),
                          n_absorbers=int(A.s.shape[1])))
         if time.perf_counter() - t_start + reps[-1]["total"] > c["budget_s"] and r >= 1:

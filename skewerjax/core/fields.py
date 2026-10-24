@@ -52,8 +52,10 @@ class VectorField(ScalarField):
 class SampledField:
     """Field given by its values at the points of a ``SkewerBundle`` (e.g. deposited from a simulation).
 
-    values : (N_sk, N_ppsk) scalar or (N_sk, N_ppsk, 3) vector values. Called with the bundle's events
-    (any batch shape with N_sk * N_ppsk points), it returns the values reshaped to that batch.
+    values : (N_sk, N_ppsk) scalar or (N_sk, N_ppsk, 3) vector values: the value of each point's dual segment.
+    Called with the bundle's events (any batch shape with N_sk * N_ppsk points), it returns the values reshaped to
+    that batch; called with events of batch (N_sk, N_ppsk, q...) (the pieces of every dual segment,
+    ``optical_depth.pieces_from_fields``), each point's value is repeated over its pieces.
     """
 
     def __init__(self, values: ArrayLike):
@@ -63,6 +65,10 @@ class SampledField:
 
     def __call__(self, x: ArrayLike) -> ArrayLike:
         batch = tuple(x.shape[:-1])
+        points, tail = tuple(self.values.shape[:2]), tuple(self.values.shape[2:])
+        if len(batch) > 2 and batch[:2] == points:
+            v = self.values.reshape(points + (1,) * (len(batch) - 2) + tail)
+            return jnp.broadcast_to(v, batch + tail)
         n_points = int(np.prod(self.values.shape[:2]))
         if int(np.prod(batch)) != n_points:
             raise ValueError(f"SampledField holds {n_points} points, called with batch {batch}.")

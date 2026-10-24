@@ -76,8 +76,8 @@ if not C.quick:
     res_e = run_effects(S, HI, LYA, v, EXTRACTION_EFFECTS, EF, DEFAULT_INTEGRATION, verbose=False)
     rows_e, tot_e = effect_rows(res_e, dv)
     t_end_e = res_e["links"][list(res_e["links"])[-1]]
-    C.check("extraction chain ends at SkewerJAX's default (max |dtau| against the default tau)",
-            np.abs(t_end_e - S.tau(HI, LYA, v)).max(), 1e-12)
+    C.check("extraction chain ends at SkewerJAX's default, periodic as the comparison (max |dtau| against the tau)",
+            np.abs(t_end_e - S.tau(HI, LYA, v, velocity_period=True)).max(), 1e-12)
     C.check("fake_spectra -> default: d<F> = integration + extraction chains (telescoping, abs)",
             abs(np.exp(-t_end_e).mean() - np.exp(-res_i["links"]["start"]).mean() - tot_i["dF"] - tot_e["dF"]), 1e-12)
     Sn = SK["nset"]

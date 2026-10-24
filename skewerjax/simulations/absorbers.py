@@ -1,15 +1,18 @@
-"""Absorbers (layer 6): the deposited pieces of every skewer, their frame a(s), and tau through the core kernel.
+"""Absorbers (layer 6): the deposited pieces of every skewer, their frame a(s), and tau through the core.
 
 What the optical-depth integral needs (review notes, Eq. tau_straight_los) is, along the path, the
-comoving density of the absorbing ion, its temperature, its *peculiar* velocity and the line element. The Hubble
-flow is not a field: it enters through the scale factor a(s) of every point, set by the frame.
+comoving density of the absorbing ion, its temperature, its *peculiar* velocity and the length of each piece. The
+Hubble flow is not a field: it enters through the scale factor a(s), set by the frame at every piece's centroid.
 
-``Absorbers`` flattens the components of all sampling points of a skewer (cell pieces, sphere overlaps, ...) into
-one list (path coordinate s, density, piece length, T, line-of-sight peculiar velocity). ``absorber_samples`` turns
-the absorbers of one skewer into a ``core.LoSSamples`` (fixed-size chunks: static shapes) and ``tau_absorbers``
-integrates them with ``core.optical_depth_from_samples``, the pieces' lengths as line elements:
+``Absorbers`` flattens the pieces of all skewers (cell pieces, sphere overlaps, ...) into one list per skewer (path
+coordinate s of the centroid, density, piece length, T, line-of-sight peculiar velocity). ``absorber_pieces`` turns
+them into ``core.Pieces``, and ``tau_absorbers`` integrates them with ``core.compute_optical_depth``, the same entry
+point as every other field source:
 
     tau(v) = sum_p  C f  n_com,p a_p^-2  phi_p(v)  l_p .
+
+Periodicity is not a property of the frame or of the pieces: it is ``compute_optical_depth``'s ``velocity_period``
+(default: none), passed through by ``tau_absorbers``.
 
 Frames (NumPy, host side):
 
@@ -28,7 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from skewerjax.core.constants import phys
-from skewerjax.core.optical_depth import LoSSamples, optical_depth_from_samples, optical_depth_kernel, optical_depth_sharded
+from skewerjax.core.optical_depth import Pieces, compute_optical_depth
 from skewerjax.core.skewers import path_geometry
 
 MPC_CM = 3.085678e24
@@ -37,18 +40,24 @@ MPC_CM = 3.085678e24
 # --------------------------------------------------------------------------- frames
 @dataclass
 class SnapshotFrame:
-    """fake_spectra's frame: a = a_snap everywhere, linear Hubble flow velfac * s [km/s]."""
+    """fake_spectra's frame: a = a_snap everywhere, linear Hubble flow velfac * s [km/s].
+
+    path_length : (N_sk,) path length of every skewer [cMpc] (its velocity span is velfac x path_length).
+    """
     a_snap: float
     velfac: float                      # [km/s per cMpc] = a H(z)
-    period_kms: Optional[float] = None
-    s_origin: float = 0.0              # path coordinate of the box origin (u = 0) [cMpc]
+    path_length: np.ndarray
 
     def scale_factors(self, skewer: int, s):
         return np.full(np.shape(s), self.a_snap)
 
     def velocity(self, skewer: int, s, v_los):
-        """Line-of-sight velocity that puts the line centre at velfac (s - s_origin) + v_pec exactly."""
-        return phys.c_kms * np.tanh((self.velfac * (np.asarray(s) - self.s_origin) + np.asarray(v_los)) / phys.c_kms)
+        """Line-of-sight velocity that puts the line centre at velfac s + v_pec exactly."""
+        return phys.c_kms * np.tanh((self.velfac * np.asarray(s) + np.asarray(v_los)) / phys.c_kms)
+
+    def velocity_span(self, skewer: int) -> float:
+        """Hubble-flow span of the path [km/s], first to last point."""
+        return float(self.velfac * np.asarray(self.path_length)[skewer])
 
     @property
     def a_dagger(self):
@@ -68,12 +77,10 @@ class ExactFrame:
     s_grid : (N_sk, N) path coordinates [cMpc] of the sampling points (increasing).
     a_grid : (N_sk, N) scale factors there (``scale_factors_along_paths``).
     a_dagger : reference scale factor of the spectral coordinate (default a(s = 0) of skewer 0).
-    period_kms : velocity period of a periodic box (None: no wrap).
     """
     s_grid: np.ndarray
     a_grid: np.ndarray
     a_dagger_value: Optional[float] = None
-    period_kms: Optional[float] = None
 
     def scale_factors(self, skewer: int, s):
         lna = np.interp(np.asarray(s), self.s_grid[skewer], np.log(self.a_grid[skewer]))
@@ -90,6 +97,10 @@ class ExactFrame:
         lna = np.log(self.a_grid[skewer])
         dlna = np.gradient(lna, self.s_grid[skewer])
         return phys.c_kms * np.abs(np.interp(np.asarray(s), self.s_grid[skewer], dlna))
+
+    def velocity_span(self, skewer: int) -> float:
+        """c |ln(a_first / a_last)| [km/s]: the line-centre span of the path without peculiar velocities."""
+        return float(phys.c_kms * abs(np.log(self.a_grid[skewer, 0] / self.a_grid[skewer, -1])))
 
 
 def scale_factors_along_paths(s, a_ref: float, cosmology, s_ref=None) -> np.ndarray:
@@ -190,17 +201,6 @@ def absorbers_from_components(seg, points, n_cell, T_cell, velocity_cell, a_data
                      species=species, mass_amu=float(mass_amu), meta=dict(kind=seg.kind))
 
 
-def absorbers_from_point_values(points, pv: dict, a_data: float, species: str, mass_amu: float) -> Absorbers:
-    """Absorbers of a point-valued deposition (``tophat_point_values``): one per point, with the
-    trapezoid line element of the point (the previous "points" mode)."""
-    g = path_geometry(jnp.asarray(points, dtype=jnp.float64))
-    n_sk, n_p = np.shape(pv["n"])
-    return Absorbers(s=np.asarray(g["s"]), n=np.asarray(pv["n"], float), length=np.asarray(g["line_elements"]),
-                     T=np.asarray(pv["T"], float), v_los=np.asarray(pv["v_los"], float),
-                     cell=-np.ones((n_sk, n_p), int), point=np.broadcast_to(np.arange(n_p), (n_sk, n_p)).copy(),
-                     a_data=float(a_data), species=species, mass_amu=float(mass_amu), meta=dict(kind="points"))
-
-
 def absorbers_from_crossings(cross, points, n_cell, T_cell, velocity_cell, a_data: float, species: str, mass_amu: float,
                              *, frame=None, tolerance: Optional[float] = 0.25, max_split: int = 64) -> Absorbers:
     """Absorbers of the Voronoi-adapted segmentation: every cell crossing, split into equal sub-pieces.
@@ -281,50 +281,53 @@ def sampling_check(ab: Absorbers, frame, *, T_scale: float = 1.0, tolerance: flo
 
 
 # --------------------------------------------------------------------------- optical depth
-def absorber_samples(ab: Absorbers, frame, skewer: int, n_lines: int, *, density_scaling: str = "comoving", T_scale: float = 1.0,
-                     n_scale: float = 1.0, chunk: int = 2048) -> LoSSamples:
-    """The absorbers of one skewer as a ``core.LoSSamples`` of ``nchunk`` rows of ``chunk`` points (padded with n = 0).
+def absorber_pieces(ab: Absorbers, frame, n_lines: int, *, skewers=None, density_scaling: str = "comoving", T_scale: float = 1.0,
+                    n_scale: float = 1.0) -> Pieces:
+    """The absorbers of ``skewers`` (default all) as ``core.Pieces`` (N_sk, M), padded with empty pieces.
 
-    Every absorber is one point: at its path coordinate s, with the frame's a(s), the velocity the frame injects
-    along the path (photons travel towards decreasing s), T x ``T_scale``, the comoving density
-    n_com = n a_data^3 x ``n_scale`` (``density_scaling="fixed_column"``: n a_data a(s)^2) and its length as line
-    element. ``T_scale`` and ``n_scale`` are matched-mode knobs (fake_spectra's b constants and 7/8 chords).
+    Every absorber is one piece: at its centroid s, with the frame's a(s), the velocity the frame injects along the
+    path (photons travel towards decreasing s), T x ``T_scale``, the comoving density n_com = n a_data^3 x ``n_scale``
+    (``density_scaling="fixed_column"``: n a_data a(s)^2) and its length. Its width in velocity is the frame's Hubble
+    rate times its length (n, T and v_pec are constant inside a cell). ``T_scale`` and ``n_scale`` are matched-mode
+    knobs (fake_spectra's b constants and 7/8 chords).
     """
-    M = ab.s.shape[1]
-    nchunk = -(-M // chunk)
-    pad = nchunk * chunk - M
-    P = lambda x, f: np.concatenate([x[skewer], np.full(pad, f)]).reshape(nchunk, chunk)
-    s, n, l, T, vl = P(ab.s, 0.0), P(ab.n, 0.0), P(ab.length, 0.0), P(ab.T, 1e4), P(ab.v_los, 0.0)
-    a = frame.scale_factors(skewer, s)
+    ks = range(ab.n_skewers) if skewers is None else [int(k) for k in np.atleast_1d(skewers)]
+    s, n, l, T, vl = (np.asarray(getattr(ab, f))[list(ks)] for f in ("s", "n", "length", "T", "v_los"))
+    a = np.stack([frame.scale_factors(k, s[i]) for i, k in enumerate(ks)])
+    u = np.stack([frame.velocity(k, s[i], vl[i]) for i, k in enumerate(ks)])
+    W = np.stack([frame.hubble_rate(k, s[i]) for i, k in enumerate(ks)]) * l
     n_com = n * n_scale * (ab.a_data ** 3 if density_scaling == "comoving" else ab.a_data * a ** 2)
-    u = frame.velocity(skewer, s, vl)
     lines = lambda x: jnp.broadcast_to(jnp.asarray(x)[None], (n_lines,) + x.shape)
     zeros = np.zeros(T.shape)
-    return LoSSamples(a_dagger=jnp.full((nchunk, chunk), frame.a_dagger), scale_factor=jnp.asarray(a),
-                      weights_m=jnp.asarray(l) * phys.Mpc_to_m, temperature=lines(T * T_scale), turbulence=lines(zeros),
-                      collisional=lines(zeros), los_velocity=lines(-np.asarray(u)), number_density=lines(n_com))
+    return Pieces(a_dagger=jnp.full(s.shape, frame.a_dagger), scale_factor=jnp.asarray(a), length_m=jnp.asarray(l) * phys.Mpc_to_m,
+                  temperature=lines(T * T_scale), turbulence=lines(zeros), collisional=lines(zeros), los_velocity=lines(-u),
+                  number_density=lines(n_com), width_kms=lines(W),
+                  velocity_span_kms=jnp.asarray([frame.velocity_span(k) for k in ks]))
 
 
-def tau_absorbers(ab: Absorbers, line_bundle, velocities_kms, frame, *, density_scaling: str = "comoving",
+def tau_absorbers(ab: Absorbers, line_bundle, velocities_kms, frame, *, velocity_period=False, density_scaling: str = "comoving",
                   T_scale: float = 1.0, n_scale: float = 1.0, detuning: str = "exact",
                   pixel_offsets=None, pixel_weights=None, chunk: int = 2048, v_chunk: Optional[int] = 4096,
                   voigt: str = "ExoJAX", check: Optional[float] = 0.25, per_absorber: bool = False,
                   dtype: Optional[str] = None, devices=None, skewers=None) -> np.ndarray:
-    """tau(v) of every skewer (or of the ``skewers`` given) from its absorbers.
+    """tau(v) of every skewer (or of the ``skewers`` given) from its absorbers, through ``core.compute_optical_depth``.
 
     Parameters
     ----------
     line_bundle : LineBundle whose species is ``ab.species``.
-    velocities_kms : (N_v,) spectral coordinate [km/s] (v_dagger in ``ExactFrame``; u in ``SnapshotFrame``).
-    frame : ExactFrame or SnapshotFrame (sets a(s), the injected velocity, a_dagger and the period).
-    density_scaling, T_scale, n_scale : see ``absorber_samples``.
+    velocities_kms : (N_v,) spectral coordinate [km/s] (v_dagger in ``ExactFrame``; u in ``SnapshotFrame``), or
+        (N_lines, N_v), one grid per line.
+    frame : ExactFrame or SnapshotFrame (sets a(s), the injected velocity and a_dagger).
+    velocity_period : ``compute_optical_depth``'s option (default False: no wrap; True: each skewer periodic over
+        its own velocity span; a number: that period [km/s]).
+    density_scaling, T_scale, n_scale : see ``absorber_pieces``.
     detuning : "exact" (default) or "linear" (matched mode).
     pixel_offsets, pixel_weights : sub-pixel offsets [km/s] and weights (sum 1) to average each pixel; None: centres.
-    chunk : absorbers per row of the samples (static shape); v_chunk : velocities per kernel call.
+    chunk : pieces per kernel call (``compute_optical_depth``'s ``piece_chunk``); v_chunk : velocities per call.
     check : tolerance of ``sampling_check`` (None: no check).
     per_absorber : True returns (N_lines, N_sk, M, N_v) contributions (memory!).
-    dtype : opt-in kernel precision, e.g. "float32" (``core.optical_depth_from_samples``; summed path only).
-    devices : None (one device) or devices to split the absorber rows of each skewer over (``core.optical_depth_sharded``).
+    dtype : opt-in kernel precision, e.g. "float32" (``core.optical_depth_from_pieces``).
+    devices : None (one device) or devices to split the rows of pieces of each skewer over (``core.optical_depth_sharded``).
     skewers : optional indices of the skewers to integrate (default all); the output follows their order.
 
     Returns
@@ -341,22 +344,20 @@ def tau_absorbers(ab: Absorbers, line_bundle, velocities_kms, frame, *, density_
     v = np.asarray(velocities_kms, dtype=np.float64)
     off = np.zeros(1) if pixel_offsets is None else np.asarray(pixel_offsets, float)
     wts = np.ones(1) if pixel_weights is None else np.asarray(pixel_weights, float)
-    v_all = (v[:, None] + off[None, :]).ravel()
-    n_lines, M = line_bundle.n_lines, ab.s.shape[1]
+    v_all = (v[..., :, None] + off).reshape(v.shape[:-1] + (-1,))
+    n_lines, M, n_v = line_bundle.n_lines, ab.s.shape[1], v.shape[-1]
     ks = range(ab.n_skewers) if skewers is None else [int(k) for k in np.atleast_1d(skewers)]
-    nchunk = -(-M // chunk)
-    out = np.zeros((n_lines, len(ks), nchunk * chunk if per_absorber else 1, v.size))
+    out = np.zeros((n_lines, len(ks), M if per_absorber else 1, n_v))
+    kw = dict(velocity_period=velocity_period, voigt=voigt, detuning=detuning, resolution_tolerance=None, v_chunk=v_chunk,
+              piece_chunk=chunk, per_piece=per_absorber, dtype=None if per_absorber else dtype, devices=devices)
     for i, k in enumerate(ks):
-        smp = absorber_samples(ab, frame, k, n_lines, density_scaling=density_scaling, T_scale=T_scale, n_scale=n_scale, chunk=chunk)
+        pieces = absorber_pieces(ab, frame, n_lines, skewers=[k], density_scaling=density_scaling, T_scale=T_scale,
+                                 n_scale=n_scale)
+        t = np.asarray(compute_optical_depth(pieces, v_all if v.ndim == 1 else jnp.asarray(v_all), line_bundle, **kw))[:, 0]
         if per_absorber:
-            t = _tau_per_absorber(smp, line_bundle, v_all, frame, detuning, voigt, v_chunk)
-            out[:, i] = (t.reshape(n_lines, nchunk * chunk, v.size, off.size) * wts).sum(-1)
+            out[:, i] = (t.reshape(n_lines, M, n_v, off.size) * wts).sum(-1)
         else:
-            kw = dict(voigt=voigt, detuning=detuning, velocity_period=frame.period_kms, v_chunk=v_chunk, dtype=dtype)
-            t = (optical_depth_from_samples(smp, jnp.asarray(v_all), line_bundle, **kw) if devices is None else
-                 optical_depth_sharded(smp, v_all, line_bundle, devices=devices, **kw))
-            t = np.asarray(t).sum(axis=1)
-            out[:, i, 0] = (t.reshape(n_lines, v.size, off.size) * wts).sum(-1)
+            out[:, i, 0] = (t.reshape(n_lines, n_v, off.size) * wts).sum(-1)
     return out if per_absorber else out[:, :, 0]
 
 
@@ -374,22 +375,8 @@ def tau_by_path_bins(ab: Absorbers, line_bundle, velocities_kms, frame, s_edges,
     return np.stack(out)
 
 
-def _tau_per_absorber(smp: LoSSamples, line_bundle, v_all, frame, detuning, voigt, v_chunk):
-    """(N_lines, N_points, N_v') contribution of every absorber (all rows of ``smp`` at once)."""
-    n_l = line_bundle.n_lines
-    flat = lambda x: x.reshape(n_l, -1)
-    nv = len(v_all) if v_chunk is None else v_chunk
-    parts = [optical_depth_kernel(jnp.asarray(v_all[v0:v0 + nv]), line_bundle.lambda0_A, line_bundle.A21_GHz, line_bundle.mass_amu,
-                                  line_bundle.f_osc, frame.a_dagger, smp.scale_factor.reshape(-1), flat(smp.los_velocity),
-                                  flat(smp.temperature), flat(smp.turbulence), flat(smp.collisional), flat(smp.number_density),
-                                  smp.weights_m.reshape(-1), voigt=voigt, detuning=detuning, velocity_period=frame.period_kms,
-                                  per_point=True)
-             for v0 in range(0, len(v_all), nv)]
-    return np.asarray(jnp.concatenate(parts, axis=-1))
-
-
 # --------------------------------------------------------------------------- columns
-def column_per_pixel(ab: Absorbers, path_length: float, nbins: int, s_origin: float = 0.0) -> np.ndarray:
+def column_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarray:
     """(N_sk, nbins) physical column [cm^-2] of the absorbers binned exactly into ``nbins`` equal
     position pixels of a periodic path of length ``path_length`` [cMpc]. Each absorber is the
     interval [s - l/2, s + l/2] (a piece of one convex cell or sphere inside one segment)."""
@@ -397,7 +384,7 @@ def column_per_pixel(ab: Absorbers, path_length: float, nbins: int, s_origin: fl
     dz = path_length / nbins
     for k in range(ab.n_skewers):
         live = ab.n[k] > 0
-        lo = ab.s[k][live] - s_origin - 0.5 * ab.length[k][live]
+        lo = ab.s[k][live] - 0.5 * ab.length[k][live]
         hi = lo + ab.length[k][live]
         dens = ab.n[k][live] * MPC_CM * ab.a_data
         j0, j1 = np.floor(lo / dz).astype(np.int64), np.floor(hi / dz).astype(np.int64)

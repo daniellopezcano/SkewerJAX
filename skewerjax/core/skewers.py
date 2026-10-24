@@ -79,7 +79,7 @@ def grid_skewer_points(L_box, N_grid: int, N_ppsk: int, direction: str = "y", ha
     return xyz.at[..., t2].set(g2[..., None])
 
 
-def axis_aligned_skewer_points(cofm, axis, box: float, spacing: float, extend: float = 0.0) -> np.ndarray:
+def axis_aligned_skewer_points(cofm, axis, box: float, spacing: float) -> np.ndarray:
     """Straight skewers parallel to box axes, as fake_spectra's sightlines [cMpc].
 
     Parameters
@@ -87,21 +87,18 @@ def axis_aligned_skewer_points(cofm, axis, box: float, spacing: float, extend: f
     cofm : (N_sk, 3) a point of each skewer [cMpc] (its coordinate along ``axis`` is ignored).
     axis : (N_sk,) 1, 2 or 3 (x, y, z).
     box : box side [cMpc]; spacing : target spacing [cMpc] (rounded to divide the box).
-    extend : extra path [cMpc] before 0 and after ``box``.
 
     Returns
     -------
-    (N_sk, N + 1, 3) points from -extend to box + extend, unwrapped; the first and last point of a non-extended
-    skewer are the same place of the periodic box.
+    (N_sk, N + 1, 3) points from 0 to box; the first and last point of a skewer are the same place of the periodic box.
     """
     cofm = np.atleast_2d(np.asarray(cofm, dtype=np.float64))
     axis = np.atleast_1d(np.asarray(axis, dtype=int))
     n = int(round(box / spacing))
     ds = box / n
-    m = int(round(extend / ds))
-    pts = np.repeat(cofm[:, None, :], n + 2 * m + 1, axis=1)
+    pts = np.repeat(cofm[:, None, :], n + 1, axis=1)
     for k, ax in enumerate(axis):
-        pts[k, :, ax - 1] = np.arange(-m, n + m + 1) * ds
+        pts[k, :, ax - 1] = np.arange(n + 1) * ds
     return pts
 
 
@@ -244,7 +241,8 @@ class SkewerBundle:
 
     @property
     def line_elements(self) -> jnp.ndarray:
-        """(N_sk, N_ppsk) trapezoid line elements [cMpc] (the default quadrature weights of the optical depth)."""
+        """(N_sk, N_ppsk) line elements [cMpc]: the lengths of the dual segments, the pieces of fields known everywhere
+        (``optical_depth.pieces_from_fields``)."""
         return line_elements(self.spatial_points)
 
     @property

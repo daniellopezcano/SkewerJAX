@@ -127,7 +127,8 @@ def fake_emulated_tau(ab: Absorbers, line_bundle, frame, nbins: int, dv: float, 
 
     Parameters
     ----------
-    frame : ``SnapshotFrame`` with ``period_kms = nbins dv``.
+    frame : ``SnapshotFrame``; the spectrum is periodic with period nbins dv (fake_spectra's grid is periodic by
+        construction), ``velocity_period=nbins * dv``.
     group : cells per batch; memory ~ group x (pieces per cell) x nbins x 8 bytes.
     cell_centre_s, cell_v_los, cell_T : per-cell arrays indexed by ``ab.cell``: the cell's position
         along the skewer [cMpc] (fake_spectra's line centre is velfac * that + v_pec,
@@ -142,7 +143,7 @@ def fake_emulated_tau(ab: Absorbers, line_bundle, frame, nbins: int, dv: float, 
     b = np.sqrt(2.0 * 8314.46262102654 * T_c * T_scale / ab.mass_amu) / 1e3      # phys.kB, as gas_physics.doppler_b_kms
     rules = [fake_pixel_points(bb, dv) if pixel_average else (np.zeros(1), np.ones(1)) for bb in b]
     key = np.array([len(r[0]) for r in rules])
-    u_c = frame.velfac * (np.asarray(cell_centre_s, float)[cells] - frame.s_origin) + np.asarray(cell_v_los, float)[cells]
+    u_c = frame.velfac * np.asarray(cell_centre_s, float)[cells] + np.asarray(cell_v_los, float)[cells]
     zmax = np.floor(u_c / dv).astype(int)
     order = np.argsort(ab.cell[0], kind="stable")
     sorted_cells = ab.cell[0][order]
@@ -156,7 +157,7 @@ def fake_emulated_tau(ab: Absorbers, line_bundle, frame, nbins: int, dv: float, 
             pick = np.concatenate([order[a:b_] for a, b_ in zip(lo, hi)])
             owner = np.repeat(np.arange(cs.size), hi - lo)
             sub = ab.with_values(**{k: getattr(ab, k)[:, pick] for k in ("s", "n", "length", "T", "v_los", "cell", "point")})
-            t = tau_absorbers(sub, line_bundle, v, frame, T_scale=T_scale, n_scale=n_scale, detuning=detuning,
+            t = tau_absorbers(sub, line_bundle, v, frame, velocity_period=nbins * dv, T_scale=T_scale, n_scale=n_scale, detuning=detuning,
                               pixel_offsets=off, pixel_weights=wts, per_absorber=True, check=None, **kw)[:, 0, :pick.size]
             for li in range(line_bundle.n_lines):
                 per_cell = np.zeros((cs.size, nbins))
@@ -173,11 +174,15 @@ class MatchedIntegration(IntegrationOptions):
     chord : "segments" (the exact pieces of the dual segments) or "fake_7pt" (7 interior points of every top-hat
         chord, weight 1/8: 7/8 of the column; needs ``deposition="tophat"`` and the snapshot frame).
     tautail : the per-cell early stop at tau < 1e-7; pixel_average : the per-cell pixel average for b < 2 dv.
-    The per-cell options need the snapshot frame and fake_spectra's periodic pixel grid (``spectral_grid()``).
+    velocity_period : ``core.compute_optical_depth``'s option, passed to ``SimulationSkewers.tau`` (default False, as
+        the core; the comparison sets True explicitly, since fake_spectra's spectra are periodic by construction).
+    The per-cell options need the snapshot frame and fake_spectra's periodic pixel grid (``spectral_grid()``); they
+    are periodic over that grid whatever ``velocity_period`` says.
     """
     chord: str = "segments"
     tautail: bool = False
     pixel_average: bool = False
+    velocity_period: object = False
 
     @property
     def per_cell(self) -> bool:
@@ -192,7 +197,8 @@ def matched_tau(sk, ion, line_bundle, velocities_kms, ext, integ: IntegrationOpt
     (cached in ``sk.cache`` under the same key format).
     """
     if not getattr(integ, "per_cell", False):
-        return sk.tau(ion, line_bundle, velocities_kms, ext, integ, override=override, override_key=override_key, check=check)
+        return sk.tau(ion, line_bundle, velocities_kms, ext, integ, override=override, override_key=override_key, check=check,
+                      velocity_period=getattr(integ, "velocity_period", False))
     if override is not None and not override_key:
         override_key = "override"
     v = np.asarray(velocities_kms, dtype=np.float64)
@@ -210,7 +216,7 @@ def _per_cell_tau(sk, ion, line_bundle, v, ext, integ: MatchedIntegration, overr
     if not (np.allclose(v, (np.arange(nbins) + 0.5) * dv) and np.isclose(nbins * dv, sk.header.vmax_kms)):
         raise ValueError("fake_spectra's per-cell scheme needs its periodic pixel grid (spectral_grid()).")
     T_scale = gp.FAKE_SPECTRA_B2_RATIO if ext.b_constants == "fake_spectra" else 1.0
-    fr = sk.frame(integ.frame, integ.periodic)
+    fr = sk.frame(integ.frame)
     ci = sk.cell_inputs(ion, ext, override)
     A = None if integ.chord == "fake_7pt" else sk.absorbers(ion, ext, override)
     out = []

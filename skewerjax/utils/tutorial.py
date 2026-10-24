@@ -1,11 +1,9 @@
-"""Small toy set-ups of the tutorial notebooks (NumPy + the core kernels), kept here so the notebooks stay readable.
+"""Small toy set-ups of the tutorial notebooks (NumPy + the core), kept here so the notebooks stay readable.
 
-* ``two_elements``: two gas elements on opposite sides of a reference point, with opposite peculiar velocities that put
-  their line centres at the same v_dagger; tau from a finely resolved quadrature of the integral (review notes,
-  Eq. tau_straight_los; scipy's Faddeeva function, independent of the package's Voigt) and from the package's sum
-  (``core.optical_depth_kernel``) with K pieces per element.
-* ``linear_detuning``: one absorber, tau with the exact and the linear detuning (``core.spectral.frequency_offset_GHz``).
-* ``periodic_box_demo``: one absorber near the far edge of a periodic box, integrated with each periodicity option.
+* ``toy_pieces``: ``core.Pieces`` of one skewer from plain arrays (centroid a, length, T, peculiar velocity, density).
+* ``periodic_pieces_demo``: a few pieces along a box, one with its line centre beyond the period (effect i) and a
+  damped absorber at the edge (effect ii), integrated without wrap and with ``velocity_period=True`` through
+  ``core.compute_optical_depth``; and the exact periodic sum over images against the nearest image.
 * ``p1d_expected``, ``p3d_expected_on_skewer_grid``: the expected spectra of a GRF sampled along skewers (discrete
   transverse projection or aliasing, the linear-interpolation window).
 """
@@ -15,35 +13,27 @@ from typing import Optional, Sequence
 
 import jax.numpy as jnp
 import numpy as np
-from scipy.special import wofz
 
 from skewerjax.core.constants import phys
 from skewerjax.core.cosmology import Cosmology
 from skewerjax.core.lines import LineBundle
-from skewerjax.core.optical_depth import optical_depth_kernel, voigt_widths_GHz
+from skewerjax.core.optical_depth import Pieces, compute_optical_depth
 from skewerjax.core.skewers import SkewerBundle
 
 
-def _line_arrays(line_bundle: LineBundle):
-    return tuple(jnp.asarray(x) for x in (line_bundle.lambda0_A, line_bundle.A21_GHz, line_bundle.mass_amu, line_bundle.f_osc))
+def toy_pieces(line_bundle: LineBundle, a_dagger: float, a, length_cMpc, T, u_away_kms, n_com, velocity_span_kms: float) -> Pieces:
+    """``core.Pieces`` of one skewer from plain (N_p,) arrays: a at the centroids, lengths [cMpc], T [K], the peculiar
+    velocity along the path [km/s, positive away from the observer] and the comoving density [cm^-3].
 
-
-def kernel_tau(line_bundle: LineBundle, v_kms, a_dagger, a, u_away_kms, T, n_com, w_cMpc, *, detuning: str = "exact",
-               velocity_period: Optional[float] = None, per_point: bool = False) -> np.ndarray:
-    """The package's sum (``optical_depth_kernel``) for points of one skewer given as plain arrays.
-
-    a, u_away_kms (peculiar velocity along the path, positive away from the observer), T [K], n_com [comoving cm^-3],
-    w_cMpc (line elements) : (N_p,). The photon travels towards the observer, so its velocity along the photon is -u.
-    Returns (N_lines, N_v), or (N_lines, N_p, N_v) with ``per_point``.
+    The photon travels towards the observer, so its velocity along the photon is -u. The widths are 0 (no check).
     """
-    lam, A21, mass, f = _line_arrays(line_bundle)
-    nl = lam.shape[0]
-    rows = lambda x: jnp.broadcast_to(jnp.asarray(x, dtype=float)[None], (nl, np.size(x)))
-    z = rows(np.zeros(np.size(a)))
-    return np.asarray(optical_depth_kernel(jnp.asarray(v_kms, dtype=float), lam, A21, mass, f, jnp.asarray(a_dagger, dtype=float),
-                                           jnp.asarray(a, dtype=float), rows(-np.asarray(u_away_kms)), rows(T), z, z, rows(n_com),
-                                           jnp.asarray(w_cMpc, dtype=float) * phys.Mpc_to_m, detuning=detuning,
-                                           velocity_period=velocity_period, per_point=per_point))
+    nl = line_bundle.n_lines
+    rows = lambda x: jnp.broadcast_to(jnp.asarray(x, dtype=float)[None, None], (nl, 1, np.size(x)))
+    one = lambda x: jnp.asarray(x, dtype=float)[None]
+    z = np.zeros(np.size(a))
+    return Pieces(a_dagger=one(np.full(np.size(a), a_dagger)), scale_factor=one(a), length_m=one(np.asarray(length_cMpc) * phys.Mpc_to_m),
+                  temperature=rows(T), turbulence=rows(z), collisional=rows(z), los_velocity=rows(-np.asarray(u_away_kms)),
+                  number_density=rows(n_com), width_kms=rows(z), velocity_span_kms=jnp.asarray([float(velocity_span_kms)]))
 
 
 def scale_factor_of_x(x_max_cMpc: float = 20.0, a_obs: float = 0.25, cosmology: Optional[Cosmology] = None, n: int = 4001):
@@ -55,116 +45,50 @@ def scale_factor_of_x(x_max_cMpc: float = 20.0, a_obs: float = 0.25, cosmology: 
     return x, np.asarray(sb.scale_factors[0, 0])
 
 
-def two_elements(x_ref: float = 10.0, d: float = 1.5, length: float = 0.3, n_com: Sequence[float] = (2e-11, 1e-11),
-                 T: Sequence[float] = (1.0e4, 6.0e4), line_id: str = "HI-LyA", a_obs: float = 0.25, pieces=(1, 4, 32),
-                 n_v: int = 1201, half_width_kms: float = 150.0, n_fine: int = 20001) -> dict:
-    """Elements A (x_ref - d, nearer the observer) and B (x_ref + d) of uniform n_com, T over ``length`` [cMpc], with
-    peculiar velocities u_A = -u_B = c tanh(Delta / c), Delta = [v_H(x_B) - v_H(x_A)] / 2, so that both line centres
-    v_c = v_H(x) + c artanh(u / c) fall at the same v_dagger (v_H = c ln(a_dagger / a(x))).
-
-    Returns a dict with the velocity grid ``v``, the reference ``tau_ref`` (N_v,) and its per-element parts
-    ``tau_ref_parts`` (2, N_v) (Simpson quadrature on ``n_fine`` points per element, scipy's wofz), the package's sum
-    ``tau_sum[K]`` (N_v,) and ``tau_sum_parts[K]`` (2, N_v) for every number of pieces K per element, and the set-up.
-    """
-    from scipy.integrate import simpson
-    lb = LineBundle([line_id], ref_line_id=line_id)
-    xg, ag = scale_factor_of_x(x_ref + d + length + 1.0, a_obs)
-    a_of = lambda x: np.exp(np.interp(x, xg, np.log(ag)))
-    vH = lambda x: phys.c_kms * np.log(a_obs / a_of(x))
-    xc = np.array([x_ref - d, x_ref + d])
-    Delta = 0.5 * (vH(xc[1]) - vH(xc[0]))
-    u = np.array([1.0, -1.0]) * phys.c_kms * np.tanh(Delta / phys.c_kms)
-    v_star = vH(xc[0]) + Delta
-    v = v_star + np.linspace(-half_width_kms, half_width_kms, n_v)
-    lam, A21, mass, f = (np.asarray(x) for x in _line_arrays(lb))
-    sig, gam = (np.asarray(x)[0, 0] for x in voigt_widths_GHz(jnp.asarray([[T[0]]]), jnp.zeros((1, 1)), jnp.zeros((1, 1)),
-                                                             jnp.asarray(lam), jnp.asarray(A21), jnp.asarray(mass)))
-    parts = []
-    for e in range(2):
-        xs = np.linspace(xc[e] - 0.5 * length, xc[e] + 0.5 * length, n_fine)
-        a = a_of(xs)
-        sig_e = float(np.asarray(voigt_widths_GHz(jnp.asarray([[T[e]]]), jnp.zeros((1, 1)), jnp.zeros((1, 1)), jnp.asarray(lam),
-                                                  jnp.asarray(A21), jnp.asarray(mass))[0])[0, 0])
-        beta = -u[e] / phys.c_kms                                           # along the photon
-        v_c = phys.c_kms * (np.log(a_obs / a) + 0.5 * (np.log1p(-beta) - np.log1p(beta)))
-        nu = (phys.c * 10.0 / lam[0]) * np.expm1(-(v[None, :] - v_c[:, None]) / phys.c_kms)      # exact detuning [GHz]
-        phi = np.real(wofz((nu + 1j * gam) / (np.sqrt(2.0) * sig_e))) / (np.sqrt(2.0 * np.pi) * sig_e)
-        integrand = phys.cross_section_prefactor * f[0] * n_com[e] * a[:, None] ** -2 * 1e2 * phi
-        parts.append(simpson(integrand, x=xs * phys.Mpc_to_m, axis=0))
-    tau_ref_parts = np.stack(parts)
-    sums, sum_parts = {}, {}
-    for K in pieces:
-        edges = np.linspace(-0.5, 0.5, K + 1) * length
-        mids = 0.5 * (edges[1:] + edges[:-1])
-        x_p = np.concatenate([xc[0] + mids, xc[1] + mids])
-        tp = kernel_tau(lb, v, a_obs, a_of(x_p), np.repeat(u, K), np.repeat(T, K), np.repeat(n_com, K), np.full(2 * K, length / K),
-                        per_point=True)[0]
-        sum_parts[K] = np.stack([tp[:K].sum(0), tp[K:].sum(0)])
-        sums[K] = sum_parts[K].sum(0)
-    return dict(v=v, v_star=v_star, x_c=xc, u=u, T=np.asarray(T), n_com=np.asarray(n_com), length=length, a=a_of(xc),
-                hubble_width_kms=np.abs(np.gradient(vH(xg), xg)).mean() * length, b_kms=np.sqrt(2 * phys.kB * np.asarray(T) / mass[0]) / 1e3,
-                x_grid=xg, v_hubble=vH(xg), tau_ref=tau_ref_parts.sum(0), tau_ref_parts=tau_ref_parts, tau_sum=sums, tau_sum_parts=sum_parts)
+PERIODIC_DEMO_PIECES = (            # s [cMpc], length [cMpc], log10 N [cm^-2], T [K], u [km/s, away from the observer]
+    (3.0, 0.3, 13.8, 1.5e4, 40.0),
+    (8.0, 0.4, 14.2, 2.0e4, -60.0),
+    (12.5, 0.3, 13.6, 1.0e4, 20.0),
+    (19.2, 0.3, 14.0, 2.0e4, 120.0),     # effect (i): its line centre falls beyond the period
+    (19.6, 0.2, 19.3, 1.0e4, 0.0),       # effect (ii): a damped absorber at the edge, at rest
+)
 
 
-def linear_detuning(log_N: Sequence[float] = (14.0, 17.0, 20.5), T: float = 1.5e4, line_id: str = "HI-LyA", a: float = 0.25,
-                    half_width_kms: float = 2000.0, n_v: int = 8001) -> dict:
-    """One absorber at rest at v_dagger = 0 with column N [cm^-2]: tau with the exact and the linear detuning.
+def periodic_pieces_demo(L_cMpc: float = 20.0, a_obs: float = 0.25, pieces: Sequence = PERIODIC_DEMO_PIECES,
+                         line_id: str = "HI-LyA", dv_kms: float = 1.0, n_images: int = 200) -> dict:
+    """A few pieces along a box of side L (observer at s = 0, a(0) = a_obs), each with its own colour in the figure.
 
-    Returns v (N_v,), tau_exact and tau_linear (N_col, N_v), the columns, and b [km/s].
+    The spectrum is computed on one period [0, P), P = c ln(a(0) / a(L)) (the velocity span of the path), with
+    ``core.compute_optical_depth(..., per_piece=True)``: ``velocity_period=False`` (no wrap) and ``True`` (each detuning
+    replaced by its nearest image modulo P). Also: every piece's whole profile on an extended axis (where its
+    absorption is before any wrap), and for the damped piece the exact periodic sum over |n| <= ``n_images`` images
+    against the nearest image (the limitation of keeping one image).
     """
     lb = LineBundle([line_id], ref_line_id=line_id)
-    v = np.linspace(-half_width_kms, half_width_kms, n_v)
-    w = 1e-3                                                                 # a 1 ckpc element; n_com sets the column
-    out = {}
-    for mode in ("exact", "linear"):
-        rows = []
-        for lN in log_N:
-            n_com = 10 ** lN / (a ** -2 * w * phys.Mpc_to_m * 1e2)
-            rows.append(kernel_tau(lb, v, a, [a], [0.0], [T], [n_com], [w], detuning=mode)[0])
-        out[mode] = np.stack(rows)
-    mass = float(np.asarray(lb.mass_amu)[0])
-    return dict(v=v, tau_exact=out["exact"], tau_linear=out["linear"], log_N=np.asarray(log_N), b_kms=np.sqrt(2 * phys.kB * T / mass) / 1e3)
-
-
-def periodic_box_demo(L_cMpc: float = 20.0, x_abs: float = 19.75, log_N: float = 14.0, T: float = 4.0e4, a_obs: float = 0.25,
-                      buffer_cMpc: float = 4.0, line_id: str = "HI-LyA", dv_kms: float = 1.0) -> dict:
-    """One absorber near the far edge of a periodic box of side L, integrated with each periodicity option.
-
-    * ``none``: the path [0, L], a grid [0, P) (P = v_H(L)), detunings not wrapped: the absorption past P is lost;
-    * ``wrapped``: the same path, detunings wrapped to their minimum image modulo P (``velocity_period=P``);
-    * ``buffer``: the path extended by ``buffer_cMpc`` on both sides with the periodic copies of the absorber
-      (non-periodic integral on a longer path), then read on [0, P).
-    Also: the absorber's whole (non-periodic) profile ``tau_full`` on the extended grid, and for the line-frame shift an
-    absorber in the middle of the box seen in Lya and Si III 1206 (``two_lines_own``, periodic) and both on the Lya frame
-    (``two_lines_ref``, ``core.wrap_to_ref_line``). Returns the grid v (N_v,), the tau (N_v,), P, the absorber's line
-    centre, the buffer's extended grid and these extras.
-    """
-    lb = LineBundle([line_id], ref_line_id=line_id)
-    xg, ag = scale_factor_of_x(L_cMpc + buffer_cMpc + 1.0, a_obs)
-    xg_neg, ag_neg = scale_factor_of_x(buffer_cMpc + 1.0, a_obs)            # towards the observer: mirror (a > a_obs)
-    a_of = lambda x: np.where(x >= 0, np.exp(np.interp(x, xg, np.log(ag))), np.exp(2 * np.log(a_obs) - np.interp(-x, xg_neg, np.log(ag_neg))))
+    xg, ag = scale_factor_of_x(L_cMpc + 1.0, a_obs)
+    a_of = lambda x: np.exp(np.interp(np.asarray(x, dtype=float), xg, np.log(ag)))
     P = float(phys.c_kms * np.log(a_obs / a_of(L_cMpc)))
+    s, ell, logN, T, u = (np.array([p[i] for p in pieces], dtype=float) for i in range(5))
+    a = a_of(s)
+    n_com = 10 ** logN / (ell * phys.Mpc_to_m * 1e2) * a ** 2           # sum_p n a^-2 l = N (physical column)
+    pc = toy_pieces(lb, a_obs, a, ell, T, u, n_com, P)
     nb = int(round(P / dv_kms))
     v = (np.arange(nb) + 0.5) * (P / nb)
-    w = 1e-3
-    n_com = 10 ** log_N / (a_obs ** -2 * w * phys.Mpc_to_m * 1e2)
-    one = lambda x, vv, period=None: kernel_tau(lb, vv, a_obs, a_of(np.atleast_1d(x)), [0.0], [T], [n_com], [w], velocity_period=period)[0]
-    tau = dict(none=one(x_abs, v), wrapped=one(x_abs, v, P))
-    copies = [x for x in (x_abs - L_cMpc, x_abs, x_abs + L_cMpc) if -buffer_cMpc <= x <= L_cMpc + buffer_cMpc]
-    tau["buffer"] = sum(one(x, v) for x in copies)
-    v_ext = np.arange(-buffer_cMpc / L_cMpc * P, P * (1 + buffer_cMpc / L_cMpc), P / nb)
-    tau_ext = sum(one(x, v_ext) for x in copies)
-    # one axis for two lines: an absorber in the middle of the box, Lya and Si III, periodic, then wrap_to_ref_line
-    from skewerjax.core.optical_depth import wrap_to_ref_line
-    two = LineBundle([line_id, "SiIII-1206"], ref_line_id=line_id)
-    a_mid = a_of(np.atleast_1d(0.5 * L_cMpc))
-    own = np.stack([kernel_tau(LineBundle([lid], ref_line_id=lid), v, a_obs, a_mid, [0.0], [T], [n_com * f], [w], velocity_period=P)[0]
-                    for lid, f in ((line_id, 1.0), ("SiIII-1206", 1.0 / 30))])                 # Si III 30 x less dense
-    ref = np.asarray(wrap_to_ref_line(own[:, None], v, two))[:, 0]
-    return dict(v=v, tau=tau, period_kms=P, v_c=float(phys.c_kms * np.log(a_obs / a_of(x_abs))), v_ext=v_ext, tau_ext=tau_ext,
-                v_full=v_ext, tau_full=one(x_abs, v_ext), copies=np.asarray(copies), L=L_cMpc, x_abs=x_abs,
-                v_of_x=lambda x: float(phys.c_kms * np.log(a_obs / a_of(np.asarray(x)))),
-                two_lines_own=own, two_lines_ref=ref, delta_v=float(two.delta_v[1]))
+    tau = {k: np.asarray(compute_optical_depth(pc, v, lb, velocity_period=k, per_piece=True, resolution_tolerance=None))[0, 0]
+           for k in (False, True)}
+    v_ext = np.arange(-0.35 * P, 1.35 * P, P / nb)
+    tau_ext = np.asarray(compute_optical_depth(pc, v_ext, lb, per_piece=True, resolution_tolerance=None))[0, 0]
+    v_H = phys.c_kms * np.log(a_obs / a)
+    beta = -u / phys.c_kms
+    v_c = v_H + 0.5 * phys.c_kms * (np.log1p(-beta) - np.log1p(beta))
+    # the exact periodic sum of the damped piece: sum_n tau_1(v + n P), against the nearest image
+    j = int(np.argmax(logN))
+    one = toy_pieces(lb, a_obs, a[j:j + 1], ell[j:j + 1], T[j:j + 1], u[j:j + 1], n_com[j:j + 1], P)
+    exact = sum(np.asarray(compute_optical_depth(one, v + n * P, lb, resolution_tolerance=None))[0, 0]
+                for n in range(-n_images, n_images + 1))
+    return dict(v=v, P=P, L=L_cMpc, s=s, length=ell, logN=logN, T=T, u=u, v_H=v_H, v_c=v_c, tau_nowrap=tau[False],
+                tau_wrap=tau[True], v_ext=v_ext, tau_ext=tau_ext, strong=j, tau_strong_exact=exact,
+                tau_strong_nearest=tau[True][j], v_of_s=lambda x: phys.c_kms * np.log(a_obs / a_of(x)))
 
 
 # --------------------------------------------------------------------------- expectations for the GRF study of notebook 07

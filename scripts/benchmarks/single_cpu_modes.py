@@ -72,7 +72,8 @@ def worker(mode: str, snap_base: str, n: int, repeats: int, out: Path):
                 A = sk.absorbers(ion, ext, frame=fr)
                 n_abs[name] = int((A.n > 0).sum())
             with T.stage("tau"):
-                tau = tau_absorbers(A, lbs[name], v, fr, check=None, dtype="float32" if mode == "float32" else None)[0]
+                tau = tau_absorbers(A, lbs[name], v, fr, velocity_period=True, check=None,      # periodic, as fake_spectra
+                                    dtype="float32" if mode == "float32" else None)[0]
         reps.append(dict(stages=dict(T.t), total=time.perf_counter() - t0, n_cells=len(sk.cells), n_v=int(v.size), n_absorbers=n_abs,
                          meanF={name: None for name in ions}))
     rec = dict(id=f"single_cpu_{mode}", mode=mode, n_skewers=n, snap_base=snap_base, repeats=reps, peak_rss_GB=B.peak_rss_GB(),

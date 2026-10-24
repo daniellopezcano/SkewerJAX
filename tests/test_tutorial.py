@@ -1,33 +1,24 @@
-"""The toy set-ups of the tutorial notebooks: the sum converges to the integral at second order and conserves the column,
-the linear detuning follows -(v - v_c)/c in the wings, the periodicity options agree, and the GRF expectations."""
+"""The toy set-ups of the tutorial notebooks: the periodic pieces demo (the two effects of velocity_period, the
+nearest-image limitation) and the GRF expectations."""
 import numpy as np
 
-from skewerjax.core import PowerLawGRF, phys
+from skewerjax.core import PowerLawGRF
 from skewerjax.utils import tutorial as tu
 
 
-def test_two_elements_sum_vs_integral():
-    r = tu.two_elements(pieces=(4, 8, 16), n_fine=4001)
-    err = {K: np.abs(t - r["tau_ref"]).max() / r["tau_ref"].max() for K, t in r["tau_sum"].items()}
-    assert 3.5 < err[8] / err[16] < 4.5 and 3.5 < err[4] / err[8] < 4.5          # second order in the piece length
-    for t in r["tau_sum"].values():
-        assert abs(t.sum() / r["tau_ref"].sum() - 1) < 1e-6                        # the column is exact
-    np.testing.assert_allclose(r["tau_sum_parts"][16].sum(0), r["tau_sum"][16], rtol=1e-12)   # additive
-    assert abs(r["v"][np.argmax(r["tau_ref_parts"][0])] - r["v"][np.argmax(r["tau_ref_parts"][1])]) < 1.0
-
-
-def test_linear_detuning_wings():
-    d = tu.linear_detuning(log_N=(14.0,), n_v=4001)
-    rel = d["tau_linear"][0] / d["tau_exact"][0] - 1
-    for dv in (-2000.0, 1000.0, 2000.0):
-        assert abs(np.interp(dv, d["v"], rel) / (-dv / phys.c_kms) - 1) < 0.02
-
-
-def test_periodicity_options():
-    p = tu.periodic_box_demo()
-    t = p["tau"]
-    assert t["wrapped"].sum() > t["none"].sum()
-    assert np.abs(t["wrapped"] - t["buffer"]).max() < 1e-2 * t["wrapped"].max()
+def test_periodic_pieces_demo():
+    d = tu.periodic_pieces_demo(n_images=20)
+    v, P = d["v"], d["P"]
+    i = int(np.argmax(d["v_c"] - P))                                               # (i): line centre beyond P
+    assert d["v_c"][i] > P and abs(v[np.argmax(d["tau_wrap"][i])] - (d["v_c"][i] - P)) < 2.0
+    assert d["tau_nowrap"][i].max() < 1e-2 * d["tau_wrap"][i].max()
+    j = d["strong"]                                                                # (ii): the wing re-enters at v ~ 0
+    assert d["v_c"][j] < P and d["tau_wrap"][j][v < 50].max() > 1e3 * d["tau_nowrap"][j][v < 50].max()
+    for k in range(len(d["s"])):                                                   # pieces far from the ends: unchanged
+        if k not in (i, j):
+            np.testing.assert_allclose(d["tau_wrap"][k][d["tau_wrap"][k] > 1e-3], d["tau_nowrap"][k][d["tau_wrap"][k] > 1e-3], rtol=1e-6)
+    miss = d["tau_strong_exact"] - d["tau_strong_nearest"]                        # the nearest image misses the far images
+    assert miss.min() > -1e-9 and abs(v[np.argmax(miss)] - np.mod(d["v_c"][j] - 0.5 * P, P)) < 5.0
 
 
 def test_grf_expectations():

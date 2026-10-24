@@ -95,15 +95,17 @@ def line_centre_velocity_kms(a_dagger: ArrayLike, scale_factor: ArrayLike, LoS_v
 
 
 def frequency_offset_GHz(velocities_kms: ArrayLike, lambda0_A: ArrayLike, a_dagger: ArrayLike, scale_factor: ArrayLike,
-                         LoS_velocity: ArrayLike, velocity_period: Optional[float] = None,
+                         LoS_velocity: ArrayLike, velocity_period: Optional[ArrayLike] = None,
                          detuning: str = "exact") -> jnp.ndarray:
-    """nu_j = c (1 / lambda' - 1 / lambda_j) [GHz] of every (line, point, velocity), from the detuning dv = v - v_c.
+    """nu_j = c (1 / lambda' - 1 / lambda_j) [GHz] of every (line, piece, velocity), from the detuning dv = v - v_c.
 
     "exact" (default): nu = (c / lambda_j) expm1(-dv / c), the exact exponential mapping. "linear": nu = -(c / lambda_j)
     dv / c, the first-order mapping of fake_spectra (Sec. approx_velocity_units; matched mode only).
-    ``velocity_period`` [km/s] replaces dv by its minimum image in [-P/2, P/2) (periodic boxes).
+    ``velocity_period`` [km/s] (a number, possibly traced) replaces dv by its nearest periodic image in [-P/2, P/2):
+    the opt-in periodic spectrum of ``optical_depth.compute_optical_depth``; None (default) does not wrap.
 
-    Shapes: velocities (N_v,), lambda0_A (N_lines,), a_dagger scalar or (N_points,), scale_factor (N_points,),
+    Shapes: velocities (N_v,) (one grid for every line) or (N_lines, N_v) (one grid per line, e.g. the reference
+    line's grid in every line's frame), lambda0_A (N_lines,), a_dagger scalar or (N_points,), scale_factor (N_points,),
     LoS_velocity (N_lines, N_points) -> (N_lines, N_points, N_v).
     """
     velocities_kms, lambda0_A, a_dagger, scale_factor, LoS_velocity = (
@@ -116,12 +118,17 @@ def frequency_offset_GHz(velocities_kms: ArrayLike, lambda0_A: ArrayLike, a_dagg
         raise ValueError(f"LoS_velocity.shape[1]={LoS_velocity.shape[1]} does not match scale_factor.shape[0]={scale_factor.shape[0]}.")
     if a_dagger.ndim != 0 and a_dagger.shape != scale_factor.shape:
         raise ValueError(f"a_dagger must be scalar or have shape {scale_factor.shape}; got {a_dagger.shape}.")
+    if velocities_kms.ndim == 2 and velocities_kms.shape[0] != LoS_velocity.shape[0]:
+        raise ValueError(f"per-line velocities must be (N_lines={LoS_velocity.shape[0]}, N_v), got {velocities_kms.shape}.")
+    if velocities_kms.ndim not in (1, 2):
+        raise ValueError(f"velocities must be (N_v,) or (N_lines, N_v), got {velocities_kms.shape}.")
     if detuning not in ("exact", "linear"):
         raise ValueError(f"detuning must be 'exact' or 'linear', got {detuning!r}.")
     v_c = line_centre_velocity_kms(a_dagger, scale_factor, LoS_velocity)
-    delta = velocities_kms[None, None, :] - v_c[..., None]
+    v = velocities_kms[None, None, :] if velocities_kms.ndim == 1 else velocities_kms[:, None, :]
+    delta = v - v_c[..., None]
     if velocity_period is not None:
-        P = float(velocity_period)
+        P = jnp.asarray(velocity_period, dtype=delta.dtype)
         delta = jnp.mod(delta + 0.5 * P, P) - 0.5 * P
     x = -delta / phys.c_kms
     factor = jnp.expm1(x) if detuning == "exact" else x

@@ -1,5 +1,7 @@
-"""Sign of the reference-line shift (``core.wrap_to_ref_line``, ``core.velocities_in_line_frames``): a feature at v0
-in a line's own frame lands at v0 - delta_v on the reference frame, delta_v = c ln(lambda_ref / lambda_j).
+"""Sign of the reference-line shift (``core.wrap_to_ref_line``, ``core.velocities_in_line_frames``,
+``compute_optical_depth(line_frame="reference")``): a feature at v0 in a line's own frame lands at v0 - delta_v on the
+reference frame, delta_v = c ln(lambda_ref / lambda_j). The shift is a change of axis: it wraps only with
+``velocity_period``.
 
 The same checks are in ``scripts/validation/check_line_frames.py``."""
 import numpy as np
@@ -16,9 +18,12 @@ def test_delta_function():
     tau = np.zeros((2, 1, v.size))
     tau[:, 0, 3000] = 1.0
     w = np.asarray(wrap_to_ref_line(tau, v, LB))
-    expected = np.mod(v[3000] - float(LB.delta_v[1]), v.size)
-    got = v[np.argmax(w[1, 0])]
+    expected = v[3000] - float(LB.delta_v[1])
+    got = v[np.nanargmax(w[1, 0])]
     assert abs(got - expected) <= 1.0, f"Si III at {got} km/s, expected {expected:.1f} (v0 - delta_v)"
+    assert np.all(np.isnan(w[1, 0][v + float(LB.delta_v[1]) > v[-1]])), "no wrap: unknown off the grid"
+    wp = np.asarray(wrap_to_ref_line(np.roll(tau, -2900, axis=-1), v, LB, velocity_period=4000.0))
+    assert abs(v[np.argmax(wp[1, 0])] - np.mod(v[100] - float(LB.delta_v[1]), 4000.0)) <= 1.0, "periodic: modulo P"
 
 
 def test_physical_absorber():
@@ -36,13 +41,15 @@ def test_physical_absorber():
     fields = Fields({"HI": {"temperature": ScalarField(Constant(1e4)), "turbulence": ScalarField(Constant(0.0)),
                             "collisional": ScalarField(Constant(0.0)), "number_density": ScalarField(SampledField(dens)),
                             "velocity": VectorField(SampledField(np.zeros((1, n_pt, 3))))}})
-    v = jnp.asarray((np.arange(-2000, 2000) + 0.5) * 1.0)
+    v = jnp.asarray((np.arange(-3000, 1000) + 0.5) * 1.0)          # wide enough for the shift: no wrap needed
     t = np.asarray(compute_optical_depth(sb, v, LB, fields, a_dagger=a))
     v_ly, v_own = float(v[np.argmax(t[0, 0])]), float(v[np.argmax(t[1, 0])])
-    v_ref = float(v[np.argmax(np.asarray(wrap_to_ref_line(t, v, LB))[1, 0])])
+    v_ref = float(v[np.nanargmax(np.asarray(wrap_to_ref_line(t, v, LB))[1, 0])])
     expected = v_ly + phys.c_kms * np.log(1206.5 / 1215.6701)
     assert abs(v_own - v_ly) <= 1.0, "both lines of the same gas peak at the same line-centred velocity"
-    assert abs(np.mod(v_ref - expected + 2000, 4000) - 2000) <= 1.0, f"1206 line at {v_ref} km/s, expected {expected:.1f}"
+    assert abs(v_ref - expected) <= 1.0, f"1206 line at {v_ref} km/s, expected {expected:.1f}"
+    t_ref = np.asarray(compute_optical_depth(sb, v, LB, fields, a_dagger=a, line_frame="reference"))
+    assert abs(float(v[np.argmax(t_ref[1, 0])]) - expected) <= 1.0, "direct evaluation on the reference axis"
 
 
 def test_reference_velocities_round_trip():

@@ -8,13 +8,13 @@ the same tools at work, step by step.
 flowchart LR
     subgraph A["core"]
         L[LineBundle, Cosmology] --> S[SkewerBundle]
-        S --> LS[los_samples]
+        S --> LS["pieces_from_fields → Pieces"]
         F[Fields] --> LS
-        LS --> T["optical_depth_from_samples / _sharded"]
+        LS --> T["compute_optical_depth → optical_depth_from_pieces / _sharded"]
         T --> O[DeltaFieldBuilder] --> ST[OverfluxStatistics1D / 3D]
     end
     subgraph B["simulations"]
-        R[ArepoHDF5Reader] --> SS[SimulationSkewers] --> AB[Absorbers] --> TA[tau_absorbers]
+        R[ArepoHDF5Reader] --> SS[SimulationSkewers] --> AB["Absorbers → absorber_pieces"] --> TA[tau_absorbers]
     end
     subgraph C["comparison"]
         FS[FakeSpectraSource] --- MT[matched_tau] --- BM[benchmark]
@@ -32,9 +32,20 @@ imports the other subpackages. `skewerjax.utils.plotting` is outside them.
   comoving cm⁻³ in `core.Fields` and physical cm⁻³ at the data epoch in `simulations.Absorbers`. Wavelengths are in Å.
 - **Shapes.** τ is `(N_lines, N_skewers, N_v)`; a `SkewerBundle` holds `(N_cosmologies, N_skewers, N_points, 4)` events
   (a, x, y, z).
+- **Pieces.** τ is a sum over pieces, fragments of the path within which the gas is constant, each evaluated at its
+  centroid (a, a⁻², the line centre and the fields). Simulation outputs give the exact intersections of the path with
+  the cells; fields known everywhere give the dual segment of every sampling point (midpoint to midpoint), or
+  `subdivide=q` equal pieces of it. Both reach the kernel as `core.Pieces` through `compute_optical_depth`.
+- **Periodicity** is one option of `compute_optical_depth`, `velocity_period`: `False` (default, the direct sum),
+  `True` (each skewer periodic over its own velocity span, set by a at its first and last points) or a period in km/s.
+  The detuning is then replaced by its nearest image; only that image is kept. `SimulationSkewers.tau`,
+  `optical_depth` and `tau_absorbers` pass it through; nothing else wraps a spectrum.
 - **Frames.**
-  - Each line is integrated in its own line-centred velocity frame v_†.
-  - `wrap_to_ref_line` moves every line onto the reference line's frame, periodically (period N_v dv).
+  - Each line is integrated in its own line-centred velocity frame v_† (`line_frame="own"`, default), or directly on
+    the reference line's axis (`line_frame="reference"`: line j at v + Δv_j).
+  - `wrap_to_ref_line` shifts spectra computed in their own frames onto the reference axis by interpolation: without a
+    period, τ is NaN where the shift leaves the grid; with `velocity_period=P` (a spectrum computed periodic on a grid of
+    one period), it wraps modulo P.
   - In simulations, `frame="exact"` uses a(x) along the path and `frame="snapshot"` uses fake_spectra's single
     redshift with a linear Hubble flow.
 - **Precision.** SkewerJAX follows `jax_enable_x64` and never sets it. Every validated tolerance is a float64 one.
@@ -49,9 +60,9 @@ imports the other subpackages. `skewerjax.utils.plotting` is outside them.
 | background | `Cosmology(H0, Omega_r_0, Omega_m_0, Omega_k_0, Omega_lambda_0)` | batches of cosmologies; `solve_a_of_x(rtol, atol)` |
 | skewers | `SkewerBundle(spatial_points, cosmologies, a0, x0, ...)` | `ICs_defined_at_index`, `ICs_at_emission_or_absorption`, `manual_scale_factors` |
 | fields | `Fields({species: {name: ScalarField/VectorField}})` | samplers `LogRamp`, `VelocityRamp`, `Constant`, `GRFDensity` (n = n̄(1 + δ) of a `PowerLawGRF`), `SampledField` |
-| τ | `compute_optical_depth(bundle, v, lines, fields, a_dagger=...)` | `voigt`, `detuning`, `velocity_period`, `v_chunk`, `batch_size`, `dtype`, `devices` |
-| τ (layers) | `los_samples` → `optical_depth_from_samples` → `optical_depth_kernel` | `LoSSamples` is the boundary with `skewerjax.simulations` |
-| frames | `wrap_to_ref_line`, `velocities_in_line_frames`, `line_wavelength_grid_A` | |
+| τ | `compute_optical_depth(bundle, v, lines, fields, a_dagger=...)` or `compute_optical_depth(pieces, v, lines)` | `subdivide`, `line_frame`, `velocity_period`, `voigt`, `detuning`, `resolution_tolerance`, `v_chunk`, `piece_chunk`, `batch_size`, `per_piece`, `dtype`, `devices` |
+| τ (layers) | `pieces_from_fields` → `Pieces` → `optical_depth_from_pieces` → `optical_depth_kernel` | `Pieces` is the boundary with `skewerjax.simulations`; `resolution_report(pieces, lines)` |
+| frames | `compute_optical_depth(..., line_frame="reference")`, `wrap_to_ref_line`, `velocities_in_line_frames`, `line_wavelength_grid_A` | |
 | overflux | `DeltaFieldBuilder(tau, labels=...).build()` | every line subset and the exact decomposition of the total |
 | statistics | `OverfluxStatistics1D(ov, dv).compute_p1d().compute_xi1d()`, `OverfluxStatistics3D` | pairs, orders, binning (`bin_p1d`, `bin_p3d_kperp`) |
 | metal models | `fit_mcdonald_a`, `fit_ma_model_profiled` | |
@@ -70,7 +81,7 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 - **Skewers:** `SimulationSkewers.axis_aligned` (straight, along a box axis) or `SimulationSkewers.from_bundle` (any
   `SkewerBundle`, with its own a(x)). The constructor selects the cells near the paths, streaming the snapshot in
   blocks of `max_rows` cells. Host memory is therefore set by the block size, not by the snapshot size.
-- **Physics options** (`ExtractionOptions`): `deposition` (`"voronoi"` default, `"tophat"`, `"points"`, or the opt-in
+- **Physics options** (`ExtractionOptions`): `deposition` (`"voronoi"` default, `"tophat"`, or the opt-in
   `"voronoi_crossings"`: one absorber per sub-piece of each cell crossing, split so that its velocity width stays below
   0.25 b), `mass_unit`, `T_constants`, `b_constants`, `x_HI_model`, `cloudy_density`, `cloudy_interpolation`.
 - **Selection back ends:** `selection.select_cells_near_paths(..., backend="cpu" | "jztree" | "auto")` and
@@ -80,10 +91,14 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 - **Deposition back ends:** `deposition.voronoi_segments(..., backend="jax")` computes the same Voronoi pieces in JAX
   with static shapes (identical cells and lengths; slower on a CPU, so the NumPy path is the default).
   `SimulationSkewers.crossings()` keeps the cell crossings of the skewers alongside their points (`CellCrossings`).
-- **Integration options** (`IntegrationOptions`): `frame`, `normalisation`, `detuning`, `periodic`, `dtype`.
-- **Lower layers:** `sk.absorbers(ion)` gives the deposited pieces, `tau_absorbers(A, lines, v, frame)` the τ (options
-  `chunk`, `v_chunk`, `dtype`, `devices`, `skewers`), and `sk.tau(...)` the τ cached in an HDF5 file when the object
-  has a `name` and a `cache`.
+- **Integration options** (`IntegrationOptions`): `frame`, `normalisation`, `detuning`, `dtype`. Periodicity is not one
+  of them: `sk.tau(..., velocity_period=...)` and `sk.optical_depth(..., velocity_period=..., line_frame=...)` pass the
+  core's option through (default: none). `spectral_grid(res, frame)` spans the velocity span of the box and implies no
+  wrap.
+- **Lower layers:** `sk.absorbers(ion)` gives the deposited pieces, `sk.pieces(ion, lines)` the same as `core.Pieces`
+  (for `compute_optical_depth`), `tau_absorbers(A, lines, v, frame)` the τ (options `velocity_period`, `chunk`,
+  `v_chunk`, `dtype`, `devices`, `skewers`), and `sk.tau(...)` the τ cached in an HDF5 file when the object has a `name`
+  and a `cache`. `select_cells_near_paths` also takes `GasCells` already in memory (e.g. toy cells, notebook 05).
 - **Figure tools:**
   - `slab_projection(reader, normal_axis, centre, thickness, n_pix)` gives the gas surface density and the
     mass-weighted temperature of a slab;
@@ -93,8 +108,9 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 ## `skewerjax.comparison`
 
 - **Modes:** `FAKE_SPECTRA_EXTRACTION` + `FAKE_SPECTRA_INTEGRATION` reproduce fake_spectra (the matched mode), and
-  `ExtractionOptions()` + `DEFAULT_INTEGRATION` are SkewerJAX's defaults. `matched_tau(sk, ion, lines, v, ext, integ)`
-  evaluates any combination.
+  `ExtractionOptions()` + `DEFAULT_INTEGRATION` are SkewerJAX's defaults. Both use `velocity_period=True`, because
+  fake_spectra's spectra are periodic by construction. `matched_tau(sk, ion, lines, v, ext, integ)` evaluates any
+  combination.
 - **Effect chain:** `run_effects` and `effect_rows` switch one difference at a time (`EXTRACTION_EFFECTS`,
   `INTEGRATION_EFFECTS`).
 - **fake_spectra itself:** `FakeSpectraSource(cache=DIR, snap_base=..., snapnum=...)` runs it live, in its own process
@@ -106,9 +122,9 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 
 | knob | where | effect |
 |---|---|---|
-| `v_chunk` | `optical_depth_from_samples`, `tau_absorbers` (default 4096) | velocities per kernel call: memory ∝ N_lines × N_points × v_chunk |
-| `batch_size` | `optical_depth_from_samples` | skewers vmapped at once inside `lax.map` (more memory, fewer launches) |
-| `chunk` | `tau_absorbers` (default 2048) | absorbers per row of the samples (a static shape: one compilation per row count) |
+| `v_chunk` | `compute_optical_depth`, `optical_depth_from_pieces`, `tau_absorbers` (default 4096) | velocities per kernel call: memory ∝ N_lines × N_pieces × v_chunk |
+| `batch_size` | `compute_optical_depth`, `optical_depth_from_pieces` | skewers vmapped at once inside `lax.map` (more memory, fewer launches) |
+| `piece_chunk` / `chunk` | `compute_optical_depth` / `tau_absorbers` (default 2048) | pieces per kernel call: each skewer's pieces summed in rows (`Pieces.rows`; a static shape) |
 | `dtype="float32"` | `compute_optical_depth`, `tau_absorbers`, `IntegrationOptions` | opt-in: 2.4× faster on 16 TNG50-4 skewers on the CPU, max \|ΔF\| 1.6e-3 |
 | `devices=` | `compute_optical_depth`, `tau_absorbers`, `optical_depth_sharded` | shards the skewer axis (or a skewer's absorber rows) over devices |
 | `max_rows` | `SimulationSkewers` | cells per streamed block of the selection |
@@ -119,11 +135,11 @@ Sharding uses one call for any number of devices:
 ```python
 import jax
 from skewerjax.core import optical_depth_sharded
-tau = optical_depth_sharded(samples, v, lines, devices=jax.devices())   # = optical_depth_from_samples(...) bit for bit
+tau = optical_depth_sharded(pieces, v, lines, devices=jax.devices())    # = optical_depth_from_pieces(...) bit for bit
 ```
 
 The skewers are padded to a multiple of the device count, and the padding is dropped from the result. On one device the
-call falls back to `optical_depth_from_samples`. To try several devices on one CPU, start Python with
+call falls back to `optical_depth_from_pieces`. To try several devices on one CPU, start Python with
 `XLA_FLAGS=--xla_force_host_platform_device_count=N`. This tests the code path only; XLA already uses all the cores of a
 single CPU device.
 
@@ -167,13 +183,16 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
 
 - Line styles per mode: `MODE_STYLES`; labels with units: `LABELS`; sizes: `FIGSIZES`.
 - `plot_dag(highlight, external=False)`: the dependency graph of the ingredients (`DAG_NODES`, `DAG_EDGES`).
+- Path geometry: `geometry_style(name)`, the one style of points, midpoints, dual segments, tangents, line elements,
+  piece ends and generators (03 and 05).
 - Tutorial figures: `plot_line_table`, `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,
-  `plot_pk_recovery_nd` (+ `field_power_modes`, `binned_power`, `power_map_kpar_kperp`), `plot_nH_T_fractions`,
-  `plot_deposition_story`, `plot_voigt_limits`, `plot_frames_axes`, `plot_two_elements`, `plot_linear_detuning`,
-  `plot_periodicity_options`, `plot_effect_fluxes`, `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
+  `plot_isotropic_recovery` (+ `correlation_binned`), `plot_kpar_kperp_maps`, `plot_pk_mu_wedges` (`MU_WEDGES`, + `power_kmu`,
+  `field_power_modes`, `binned_power`, `power_map_kpar_kperp`), `plot_nH_T_fractions`, `plot_deposition_steps`
+  (+ `cell_colors`, `voronoi_polygons_2d`), `plot_voigt_limits`, `plot_frames_axes`, `plot_periodic_pieces`,
+  `plot_effect_fluxes`, `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
   `plot_line_frames`, `plot_flux_vs_analytic`, `plot_terms_by_order`,
   `plot_p1d_input_vs_measured` (+ `grf_p1d_along_axis`), `plot_cylinder(..., progress=p)` (one frame per call),
   `plot_slab`, `plot_tau_buildup`, `plot_orders_superimposed`, `plot_pk_recovery`, the benchmark figures `plot_bench_*`.
-- `skewerjax.utils.tutorial`: the small toy set-ups of the notebooks (`two_elements`, `linear_detuning`,
-  `periodic_box_demo`) and the expected spectra of a GRF along skewers (`p1d_expected`, `p3d_expected_on_skewer_grid`,
+- `skewerjax.utils.tutorial`: the small toy set-ups of the notebooks (`toy_pieces`, `periodic_pieces_demo`) and the
+  expected spectra of a GRF along skewers (`p1d_expected`, `p3d_expected_on_skewer_grid`,
   `binned_input_power`).

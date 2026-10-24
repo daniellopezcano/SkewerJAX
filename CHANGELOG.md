@@ -3,6 +3,73 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — fifth pass: one piece-based τ route, opt-in periodicity, notebooks 03–07 (2026-10-24, session 20261024_0040)
+
+### Changed (breaking)
+- **One route for τ: pieces.** `core.Pieces` (replaces `LoSSamples`) holds the constant-property pieces of every skewer,
+  each at its centroid, plus `width_kms` (the line-centre variation across the piece) and `velocity_span_kms`.
+  - Fields known everywhere: `core.pieces_from_fields(bundle, fields, lines, subdivide=1)` (replaces `los_samples`):
+    one piece per dual segment (or `subdivide` equal ones), with a, the position, the photon direction and every field
+    at the piece's centroid (a interpolated in ln a between the bundle's points). The `line_elements=` option is gone.
+  - Simulation outputs: `simulations.absorber_pieces(ab, frame, n_lines, skewers=None)` (replaces `absorber_samples`);
+    `SimulationSkewers.pieces(ion, lines)`; `tau_absorbers` now calls `core.compute_optical_depth`.
+  - `core.compute_optical_depth(source, v, lines, fields=None, ...)` takes a `SkewerBundle` (with `fields`) or `Pieces`;
+    new options `subdivide`, `line_frame`, `piece_chunk`, `per_piece`. `optical_depth_from_samples` →
+    `optical_depth_from_pieces`; `optical_depth_kernel(..., length_m, per_piece=)`; `resolution_report(pieces, lines)`
+    uses the piece widths (`sampling_resolution_report` removed).
+- **Periodicity is one opt-in option of `compute_optical_depth`:** `velocity_period=False` (default, no wrap), `True`
+  (each skewer periodic over its own velocity span, set by a at its first and last points), or a period [km/s]. It is
+  a traced per-skewer array inside the kernel. `SimulationSkewers.tau / optical_depth / compute_tau` and
+  `tau_absorbers` pass it through.
+  - Removed: `IntegrationOptions.periodic` (the simulation default was periodic; it is now the core's non-periodic
+    default), `SimulationSkewers.frame(kind, periodic)` → `frame(kind)`, `ExactFrame/SnapshotFrame.period_kms`
+    (→ `velocity_span(skewer)`), the buffer (`SimulationSkewers.axis_aligned(..., extend_cMpc=)`, `s_origin`,
+    `axis_aligned_skewer_points(extend=)`, `column_per_pixel(s_origin=)`).
+  - `SnapshotFrame(a_snap, velfac, path_length)`. `spectral_grid(res, frame)` spans the velocity span and implies no wrap.
+  - The comparison layer sets `velocity_period=True` explicitly (`FAKE_SPECTRA_INTEGRATION`, `DEFAULT_INTEGRATION`,
+    `MatchedIntegration.velocity_period`, the benchmark), because fake_spectra is periodic by construction.
+- **Frames are not periodicity.** `compute_optical_depth(..., line_frame="reference")` evaluates every line on the
+  reference line's axis (line j at v + Δv_j), with no interpolation. `wrap_to_ref_line(tau, v, lines, *,
+  velocity_period=None, fill_value=nan)` no longer wraps by default: NaN where the shift leaves the grid; it wraps
+  modulo P only with `velocity_period=P` (a grid of one period). `spectral.frequency_offset_GHz` takes per-line grids.
+- Removed the point-valued deposition (`deposition="points"`, `tophat_point_values`, `absorbers_from_point_values`):
+  it sampled the cells at the points, not over the pieces.
+- `SampledField` repeats each point's value over the pieces of its dual segment.
+
+### Added
+- `select_cells_near_paths` accepts `GasCells` already in memory (toy cells; the same selection rule).
+- `simulations.absorbers_from_components` exported.
+- Plotting: `geometry_style` (one style for points, midpoints, dual segments, tangents, line elements, piece ends,
+  generators); `plot_isotropic_recovery` (+ `correlation_binned`), `plot_kpar_kperp_maps` (residuals, χ²/dof),
+  `plot_pk_mu_wedges` (`MU_WEDGES`, `power_kmu`); `plot_deposition_steps` (+ `cell_colors`, `voronoi_polygons_2d`);
+  `plot_periodic_pieces`. `plot_skewer_geometry_3d(scale_factors=None)` no longer colours by a(x).
+  `plot_frames_axes(..., v_ref=, F_ref=)`: own frame, global axis, observed wavelength.
+- `utils.tutorial`: `toy_pieces`, `periodic_pieces_demo`.
+- Tests: `tests/test_pieces.py`; updated `test_wrap_to_ref_line`, `test_precision_and_sharding`, `test_tutorial`,
+  `test_plotting`, `test_deposition`.
+
+### Removed
+- `plot_pk_recovery_nd`, `plot_deposition_story`, `plot_two_elements`, `plot_linear_detuning`,
+  `plot_periodicity_options`; `tutorial.two_elements`, `linear_detuning`, `periodic_box_demo`.
+
+### Numbers (against the committed code, 14f6b3f)
+- TNG50-4 (6 configurations, 1 and 16 skewers, Voronoi and crossings, H I and Si III) with `velocity_period=True`:
+  bit-identical to the committed periodic default.
+- New default (no wrap) on the 16 TNG50-4 skewers: ⟨F⟩ +6.6e-3, max |ΔF| 0.998 at an edge, P1D up to 25 % at
+  k < 0.1 s/km; on one skewer ⟨F⟩ +1.5e-2.
+- Toy route, dual-segment centroids: interior pieces of even straight skewers unchanged to rounding (5e-5 of τ_max with
+  float32 input points); only the end pieces move (by a quarter of the spacing). Uneven helix: the new route is closer
+  to the converged (subdivided) τ (1.6e-2 vs 2.8e-2 of τ_max for Lyα).
+- `check_optical_depth_analytic`: the radiation-domination errors fall by 2–4× at every resolution.
+
+### Notebooks
+- 03: the 3D geometry figure without a(x) colouring, each element in its own style. 04: block A (P(k), ξ(r)),
+  block B ((k∥, k⊥) maps with residuals; P(k) in μ wedges). 05 §3: built from the package's classes on toy cells.
+  06: §1 around pieces, two-element block and linear detuning removed, §5 frames only, §6 periodicity under the new
+  option, §7 simulation outputs. 07: the deleted first block of §1 restored; periodic spectra (FFT estimators) and one
+  axis for both lines. 00, 00b: the same choices where their spectra are used as periodic. 08: one call
+  (`sk.tau(..., velocity_period=True)`, like-for-like with fake_spectra).
+
 ## Unreleased — notebooks fourth pass: paper/dark styles, τ derivation, periodicity, GRF study, selection back ends (2026-10-23, session 20261023_0530)
 
 ### Added

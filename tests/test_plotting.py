@@ -87,22 +87,36 @@ def test_palette_fonts_and_backend():
     assert pl.use_backend() == matplotlib.get_backend()      # outside IPython: unchanged
 
 
-def test_fourth_pass_figures():
+def test_fifth_pass_figures():
+    import jax
     from skewerjax.utils import tutorial as tu
+    from skewerjax.core import LineBundle as LB
     t = np.linspace(0, 1, 12)
     pts = np.stack([np.cos(3 * t), np.sin(3 * t), t], -1)
     fig = plt.figure()
     ax = fig.add_subplot(projection="3d")
-    assert pl.plot_skewer_geometry_3d(ax, pts, scale_factors=1 - 0.01 * t, highlight=5) is not None
+    assert pl.plot_skewer_geometry_3d(ax, pts, highlight=5) is None              # scale_factors optional
+    pl.plot_skewer_geometry_3d(ax, pts, scale_factors=1 - 0.01 * t)
     fig.canvas.draw()
-    pl.plot_two_elements(tu.two_elements(pieces=(1, 4), n_fine=2001, n_v=301))[0].canvas.draw()
-    pl.plot_linear_detuning(tu.linear_detuning(n_v=801))[0].canvas.draw()
-    pl.plot_periodicity_options(tu.periodic_box_demo())[0].canvas.draw()
-    g = PowerLawGRF(A_s=1.0, k_0=1.0, n_s=-1.0, L=(10.0, 10.0), N=(16, 16))
-    d = np.random.default_rng(0).normal(size=(2, 16, 16))
-    fig, axs, out = pl.plot_pk_recovery_nd({"2D": (g, d)})
+    pl.plot_periodic_pieces(tu.periodic_pieces_demo(n_images=5))[0].canvas.draw()
+    g1 = PowerLawGRF(A_s=1.0, k_0=1.0, n_s=-0.5, L=20.0, N=64)
+    g2 = PowerLawGRF(A_s=1.0, k_0=1.0, n_s=-1.0, L=(10.0, 10.0), N=(16, 16))
+    d1 = np.asarray(jax.vmap(g1.sample)(jax.random.split(jax.random.PRNGKey(0), 8)))
+    d2 = np.asarray(jax.vmap(g2.sample)(jax.random.split(jax.random.PRNGKey(1), 8)))
+    fig, axs, out = pl.plot_isotropic_recovery({"1D": (g1, d1), "2D": (g2, d2)})
     fig.canvas.draw()
-    assert "map_chi2_dof" in out["2D"]
+    assert {"chi2_dof", "xi_chi2_dof"} <= set(out["2D"])
+    r, xi, err, n, xin = pl.correlation_binned(d2, g2.L, np.linspace(0, 2.5, 6), g2)
+    assert np.isclose(xin[0], float(g2.variance()), rtol=1e-10), "input xi(0) = sigma^2"
+    fig, axs, chi2 = pl.plot_kpar_kperp_maps({"2D": (g2, d2)})
+    fig.canvas.draw()
+    fig, axs, chi2w = pl.plot_pk_mu_wedges({"2D": (g2, d2)})
+    fig.canvas.draw()
+    assert len(chi2w["2D"]) == len(pl.MU_WEDGES) - 1
+    lines = LB(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
+    v = np.linspace(0, 400, 200)
+    F = np.exp(-np.exp(-((v - 200) / 10) ** 2))[None] * np.ones((2, 1))
+    pl.plot_frames_axes(v, F, lines, v_ref=v, F_ref=F, a_dagger=0.25, centres=[200.0])[0].canvas.draw()
     for theme in ("dark", "paper"):
         pl.use_style(theme)
         pl.plot_dag(("lines", "cosmology", "skewers"))[0].canvas.draw()

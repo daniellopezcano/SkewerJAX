@@ -22,9 +22,11 @@ from skewerjax.simulations.snapshot_skewers import ExtractionOptions, Simulation
 FAKE_SPECTRA_EXTRACTION = ExtractionOptions(deposition="tophat", mass_unit="proton", T_constants="fake_spectra",
                                             b_constants="fake_spectra", x_HI_model="fake_sf", cloudy_density="fake_spectra",
                                             cloudy_interpolation="cubic")
+# fake_spectra's spectra are periodic by construction, so both ends of the comparison use a periodic spectrum
+# (velocity_period=True: each skewer over its own velocity span); SkewerJAX's own default is not periodic.
 FAKE_SPECTRA_INTEGRATION = MatchedIntegration(frame="snapshot", chord="fake_7pt", detuning="linear", tautail=True,
-                                              pixel_average=True)
-DEFAULT_INTEGRATION = MatchedIntegration()
+                                              pixel_average=True, velocity_period=True)
+DEFAULT_INTEGRATION = MatchedIntegration(velocity_period=True)
 
 
 # --------------------------------------------------------------------------- the differences, one switch each

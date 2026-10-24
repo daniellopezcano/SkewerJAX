@@ -1,18 +1,31 @@
 """Line profiles and the optical depth tau(v) along skewers (review notes, Eqs. line_profile, tau_straight_los).
 
-    tau_j(v) = C_j f_j sum_i w_i n_com,i a_i^-2 phi_ij(v),   C_j = q_e^2 / (4 eps_0 m_e c),   F = exp(-tau)
+The optical depth is a line integral along the path (x comoving, dl_phys = a dx),
 
-The sum is the quadrature of Eq. tau_straight_los on the sampling points i of a skewer, with line elements w_i
-[comoving m] (trapezoid weights of the points by default, or explicit segment lengths), comoving densities
-n_com [cm^-3] and the Voigt profile phi [ns] of the detuning nu (``spectral.frequency_offset_GHz``).
+    tau_j(v) = C_j f_j int n_com(x) a(x)^-2 phi_j(v; x) dx,   C_j = q_e^2 / (4 eps_0 m_e c),   F = exp(-tau),
 
-Layers (all pure; the last one only adds eager checks):
+evaluated as a sum over **pieces** p, fragments of the path within which the gas properties are constant:
 
-* ``optical_depth_kernel``: one skewer, arrays in, (N_lines, N_v) out (jit);
-* ``optical_depth_from_samples``: every skewer of a ``LoSSamples`` pytree, ``lax.map`` over skewers (optionally
-  vmapped in batches) and velocity chunks (jit);
-* ``compute_optical_depth``: samples the ``Fields`` of a ``SkewerBundle`` (``los_samples``), checks the sampling
-  resolution and runs the above.
+    tau_j(v) = C_j f_j sum_p l_p n_com,p a_p^-2 phi_pj(v),
+
+with every quantity of a piece, its scale factor a_p included, evaluated at the piece's centroid (the midpoint rule
+on each piece). The column sum_p n_p l_p is exact for any partition; the profile has an error O((W_p / b_p)^2), W_p
+the variation of the line centre across the piece. Every field source reaches the kernel the same way, as ``Pieces``;
+the sources differ only in how they cut the path:
+
+* fields known everywhere (toy samplers, ``Fields``): ``pieces_from_fields`` cuts the *dual segment* of every point
+  of a ``SkewerBundle`` (midpoint to midpoint, ``core.skewers.path_geometry``) into ``subdivide`` equal pieces and
+  samples the fields at their centroids;
+* simulation outputs: ``skewerjax.simulations`` cuts the path at its exact intersections with the gas cells
+  (``absorbers.absorber_pieces``).
+
+Layers (all pure; the last one only adds eager checks and options):
+
+* ``optical_depth_kernel``: the pieces of one skewer, arrays in, (N_lines, N_v) out (jit);
+* ``optical_depth_from_pieces``: every skewer of a ``Pieces`` pytree, ``lax.map`` over skewers (jit);
+* ``compute_optical_depth``: the entry point: the pieces (from a bundle and fields, or given), the resolution check,
+  the spectral axis (each line's own frame, or the reference line's) and the one periodicity option of the package,
+  ``velocity_period`` (default: none).
 """
 from __future__ import annotations
 
@@ -30,7 +43,6 @@ from jax.sharding import Mesh, PartitionSpec
 from jax.typing import ArrayLike
 
 from skewerjax.core.constants import phys
-from skewerjax.core.skewers import line_elements as trapezoid_line_elements
 from skewerjax.core.spectral import frequency_offset_GHz, line_centre_velocity_kms
 from skewerjax.core.voigt import log10_voigt
 
@@ -120,20 +132,21 @@ def line_profiles(quadri_vectors: jnp.ndarray, LoS_directions: jnp.ndarray, velo
 
 
 # --------------------------------------------------------------------------- the optical depth of one skewer
-@partial(jax.jit, static_argnames=("voigt", "detuning", "velocity_period", "per_point"))
+@partial(jax.jit, static_argnames=("voigt", "detuning", "per_piece"))
 def optical_depth_kernel(velocities_kms, lambda0_A, A21_GHz, mass_amu, f_osc, a_dagger, scale_factor, los_velocity, temperature,
-                         turbulence, collisional, number_density, weights_m, voigt: str = "ExoJAX", detuning: str = "exact",
-                         velocity_period: Optional[float] = None, per_point: bool = False):
-    """tau = sum_i w_i C f n_i a_i^-2 phi_i(v) for the points of one skewer (Eq. tau_straight_los, discretised).
+                         turbulence, collisional, number_density, length_m, voigt: str = "ExoJAX", detuning: str = "exact",
+                         velocity_period=None, per_piece: bool = False):
+    """tau = sum_p l_p C f n_p a_p^-2 phi_p(v) for the pieces of one skewer (Eq. tau_straight_los, as a sum over pieces).
 
     Parameters
     ----------
-    velocities_kms : (N_v,); lambda0_A, A21_GHz [GHz], mass_amu, f_osc : (N_lines,)
-    a_dagger : scalar or (N_points,); scale_factor : (N_points,)
+    velocities_kms : (N_v,) or (N_lines, N_v) (one grid per line); lambda0_A, A21_GHz [GHz], mass_amu, f_osc : (N_lines,)
+    a_dagger : scalar or (N_p,); scale_factor : (N_p,) a at the piece centroids
     los_velocity [km/s], temperature [K], turbulence [m/s], collisional [GHz], number_density [comoving cm^-3] :
-        (N_lines, N_points)
-    weights_m : (N_points,) line elements [comoving m]
-    per_point : True returns every point's contribution (N_lines, N_points, N_v) instead of the sum.
+        (N_lines, N_p)
+    length_m : (N_p,) piece lengths [comoving m]
+    velocity_period : None (no wrap) or the period [km/s] (a number, possibly traced) of the detuning's nearest image.
+    per_piece : True returns every piece's contribution (N_lines, N_p, N_v) instead of the sum.
 
     Returns
     -------
@@ -145,222 +158,351 @@ def optical_depth_kernel(velocities_kms, lambda0_A, A21_GHz, mass_amu, f_osc, a_
     n_l, n_p, n_v = nu.shape
     phi = voigt_line_profiles(nu.reshape(n_l * n_p, n_v), sigma.reshape(-1), gamma.reshape(-1), voigt).reshape(n_l, n_p, n_v)
     # dtau/dx [1/m] = C f phi n a^-2 (x comoving); 1e2 turns cm^2 cm^-3 m into a number
-    amp = phys.cross_section_prefactor * f_osc[:, None] * number_density * scale_factor[None, :] ** -2 * 1e2 * weights_m[None, :]
-    if per_point:
+    amp = phys.cross_section_prefactor * f_osc[:, None] * number_density * scale_factor[None, :] ** -2 * 1e2 * length_m[None, :]
+    if per_piece:
         return amp[..., None] * phi
     return jnp.einsum("lp,lpv->lv", amp, phi)
 
 
-# --------------------------------------------------------------------------- every skewer
+# --------------------------------------------------------------------------- pieces
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
-class LoSSamples:
-    """What the optical depth needs at every sampling point (the boundary between field sources and tau).
+class Pieces:
+    """The pieces of N_sk skewers: what the optical-depth sum runs over (the boundary between field sources and tau).
 
-    a_dagger, scale_factor : (N_sk, N_p) reference and local scale factors; weights_m : (N_sk, N_p) line elements
-    [comoving m]; temperature [K], turbulence [m/s], collisional [GHz], los_velocity [km/s, along the photon
-    direction], number_density [comoving cm^-3] : (N_lines, N_sk, N_p). JAX pytree (every field a leaf).
+    A piece is a fragment of the path within which the gas properties are constant; every quantity below is its value
+    at the piece's centroid. Padding pieces have zero length and density.
+
+    a_dagger, scale_factor : (N_sk, N_p) reference scale factor of v_dagger and the scale factor a at the centroid;
+    length_m : (N_sk, N_p) comoving length [m];
+    temperature [K], turbulence [m/s], collisional [GHz], los_velocity [km/s, along the photon direction],
+    number_density [comoving cm^-3] : (N_lines, N_sk, N_p);
+    width_kms : (N_lines, N_sk, N_p) the variation of the line centre across the piece [km/s] (``resolution_report``);
+    velocity_span_kms : (N_sk,) the line-centre span of the whole path without peculiar velocities [km/s], from its
+        first point to its last one (c |ln(a_first / a_last)|): the period of ``velocity_period=True``.
+    JAX pytree (every field a leaf).
     """
     a_dagger: jnp.ndarray
     scale_factor: jnp.ndarray
-    weights_m: jnp.ndarray
+    length_m: jnp.ndarray
     temperature: jnp.ndarray
     turbulence: jnp.ndarray
     collisional: jnp.ndarray
     los_velocity: jnp.ndarray
     number_density: jnp.ndarray
+    width_kms: jnp.ndarray
+    velocity_span_kms: jnp.ndarray
 
     @property
     def shape(self) -> tuple:
         """(N_lines, N_sk, N_p)."""
         return self.temperature.shape
 
+    def rows(self, chunk: int) -> "Pieces":
+        """The pieces of every skewer in rows of ``chunk`` (N_sk * n_rows, chunk), padded with empty pieces: summing a
+        row's tau over the rows of one skewer gives the skewer's tau (bounds the memory of the kernel)."""
+        n_sk, m = self.scale_factor.shape
+        n_rows = -(-m // chunk)
+        pad = n_rows * chunk - m
 
-def los_samples(skewer_bundle, fields, line_bundle, *, a_dagger: Optional[ArrayLike] = None, ii_cosmology: int = 0,
-                line_elements: Optional[ArrayLike] = None) -> LoSSamples:
-    """Sample ``fields`` at the events of ``skewer_bundle`` for every line (eager: the fields may be any callables).
+        def r(x, empty):
+            lead = x.shape[:-2]
+            x = jnp.pad(x, [(0, 0)] * (x.ndim - 1) + [(0, pad)], mode="constant" if empty else "edge")
+            return x.reshape(lead + (n_sk * n_rows, chunk))
+
+        return Pieces(a_dagger=r(self.a_dagger, False), scale_factor=r(self.scale_factor, False), length_m=r(self.length_m, True),
+                      temperature=r(self.temperature, False), turbulence=r(self.turbulence, False),
+                      collisional=r(self.collisional, False), los_velocity=r(self.los_velocity, False),
+                      number_density=r(self.number_density, True), width_kms=r(self.width_kms, True),
+                      velocity_span_kms=jnp.repeat(self.velocity_span_kms, n_rows))
+
+
+def pieces_from_fields(skewer_bundle, fields, line_bundle, *, a_dagger: Optional[ArrayLike] = None, ii_cosmology: int = 0,
+                       subdivide: int = 1) -> Pieces:
+    """The pieces of fields known everywhere (toy samplers, ``Fields``) along the skewers of ``skewer_bundle``.
+
+    Point i of a skewer stands for its *dual segment*, from the midpoint m_{i-1/2} to the midpoint m_{i+1/2} (half
+    a segment at the two ends; ``core.skewers.path_geometry``), of length w_i (the trapezoid line element). Each dual
+    segment is cut into ``subdivide`` pieces of equal length w_i / q. Every piece takes the values at its centroid:
+
+    * position and scale factor: linear along the polyline in the path length s (a through ln a, between the
+      bundle's points, where a(x) was solved);
+    * photon direction: that of the polyline segment holding the centroid (the bundle's ``los_directions`` of that
+      segment);
+    * fields: every sampler of ``fields`` called at the centroid's event (a, x, y, z). A ``SampledField`` (values
+      given at the points) repeats each point's value over the pieces of its dual segment.
 
     Parameters
     ----------
     a_dagger : reference scale factor of v_dagger: None (the bundle's ``a0``), scalar, (N_sk,), (N_sk, N_ppsk) or
-        (N_sk * N_ppsk,).
+        (N_sk * N_ppsk,) (a per-point value applies to the pieces of its dual segment).
     ii_cosmology : which cosmology of the bundle's scale factors.
-    line_elements : (N_sk, N_ppsk) [cMpc]; None takes the trapezoid weights of the points (point-sampled fields),
-        explicit ones are used for segment averages (they conserve the column for any spacing).
+    subdivide : pieces per dual segment q (static); the profile error falls as q^-2, the column is exact for any q.
+
+    Returns
+    -------
+    Pieces with N_p = N_ppsk * q per skewer, ordered along the path.
     """
-    qv = skewer_bundle.quadri_vectors[ii_cosmology]
-    N_sk, N_ppsk = qv.shape[:2]
-    n_pts = N_sk * N_ppsk
-    if line_elements is not None:
-        w = jnp.asarray(line_elements)
-        if w.shape != (N_sk, N_ppsk):
-            raise ValueError(f"line_elements must be ({N_sk}, {N_ppsk}), got {w.shape}.")
-    else:
-        w = trapezoid_line_elements(qv[..., 1:])
-    w_m = (w * phys.Mpc_to_m).reshape(n_pts)
-    a = jnp.asarray(skewer_bundle.a0 if a_dagger is None else a_dagger)
-    if a.ndim == 0 or a.shape == (n_pts,):
-        a_d = a
-    elif a.shape == (N_sk,):
-        a_d = jnp.repeat(a[:, None], N_ppsk, axis=1).reshape(n_pts)
-    elif a.shape == (N_sk, N_ppsk):
-        a_d = a.reshape(n_pts)
-    else:
-        raise ValueError(f"`a_dagger` must be None, scalar, ({N_sk},), ({N_sk}, {N_ppsk}), or ({n_pts},). Got {a.shape}.")
-    qv_flat = qv.reshape(n_pts, 4)
-    f = _line_fields(fields, line_bundle, qv_flat, skewer_bundle.los_directions.reshape(n_pts, 3),
+    q = int(subdivide)
+    if q < 1:
+        raise ValueError(f"subdivide must be >= 1, got {subdivide}.")
+    qv = jnp.asarray(skewer_bundle.quadri_vectors[ii_cosmology])
+    x, lna = qv[..., 1:], jnp.log(qv[..., 0])
+    N_sk, N = x.shape[:2]
+    if N < 2:
+        raise ValueError("pieces_from_fields needs at least two points per skewer.")
+    d = jnp.linalg.norm(x[:, 1:] - x[:, :-1], axis=-1)                       # (N_sk, N - 1) segment lengths [cMpc]
+    z = jnp.zeros((N_sk, 1), d.dtype)
+    s = jnp.concatenate([z, jnp.cumsum(d, axis=-1)], axis=-1)               # path coordinate of the points
+    back, ahead = jnp.concatenate([z, d], axis=-1), jnp.concatenate([d, z], axis=-1)
+    w = 0.5 * (back + ahead)                                                # dual-segment lengths
+    off = -0.5 * back[..., None] + (jnp.arange(q) + 0.5) * w[..., None] / q   # (N_sk, N, q) centroid - x_i along s
+    i = jnp.broadcast_to(jnp.arange(N)[None, :, None], off.shape)
+    tie = jnp.abs(off) <= 1e-9 * w[..., None]                              # a centroid on x_i itself (q odd, even spacing)
+    k = jnp.where((off >= 0) | tie, jnp.minimum(i, N - 2), jnp.maximum(i - 1, 0)).reshape(N_sk, N * q)   # segment (k, k+1)
+    g = lambda arr: jnp.take_along_axis(arr, k if arr.ndim == 2 else k[..., None], axis=1)
+    s_c = (s[..., None] + off).reshape(N_sk, N * q)
+    t = (s_c - g(s)) / jnp.maximum(g(d), 1e-300)
+    pos = g(x) + t[..., None] * (g(x[:, 1:]) - g(x))
+    a_c = jnp.exp(g(lna) + t * (g(lna[:, 1:]) - g(lna)))
+    # photon direction of segment k: the bundle's direction of point k (array_direction +1) or k + 1 (-1); a centroid
+    # on x_i itself takes point i's own direction
+    kd = jnp.where(skewer_bundle.array_direction[:, None] == 1, k, k + 1)
+    kd = jnp.where(tie.reshape(N_sk, N * q), i.reshape(N_sk, N * q), kd)
+    los = jnp.take_along_axis(jnp.asarray(skewer_bundle.los_directions), kd[..., None], axis=1)
+    ev = jnp.concatenate([a_c[..., None], pos], axis=-1).reshape(N_sk, N, q, 4)
+    f = _line_fields(fields, line_bundle, ev, los.reshape(N_sk, N, q, 3),
                      ("temperature", "turbulence", "collisional", "number_density"))
-    per_skewer = lambda x: x.reshape(x.shape[:-1] + (N_sk, N_ppsk))
-    return LoSSamples(a_dagger=jnp.broadcast_to(a_d, (n_pts,)).reshape(N_sk, N_ppsk), scale_factor=per_skewer(qv_flat[:, 0]),
-                      weights_m=per_skewer(w_m), temperature=per_skewer(f["temperature"]), turbulence=per_skewer(f["turbulence"]),
-                      collisional=per_skewer(f["collisional"]), los_velocity=per_skewer(f["LoS_velocity"]),
-                      number_density=per_skewer(f["number_density"]))
+    n_l = line_bundle.n_lines
+    flat = lambda y: y.reshape(n_l, N_sk, N * q)
+    a = jnp.asarray(skewer_bundle.a0 if a_dagger is None else a_dagger)
+    if a.ndim == 0:
+        a_d = jnp.full((N_sk, N), a)
+    elif a.shape == (N_sk,):
+        a_d = jnp.broadcast_to(a[:, None], (N_sk, N))
+    elif a.shape == (N_sk, N) or a.shape == (N_sk * N,):
+        a_d = a.reshape(N_sk, N)
+    else:
+        raise ValueError(f"`a_dagger` must be None, scalar, ({N_sk},), ({N_sk}, {N}), or ({N_sk * N},). Got {a.shape}.")
+    a_d = jnp.repeat(a_d, q, axis=1)
+    length = jnp.repeat(w / q, q, axis=1)                                    # [cMpc]
+    lv = flat(f["LoS_velocity"])
+    # the line-centre variation across each piece, |dv_c/ds| l_p: the Hubble part -c d(ln a)/ds from the slope of ln a
+    # on the piece's segment (exact for the interpolated a), the peculiar part c artanh(-u/c) from the neighbouring
+    # centroids (one-sided at the ends)
+    hubble = -phys.c_kms * (g(lna[:, 1:]) - g(lna)) / jnp.maximum(g(d), 1e-300)
+    pec = 0.5 * phys.c_kms * (jnp.log1p(-lv / phys.c_kms) - jnp.log1p(lv / phys.c_kms))
+    nxt = lambda y: jnp.concatenate([y[..., 1:], y[..., -1:]], axis=-1)
+    prv = lambda y: jnp.concatenate([y[..., :1], y[..., :-1]], axis=-1)
+    grad = hubble[None] + (nxt(pec) - prv(pec)) / jnp.maximum(nxt(s_c) - prv(s_c), 1e-300)
+    return Pieces(a_dagger=a_d, scale_factor=a_c, length_m=length * phys.Mpc_to_m, temperature=flat(f["temperature"]),
+                  turbulence=flat(f["turbulence"]), collisional=flat(f["collisional"]), los_velocity=lv,
+                  number_density=flat(f["number_density"]), width_kms=jnp.abs(grad) * length[None],
+                  velocity_span_kms=phys.c_kms * jnp.abs(lna[:, 0] - lna[:, -1]))
 
 
-@partial(jax.jit, static_argnames=("voigt", "detuning", "velocity_period", "v_chunk", "batch_size", "per_point", "dtype"))
-def optical_depth_from_samples(samples: LoSSamples, velocities_kms, line_bundle, *, voigt: str = "ExoJAX", detuning: str = "exact",
-                               velocity_period: Optional[float] = None, v_chunk: Optional[int] = None,
-                               batch_size: Optional[int] = None, per_point: bool = False,
-                               dtype: Optional[str] = None) -> jnp.ndarray:
-    """tau (N_lines, N_sk, N_v) of every skewer of ``samples``: ``optical_depth_kernel`` mapped over skewers.
+# --------------------------------------------------------------------------- every skewer
+@partial(jax.jit, static_argnames=("voigt", "detuning", "v_chunk", "batch_size", "per_piece", "dtype"))
+def optical_depth_from_pieces(pieces: Pieces, velocities_kms, line_bundle, *, voigt: str = "ExoJAX", detuning: str = "exact",
+                              velocity_period=None, v_chunk: Optional[int] = None, batch_size: Optional[int] = None,
+                              per_piece: bool = False, dtype: Optional[str] = None) -> jnp.ndarray:
+    """tau (N_lines, N_sk, N_v) of every skewer of ``pieces``: ``optical_depth_kernel`` mapped over skewers.
 
+    velocities_kms : (N_v,) or (N_lines, N_v) (one grid per line).
+    velocity_period : None (no wrap) or (N_sk,) periods [km/s] (``compute_optical_depth`` resolves the option).
     v_chunk : velocities per kernel call (memory ~ N_lines x N_p x v_chunk); batch_size : skewers vmapped together
-    inside the sequential map (None: one at a time, the lowest memory). per_point : (N_lines, N_sk, N_p, N_v).
+    inside the sequential map (None: one at a time, the lowest memory). per_piece : (N_lines, N_sk, N_p, N_v).
     dtype : None (default: the dtype of the inputs) or e.g. "float32": opt-in lower-precision kernel (2-3x faster on
         the CPU; max |dF| ~1e-3 on TNG50-4 skewers); the result is cast back to the input dtype.
     """
-    out_dtype = samples.temperature.dtype
+    out_dtype = pieces.temperature.dtype
     if dtype is not None:
-        samples, velocities_kms = jax.tree_util.tree_map(lambda x: x.astype(dtype), (samples, velocities_kms))
+        pieces, velocities_kms, velocity_period = jax.tree_util.tree_map(lambda x: x.astype(dtype),
+                                                                         (pieces, velocities_kms, velocity_period))
     lam, A21, mass, f_osc = (x if dtype is None else x.astype(dtype)
                              for x in (line_bundle.lambda0_A, line_bundle.A21_GHz, line_bundle.mass_amu, line_bundle.f_osc))
-    n_v = velocities_kms.shape[0]
+    n_v = velocities_kms.shape[-1]
     nv = n_v if v_chunk is None else int(v_chunk)
 
     def one_skewer(s):
-        a_d, a, w, T, tb, co, lv, n = s
-        chunks = [optical_depth_kernel(velocities_kms[v0:v0 + nv], lam, A21, mass, f_osc, a_d, a, lv, T, tb, co, n, w, voigt=voigt,
-                                       detuning=detuning, velocity_period=velocity_period, per_point=per_point)
+        a_d, a, w, T, tb, co, lv, n, P = s
+        chunks = [optical_depth_kernel(velocities_kms[..., v0:v0 + nv], lam, A21, mass, f_osc, a_d, a, lv, T, tb, co, n, w,
+                                       voigt=voigt, detuning=detuning, velocity_period=P, per_piece=per_piece)
                   for v0 in range(0, n_v, nv)]
         return jnp.concatenate(chunks, axis=-1)
 
     sk = lambda x: jnp.moveaxis(x, 1, 0)                          # (N_lines, N_sk, N_p) -> (N_sk, N_lines, N_p)
-    xs = (samples.a_dagger, samples.scale_factor, samples.weights_m, sk(samples.temperature), sk(samples.turbulence),
-          sk(samples.collisional), sk(samples.los_velocity), sk(samples.number_density))
+    xs = (pieces.a_dagger, pieces.scale_factor, pieces.length_m, sk(pieces.temperature), sk(pieces.turbulence),
+          sk(pieces.collisional), sk(pieces.los_velocity), sk(pieces.number_density), velocity_period)
     return jnp.moveaxis(jax.lax.map(one_skewer, xs, batch_size=batch_size), 0, 1).astype(out_dtype)
 
 
-def optical_depth_sharded(samples: LoSSamples, velocities_kms, line_bundle, *, devices=None, **kw) -> jnp.ndarray:
-    """``optical_depth_from_samples`` with the skewers split over ``devices`` (default: all ``jax.devices()``).
+def optical_depth_sharded(pieces: Pieces, velocities_kms, line_bundle, *, devices=None, velocity_period=None, **kw) -> jnp.ndarray:
+    """``optical_depth_from_pieces`` with the skewers split over ``devices`` (default: all ``jax.devices()``).
 
     The skewer axis is padded to a multiple of the number of devices (copies of the last skewer, dropped from the
     result), split with ``shard_map`` over a 1D mesh, and every device maps its own skewers; the velocity grid and the
     line data are replicated. Each skewer is computed exactly as on one device, so the result is the same; with one
-    device this is ``optical_depth_from_samples``. kw: its options (``voigt``, ``detuning``, ``v_chunk``, ``dtype``, ...).
+    device this is ``optical_depth_from_pieces``. kw: its options (``voigt``, ``detuning``, ``v_chunk``, ``dtype``, ...).
     CPU cores can be exposed as devices with ``XLA_FLAGS=--xla_force_host_platform_device_count=N`` (before importing JAX).
     """
     devices = list(jax.devices() if devices is None else devices)
     velocities_kms = jnp.asarray(velocities_kms)
     if len(devices) == 1:
-        return optical_depth_from_samples(samples, velocities_kms, line_bundle, **kw)
-    n_sk, n_dev = samples.scale_factor.shape[0], len(devices)
+        return optical_depth_from_pieces(pieces, velocities_kms, line_bundle, velocity_period=velocity_period, **kw)
+    n_sk, n_dev = pieces.scale_factor.shape[0], len(devices)
     pad = -n_sk % n_dev
-    skewer_axis = lambda x: 0 if x.ndim == 2 else 1                 # (N_sk, N_p) or (N_lines, N_sk, N_p)
+    skewer_axis = lambda x: 0 if x.ndim <= 2 else 1                 # (N_sk,), (N_sk, N_p) or (N_lines, N_sk, N_p)
+    args = pieces if velocity_period is None else (pieces, jnp.asarray(velocity_period))
     padded = jax.tree_util.tree_map(
-        lambda x: jnp.pad(x, [(0, pad) if i == skewer_axis(x) else (0, 0) for i in range(x.ndim)], mode="edge"), samples)
-    spec = jax.tree_util.tree_map(lambda x: PartitionSpec("sk") if x.ndim == 2 else PartitionSpec(None, "sk"), padded)
-    run = shard_map(lambda s, v, lb: optical_depth_from_samples(s, v, lb, **kw), mesh=Mesh(np.array(devices), ("sk",)),
-                    in_specs=(spec, PartitionSpec(), PartitionSpec()), out_specs=PartitionSpec(None, "sk"), check_rep=False)
+        lambda x: jnp.pad(x, [(0, pad) if i == skewer_axis(x) else (0, 0) for i in range(x.ndim)], mode="edge"), args)
+    spec = jax.tree_util.tree_map(lambda x: PartitionSpec("sk") if x.ndim <= 2 else PartitionSpec(None, "sk"), padded)
+
+    def body(s, v, lb):
+        p, P = (s, None) if velocity_period is None else s
+        return optical_depth_from_pieces(p, v, lb, velocity_period=P, **kw)
+
+    run = shard_map(body, mesh=Mesh(np.array(devices), ("sk",)), in_specs=(spec, PartitionSpec(), PartitionSpec()),
+                    out_specs=PartitionSpec(None, "sk"), check_rep=False)
     return jax.jit(run)(padded, velocities_kms, line_bundle)[:, :n_sk]
 
 
-# --------------------------------------------------------------------------- sampling resolution
-def sampling_resolution_report(line_centre_kms, b_kms, weight, tolerance: float = 0.25) -> dict:
-    """Are consecutive points closer in line-centre velocity than ``tolerance`` x the line width? (notes
-    review notes on the numerical resolution; NumPy, diagnostics only).
+# --------------------------------------------------------------------------- resolution
+def resolution_report(pieces: Pieces, line_bundle, tolerance: float = 0.25) -> dict:
+    """Are the pieces short enough in velocity to be represented at their centroids? (NumPy, diagnostics only.)
 
-    The quadrature puts point i's absorption at its line centre v_c,i; for a top hat of width W replaced by a delta
-    the peak of a Gaussian of Doppler parameter b changes by W^2 / (12 b^2) (0.5 % for W = b / 4).
-    line_centre_kms, b_kms (``voigt_width_kms``), weight (n w, the column of each point) : (N_lines, N_sk, N_ppsk).
+    The sum puts each piece's absorption at its centroid's line centre: a top hat of velocity width W (the line-centre
+    variation across the piece, ``Pieces.width_kms``) replaced by a delta, which changes the peak of a Doppler profile
+    of width b by W^2 / (12 b^2) (0.5 % for W = b / 4). b is the Voigt width (``voigt_width_kms``).
 
     Returns
     -------
-    dict(max_ratio (N_lines,), column_fraction (N_lines,) of the column in under-resolved intervals, ok, b_min (N_lines,)).
+    dict(max_ratio (N_lines,) of W / b, column_fraction (N_lines,) of the column in pieces with W / b > tolerance,
+    ok (every column fraction < 1e-3), b_min (N_lines,)).
     """
-    dv = np.abs(np.diff(np.asarray(line_centre_kms), axis=-1))
-    b = np.asarray(b_kms)
-    ratio = dv / np.maximum(np.minimum(b[..., 1:], b[..., :-1]), 1e-30)
-    w = np.asarray(weight)
-    wm = 0.5 * (w[..., 1:] + w[..., :-1])
-    frac = (wm * (ratio > tolerance)).sum(axis=(-2, -1)) / np.maximum(wm.sum(axis=(-2, -1)), 1e-300)
-    return dict(max_ratio=ratio.max(axis=(-2, -1)), column_fraction=frac, ok=bool(np.all(frac < 1e-3)), b_min=b.min(axis=(-2, -1)))
+    n_l = pieces.shape[0]
+    flat = lambda y: np.asarray(y).reshape(n_l, -1)
+    sigma, gamma = voigt_widths_GHz(jnp.asarray(flat(pieces.temperature)), jnp.asarray(flat(pieces.turbulence)),
+                                    jnp.asarray(flat(pieces.collisional)), line_bundle.lambda0_A, line_bundle.A21_GHz,
+                                    line_bundle.mass_amu)
+    b = np.asarray(voigt_width_kms(sigma, gamma, line_bundle.lambda0_A))
+    col = flat(pieces.number_density) * np.asarray(pieces.length_m).reshape(1, -1)
+    ratio = flat(pieces.width_kms) / np.maximum(b, 1e-30)
+    live = col > 0
+    frac = (col * (ratio > tolerance)).sum(-1) / np.maximum(col.sum(-1), 1e-300)
+    return dict(max_ratio=np.where(live, ratio, 0.0).max(-1), column_fraction=frac, ok=bool(np.all(frac < 1e-3)),
+                b_min=np.where(live, b, np.inf).min(-1))
 
 
-def resolution_report(samples: LoSSamples, line_bundle, tolerance: float = 0.25) -> dict:
-    """``sampling_resolution_report`` of the points of ``samples``."""
-    lam, shp = line_bundle.lambda0_A, samples.shape
-    n_l = shp[0]
-    flat = lambda x: x.reshape(n_l, -1)
-    v_c = line_centre_velocity_kms(samples.a_dagger.reshape(-1), samples.scale_factor.reshape(-1), flat(samples.los_velocity))
-    sigma, gamma = voigt_widths_GHz(flat(samples.temperature), flat(samples.turbulence), flat(samples.collisional), lam,
-                                    line_bundle.A21_GHz, line_bundle.mass_amu)
-    b = voigt_width_kms(sigma, gamma, lam)
-    col = flat(samples.number_density) * samples.weights_m.reshape(-1)[None, :]
-    return sampling_resolution_report(v_c.reshape(shp), b.reshape(shp), col.reshape(shp), tolerance)
+# --------------------------------------------------------------------------- the entry point
+def _velocity_periods(velocity_period, pieces: Pieces) -> Optional[jnp.ndarray]:
+    """(N_sk,) periods [km/s] of the option ``velocity_period``, or None (no wrap)."""
+    if velocity_period is None or velocity_period is False:
+        return None
+    n_sk = pieces.scale_factor.shape[0]
+    if velocity_period is True:
+        P = jnp.asarray(pieces.velocity_span_kms)
+        if not isinstance(P, jax.core.Tracer) and bool(jnp.any(P <= 0)):
+            raise ValueError("velocity_period=True: a skewer has no velocity span (a(first point) = a(last point)); "
+                             "give the period explicitly.")
+        return P
+    P = jnp.broadcast_to(jnp.asarray(velocity_period, dtype=pieces.scale_factor.dtype), (n_sk,))
+    if not isinstance(P, jax.core.Tracer) and bool(jnp.any(P <= 0)):
+        raise ValueError(f"velocity_period must be positive, got {velocity_period}.")
+    return P
 
 
-# --------------------------------------------------------------------------- the eager entry point
-def compute_optical_depth(skewer_bundle, velocities_kms: ArrayLike, line_bundle, fields, *, a_dagger: Optional[ArrayLike] = None,
-                  ii_cosmology: int = 0, line_elements: Optional[ArrayLike] = None, voigt: str = "ExoJAX",
-                  detuning: str = "exact", velocity_period: Optional[float] = None,
-                  resolution_tolerance: Optional[float] = 0.25, v_chunk: Optional[int] = None,
-                  batch_size: Optional[int] = None, dtype: Optional[str] = None, devices=None) -> jnp.ndarray:
-    """tau (N_lines, N_sk, N_v) of every line along every skewer of ``skewer_bundle`` (F = exp(-tau)).
+def compute_optical_depth(source, velocities_kms: ArrayLike, line_bundle, fields=None, *, a_dagger: Optional[ArrayLike] = None,
+                          ii_cosmology: int = 0, subdivide: int = 1, line_frame: str = "own", velocity_period=False,
+                          voigt: str = "ExoJAX", detuning: str = "exact", resolution_tolerance: Optional[float] = 0.25,
+                          v_chunk: Optional[int] = None, piece_chunk: Optional[int] = None, batch_size: Optional[int] = None,
+                          per_piece: bool = False, dtype: Optional[str] = None, devices=None) -> jnp.ndarray:
+    """tau (N_lines, N_sk, N_v) of every line along every skewer (F = exp(-tau)): the sum over the pieces of ``source``.
 
     Parameters
     ----------
-    velocities_kms : (N_v,) line-centred velocity grid v_dagger [km/s], common to all lines.
-    a_dagger, ii_cosmology, line_elements : see ``los_samples``.
+    source : a ``SkewerBundle`` (with ``fields``: the pieces of ``pieces_from_fields``) or ``Pieces`` (e.g. from a
+        simulation, ``skewerjax.simulations``).
+    velocities_kms : (N_v,) velocity grid [km/s]: the line-centred velocity v_dagger of each line (``line_frame="own"``)
+        or of the reference line (``"reference"``).
+    fields, a_dagger, ii_cosmology, subdivide : see ``pieces_from_fields`` (bundle sources only).
+    line_frame : "own" (default): each line on its own line-centred axis; "reference": every line evaluated directly on
+        the reference line's axis (``LineBundle.ref_line_id``), at v + delta_v_j: the lines share one axis exactly, with
+        no shift, interpolation or wrap (review notes, relative line-centred velocity units).
+    velocity_period : the only periodicity option of the package. False (default): no wrap, the spectrum is the direct
+        integral along the path. True: each skewer is periodic over its own velocity span
+        (``Pieces.velocity_span_kms``, set by the scale factors of its first and last points). A number: that period
+        [km/s] for every skewer. With a period P, every detuning v - v_c is replaced by its nearest image in
+        [-P/2, P/2): a piece whose line centre falls outside the period absorbs at the other end, and the wings that
+        cross one end re-enter at the other (only the nearest image is kept).
     voigt : "ExoJAX" (default) or "convolution" ("scipy_wofz" cannot run inside the jitted kernel).
     detuning : "exact" (default) or "linear" (fake_spectra's first-order mapping; matched mode).
-    velocity_period : period [km/s] of a periodic box: each point absorbs through the nearest image of its detuning.
-    resolution_tolerance : warn when consecutive points are farther apart in line-centre velocity than this
-        fraction of the line width (``resolution_report``); None disables the check.
-    v_chunk, batch_size : memory controls of ``optical_depth_from_samples``.
-    dtype : opt-in kernel precision, e.g. "float32" (``optical_depth_from_samples``); None keeps the input precision.
+    resolution_tolerance : warn when more than 1e-3 of the column sits in pieces wider than this fraction of the line
+        width in velocity (``resolution_report``); None disables the check.
+    v_chunk, batch_size : memory controls of ``optical_depth_from_pieces``; piece_chunk : pieces per kernel call (the
+        pieces of each skewer are summed in rows of ``piece_chunk``, ``Pieces.rows``).
+    per_piece : True returns every piece's contribution (N_lines, N_sk, N_p, N_v).
+    dtype : opt-in kernel precision, e.g. "float32" (``optical_depth_from_pieces``); None keeps the input precision.
     devices : None (one device, the default) or a list of devices to split the skewers over (``optical_depth_sharded``).
     """
-    samples = los_samples(skewer_bundle, fields, line_bundle, a_dagger=a_dagger, ii_cosmology=ii_cosmology,
-                          line_elements=line_elements)
+    if isinstance(source, Pieces):
+        if fields is not None or a_dagger is not None or subdivide != 1:
+            raise ValueError("fields, a_dagger and subdivide apply to a SkewerBundle source, not to Pieces.")
+        pieces = source
+    else:
+        pieces = pieces_from_fields(source, fields, line_bundle, a_dagger=a_dagger, ii_cosmology=ii_cosmology,
+                                    subdivide=subdivide)
     if resolution_tolerance is not None:
-        rep = resolution_report(samples, line_bundle, resolution_tolerance)
+        rep = resolution_report(pieces, line_bundle, resolution_tolerance)
         if not rep["ok"]:
             warnings.warn(
-                "compute_optical_depth: the points are too sparse for the line widths: "
-                + ", ".join(f"line {j}: max dv_c / width = {rep['max_ratio'][j]:.2f}, column fraction "
+                "compute_optical_depth: the pieces are too wide in velocity for the line widths: "
+                + ", ".join(f"line {j}: max W / b = {rep['max_ratio'][j]:.2f}, column fraction "
                             f"{rep['column_fraction'][j]:.1e} above tolerance {resolution_tolerance}"
                             for j in range(line_bundle.n_lines))
-                + ". Sample more densely (spacing <= tolerance x b_min / (dv/dx)).", stacklevel=2)
-    kw = dict(voigt=voigt, detuning=detuning, velocity_period=None if velocity_period is None else float(velocity_period),
-              v_chunk=v_chunk, batch_size=batch_size, dtype=dtype)
-    if devices is not None:
-        return optical_depth_sharded(samples, velocities_kms, line_bundle, devices=devices, **kw)
-    return optical_depth_from_samples(samples, jnp.asarray(velocities_kms), line_bundle, **kw)
+                + ". Sample more densely or subdivide the pieces.", stacklevel=2)
+    v = jnp.asarray(velocities_kms)
+    if line_frame == "reference":
+        v = v[None, :] + jnp.asarray(line_bundle.delta_v)[:, None]
+    elif line_frame != "own":
+        raise ValueError(f"line_frame must be 'own' or 'reference', got {line_frame!r}.")
+    P = _velocity_periods(velocity_period, pieces)
+    n_sk, m = pieces.scale_factor.shape
+    if piece_chunk is not None:
+        pieces = pieces.rows(int(piece_chunk))
+        P = None if P is None else jnp.repeat(P, pieces.scale_factor.shape[0] // n_sk)
+    kw = dict(voigt=voigt, detuning=detuning, velocity_period=P, v_chunk=v_chunk, batch_size=batch_size, per_piece=per_piece,
+              dtype=dtype)
+    tau = (optical_depth_sharded(pieces, v, line_bundle, devices=devices, **kw) if devices is not None
+           else optical_depth_from_pieces(pieces, v, line_bundle, **kw))
+    if piece_chunk is None:
+        return tau
+    n_l, n_v = tau.shape[0], tau.shape[-1]
+    if per_piece:
+        return tau.reshape(n_l, n_sk, -1, n_v)[:, :, :m]
+    return tau.reshape(n_l, n_sk, -1, n_v).sum(axis=2)
 
 
-def wrap_to_ref_line(optical_depth: ArrayLike, velocities_kms: ArrayLike, line_bundle) -> jnp.ndarray:
-    """Put every line's tau on the reference line's velocity frame: tau_j^ref(v) = tau_j(v + delta_v_j).
+def wrap_to_ref_line(optical_depth: ArrayLike, velocities_kms: ArrayLike, line_bundle, *, velocity_period: Optional[float] = None,
+                     fill_value: float = np.nan) -> jnp.ndarray:
+    """Put every line's tau, computed in its own frame, on the reference line's axis: tau_j^ref(v) = tau_j(v + delta_v_j).
 
     A feature at v_j in line j's own frame appears at v_j - delta_v_j, delta_v_j = c ln(lambda_ref / lambda_j)
-    (lines bluer than the reference move to lower velocities). The uniform grid is treated as periodic, period
-    N_v dv (snapshot boxes). optical_depth : (N_lines, N_sk, N_v); returns the same shape.
+    (lines bluer than the reference move to lower velocities). This is a change of axis, by linear interpolation;
+    ``compute_optical_depth(..., line_frame="reference")`` evaluates every line on the reference axis directly instead
+    (exact, no interpolation, no gaps).
+
+    velocity_period : None (default): no wrap; where v + delta_v_j falls outside the grid, tau_j is unknown and
+        ``fill_value`` (NaN) is returned. A number P: only for a spectrum computed with ``velocity_period=P`` on a
+        uniform grid of exactly one period (N_v dv = P): the shift then wraps modulo P.
+    optical_depth : (N_lines, N_sk, N_v); returns the same shape.
     """
     tau, v = jnp.asarray(optical_depth), jnp.asarray(velocities_kms)
-    dv, v0 = v[1] - v[0], v[0]
-    period = v.size * dv
-
-    def shift_profile(tau_1d, shift):
-        vq = jnp.mod(v + shift - v0, period) + v0
-        return jnp.interp(vq, v, tau_1d, period=period)
-
-    return jax.vmap(lambda t, s: jax.vmap(lambda t1: shift_profile(t1, s))(t), in_axes=(0, 0))(tau, jnp.asarray(line_bundle.delta_v))
+    if velocity_period is None:
+        shift = lambda tau_1d, dv_j: jnp.interp(v + dv_j, v, tau_1d, left=fill_value, right=fill_value)
+    else:
+        dv, v0, P = v[1] - v[0], v[0], float(velocity_period)
+        if not isinstance(dv, jax.core.Tracer) and abs(float(v.size * dv) / P - 1.0) > 1e-6:
+            raise ValueError(f"velocity_period={P}: the grid must be uniform and span one period (N_v dv = {float(v.size * dv)}).")
+        shift = lambda tau_1d, dv_j: jnp.interp(jnp.mod(v + dv_j - v0, P) + v0, v, tau_1d, period=P)
+    return jax.vmap(lambda t, s: jax.vmap(lambda t1: shift(t1, s))(t), in_axes=(0, 0))(tau, jnp.asarray(line_bundle.delta_v))

@@ -121,7 +121,8 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_fac
 
     Parameters
     ----------
-    reader : layer-1 reader (``iter_blocks``, ``read_rows``, ``to_gas_cells``, ``header``).
+    reader : layer-1 reader (``iter_blocks``, ``read_rows``, ``to_gas_cells``, ``header``), or a ``GasCells`` already
+        in memory (e.g. toy cells): the same selection rule on those cells, without streaming.
     paths : (N_sk, N_pts, 3) sampling points [cMpc], e.g. ``SkewerBundle.spatial_points``.
     mode : "voronoi" (default deposition) or "tophat" (fake_spectra's kernel); "voronoi" selects
         a superset of "tophat" for voronoi_factor >= 1.
@@ -136,6 +137,8 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_fac
     GasCells of the selected cells, physical units (``reader.to_gas_cells``), with ``ids`` =
     (file_index << 40) | row, so that every cell can be traced back to the snapshot.
     """
+    if isinstance(reader, GasCells):
+        return _select_in_memory(reader, paths, mode, voronoi_factor, voronoi_min, workers, backend)
     from skewerjax.simulations.readers import GAS_DATASETS
     datasets = tuple(GAS_DATASETS if datasets is None else datasets)
     missing = set(GEOMETRY_DATASETS) - set(datasets)
@@ -173,3 +176,22 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_fac
     if n_sel == 0:
         raise RuntimeError("no gas cell is within reach of the paths.")
     return GasCells.concatenate(parts)
+
+
+def _select_in_memory(cells: GasCells, paths, mode: str, voronoi_factor: float, voronoi_min: float, workers: int,
+                      backend: str) -> GasCells:
+    """``select_cells_near_paths`` for cells already in memory: the same radii and distances, one block."""
+    box = cells.box
+    ds = max_path_spacing(paths)
+    pts = np.asarray(paths, dtype=np.float64).reshape(-1, 3)
+    pts = pts if box is None else wrap_positions(pts, box)
+    tree = cKDTree(pts) if box is None else cKDTree(pts, boxsize=box)
+    pos = np.asarray(cells.positions, dtype=np.float64)
+    pos = pos if box is None else wrap_positions(pos, box)
+    rad = selection_radius(cells.size_cMpc, mode, ds, voronoi_factor, voronoi_min)
+    backend = resolve_backend(backend)
+    d = _nearest_distance_jztree(pts, pos, box, tree, rad) if backend == "jztree" else _nearest_distance_cpu(tree, pos, rad, workers)
+    sel = np.nonzero(d <= rad)[0]
+    if sel.size == 0:
+        raise RuntimeError("no gas cell is within reach of the paths.")
+    return cells.take(sel)

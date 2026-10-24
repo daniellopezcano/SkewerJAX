@@ -54,7 +54,7 @@ def test_split_crossings_keep_the_column():
     n, T, vel = rng.lognormal(size=len(g)), rng.uniform(1e3, 1e5, len(g)), rng.normal(0, 30, (len(g), 3))
     s = np.linalg.norm(np.diff(pts, axis=1), axis=-1).cumsum(-1)
     s = np.concatenate([np.zeros((2, 1)), s], -1)
-    frame = ab_.SnapshotFrame(a_snap=0.25, velfac=300.0)
+    frame = ab_.SnapshotFrame(a_snap=0.25, velfac=300.0, path_length=s[:, -1])
     cols = []
     for tol in (None, 0.25, 0.05):
         A = ab_.absorbers_from_crossings(cr, pts, n, T, vel, 0.25, "SiIII", 28.0855, frame=frame, tolerance=tol)
