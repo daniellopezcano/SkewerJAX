@@ -1,12 +1,12 @@
-"""The piece-based optical depth (``core.pieces_from_fields``, ``core.compute_optical_depth``): dual-segment pieces at
-their centroids, ``subdivide``, the ``velocity_period`` option (False / True / a number) and its two effects, and the
-reference line frame."""
+"""The piece-based optical depth from cells (``core.cell_pieces``, ``core.compute_optical_depth``): the pieces tile the
+path at their centroids, the sum converges at second order in the piece length with an exact column, the
+``velocity_period`` option (False / True / a number) and its two effects, and the reference line frame."""
 import numpy as np
 import jax.numpy as jnp
 import pytest
 
-from skewerjax.core import (Constant, Fields, LineBundle, Pieces, SampledField, ScalarField, SkewerBundle, VectorField,
-                            compute_optical_depth, phys, pieces_from_fields)
+from skewerjax.core import (LineBundle, Pieces, SkewerBundle, cell_pieces, cells_from_values, cells_on_grid, compute_optical_depth,
+                            phys)
 
 LYA = LineBundle(["HI-LyA"], ref_line_id="HI-LyA")
 
@@ -16,43 +16,52 @@ def uniform(n_pt=201, L=2.0, n=1e-12, T=1e4):
     pos = np.zeros((1, n_pt, 3)); pos[0, :, 0] = np.linspace(0.0, L, n_pt) ** 1.3 / L ** 0.3      # uneven spacing
     a = np.exp(np.linspace(np.log(0.30), np.log(0.302), n_pt))[None, None]
     sb = SkewerBundle(spatial_points=jnp.asarray(pos), manual_scale_factors=jnp.asarray(a), a0=0.302, ICs_defined_at_index=-1)
-    sp = {"temperature": ScalarField(Constant(T)), "turbulence": ScalarField(Constant(0.0)), "collisional": ScalarField(Constant(0.0)),
-          "number_density": ScalarField(Constant(n)), "velocity": VectorField(SampledField(np.zeros((1, n_pt, 3))))}
-    return sb, Fields({"HI": sp}), pos, a
+    # cells at the points: the Voronoi cell of a point of the straight skewer is its dual segment
+    cells = cells_from_values(pos[0], None, {"HI": np.full(n_pt, n)}, temperature=T, volumes=np.full(n_pt, (L / n_pt) ** 3))
+    return sb, cells, pos, a
 
 
-def test_dual_segments_tile_the_path_and_centroids():
+def test_pieces_tile_the_path_and_centroids():
     sb, f, pos, a = uniform()
-    for q in (1, 3):
-        p = pieces_from_fields(sb, f, LYA, a_dagger=0.302, subdivide=q)
-        L = np.asarray(p.length_m[0]) / phys.Mpc_to_m
-        assert np.isclose(L.sum(), pos[0, -1, 0] - pos[0, 0, 0], rtol=1e-12), "the pieces tile the path"
-        x = pos[0, :, 0]
-        # the scale factor at the centroid: ln a linear in s between the points
-        s_c = np.concatenate([[0.0], np.cumsum(L)])[:-1] + 0.5 * L
-        assert np.allclose(np.asarray(p.scale_factor[0]), np.exp(np.interp(s_c, x - x[0], np.log(a[0, 0]))), rtol=1e-12)
-    p1 = pieces_from_fields(sb, f, LYA, a_dagger=0.302)
+    p = cell_pieces(f, LYA, skewer_bundle=sb, a_dagger=0.302)
+    order = np.argsort(np.asarray(p.scale_factor[0]))
+    L = np.asarray(p.length_m[0])[order] / phys.Mpc_to_m
+    assert np.isclose(L.sum(), pos[0, -1, 0] - pos[0, 0, 0], rtol=1e-12), "the pieces tile the path"
+    x = pos[0, :, 0]
+    # the scale factor at the centroid: ln a linear in s between the points
+    s_c = np.concatenate([[0.0], np.cumsum(L)])[:-1] + 0.5 * L
+    assert np.allclose(np.asarray(p.scale_factor[0])[order], np.exp(np.interp(s_c, x - x[0], np.log(a[0, 0]))), rtol=1e-12)
+    p1 = p
     d = np.diff(pos[0, :, 0])
-    assert np.isclose(float(p1.scale_factor[0, 0]), np.exp(np.log(a[0, 0, 0]) + 0.25 * np.log(a[0, 0, 1] / a[0, 0, 0])), rtol=1e-12), \
-        "the first piece sits at d_0 / 4"
+    assert np.isclose(float(np.asarray(p1.scale_factor[0]).min()), np.exp(np.log(a[0, 0, 0]) + 0.25 * np.log(a[0, 0, 1] / a[0, 0, 0])),
+                      rtol=1e-12), "the first piece sits at d_0 / 4"
     assert np.isclose(float(p1.velocity_span_kms[0]), phys.c_kms * np.log(0.302 / 0.30), rtol=1e-12)
     assert d.min() < d.max()
 
 
-def test_subdivide_converges_and_keeps_the_column():
-    sb, f, _, _ = uniform(n_pt=41, T=2e3)
-    v = jnp.linspace(-100.0, 2100.0, 4401)                          # the whole velocity span of the skewer
-    taus = {q: np.asarray(compute_optical_depth(sb, v, LYA, f, a_dagger=0.302, subdivide=q, resolution_tolerance=None))[0, 0]
-            for q in (1, 2, 4, 64)}
-    e = [np.abs(taus[q] - taus[64]).max() for q in (1, 2, 4)]
+def test_finer_sampling_converges_and_keeps_the_column():
+    """Cells of a coarse grid sampled with more and more points: the pieces are the cell crossings cut at the dual
+    segments, so the sum converges at second order in the spacing and the column is exact at every spacing."""
+    L, n0 = 2.0, 1e-12
+    grid = np.full((8, 8, 8), n0) * (1.0 + 0.5 * np.sin(2 * np.pi * np.arange(8) / 8))[:, None, None]
+    cells = cells_on_grid(L, {"HI": grid}, temperature=2e3)
+    v = jnp.linspace(-100.0, 2100.0, 4401)
+    taus, cols = {}, {}
+    for n_pt in (161, 321, 641, 5121):
+        pos = np.zeros((1, n_pt, 3)); pos[0, :, 0] = np.linspace(0.0, L * (1 - 1e-9), n_pt); pos[0, :, 1:] = 0.25
+        a = np.exp(np.linspace(np.log(0.30), np.log(0.302), n_pt))[None, None]
+        sb = SkewerBundle(spatial_points=jnp.asarray(pos), manual_scale_factors=jnp.asarray(a), a0=0.302, ICs_defined_at_index=-1)
+        p = cell_pieces(cells, LYA, skewer_bundle=sb)
+        cols[n_pt] = float(np.sum(np.asarray(p.number_density[0]) * np.asarray(p.length_m)))
+        taus[n_pt] = np.asarray(compute_optical_depth(p, v, LYA, resolution_tolerance=None))[0, 0]
+    e = [np.abs(taus[n] - taus[5121]).max() for n in (161, 321, 641)]
     assert e[0] > e[1] > e[2] and e[1] / e[2] > 3.0, f"second-order convergence, got {e}"
-    cols = [taus[q].sum() for q in (1, 2, 4, 64)]
-    assert np.allclose(cols, cols[-1], rtol=2e-3), "the column is the same for any subdivision"
+    assert np.allclose(list(cols.values()), cols[5121], rtol=1e-12), "the column is exact at any spacing"
 
 
 def test_velocity_period_options():
     sb, f, _, _ = uniform()
-    p = pieces_from_fields(sb, f, LYA, a_dagger=0.302)
+    p = cell_pieces(f, LYA, skewer_bundle=sb, a_dagger=0.302)
     P = float(p.velocity_span_kms[0])
     v = (np.arange(800) + 0.5) * P / 800
     t_no = np.asarray(compute_optical_depth(p, v, LYA))
@@ -92,8 +101,8 @@ def test_the_two_periodic_effects():
 def test_reference_frame_is_the_shifted_evaluation():
     two = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
     sb, f1, _, _ = uniform()
-    sp = f1["HI"]
-    f = Fields({"HI": sp, "SiIII": sp})
+    f = f1.merge_species([f1, cells_from_values(f1.positions, None, {"SiIII": f1.species["HI"]["number_density"]}, temperature=1e4,
+                                                volumes=f1.volumes)])
     v = jnp.linspace(-3000.0, 1000.0, 801)
     t_ref = np.asarray(compute_optical_depth(sb, v, two, f, a_dagger=0.302, line_frame="reference", resolution_tolerance=None))
     t_si = np.asarray(compute_optical_depth(sb, v + float(two.delta_v[1]), two, f, a_dagger=0.302, resolution_tolerance=None))[1]

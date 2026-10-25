@@ -426,9 +426,9 @@ DAG_NODES = {   # key: (column, row, name, detail)
     "lines": (0, 1.45, "lines", "LineBundle"),
     "cosmology": (0, -1.2, "cosmology", "Cosmology"),
     "skewers": (1, -1.2, "skewers", "SkewerBundle, a(x)"),
-    "samplers": (2, 0.52, "toy samplers", "PowerLawGRF, ramps"),
-    "simulation": (2, -0.52, "simulation outputs", "TNG snapshot → gas"),
-    "fields": (3, 0.0, "gas fields", "n, T, v at the points"),
+    "samplers": (2, 0.52, "toy models", "PowerLawGRF → cells"),
+    "simulation": (2, -0.52, "simulation outputs", "TNG snapshot → cells"),
+    "fields": (3, 0.0, "gas cells", "Voronoi cells: n, T, v"),
     "tau": (4, 0.0, "optical depth", r"$\tau(v)$, $F=e^{-\tau}$"),
     "overflux": (5, 0.0, "overflux", r"$\delta_F$ per line, total"),
     "stats": (6, 0.0, "statistics", "P1D, ξ1D, P3D, ξ3D"),
@@ -439,7 +439,7 @@ DAG_NODES = {   # key: (column, row, name, detail)
 DAG_EDGES = (
     ("cosmology", "skewers", "optional", "a(x) (or manual)", None),
     ("skewers", "simulation", "solid", "paths", "v"),
-    ("skewers", "tau", "solid", "points, a(x), w", "h"),
+    ("skewers", "tau", "solid", "points, a(x): pieces", "h"),
     ("lines", "simulation", "optional", "ion masses", "v"),
     ("samplers", "fields", "solid", None, None),
     ("simulation", "fields", "solid", None, None),
@@ -450,7 +450,7 @@ DAG_EDGES = (
     ("overflux", "stats", "solid", None, None),
 )
 DAG_EXTERNAL = (("simulation", "fake_spectra", None), ("fake_spectra", "tau", "compared"))   # same snapshot, compared τ
-DAG_NOTEBOOKS = {"lines": "01", "cosmology": "02", "skewers": "03", "samplers": "04", "fields": "04", "simulation": "05",
+DAG_NOTEBOOKS = {"lines": "01", "cosmology": "02", "skewers": "03", "samplers": "04", "fields": "04, 05", "simulation": "05",
                  "tau": "06", "overflux": "07", "stats": "07", "fake_spectra": "08"}
 _DAG_W, _DAG_H = 0.80, 0.56
 
@@ -476,8 +476,8 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
 
     Arrows point from an ingredient to what needs it. Solid: a required input. Dashed: optional, or data only (the
     cosmology can be replaced by manual a(x); the simulation reads only ion masses from the line table; the overflux
-    reads only the line offsets Δv to put every line on the reference frame). The two field sources are interchangeable
-    inputs of the gas fields. ``external`` adds fake_spectra, the external reference code (comparison notebook only).
+    reads only the line offsets Δv to put every line on the reference frame). The two sources of gas are interchangeable:
+    both produce the same container, Voronoi gas cells, which the optical depth cuts into pieces along the skewers. ``external`` adds fake_spectra, the external reference code (comparison notebook only).
     ``notebooks`` writes the notebook of every ingredient under its box. Returns (fig, ax).
     """
     from matplotlib.lines import Line2D
@@ -497,7 +497,7 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
     gh = DAG_NODES["samplers"][1] - DAG_NODES["simulation"][1] + h + 0.34
     ax.add_patch(mpl.patches.FancyBboxPatch((gx - w / 2 - 0.08, gy - gh / 2), w + 0.16, gh, boxstyle="round,pad=0.02,rounding_size=0.1",
                  facecolor="none", edgecolor=DIM, lw=1.2, ls=":", path_effects=[]))
-    ax.text(gx, gy + gh / 2 + 0.04, "field sources (interchangeable)", ha="center", va="bottom", fontsize=FONT_MIN["floor"],
+    ax.text(gx, gy + gh / 2 + 0.04, "sources of cells (interchangeable)", ha="center", va="bottom", fontsize=FONT_MIN["floor"],
             color=DIM, style="italic")
     edges = [e for e in DAG_EDGES] + ([(a, b, "external", lab, None) for a, b, lab in DAG_EXTERNAL] if external else [])
     for a, b, kind, label, route in edges:
@@ -1700,14 +1700,25 @@ def _wrapped_offsets(n: int, dx: float) -> np.ndarray:
     return dx * np.where(j <= n // 2, j, j - n)
 
 
-def correlation_binned(deltas, L, edges, grf=None, *, r_max_fraction: float = 0.25):
+def correlation_binned(deltas, L, edges, grf=None, *, r_max_fraction: float = 0.25, cov_k_cut: float = 16.0,
+                       max_exact: float = 5e7):
     """xi(|r|) of periodic fields, binned in |r| over the minimum-image separations of the grid.
 
     Measured: xi(r) = (1/N) sum_x delta(x) delta(x + r) = irfftn(|rfftn(delta)|^2) / N (Wiener-Khinchin), averaged over
-    the separations of each bin and over draws; error: the scatter between draws / sqrt(N_real). Input (``grf``):
-    xi(r) = (1/V) sum_k P(k) e^{i k.r} = irfftn(P on the rfft grid) / dV, the exact correlation of the discrete periodic
-    field with spectrum P, binned alike. Only separations with every |r_i| <= ``r_max_fraction`` L_i are used.
-    Returns (r_b, xi_b, err, n_sep, xi_input_b or None).
+    the separations of each bin and over draws. Input (``grf``): xi(r) = (1/V) sum_k P(k) e^{i k.r} = irfftn(P on the
+    rfft grid) / dV, the exact correlation of the discrete periodic field with spectrum P (the box's own modes, no
+    k = 0), binned alike, so <xi_measured> = xi_input exactly. Only separations with every |r_i| <= ``r_max_fraction``
+    L_i are used.
+
+    Errors (with ``grf``): the exact Gaussian covariance of the binned mean over the N_real draws,
+
+        Cov(xi_b, xi_b') = 2 / (V^2 N_real) sum_{k != 0} P(k)^2 c_b(k) c_b'(k),   c_b(k) = <cos(k.r)>_{r in bin b},
+
+    (|delta_k|^2 is exponential with variance P^2; the modes k and -k are the same). Every bin is dominated by the few
+    largest-scale modes of the box, so the bins are strongly correlated: they move together. The diagonal is exact;
+    when the grid has more than ``max_exact`` (modes x bins), the off-diagonal terms keep the modes with |k| <=
+    ``cov_k_cut`` fundamental modes only (the dominant ones). Without ``grf``: the scatter between draws / sqrt(N_real).
+    Returns (r_b, xi_b, err, n_sep, xi_input_b or None, cov or None).
     """
     d = np.asarray(deltas, dtype=float)
     shape = d.shape[1:]
@@ -1730,22 +1741,56 @@ def correlation_binned(deltas, L, edges, grf=None, *, r_max_fraction: float = 0.
         xs.append(np.bincount(j[ok], weights=xi.ravel()[ok], minlength=nb) / np.maximum(cnt, 1))
     xs = np.stack(xs)
     err = xs.std(0, ddof=1) / np.sqrt(len(xs)) if len(xs) > 1 else np.full(nb, np.nan)
-    xin = None
+    xin, cov = None, None
+    keep = cnt > 0
     if grf is not None:
+        import scipy.fft as sfft
         kk = [2 * np.pi * np.fft.fftfreq(n, h) for n, h in zip(shape[:-1], dx[:-1])] + [2 * np.pi * np.fft.rfftfreq(shape[-1], dx[-1])]
         kmod = np.sqrt(sum(np.meshgrid(*[k ** 2 for k in kk], indexing="ij")))
-        xi_in = np.fft.irfftn(np.asarray(grf.power(kmod)), s=shape, axes=axes)[sub] / np.prod(dx)
+        Pk = np.asarray(grf.power(kmod))
+        xi_in = np.fft.irfftn(Pk, s=shape, axes=axes)[sub] / np.prod(dx)
         xin = np.bincount(j[ok], weights=xi_in.ravel()[ok], minlength=nb) / np.maximum(cnt, 1)
-    keep = cnt > 0
-    return rb[keep], xs.mean(0)[keep], err[keep], cnt[keep], None if xin is None else xin[keep]
+        # c_b(k) = Re FFT of the bin's indicator over the separations / n_b; w: half-space multiplicity
+        last = kk[-1][(None,) * (len(shape) - 1) + (slice(None),)]
+        w = np.where((last == 0) | (np.isclose(last, np.pi / dx[-1]) & (shape[-1] % 2 == 0)), 1.0, 2.0)
+        wP2 = np.broadcast_to(w * Pk ** 2, kmod.shape)
+        exact = kmod.size * nb <= max_exact
+        low = np.ones(kmod.shape, bool) if exact else (kmod > 0) & (kmod <= cov_k_cut * 2 * np.pi / Ls.max() * 1.0001)
+        jj = np.full(r.shape, -1)
+        jj.ravel()[ok] = j[ok]
+        C_low, diag = np.zeros((nb, int(low.sum()))), np.zeros(nb)
+        for b in np.nonzero(keep)[0]:
+            ind = np.zeros(shape, np.float32)
+            ind[sub] = (jj == b)
+            c = sfft.rfftn(ind, workers=-1).real.astype(np.float64) / cnt[b]
+            diag[b] = np.sum(wP2 * c ** 2)
+            C_low[b] = c[low]
+        cov = C_low @ (C_low * wP2[low]).T
+        np.fill_diagonal(cov, diag)
+        cov = cov * 2.0 / (np.prod(Ls) ** 2 * len(xs))
+        err = np.sqrt(np.diag(cov))
+        cov = cov[np.ix_(keep, keep)]
+    return rb[keep], xs.mean(0)[keep], err[keep], cnt[keep], None if xin is None else xin[keep], cov
+
+
+def chi2_cov(res, cov, rcond: float = 1e-10):
+    """res^T C^-1 res / dof over the eigenvectors of C above ``rcond`` x its largest eigenvalue (C is nearly singular
+    when the bins are strongly correlated): (chi2/dof, dof)."""
+    lam, U = np.linalg.eigh(cov)
+    good = lam > rcond * lam.max()
+    y = U[:, good].T @ res
+    return float(np.sum(y ** 2 / lam[good]) / good.sum()), int(good.sum())
 
 
 def plot_isotropic_recovery(cases: dict, *, n_bins: int = 18, n_r_bins: int = 16, figsize=(24, 19)):
-    """Isotropic statistics of GRF draws in 1D, 2D and 3D against the input (notebook 04, block A).
+    """Isotropic statistics of GRF draws in 1D, 2D and 3D against the input (notebook 04).
 
     Rows: (1) P(|k|) measured (points, error bars: scatter between draws / sqrt(N_real)) and the input; (2) the ratio
-    measured / input - 1 (input averaged over the modes of each bin); (3) xi(|r|) measured and the input xi obtained
-    from P(k) (``correlation_binned``); (4) the difference in units of its error.
+    measured / input - 1 (input averaged over the modes of each bin); (3) xi(|r|) measured and the input xi of the
+    box's discrete modes (``correlation_binned``), error bars from its exact Gaussian covariance; (4) the difference in
+    units of that error. The xi bins are strongly correlated (the same largest-scale modes set all of them): the title
+    of (4) and the summary give the fraction of the variance in the leading eigenmode of their correlation matrix (a
+    common shift of every bin) and chi2/dof with the full covariance.
     cases : {title: (grf, deltas (N_real, *shape))}. Returns (fig, axs (4, n_cases), summary dict).
     """
     n = len(cases)
@@ -1769,17 +1814,23 @@ def plot_isotropic_recovery(cases: dict, *, n_bins: int = 18, n_r_bins: int = 16
         residual_band(axs[1, c], 0.05)
         axs[0, c].legend(fontsize=FONT_MIN["legend"])
         r_edges = np.linspace(0.0, 0.25 * min(grf.L), n_r_bins + 1)
-        rb, xb, xe, _, xin = correlation_binned(deltas, grf.L, r_edges, grf)
+        rb, xb, xe, _, xin, cov = correlation_binned(deltas, grf.L, r_edges, grf)
         axs[2, c].plot(rb, xin, color=FG, lw=2, label=r"input: $\frac{1}{V}\sum_k P(k)\,e^{i\mathbf{k}\cdot\mathbf{r}}$")
         axs[2, c].errorbar(rb, xb, xe, fmt="o", ms=6, capsize=3, color=col, label="measured")
         axs[3, c].errorbar(rb, (xb - xin) / xe, np.ones_like(rb), fmt="o", ms=6, capsize=3, color=col)
         axs[3, c].axhline(0.0, color=FG, lw=1.0, path_effects=[])
         axs[3, c].axhspan(-2, 2, color=DIM, alpha=0.12, lw=0)
         axs[2, c].set(ylabel=r"$\xi(r)$")
+        chi2c, dof = chi2_cov(xb - xin, cov)
+        corr = cov / np.sqrt(np.outer(np.diag(cov), np.diag(cov)))
+        lead = float(np.linalg.eigvalsh(corr).max() / corr.shape[0])          # variance in the common (leading) mode
         axs[3, c].set(xlabel=r"$|r|$ [Mpc]", ylabel=r"$(\hat\xi - \xi_{\rm in})/\sigma_\xi$", ylim=(-5, 5))
+        axs[3, c].set_title(f"leading mode of the bins: {lead:.0%} of the variance; " + rf"$\chi^2/\mathrm{{dof}}$ (covariance) = {chi2c:.2f}",
+                            fontsize=FONT_MIN["legend"])
         axs[2, c].legend(fontsize=FONT_MIN["legend"])
         out[title] = dict(chi2_dof=float(np.mean(((Pb - Pin_b) / eb) ** 2)), max_rel=float(np.max(np.abs(Pb / Pin_b - 1))),
-                          xi_chi2_dof=float(np.mean(((xb - xin) / xe) ** 2)))
+                          xi_chi2_dof=float(np.mean(((xb - xin) / xe) ** 2)), xi_chi2_cov=chi2c, xi_dof=dof, xi_lead=lead,
+                          xi_mean_pull=float(np.mean((xb - xin) / xe)))
     return fig, axs, out
 
 
@@ -1807,17 +1858,17 @@ def power_kmu(m, k_edges, mu_edges):
     return f(kb), f(Pm), f(err), n_ind.reshape(shp)
 
 
-def plot_kpar_kperp_maps(cases: dict, *, figsize=(20, 17)):
-    """The measured P of 2D and 3D GRF draws in the (k_par, k_perp) plane (notebook 04, block B (i)).
+def plot_kpar_kperp_maps(cases: dict, *, figsize=(20, 9)):
+    """The measured P of 2D and 3D GRF draws in the (k_par, k_perp) plane (notebook 04).
 
-    Top: the measured P as colour, with measured iso-power contours (solid) on the input ones (dashed), at the same
-    levels; bottom: the residual (P_meas - P_in) / sigma_P, sigma_P = P_in / sqrt(n_modes N_real) (mode counting: the
-    mean of n independent exponential |delta_k|^2), P_in averaged over the modes of each bin. One mode per bin at low k,
-    then logarithmic bins (``hybrid_k_edges``), so k_par = 0 and k_perp = 0 are not shown.
-    cases : {title: (grf, deltas)} of 2D / 3D fields. Returns (fig, axs (2, n_cases), {title: chi2/dof}).
+    The measured P as colour, with measured iso-power contours (solid) on the input ones (dashed), at the same levels.
+    One mode per bin at low k, then logarithmic bins (``hybrid_k_edges``), so k_par = 0 and k_perp = 0 are not shown.
+    The returned chi2/dof is that of (P_meas - P_in) / sigma_P per bin, sigma_P = P_in / sqrt(n_modes N_real) (mode
+    counting: the mean of n independent exponential |delta_k|^2), P_in averaged over the modes of each bin.
+    cases : {title: (grf, deltas)} of 2D / 3D fields. Returns (fig, axs (n_cases,), {title: chi2/dof}).
     """
     n = len(cases)
-    fig, axs = plt.subplots(2, n, figsize=figsize, layout="constrained", squeeze=False)
+    fig, axs = plt.subplots(1, n, figsize=figsize, layout="constrained", squeeze=False)
     out = {}
     for c, (title, (grf, deltas)) in enumerate(cases.items()):
         m = field_power_modes(deltas, grf.L)
@@ -1846,30 +1897,32 @@ def plot_kpar_kperp_maps(cases: dict, *, figsize=(20, 17)):
         pull = np.where(good & (Nind > 0), (Pm - Pin) / sig, np.nan)
         chi2 = float(np.nanmean(pull ** 2))
         out[title] = chi2
-        im2 = axs[1, c].pcolormesh(e, e, np.ma.masked_invalid(pull).T, cmap=CMAPS["diverging"], vmin=-3, vmax=3, shading="flat")
-        fig.colorbar(im2, ax=axs[1, c], label=r"$(P_{\rm meas} - P_{\rm in})/\sigma_P$", shrink=0.9)
-        for a_, ttl in ((ax, title), (axs[1, c], rf"residual; $\chi^2/\mathrm{{dof}}$ = {chi2:.2f} ({int(np.sum(np.isfinite(pull)))} bins)")):
-            a_.set(xscale="log", yscale="log", xlim=(e[0], e[-1]), ylim=(e[0], e[-1]), aspect="equal", title=ttl,
-                   xlabel=r"$k_\parallel$ (last axis) [Mpc$^{-1}$]", ylabel=r"$k_\perp$ [Mpc$^{-1}$]")
-    return fig, axs, out
+        ax.set(xscale="log", yscale="log", xlim=(e[0], e[-1]), ylim=(e[0], e[-1]), aspect="equal", title=title,
+               xlabel=r"$k_\parallel$ (last axis) [Mpc$^{-1}$]", ylabel=r"$k_\perp$ [Mpc$^{-1}$]")
+    return fig, axs[0], out
 
 
 MU_WEDGES = (0.0, 0.5, 0.8, 0.95, 1.0)   # mu = k_par / |k|: the four wedges of Lya 3D analyses (arXiv:2308.10950, Fig. 4)
 
 
-def plot_pk_mu_wedges(cases: dict, *, mu_edges=MU_WEDGES, n_bins: int = 14, figsize=(24, 16)):
-    """P(k) in wedges of mu = |k_par| / |k| (k_par along the last axis), measured against the input, one subpanel per
-    wedge (notebook 04, block B (ii)); the way Lya 3D analyses show the anisotropic signal, wedge by wedge.
+MU_COLORS = ("blue", "cyan", "green", "red")             # one colour per wedge, in every panel (PALETTE keys)
 
-    For each case two rows: P(k) (points with error bars: scatter between draws / sqrt(N_real); line: the input averaged
-    over the modes of each (k, mu) bin) and measured / input - 1. For an isotropic input every wedge recovers P(k).
-    cases : {title: (grf, deltas)}. Returns (fig, axs (2 n_cases, n_wedges), {title: chi2/dof per wedge}).
+
+def plot_pk_mu_wedges(cases: dict, *, mu_edges=MU_WEDGES, n_bins: int = 14, figsize=(24, 13)):
+    """P(k) in wedges of mu = |k_par| / |k| (k_par along the last axis), measured against the input (notebook 04); the
+    way Lya 3D analyses show the anisotropic signal, wedge by wedge.
+
+    One column per case: on top, every wedge in one panel (points with error bars: measured, scatter between draws /
+    sqrt(N_real); dashed line: the input averaged over the modes of each (k, mu) bin), each wedge in one colour
+    (``MU_COLORS``); below, measured / input - 1 per wedge in the same colours. For an isotropic input every wedge
+    recovers P(k). cases : {title: (grf, deltas)}. Returns (fig, axs (2, n_cases), {title: chi2/dof per wedge}).
     """
     nm = len(mu_edges) - 1
-    fig, axs = plt.subplots(2 * len(cases), nm, figsize=figsize, layout="constrained", squeeze=False,
-                            gridspec_kw={"height_ratios": [2.0, 1.0] * len(cases)})
+    n = len(cases)
+    fig, axs = plt.subplots(2, n, figsize=figsize, layout="constrained", squeeze=False, sharex="col",
+                            gridspec_kw={"height_ratios": [2.0, 1.0]})
     out = {}
-    cols = [PALETTE[k] for k in ("blue", "cyan", "green", "red")]
+    cols = [PALETTE[MU_COLORS[w % len(MU_COLORS)]] for w in range(nm)]
     for c, (title, (grf, deltas)) in enumerate(cases.items()):
         m = field_power_modes(deltas, grf.L)
         kmax = min(np.pi * N / L for N, L in zip(grf.shape, grf.L))
@@ -1877,27 +1930,26 @@ def plot_pk_mu_wedges(cases: dict, *, mu_edges=MU_WEDGES, n_bins: int = 14, figs
         kb, Pb, eb, _ = power_kmu(m, edges, mu_edges)
         Pin = power_kmu(dict(m, P=np.asarray(grf.power(m["k"]))[None]), edges, mu_edges)[1]
         out[title] = []
+        a0, a1 = axs[0, c], axs[1, c]
+        shift = np.exp(0.025 * (np.arange(nm) - (nm - 1) / 2))      # a small offset in k per wedge, so every point shows
         for w in range(nm):
-            a0, a1 = axs[2 * c, w], axs[2 * c + 1, w]
             ok = np.isfinite(Pb[w]) & np.isfinite(eb[w]) & (eb[w] > 0)
-            a0.plot(kb[w][ok], Pin[w][ok], color=FG, lw=2, label="input")
-            a0.errorbar(kb[w][ok], Pb[w][ok], eb[w][ok], fmt="o", ms=5, capsize=3, color=cols[w % 4], label="measured")
-            a1.errorbar(kb[w][ok], Pb[w][ok] / Pin[w][ok] - 1, eb[w][ok] / Pin[w][ok], fmt="o", ms=5, capsize=3, color=cols[w % 4])
-            residual_band(a1, 0.05)
             chi2 = float(np.mean(((Pb[w][ok] - Pin[w][ok]) / eb[w][ok]) ** 2))
             out[title].append(chi2)
-            a0.set(xscale="log", yscale="log", title=rf"${mu_edges[w]:g} \leq \mu < {mu_edges[w + 1]:g}$, "
-                   + rf"$\chi^2/\mathrm{{dof}}$ = {chi2:.2f}")
-            a1.set(xscale="log", ylim=(-0.3, 0.3), xlabel=r"$|k|$ [Mpc$^{-1}$]", xlim=a0.get_xlim())
-            a0.tick_params(labelbottom=False)
-            if w == 0:
-                a0.set_ylabel(f"{title}\n" + r"$P(k, \mu)$")
-                a1.set_ylabel("meas. / input − 1")
-                a0.legend(fontsize=FONT_MIN["legend"])
+            lab = rf"${mu_edges[w]:g} \leq \mu < {mu_edges[w + 1]:g}$ ($\chi^2/\mathrm{{dof}}$ = {chi2:.2f})"
+            a0.plot(kb[w][ok], Pin[w][ok], color=cols[w], lw=1.8, ls="--")
+            a0.errorbar(kb[w][ok] * shift[w], Pb[w][ok], eb[w][ok], fmt="o", ms=5, capsize=3, color=cols[w], label=lab)
+            a1.errorbar(kb[w][ok] * shift[w], Pb[w][ok] / Pin[w][ok] - 1, eb[w][ok] / Pin[w][ok], fmt="o-", ms=5, capsize=3, lw=1.2,
+                        color=cols[w])
+        a0.plot([], [], color=FG, ls="--", lw=1.8, label="input (dashed, one per wedge)")
+        residual_band(a1, 0.05)
+        a0.set(xscale="log", yscale="log", title=title, ylabel=r"$P(k, \mu)$")
+        a1.set(xscale="log", ylim=(-0.3, 0.3), xlabel=r"$|k|$ [Mpc$^{-1}$]", ylabel="measured / input − 1")
+        a0.legend(fontsize=FONT_MIN["legend"])
     return fig, axs, out
 
 
-# --------------------------------------------------------------------------- selection -> deposition -> tau (notebook 05)
+# --------------------------------------------------------------------------- selection -> deposition -> tau (notebook 06)
 def cell_colors(cells) -> dict:
     """{cell index: colour} for the crossed cells, in the order given: Tol's bright palette without its grey, cycled
     (colour-blind safe, qualitative; neighbours along a path never share a colour unless more than six are crossed)."""
@@ -1922,10 +1974,11 @@ def voronoi_polygons_2d(generators, box: float) -> list:
 
 
 def plot_deposition_steps(cells, selected, bundle, seg, ab, frame, v, tau_pieces, *, plane_axes=(0, 1), figsize=(22, 21)):
-    """Selection -> deposition -> tau on toy cells, drawn from the objects of each step (notebook 05).
+    """Selection -> deposition -> tau on toy cells, drawn from the objects of each step (notebook 06).
 
-    cells : every ``GasCells`` of the toy box (generators in one plane: the cells are its 2D Voronoi cells), with
-    ``ids`` = their indices; selected : the cells kept by the selection (``seg`` and ``ab`` index them); bundle : the
+    cells : every ``core.Cells`` of the toy box (generators in one plane: the cells are its 2D Voronoi cells), with
+    ``ids`` = their indices (the velocities are those of the species of ``ab``); selected : the cells kept by the
+    selection (``seg`` and ``ab`` index them); bundle : the
     ``SkewerBundle`` (one skewer in that plane, along ``plane_axes[0]``); seg : the ``SegmentComponents`` of the Voronoi
     deposition; ab : its ``Absorbers``; frame : the ``ExactFrame``; v : (N_v,) [km/s]; tau_pieces : (N_p, N_v) the
     contribution of every piece (``compute_optical_depth(..., per_piece=True)``), in the order of ``ab``.
@@ -1944,7 +1997,7 @@ def plot_deposition_steps(cells, selected, bundle, seg, ab, frame, v, tau_pieces
     box = cells.box
     ids = np.asarray(selected.ids)                                # selected index -> index in ``cells``
     gen = np.asarray(cells.positions)[:, [i0, i1]]
-    vel = np.asarray(cells.fields["velocity"])[:, [i0, i1]]
+    vel = np.asarray(cells.species[ab.species]["velocity"] if hasattr(cells, "species") else cells.fields["velocity"])[:, [i0, i1]]
     pts3 = np.asarray(bundle.spatial_points[0], dtype=float)
     pts = pts3[:, [i0, i1]]
     g = {k: np.asarray(x) for k, x in path_geometry(pts3).items()}

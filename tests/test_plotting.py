@@ -106,7 +106,7 @@ def test_fifth_pass_figures():
     fig, axs, out = pl.plot_isotropic_recovery({"1D": (g1, d1), "2D": (g2, d2)})
     fig.canvas.draw()
     assert {"chi2_dof", "xi_chi2_dof"} <= set(out["2D"])
-    r, xi, err, n, xin = pl.correlation_binned(d2, g2.L, np.linspace(0, 2.5, 6), g2)
+    r, xi, err, n, xin, cov = pl.correlation_binned(d2, g2.L, np.linspace(0, 2.5, 6), g2)
     assert np.isclose(xin[0], float(g2.variance()), rtol=1e-10), "input xi(0) = sigma^2"
     fig, axs, chi2 = pl.plot_kpar_kperp_maps({"2D": (g2, d2)})
     fig.canvas.draw()
@@ -120,3 +120,14 @@ def test_fifth_pass_figures():
     for theme in ("dark", "paper"):
         pl.use_style(theme)
         pl.plot_dag(("lines", "cosmology", "skewers"))[0].canvas.draw()
+
+
+def test_xi_covariance_is_the_scatter_of_the_draws():
+    """The exact Gaussian covariance of the binned xi (``correlation_binned``) against the scatter of many draws."""
+    import jax
+    g = PowerLawGRF(A_s=1.0, k_0=1.0, n_s=-1.0, L=50.0, N=128)
+    d = np.asarray(jax.vmap(g.sample)(jax.random.split(jax.random.PRNGKey(5), 3000)))
+    edges = np.linspace(0.0, 12.5, 7)
+    per = np.stack([pl.correlation_binned(d[i:i + 1], g.L, edges)[1] for i in range(d.shape[0])])
+    cov1 = pl.correlation_binned(d[:1], g.L, edges, g)[5]
+    np.testing.assert_allclose(per.std(0, ddof=1), np.sqrt(np.diag(cov1)), rtol=0.1)

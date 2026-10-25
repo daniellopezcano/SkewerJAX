@@ -156,7 +156,7 @@ def run_skewerjax(c: dict, out: Path) -> dict:
     jax.config.update("jax_enable_x64", True)
     from skewerjax.core import LineBundle
     from skewerjax.simulations import HI, ArepoHDF5Reader, Ion, SimulationSkewers
-    from skewerjax.simulations.absorbers import tau_absorbers
+    from skewerjax.core.absorbers import tau_absorbers
     ions = {"HI-LyA": HI, "SiIII-1206": Ion("Si", 3)}
     lbs = {k: LineBundle([k], ref_line_id=k) for k in SPECIES}
     cofm, axis = benchmark_skewers(c["n_skewers"])

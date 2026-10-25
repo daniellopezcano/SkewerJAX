@@ -8,7 +8,8 @@ C = Checks("check_tng_optical_depth", __doc__, quick_help="fewer spacings, no 16
 import numpy as np                                                        # noqa: E402
 from skewerjax.core import LineBundle, phys                               # noqa: E402
 from skewerjax.core.stats import p1d_from_tau                             # noqa: E402
-from skewerjax.simulations import HI, ArepoHDF5Reader, Ion, SimulationSkewers, sampling_check, tau_absorbers  # noqa: E402
+from skewerjax.core import sampling_check, tau_absorbers                   # noqa: E402
+from skewerjax.simulations import HI, ArepoHDF5Reader, Ion, SimulationSkewers  # noqa: E402
 from skewerjax.comparison import SKEWER_SETS                              # noqa: E402
 
 rd = ArepoHDF5Reader(*TNG)
@@ -32,7 +33,7 @@ t_pp = tau_absorbers(sub, LYA, vw, fr, per_absorber=True, check=None, velocity_p
 t_sum = tau_absorbers(sub, LYA, vw, fr, check=None, velocity_period=True)[0, 0]
 C.check("sum of the per-piece profiles = tau of the pieces (rel)", np.abs(t_pp.sum(0) - t_sum).max() / t_sum.max(), 1e-10)
 live = A1.n[0] > 0
-N_p = A1.n[0][live] * H.a ** 3 * fr.scale_factors(0, A1.s[0][live]) ** -2 * A1.length[0][live] * 3.085678e24
+N_p = A1.n[0][live] * fr.scale_factors(0, A1.s[0][live]) ** -2 * A1.length[0][live] * 3.085678e24
 pred = np.pi * 2.8179403262e-13 * 2.99792458e10 * float(LYA.f_osc[0]) * float(LYA.lambda0_A[0]) * 1e-8 * N_p.sum() / 1e5
 C.check("integral of tau over one period = (pi e^2 / m_e c) f lambda N (rel)", abs(tau1.sum() * dv / pred - 1), 1e-3)
 # sampling criterion and convergence

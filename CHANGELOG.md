@@ -3,6 +3,71 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — one field representation: Voronoi cells for every source, one deposition route to τ (2026-10-25, session 20261025_0015)
+
+### Added
+- **`core.Cells`** (new module `core/cells.py`): the one container of the gas, for toy models and simulations alike.
+  Generating points [cMpc], volumes [cMpc³] (size V^(1/3)), the periodic box, optional ids, and per species
+  `number_density` [comoving cm⁻³], `temperature` [K], `velocity` [(M, 3), km/s], optional `turbulence` [m/s] and
+  `collisional` [GHz] (zero when left out). A pytree; `take`, `select_species`, `merge_species`, `get`, `size_cMpc`;
+  `grid` = the shape of a regular grid of cells. Builders: `cells_from_values` (values as scalars, arrays, functions of
+  the generating points, or per-species dicts), `cells_on_grid`, `grid_points`, `voronoi_volumes` (Monte Carlo
+  Voronoi volumes in a periodic box).
+- **`core.grf_cells(delta, grf, n_bar, generators=None, temperature=, velocity=, ...)`**: the cells of a `PowerLawGRF`
+  realisation, n = n̄(1 + δ) with no clipping. Default generators: the grid nodes (the cells are the grid cells: an exact
+  GRF at grid resolution); or any generating points (e.g. random), each taking δ interpolated trilinearly at its
+  position (`core.interpolate_periodic`), with its Voronoi volume.
+- **The route cells → pieces in the core:** `core.select_cells` (new `core/selection.py`, the selection rule and its CPU
+  / JZ-TREE back ends), `core.deposition` (moved from `simulations`, plus `grid_segments`, the exact fast path for
+  regular grids of cells, tested against `voronoi_segments` in `tests/test_cells.py`), `core.absorbers` (moved from
+  `simulations`: `Absorbers`, `ExactFrame`, `SnapshotFrame`, `absorber_pieces`, `tau_absorbers`, ...), and the one
+  entry point `core.cell_pieces(cells, lines, skewer_bundle= | points= + frame=, deposition=...)` with `deposit` and
+  `bundle_frame`. `ExactFrame(photon_sign=, a_dagger_per_skewer=)`.
+- `SimulationSkewers.to_cells(species, ext, override)`: the selected cells after the gas physics as `core.Cells`
+  (n_ion a_snap³, T, peculiar velocity); `SimulationSkewers.pieces` goes through `core.cell_pieces`.
+- `utils.plotting`: `correlation_binned` returns the exact Gaussian covariance of the binned ξ (and `chi2_cov`);
+  `plot_isotropic_recovery` uses it (error bars, the variance in the common mode of the bins, χ² with the covariance);
+  `MU_COLORS`. `utils.tutorial`: `cell_window` (sinc² of piecewise-constant cells), `window=` in `p1d_expected` and
+  `p3d_expected_on_skewer_grid` (replaces `interpolated=`).
+
+### Changed (breaking)
+- `core.compute_optical_depth(bundle, v, lines, cells, *, a_dagger, ii_cosmology, deposition, selection_backend, ...)`:
+  a `SkewerBundle` source takes `Cells` (the pieces of `cell_pieces`); `fields=` and `subdivide=` are gone.
+- `core.line_profiles(v, lines, *, temperature, los_velocity, scale_factor, a_dagger, turbulence, collisional, ...)`:
+  profiles of gas elements given by arrays (no `Fields`).
+- `Absorbers.n` is the comoving density (it was the physical density at `a_data`); `a_data` is optional;
+  `absorbers_from_components(seg, points, cells, species, mass_amu, a_data=)` and `absorbers_from_crossings(...)` read
+  the cells; `Absorbers` carries optional `turbulence` / `collisional`; `column_cm2(a=None)`.
+- Moved, no aliases: `skewerjax.simulations.deposition` → `skewerjax.core.deposition`; `skewerjax.simulations.absorbers`
+  → `skewerjax.core.absorbers`; the selection helpers to `skewerjax.core.selection` (`simulations.select_cells_near_paths`
+  streams a snapshot and calls `core.select_cells` for cells in memory). `skewerjax.simulations` no longer re-exports
+  `Absorbers`, `ExactFrame`, `SnapshotFrame`, `absorber_pieces`, `absorbers_from_*`, `sampling_check`, `tau_absorbers`,
+  `tau_by_path_bins`, `CellCrossings`, `SegmentComponents`, `cell_crossings`, `tophat_segments`, `voronoi_segments`.
+- `plot_kpar_kperp_maps` has no residual row (returns axes (n_cases,)); `plot_pk_mu_wedges` draws one panel per case
+  with every wedge and its residual panel below; DAG labels: toy models / simulation outputs → gas cells.
+
+### Removed
+- The route of fields known everywhere: `core.fields` (`Fields`, `ScalarField`, `VectorField`, `SampledField`,
+  `tile_field_to_lines`), the samplers `GRFDensity`, `LogRamp`, `VelocityRamp`, `Constant`, `core.pieces_from_fields`,
+  the `subdivide` option, `optical_depth._line_fields`, `SimulationSkewers.fields`. Replacements: `Cells` and its
+  builders, `grf_cells`, `cell_pieces`, `compute_optical_depth(bundle, v, lines, cells)`.
+
+### Numerical changes
+- Simulation route: unchanged (bit-identical τ for the default Voronoi and the crossings deposition; the top-hat option
+  differs by ≤ 2e-16 relative, the order of the multiplications by 3/4π and a³).
+- Toy route: the gas is piecewise constant per cell instead of trilinearly interpolated (intended). Notebook 00's box:
+  ⟨F⟩ +1.8e-4, max |ΔF| 6.2e-2; the P1D agrees at low k (1 %) and carries the window sinc² of the cells instead of the
+  sinc⁴ of linear interpolation at high k. The analytic checks are unchanged (identical numbers, same tolerances).
+
+### Notebooks
+- 04: GRFs only (ramps and the pytree section removed); ξ with its exact covariance; maps without residuals; wedges in
+  one panel per case; new closing section: from the GRF to cells (grid and random generators, the deposited P1D).
+- 05: ends with the snapshot as `core.Cells`; the step-by-step selection → deposition → τ moves to 06.
+- 06: opens with that step-by-step section on `Cells`; §1 states pieces from cells only; the convergence block of fields
+  known everywhere is removed; §3–§5 and §7 use the cell route.
+- 07: toy spectra on GRF → cells → τ; the expected projections carry the window of the cells.
+- 00, 00_quickstart_step_by_step: the new route (printed results unchanged).
+
 ## Unreleased — fifth pass: one piece-based τ route, opt-in periodicity, notebooks 03–07 (2026-10-24, session 20261024_0040)
 
 ### Changed (breaking)

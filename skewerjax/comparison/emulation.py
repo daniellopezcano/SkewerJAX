@@ -28,7 +28,7 @@ from typing import Optional
 
 import numpy as np
 
-from skewerjax.simulations.absorbers import Absorbers, tau_absorbers
+from skewerjax.core.absorbers import Absorbers, tau_absorbers
 from skewerjax.simulations.snapshot_skewers import IntegrationOptions, cached
 
 TOPHAT_NORM = 3.0 / (4.0 * np.pi)
@@ -44,7 +44,7 @@ def fake_chord_absorbers(origin, direction, path_length: float, gas_positions, g
     ----------
     origin, direction : (3,) start [cMpc] and unit direction of the skewer; path_length [cMpc]
         (= box for fake_spectra's sightlines).
-    gas_* : the cells (positions [cMpc] in [0, box), size V^(1/3) [cMpc], ion density [cm^-3],
+    gas_* : the cells (positions [cMpc] in [0, box), size V^(1/3) [cMpc], ion density [physical cm^-3 at a_data],
         T [K], velocity (M, 3) [km/s]).
     n_grid : intervals per chord (fake_spectra NGRID = 8).
     interior_only : True (fake_spectra) keeps the n_grid - 1 interior points, each 1/n_grid of the
@@ -74,7 +74,7 @@ def fake_chord_absorbers(origin, direction, path_length: float, gas_positions, g
         wk = np.full(k.size, 1.0 / n_grid); wk[[0, -1]] *= 0.5
     pos = s_c[:, None] + zr[:, None] * (2.0 * k[None, :] / n_grid - 1.0)
     ln = 2.0 * zr[:, None] * wk[None, :]
-    n = TOPHAT_NORM * np.asarray(n_cell, float)[idx]
+    n = TOPHAT_NORM * np.asarray(n_cell, float)[idx] * float(a_data) ** 3          # comoving (Absorbers.n)
     vl = np.asarray(velocity_cell, float)[idx] @ e
     rep = lambda x: np.repeat(x, k.size)
     ab = Absorbers(s=pos.ravel()[None], n=rep(n)[None], length=ln.ravel()[None], T=rep(np.asarray(T_cell, float)[idx])[None],

@@ -1,15 +1,15 @@
 #!/usr/bin/env python
 """Field extraction from TNG50-4 (read-only, ``/home/STORAGE/TNG50-4`` snapshot 25): per-cell H I physics, selection
-completeness, Voronoi deposition (exact pieces, conserved column for any spacing) and the tau inputs."""
+completeness, Voronoi deposition (exact pieces, conserved column for any spacing), the gas cells handed to the core
+(``core.Cells``, the container of the toy models too) and the tau inputs."""
 from _common import TNG, Checks
 
 C = Checks("check_tng_fields", __doc__, quick_help="one skewer, coarser spacing scan, first 10^6 cells for the physics")
 import numpy as np                                                        # noqa: E402
 import jax.numpy as jnp                                                   # noqa: E402
 from scipy.spatial import cKDTree                                         # noqa: E402
-from skewerjax.core import axis_aligned_skewer_points, path_geometry, phys  # noqa: E402
-from skewerjax.simulations import (HI, ArepoHDF5Reader, Ion, SimulationSkewers, absorber_pieces, deposition as dep,
-                                   gas_physics as gp, select_cells_near_paths)  # noqa: E402
+from skewerjax.core import absorber_pieces, axis_aligned_skewer_points, deposition as dep, path_geometry, phys  # noqa: E402
+from skewerjax.simulations import HI, ArepoHDF5Reader, Ion, SimulationSkewers, gas_physics as gp, select_cells_near_paths  # noqa: E402
 from skewerjax.comparison import SKEWER_SETS                              # noqa: E402
 
 rd = ArepoHDF5Reader(*TNG)
@@ -67,23 +67,23 @@ N_si = S.segments("voronoi").column_lengths(S.properties(SI)["n_ion"]).sum(-1)
 pts4 = axis_aligned_skewer_points(SKEWER_SETS["single"]["cofm"] * H.code_length_cMpc, SKEWER_SETS["single"]["axis"], L, 4.0 / H.velfac_kms_per_cMpc)
 N_si4 = dep.voronoi_segments(pts4, S.cells.positions, L, gas_size=S.cells.size_cMpc).column_lengths(S.properties(SI)["n_ion"]).sum(-1)
 C.check("Si III column independent of the spacing (0.25 vs 4 km/s): |dN/N|", np.abs(N_si4 / N_si - 1).max(), 2e-5)
-# 3. what the core receives: Pieces of the absorbers, and Fields of segment averages
+# 3. what the core receives: the cells (core.Cells), and the Pieces of their absorbers
 A1 = S.absorbers(HI)
 smp = absorber_pieces(A1, S.frame("exact"), 1, skewers=[0])
 M = A1.s.shape[1]
 C.check("Pieces carry the cells' own temperatures (max |diff| [K])", np.abs(np.asarray(smp.temperature[0]).ravel()[:M] - A1.T[0]).max(), 0)
 live = A1.n[0] > 0
-C.check("Pieces density = n_com = n a_snap^3 (max rel)",
-        np.abs(np.asarray(smp.number_density[0]).ravel()[:M][live] / A1.n[0][live] / H.a ** 3 - 1).max(), 1e-12)
+C.check("Pieces density = the absorbers' comoving density (max rel)",
+        np.abs(np.asarray(smp.number_density[0]).ravel()[:M][live] / A1.n[0][live] - 1).max(), 1e-12)
 pv = S.point_values(HI)
 C.check("segment averages x line elements = the deposited column (max rel)",
         np.abs((pv["n"] * pv["line_elements"]).sum(-1) / S.segments("voronoi").column_lengths(S.properties(HI)["n_ion"]).sum(-1) - 1).max(), 1e-12)
-fl = S.fields(["HI", "SiIII"])
-qv = np.concatenate([np.full(S.points.shape[:2] + (1,), H.a), S.points], -1)
-smpl = fl.sample(jnp.asarray(qv), jnp.asarray(-S.tangents))
-C.check("Fields of the simulation have the toy-model keys and shapes (mismatches)",
-        float(sum(set(smpl[sp]) != {"temperature", "velocity", "number_density", "turbulence", "collisional", "LoS_velocity"}
-                  or np.shape(smpl[sp]["temperature"]) != S.points.shape[:2] for sp in ("HI", "SiIII"))), 0)
+cl = S.to_cells(["HI", "SiIII"])
+C.check("core.Cells of the snapshot: the toy models' keys and shapes (mismatches)",
+        float(sum(set(cl.species[sp]) != {"temperature", "velocity", "number_density"} or np.shape(cl.species[sp]["velocity"]) != (len(S.cells), 3)
+                  for sp in ("HI", "SiIII"))), 0)
+C.check("core.Cells density = n_ion a_snap^3, comoving (max rel)",
+        np.abs(cl.species["HI"]["number_density"] / (np.asarray(S.properties(HI)["n_ion"]) * H.a ** 3) - 1).max(), 1e-15)
 
 if C.outdir is not None:
     from _common import figure_backend

@@ -28,7 +28,8 @@ def test_grf_expectations():
     m2, s2 = tu.p1d_expected(g, k, return_sigma=True, step=2)
     np.testing.assert_allclose(m1, m2, rtol=1e-12)                                 # the mean does not depend on the subset
     assert np.all(s2 >= s1)
-    assert np.all(tu.p1d_expected(g, k, interpolated=True) <= m1)
+    assert np.all(tu.p1d_expected(g, k, window="linear") <= tu.p1d_expected(g, k, window="cells"))
+    assert np.all(tu.p1d_expected(g, k, window="cells") <= m1)
     E = tu.p3d_expected_on_skewer_grid(g, 2, np.array([0.0, 0.6]))
     assert E.shape == (8, 8, 2) and np.all(E >= 0)
     edges = np.geomspace(0.5, 4.0, 6)

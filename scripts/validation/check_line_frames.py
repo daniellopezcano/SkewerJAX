@@ -8,8 +8,8 @@ from _common import Checks
 C = Checks("check_line_frames", __doc__)
 import numpy as np                                                        # noqa: E402
 import jax.numpy as jnp                                                   # noqa: E402
-from skewerjax.core import (Constant, Fields, LineBundle, SampledField, ScalarField, SkewerBundle, VectorField,
-                            compute_optical_depth, phys, velocities_in_line_frames, wrap_to_ref_line)  # noqa: E402
+from skewerjax.core import (LineBundle, SkewerBundle, cells_from_values, compute_optical_depth, phys,  # noqa: E402
+                            velocities_in_line_frames, wrap_to_ref_line)
 
 # 1. a feature at v0 in Si III's own frame lands at v0 - delta_v on the Lya frame
 LB = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
@@ -32,9 +32,8 @@ los = np.zeros((1, n_pt, 3)); los[..., 0] = -1.0
 sb = SkewerBundle(spatial_points=jnp.asarray(pos), a0=a, ICs_defined_at_index=0, los_directions=jnp.asarray(los),
                   manual_scale_factors=jnp.full((1, 1, n_pt), a))
 dens = np.where(np.abs(pos[..., 0] - 10.0) < 0.01, 1e-12, 0.0)
-fields = Fields({"HI": {"temperature": ScalarField(Constant(1e4)), "turbulence": ScalarField(Constant(0.0)),
-                        "collisional": ScalarField(Constant(0.0)), "number_density": ScalarField(SampledField(dens)),
-                        "velocity": VectorField(SampledField(np.zeros((1, n_pt, 3))))}})
+# cells at the sampling points (the Voronoi cell of a point of the straight skewer is its dual segment)
+fields = cells_from_values(pos[0], None, {"HI": dens[0]}, temperature=1e4, volumes=np.full(n_pt, (0.2 / (n_pt - 1)) ** 3))
 vv = jnp.asarray((np.arange(-3000, 1000) + 0.5) * 1.0)          # wide enough for the shift: no wrap needed
 t = np.asarray(compute_optical_depth(sb, vv, LB2, fields, a_dagger=a))
 v_ly, v_own = float(vv[np.argmax(t[0, 0])]), float(vv[np.argmax(t[1, 0])])

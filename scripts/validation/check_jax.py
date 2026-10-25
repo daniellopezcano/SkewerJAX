@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 """JAX-readiness of Block A: every public numerical function of ``skewerjax.core`` gives the eager result under
 ``jax.jit`` and, batched over skewers (or keys, parameters), under ``jax.vmap``; the containers pass through jit as
-pytrees. Tolerance 1e-12 of the array scale (float64)."""
+pytrees. Tolerance 1e-12 of the array scale (float64). The geometry of the route cells -> pieces (selection,
+deposition) runs on the host, so ``cell_pieces`` is checked once outside jit and the sum over its pieces under jit."""
 from _common import Checks
 
 C = Checks("check_jax", __doc__)
 import numpy as np                                                        # noqa: E402
 import jax
 import jax.numpy as jnp
-from skewerjax.core import (phys, LineBundle, Cosmology, SkewerBundle, Fields, ScalarField, VectorField, SampledField,
-                            PowerLawGRF, GRFDensity, LogRamp, VelocityRamp, Constant, plane_points, path_geometry,
-                            line_elements, overflux_terms, equivalent_width_kms)
+from skewerjax.core import (phys, LineBundle, Cosmology, SkewerBundle, Cells, PowerLawGRF, cells_from_values, cell_pieces,
+                            interpolate_periodic, plane_points, path_geometry, line_elements, overflux_terms, equivalent_width_kms)
 from skewerjax.core import skewers as skw, voigt as V, spectral as sp_, optical_depth as od, analytic as an
 from skewerjax.core.stats import two_point as tp, contaminants as cm
 tol = 1e-12
@@ -68,21 +68,18 @@ vmap_check("path_geometry (skewers)", path_geometry, (pts,))
 jit_check("line_elements", line_elements, pts)
 sb = SkewerBundle(spatial_points=pts, a0=0.3, x0=0.0, ICs_defined_at_index=0, cosmologies=cos)
 jit_check("SkewerBundle (pytree through jit)", lambda b: (b.line_elements, b.tangents, b.quadri_vectors), sb)
-# fields
+# gas cells (the container of every source)
 Lk = 1e-3
 pp = plane_points(Lk, "x", Lk / 2, 3, 16)
-qv = jnp.concatenate([jnp.full(pp.shape[:-1] + (1,), 0.9), pp], -1)
 los = jnp.broadcast_to(jnp.array([0.0, 0.6, 0.8]), pp.shape)
-spf = lambda: {"temperature": ScalarField(LogRamp(1e4, 1e6, Lk, 3)), "velocity": VectorField(VelocityRamp(-50.0, 80.0, Lk)),
-               "number_density": ScalarField(LogRamp(1e-9, 1e-3, Lk, 2)), "turbulence": ScalarField(Constant(1.5)),
-               "collisional": ScalarField(Constant(0.2))}
-F = Fields({"HI": spf(), "SiIII": spf()})
-jit_check("Fields.sample (pytree samplers)", lambda f, q, l: f.sample(q, l), F, qv, los)
-jit_check("Fields.sample (closure sampler)", lambda q: Fields({"HI": {"temperature": ScalarField(lambda y: y[..., 0] * 2)}}).sample(q, los), qv)
-vmap_check("Fields.sample (skewers)", lambda q, l: F.sample(q, l), (qv, los))
-jit_check("Fields.tile_field_to_lines", lambda f, q, l: f.tile_field_to_lines("LoS_velocity", q, {"HI": [0, 1], "SiIII": [2]}, LoS_directions=l),
-          F, qv.reshape(-1, 4), los.reshape(-1, 3))
-jit_check("SampledField", lambda s, q: s(q), SampledField(jnp.arange(48.0).reshape(3, 16)), qv)
+gen = np.asarray(pp, dtype=np.float64).reshape(-1, 3)
+ramp = lambda lo, hi, ax: (lambda y: 10 ** (np.log10(lo) + (np.log10(hi) - np.log10(lo)) * y[:, ax] / Lk))
+vramp = lambda y: np.stack([-50.0 + 130.0 * y[:, 0] / Lk, 0 * y[:, 0], 0 * y[:, 0]], -1)
+F = cells_from_values(gen, None, {"HI": ramp(1e-9, 1e-3, 1), "SiIII": ramp(1e-9, 1e-3, 1)}, temperature=ramp(1e4, 1e6, 2), velocity=vramp,
+                      turbulence=1.5, collisional=0.2, volumes=np.full(gen.shape[0], (Lk / 15) ** 3))
+jit_check("Cells (pytree through jit)", lambda c: {sp: {k: 2.0 * v for k, v in f.items()} for sp, f in c.species.items()}, F)
+vmap_check("Cells (tree_map over a batch of containers)", lambda c: c.species["HI"]["temperature"] * 2.0,
+           (jax.tree_util.tree_map(lambda x: jnp.stack([jnp.asarray(x)] * 3), F),))
 key = jax.random.PRNGKey(0)
 g3 = PowerLawGRF(A_s=2.0, k_0=1.0, n_s=-0.5, L=(10.0, 10.0, 20.0), N=(8, 8, 16))
 jit_check("PowerLawGRF.sample", lambda g, k: g.sample(k, return_modes=True), g3, key)
@@ -90,10 +87,10 @@ vmap_check("PowerLawGRF.sample (keys)", lambda k: g3.sample(k), (jax.random.spli
 jit_check("PowerLawGRF.variance", lambda g: g.variance(), g3)
 vmap_check("PowerLawGRF.power (n_s batch)", lambda n: PowerLawGRF(A_s=2.0, k_0=1.0, n_s=n, L=10.0, N=32).power(jnp.linspace(0, 3, 9)),
            (jnp.array([-1.0, -0.5, 0.5]),))
-gd = GRFDensity(key, PowerLawGRF(A_s=0.04, k_0=2.0, n_s=-1.25, L=(50.0,) * 3, N=(16,) * 3), n_bar=1e-12)   # sigma = 0.11
-ev = jnp.asarray(rng.uniform(-5, 60, size=(4, 9, 4)))
-jit_check("GRFDensity", lambda s, e: s(e), gd, ev)
-vmap_check("GRFDensity (skewers)", gd, (ev,))
+dgrid = PowerLawGRF(A_s=0.04, k_0=2.0, n_s=-1.25, L=(50.0,) * 3, N=(16,) * 3).sample(key)          # sigma = 0.11
+pos_r = jnp.asarray(rng.uniform(-5, 60, size=(4, 9, 3)))
+jit_check("interpolate_periodic (random generators of grf_cells)", lambda g, p: interpolate_periodic(g, p, 50.0), dgrid, pos_r[0])
+vmap_check("interpolate_periodic (batches of points)", lambda p: interpolate_periodic(dgrid, p, 50.0), (pos_r,))
 # Voigt
 xv = jnp.linspace(-50.0, 50.0, 201)
 for nm, f in (("gaussian", V.gaussian), ("lorentzian", V.lorentzian), ("voigt_exojax", V.voigt_exojax), ("voigt_convolution", V.voigt_convolution)):
@@ -133,8 +130,10 @@ jit_check("voigt_line_profiles (ExoJAX)", lambda n, s, g: od.voigt_line_profiles
 nu_u = jnp.tile(jnp.linspace(-50.0, 50.0, 201)[None], (3, 1))
 jit_check("voigt_line_profiles (convolution)", lambda n, s, g: od.voigt_line_profiles(n, s, g, "convolution"), nu_u,
           jnp.array([1.0, 3.0, 8.0]), jnp.array([0.1, 0.5, 2.0]))
-jit_check("line_profiles", lambda q, l, f, b: od.line_profiles(q, l, vel, 0.88, b, f), qv, los, F, lb)
-vmap_check("line_profiles (skewers)", lambda q, l: od.line_profiles(q, l, vel, 0.88, lb, F), (qv, los))
+jit_check("line_profiles", lambda T, u, a, b: od.line_profiles(vel, b, temperature=T, los_velocity=u, scale_factor=a, a_dagger=0.31),
+          T3[0, 0], vlos[0, 0], a_pts[0], lb)
+vmap_check("line_profiles (skewers)", lambda T, u, a: od.line_profiles(vel, lb, temperature=T, los_velocity=u, scale_factor=a, a_dagger=0.31),
+           (T3[:, 0], vlos[:, 0], a_pts))
 w_m = jnp.asarray(rng.uniform(0.5, 1.5, size=(4, 10))) * 1e20
 n3 = jnp.asarray(rng.uniform(0, 1e-9, size=(4, 3, 10)))
 K = lambda ad, a, lv, T, tb, co, n, w: od.optical_depth_kernel(vel, lam, lb.A21_GHz, lb.mass_amu, lb.f_osc, ad, a, lv, T, tb, co, n, w)
@@ -157,13 +156,13 @@ check("optical_depth_from_pieces (per-skewer traced velocity_period)", "vmap",
 check("compute_optical_depth (piece_chunk rows summed == all pieces)", "jit",
       lambda: (od.compute_optical_depth(S_, vel, lb, piece_chunk=3, resolution_tolerance=None), ref_tau))
 sbq = SkewerBundle(spatial_points=pp, manual_scale_factors=jnp.broadcast_to(jnp.linspace(0.9, 0.9001, pp.shape[1]), (1,) + pp.shape[:2]))
-jit_check("pieces_from_fields (bundle, fields, lines as pytrees)", lambda b, f, l: od.pieces_from_fields(b, f, l, a_dagger=0.88), sbq, F, lb)
-jit_check("pieces_from_fields (subdivide=3)", lambda b, f, l: od.pieces_from_fields(b, f, l, a_dagger=0.88, subdivide=3), sbq, F, lb)
-jit_check("optical_depth (whole pipeline under jit)", lambda b, f, l: od.compute_optical_depth(b, vel, l, f, a_dagger=0.88, resolution_tolerance=None),
-          sbq, F, lb)
-jit_check("optical_depth (reference line frame, velocity_period=True, under jit)",
-          lambda b, f, l: od.compute_optical_depth(b, vel, l, f, a_dagger=0.88, resolution_tolerance=None, line_frame="reference",
-                                                   velocity_period=250.0), sbq, F, lb)
+pc = cell_pieces(F, lb, skewer_bundle=sbq, a_dagger=0.88)                 # host geometry: the pieces of the cells
+check("compute_optical_depth (bundle + cells) == the sum over cell_pieces", "jit",
+      lambda: (od.compute_optical_depth(sbq, vel, lb, F, a_dagger=0.88, resolution_tolerance=None),
+               od.optical_depth_from_pieces(pc, vel, lb)))
+jit_check("optical_depth_from_pieces (cell pieces and lines as pytrees, under jit)", lambda p, l: od.optical_depth_from_pieces(p, vel, l), pc, lb)
+jit_check("optical_depth (reference line frame, velocity_period, under jit)",
+          lambda p, l: od.compute_optical_depth(p, vel, l, resolution_tolerance=None, line_frame="reference", velocity_period=250.0), pc, lb)
 tau_b = jnp.asarray(rng.uniform(0, 2, size=(3, 4, 64)))
 vel_p = (jnp.arange(64) + 0.5) * 600.0 / 64                 # one period of 600 km/s
 jit_check("wrap_to_ref_line (no wrap, zero fill)", lambda t, l: od.wrap_to_ref_line(t, vel, l, fill_value=0.0), tau_b, lb)

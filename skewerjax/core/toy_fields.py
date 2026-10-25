@@ -1,4 +1,9 @@
-"""Toy models: power-law Gaussian random fields and simple analytic field samplers (all JAX pytrees)."""
+"""Toy models: power-law Gaussian random fields, and the gas cells they define (``grf_cells``).
+
+A toy model enters the optical depth like a simulation does: as ``core.cells.Cells``. ``grf_cells`` turns one
+``PowerLawGRF`` realisation delta into the densities n = n_bar (1 + delta) of a set of Voronoi cells, with temperatures
+and velocities given as arrays or as functions of the generating points.
+"""
 from __future__ import annotations
 
 import warnings
@@ -288,9 +293,8 @@ def _sample_power_law_grf(grf: PowerLawGRF, key: jax.Array, return_modes: bool):
     return delta
 
 
-def _trilinear_periodic_sample(field: jnp.ndarray, pos_xyz: jnp.ndarray,
-                               L_box) -> jnp.ndarray:
-    """Periodic trilinear interpolation of ``field`` at world positions.
+def interpolate_periodic(field: jnp.ndarray, pos_xyz: jnp.ndarray, L_box) -> jnp.ndarray:
+    """Periodic trilinear interpolation of a grid ``field`` (values at the nodes x_j = j L / N) at world positions.
 
     field   : (Nx, Ny, Nz) real
     pos_xyz : (M, 3) positions, periodic in [0, L_box)
@@ -322,122 +326,54 @@ def _trilinear_periodic_sample(field: jnp.ndarray, pos_xyz: jnp.ndarray,
     return c0 * (1 - fz) + c1 * fz
 
 
-# --------------------------------------------------------------------------- samplers of events (a, x, y, z)
-@jax.tree_util.register_pytree_node_class
-class GRFDensity:
-    """n(x, y, z) = n_bar (1 + delta(x, y, z)) from one 3D ``PowerLawGRF`` realisation, trilinearly interpolated in the
-    periodic box [cm^-3].
+# --------------------------------------------------------------------------- toy gas cells
+def grf_cells(delta, grf: PowerLawGRF, n_bar: dict, *, generators=None, temperature=1e4, velocity=0.0, turbulence=None,
+              collisional=None, volumes: str = "voronoi", samples_per_cell: int = 32, seed: int = 0):
+    """``core.Cells`` of the gas of one 3D ``PowerLawGRF`` realisation: n = n_bar (1 + delta) for every species.
 
-    No transform, clipping or threshold: delta is the realisation as drawn (its variance is ``grf.variance()``), so the
-    overdensity n / <n> - 1 has the input spectrum on the grid. The amplitude must keep 1 + delta > 0: trilinear
-    interpolation is a convex combination of the grid nodes, so ``min_one_plus_delta`` (the minimum over the nodes) is
-    the minimum anywhere; a warning is issued when it is <= 0.
+    No transform, clipping or threshold: delta is the realisation as drawn (its variance is ``grf.variance()``). The
+    amplitude must keep 1 + delta > 0; a warning is issued when the minimum over the cells is <= 0.
 
     Parameters
     ----------
-    key : PRNG key of the realisation; grf : 3D ``PowerLawGRF`` (its box ``grf.L`` is the periodic domain).
-    n_bar : mean density [cm^-3]. delta_grid : optional (Nx, Ny, Nz) realisation to use instead of drawing one (e.g. the
-    same delta for several species); then ``grf`` only provides the box.
-
-    JAX pytree (``delta_grid``, ``L_box`` and ``n_bar`` are leaves).
+    delta : (N_x, N_y, N_z) one realisation (``grf.sample(key)``), on the nodes x_j = j L / N_j.
+    grf : the cubic 3D ``PowerLawGRF`` of ``delta`` (its box ``grf.L`` is the periodic box of the cells).
+    n_bar : {species: mean comoving density [cm^-3]} (e.g. {"HI": 1e-12, "SiIII": 2e-14}).
+    generators : None (default): the nodes of the grid, whose Voronoi cells are exactly the grid cells (cubes of side
+        L / N centred on the nodes): the gas is the realisation itself, piecewise constant, an exact GRF at grid
+        resolution (``cells.cells_on_grid``). Or (M, 3) generating points [same length unit as the box], e.g. random
+        ones (a moving mesh): each takes delta interpolated trilinearly at its position (``interpolate_periodic``), so
+        the gas is the realisation smoothed by the interpolation and by its own cells.
+    temperature [K], velocity [km/s], turbulence [m/s], collisional [GHz] : per cell, as in ``cells.cells_from_values``:
+        a scalar, an array (on the grid (N_x, N_y, N_z)[, 3] for the default generators, else (M,)[, 3]), a callable
+        of the generating points (M, 3), or a dict {species: one of those}.
+    volumes : generators given only: "voronoi" (default, ``cells.voronoi_volumes`` with ``samples_per_cell`` and
+        ``seed``: each cell's own volume, so its size V^(1/3) is the simulation's definition) or "mean" (L^3 / M).
     """
-
-    def __init__(self, key: jax.Array, grf: PowerLawGRF, n_bar: float = 1.0, *, delta_grid: jnp.ndarray = None):
-        if grf.ndim != 3:
-            raise ValueError(f"`grf` must be 3D, got ndim={grf.ndim}.")
-        self.delta_grid = grf.sample(key) if delta_grid is None else jnp.asarray(delta_grid)
-        if self.delta_grid.shape != grf.shape:
-            raise ValueError(f"delta_grid must have the grid shape {grf.shape}, got {self.delta_grid.shape}.")
-        self.L_box, self.n_bar = jnp.asarray(grf.L), n_bar
-        if not isinstance(self.delta_grid, jax.core.Tracer) and float(self.min_one_plus_delta) <= 0.0:
-            warnings.warn(f"GRFDensity: min(1 + delta) = {float(self.min_one_plus_delta):.3f} <= 0, so the density is "
-                          "negative somewhere; lower A_s.", stacklevel=2)
-
-    @property
-    def min_one_plus_delta(self):
-        """min(1 + delta) over the grid nodes (= over the box, for trilinear interpolation)."""
-        return 1.0 + jnp.min(self.delta_grid)
-
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        x_flat = x.reshape(-1, x.shape[-1])
-        pos = jnp.mod(x_flat[:, 1:4], self.L_box)
-        delta = _trilinear_periodic_sample(self.delta_grid, pos, self.L_box)
-        return (self.n_bar * (1.0 + delta)).reshape(x.shape[:-1])
-
-    def tree_flatten(self):
-        return (self.delta_grid, self.L_box, self.n_bar), None
-
-    @classmethod
-    def tree_unflatten(cls, aux, leaves):
-        obj = object.__new__(cls)
-        obj.delta_grid, obj.L_box, obj.n_bar = leaves
-        return obj
-
-
-@jax.tree_util.register_pytree_node_class
-class LogRamp:
-    """10^(log v_min + (log v_max - log v_min) x_axis / L_box): a log-linear ramp along one coordinate.
-
-    axis : index of the event column (1, 2, 3 = x, y, z). E.g. temperatures along z ``LogRamp(T_min, T_max, L, 3)``,
-    densities along y ``LogRamp(n_min, n_max, L, 2)``; v_min = v_max gives a constant.
-    """
-
-    def __init__(self, v_min: float, v_max: float, L_box: float = 1.0, axis: int = 3):
-        self.v_min, self.v_max, self.L_box, self.axis = v_min, v_max, L_box, int(axis)
-
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        x_flat = x.reshape(-1, x.shape[-1])
-        lo, hi = jnp.log10(self.v_min), jnp.log10(self.v_max)
-        return (10 ** (lo + (hi - lo) * (x_flat[:, self.axis] / self.L_box))).reshape(x.shape[:-1])
-
-    def tree_flatten(self):
-        return (self.v_min, self.v_max, self.L_box), self.axis
-
-    @classmethod
-    def tree_unflatten(cls, axis, leaves):
-        obj = object.__new__(cls)
-        obj.v_min, obj.v_max, obj.L_box = leaves
-        obj.axis = axis
-        return obj
-
-
-@jax.tree_util.register_pytree_node_class
-class VelocityRamp:
-    """Velocity (v_x, 0, 0) [km/s] with v_x = v_min + (v_max - v_min) x / L_box; v_min = v_max: uniform."""
-
-    def __init__(self, v_min: float = -0.001, v_max: float = 0.001, L_box: float = 1.0):
-        self.v_min, self.v_max, self.L_box = v_min, v_max, L_box
-
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        x_flat = x.reshape(-1, x.shape[-1])
-        vx = self.v_min + (self.v_max - self.v_min) * x_flat[:, 1] / self.L_box
-        return jnp.stack([vx, jnp.zeros_like(vx), jnp.zeros_like(vx)], axis=-1).reshape(*x.shape[:-1], 3)
-
-    def tree_flatten(self):
-        return (self.v_min, self.v_max, self.L_box), None
-
-    @classmethod
-    def tree_unflatten(cls, aux, leaves):
-        obj = object.__new__(cls)
-        obj.v_min, obj.v_max, obj.L_box = leaves
-        return obj
-
-
-@jax.tree_util.register_pytree_node_class
-class Constant:
-    """A uniform scalar field (e.g. ``turbulence`` b_turb [m/s] or ``collisional`` A_coll [GHz])."""
-
-    def __init__(self, value: float = 0.0):
-        self.value = value
-
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        return jnp.full(int(np.prod(x.shape[:-1])), self.value).reshape(x.shape[:-1])
-
-    def tree_flatten(self):
-        return (self.value,), None
-
-    @classmethod
-    def tree_unflatten(cls, aux, leaves):
-        obj = object.__new__(cls)
-        obj.value = leaves[0]
-        return obj
+    from skewerjax.core.cells import cells_from_values, cells_on_grid, voronoi_volumes
+    if grf.ndim != 3 or len(set(grf.L)) != 1:
+        raise ValueError(f"grf_cells needs a cubic 3D PowerLawGRF, got L = {grf.L}.")
+    d = np.asarray(delta, dtype=np.float64)
+    if d.shape != grf.shape:
+        raise ValueError(f"delta must have the grid shape {grf.shape}, got {d.shape}.")
+    box = float(grf.L[0])
+    if generators is None:
+        one = 1.0 + d
+        n = {sp: nb * one for sp, nb in n_bar.items()}
+        cells = cells_on_grid(box, n, temperature=temperature, velocity=velocity, turbulence=turbulence, collisional=collisional)
+    else:
+        pos = np.mod(np.asarray(generators, dtype=np.float64), box)
+        one = 1.0 + np.asarray(interpolate_periodic(jnp.asarray(d), jnp.asarray(pos), box))
+        if volumes == "voronoi":
+            vol = voronoi_volumes(pos, box, samples_per_cell=samples_per_cell, seed=seed)
+        elif volumes == "mean":
+            vol = np.full(pos.shape[0], box ** 3 / pos.shape[0])
+        else:
+            raise ValueError(f"volumes must be 'voronoi' or 'mean', got {volumes!r}.")
+        n = {sp: nb * one for sp, nb in n_bar.items()}
+        cells = cells_from_values(pos, box, n, temperature=temperature, velocity=velocity, turbulence=turbulence,
+                                  collisional=collisional, volumes=vol)
+    if float(one.min()) <= 0.0:
+        warnings.warn(f"grf_cells: min(1 + delta) = {float(one.min()):.3f} <= 0, so the density is negative somewhere; "
+                      "lower A_s.", stacklevel=2)
+    return cells

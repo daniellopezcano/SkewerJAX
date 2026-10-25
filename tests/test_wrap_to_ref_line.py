@@ -7,8 +7,8 @@ The same checks are in ``scripts/validation/check_line_frames.py``."""
 import numpy as np
 import jax.numpy as jnp
 
-from skewerjax.core import (Constant, Fields, LineBundle, SampledField, ScalarField, SkewerBundle, VectorField,
-                            compute_optical_depth, phys, velocities_in_line_frames, wrap_to_ref_line)
+from skewerjax.core import (LineBundle, SkewerBundle, cells_from_values, compute_optical_depth, phys, velocities_in_line_frames,
+                            wrap_to_ref_line)
 
 
 def test_delta_function():
@@ -38,9 +38,7 @@ def test_physical_absorber():
     sb = SkewerBundle(spatial_points=jnp.asarray(pos), a0=a, ICs_defined_at_index=0, los_directions=jnp.asarray(los),
                       manual_scale_factors=jnp.full((1, 1, n_pt), a))
     dens = np.where(np.abs(pos[..., 0] - 10.0) < 0.01, 1e-12, 0.0)
-    fields = Fields({"HI": {"temperature": ScalarField(Constant(1e4)), "turbulence": ScalarField(Constant(0.0)),
-                            "collisional": ScalarField(Constant(0.0)), "number_density": ScalarField(SampledField(dens)),
-                            "velocity": VectorField(SampledField(np.zeros((1, n_pt, 3))))}})
+    fields = cells_from_values(pos[0], None, {"HI": dens[0]}, temperature=1e4, volumes=np.full(n_pt, (0.2 / (n_pt - 1)) ** 3))
     v = jnp.asarray((np.arange(-3000, 1000) + 0.5) * 1.0)          # wide enough for the shift: no wrap needed
     t = np.asarray(compute_optical_depth(sb, v, LB, fields, a_dagger=a))
     v_ly, v_own = float(v[np.argmax(t[0, 0])]), float(v[np.argmax(t[1, 0])])

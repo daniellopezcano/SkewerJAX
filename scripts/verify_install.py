@@ -108,14 +108,13 @@ def test_iminuit(iminuit):
 
 def test_skewerjax(sjx):
     import jax.numpy as jnp
-    from skewerjax.core import Constant, Fields, LineBundle, LogRamp, ScalarField, SkewerBundle, VectorField, VelocityRamp, compute_optical_depth
+    import numpy as np
+    from skewerjax.core import LineBundle, SkewerBundle, cells_on_grid, compute_optical_depth
     import skewerjax.simulations, skewerjax.comparison                       # noqa: F401, E401
     pts = jnp.stack([jnp.linspace(0.0, 1e-3, 16), jnp.full(16, 5e-4), jnp.full(16, 5e-4)], -1)[None]
     sb = SkewerBundle(spatial_points=pts, manual_scale_factors=jnp.ones((1, 1, 16)))
-    sp = {"temperature": ScalarField(LogRamp(1e4, 1e4)), "velocity": VectorField(VelocityRamp(0.0, 0.0)),
-          "number_density": ScalarField(LogRamp(1e-7, 1e-7)), "turbulence": ScalarField(Constant(0.0)),
-          "collisional": ScalarField(Constant(0.0))}
-    tau = compute_optical_depth(sb, jnp.linspace(-200, 200, 64), LineBundle(["HI-LyA"]), Fields({"HI": sp}), a_dagger=1.0)
+    cells = cells_on_grid(1e-3, {"HI": np.full((4, 4, 4), 1e-7)}, temperature=1e4)        # uniform gas: 4^3 cells
+    tau = compute_optical_depth(sb, jnp.linspace(-200, 200, 64), LineBundle(["HI-LyA"]), cells, a_dagger=1.0)
     return bool(jnp.all(jnp.isfinite(tau)) and float(tau.max()) > 0), f"blocks core / simulations / comparison import; tau {tuple(tau.shape)}"
 
 

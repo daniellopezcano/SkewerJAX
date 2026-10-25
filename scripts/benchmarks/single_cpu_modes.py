@@ -41,7 +41,7 @@ def worker(mode: str, snap_base: str, n: int, repeats: int, out: Path):
     spec.loader.exec_module(B)
     from skewerjax.core import LineBundle
     from skewerjax.simulations import HI, ArepoHDF5Reader, ExtractionOptions, Ion, SimulationSkewers
-    from skewerjax.simulations.absorbers import tau_absorbers
+    from skewerjax.core.absorbers import tau_absorbers
     from skewerjax.comparison.effects import FAKE_SPECTRA_EXTRACTION, FAKE_SPECTRA_INTEGRATION
     from skewerjax.comparison.emulation import matched_tau
     ions = {"HI-LyA": HI, "SiIII-1206": Ion("Si", 3)}

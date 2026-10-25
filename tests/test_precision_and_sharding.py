@@ -1,5 +1,5 @@
 """The opt-in float32 kernel and the sharded optical depth (``core.optical_depth_from_pieces(dtype=)``,
-``core.optical_depth_sharded``) against the default path, on toy fields (with and without a velocity period)."""
+``core.optical_depth_sharded``) against the default path, on toy cells (with and without a velocity period)."""
 import os
 import subprocess
 import sys
@@ -9,20 +9,23 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from skewerjax.core import (Constant, Fields, LineBundle, LogRamp, ScalarField, SkewerBundle, VectorField, VelocityRamp,
-                            optical_depth_from_pieces, optical_depth_sharded, pieces_from_fields, plane_points)
+from skewerjax.core import (LineBundle, SkewerBundle, cell_pieces, cells_from_values, optical_depth_from_pieces, optical_depth_sharded,
+                            plane_points)
 
 L = 1e-3
 
 
 def toy(n_skewers: int = 7):
-    sp = lambda: {"temperature": ScalarField(LogRamp(1e4, 1e6, L, 3)), "velocity": VectorField(VelocityRamp(-50.0, 80.0, L)),
-                  "number_density": ScalarField(LogRamp(1e-9, 1e-6, L, 2)), "turbulence": ScalarField(Constant(0.0)),
-                  "collisional": ScalarField(Constant(0.1))}
+    """Cells at the points of ``n_skewers`` parallel skewers: T a log ramp along z, n along y, v_x a ramp along x."""
     lb = LineBundle(["HI-LyA", "SiIII-1206"])
     pts = plane_points(L, "x", L / 2, n_skewers, 64)
+    gen = np.asarray(pts, dtype=np.float64).reshape(-1, 3)
+    ramp = lambda lo, hi, ax: (lambda x: 10 ** (np.log10(lo) + (np.log10(hi) - np.log10(lo)) * x[:, ax] / L))
+    vel = lambda x: np.stack([-50.0 + 130.0 * x[:, 0] / L, 0 * x[:, 0], 0 * x[:, 0]], -1)
+    cells = cells_from_values(gen, None, {"HI": ramp(1e-9, 1e-6, 1), "SiIII": ramp(1e-9, 1e-6, 1)}, temperature=ramp(1e4, 1e6, 2),
+                              velocity=vel, collisional=0.1, volumes=np.full(gen.shape[0], (L / 63) ** 3))
     sb = SkewerBundle(spatial_points=pts, manual_scale_factors=jnp.full((1,) + pts.shape[:2], 0.9))
-    return pieces_from_fields(sb, Fields({"HI": sp(), "SiIII": sp()}), lb, a_dagger=0.88), jnp.linspace(-400, 400, 300), lb
+    return cell_pieces(cells, lb, skewer_bundle=sb, a_dagger=0.88), jnp.linspace(-400, 400, 300), lb
 
 
 def test_float32_is_opt_in_and_close():

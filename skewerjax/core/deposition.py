@@ -1,12 +1,12 @@
-"""Deposition (layer 5): the pieces of the path, i.e. which gas lies on the dual segment of every sampling point, and where.
+"""Deposition: the pieces of the path, i.e. which cell lies on the dual segment of every sampling point, and where.
 
-The sampling points are those of the bundle (any spacing, straight or curved). Point i stands for
-its *dual segment* m_{i-1/2} -> x_i -> m_{i+1/2} (``core.skewers.path_geometry``), of comoving length
-w_i. A deposition answers one question: **which gas lies on that segment, and where?** It returns
-for every point up to K *pieces*: a cell index, the comoving length of the cell's piece of the
-segment, the signed path offset of that piece's centroid from x_i, and a density weight. Inside a
-piece the gas properties are constant; the core sums the optical depth over the pieces
-(``core.optical_depth``).
+The gas is a set of Voronoi cells (``core.cells.Cells``, from a toy model or a simulation). The sampling points are
+those of the bundle (any spacing, straight or curved). Point i stands for its *dual segment* m_{i-1/2} -> x_i ->
+m_{i+1/2} (``core.skewers.path_geometry``), of comoving length w_i. A deposition answers one question: **which gas
+lies on that segment, and where?** It returns for every point up to K *pieces*: a cell index, the comoving length of
+the cell's piece of the segment, the signed path offset of that piece's centroid from x_i, and a density weight.
+Inside a piece the gas properties are constant; the core sums the optical depth over the pieces
+(``core.absorbers.cell_pieces``, ``core.optical_depth``).
 
 * ``voronoi_segments`` (SkewerJAX default): Arepo's own geometry. A point of space belongs to the
   cell of its nearest mesh-generating point (TNG ``Coordinates``), so along the segment the gas is
@@ -17,6 +17,10 @@ piece the gas properties are constant; the core sums the optical depth over the 
   periodic k-d tree, and every change of label is located at the exact crossing of the two
   lines. Weight 1. ``cell_crossings`` joins the pieces of one cell in consecutive dual segments:
   the exact intersections of the path with the cells.
+* ``grid_segments``: the same pieces for a regular grid of cells (``cells.cells_on_grid``), whose cells are cubes
+  centred on the nodes: the boundaries are the planes halfway between nodes, crossed at exact parameters along
+  every straight half-segment, and the cell of a piece is the node nearest to its midpoint. No k-d tree and no
+  selection; ``tests/test_cells.py`` checks that it gives the pieces of ``voronoi_segments``.
 * ``tophat_segments`` (fake_spectra's geometry): each cell is a sphere of radius h = V^(1/3) and
   uniform density (3 / 4 pi) n (``absorption.cpp:tophat_kern_frac`` L112-L118). The overlap of
   every sphere with every half-segment is solved exactly (a quadratic in t). Spheres overlap, so a
@@ -25,7 +29,7 @@ piece the gas properties are constant; the core sums the optical depth over the 
 Every deposition conserves the column by construction (sum of piece lengths x density), for
 any spacing, because the lengths are exact segment integrals; only *where* inside the piece the
 absorption sits is approximated (at the piece centroid). That approximation is what the sampling
-criterion of ``skewerjax.simulations.absorbers.sampling_check`` monitors.
+criterion of ``core.absorbers.sampling_check`` monitors.
 
 Periodicity of the box (the gas, not the spectrum): generator positions are always taken as the minimum image
 relative to each point, x_i + mi(g - x_i), mi(d) = d - L round(d / L), so paths may cross the box faces any number
@@ -53,7 +57,7 @@ class SegmentComponents:
 
     Attributes
     ----------
-    cell : (N_sk, N, K) int, index into the GasCells used (-1: empty slot).
+    cell : (N_sk, N, K) int, index into the cells used (-1: empty slot).
     length : (N_sk, N, K) comoving length of the piece [cMpc].
     offset : (N_sk, N, K) signed path offset of the piece centroid from x_i [cMpc].
     weight : float, density per n_cell inside the piece (1 Voronoi, 3/4pi top hat).
@@ -190,12 +194,20 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
             labs.append(lab_.ravel())
             lens.append(((hi - lo) * Lh).ravel())
             moms.append((sign * 0.5 * (hi ** 2 - lo ** 2) * Lh ** 2).ravel())
+    diag = dict(n_sub=S, sub_over_min_cell=float(L_half.max() / S / size.min()) if size is not None else None)
+    return _merge_pieces(rows, labs, lens, moms, P, len(gpos), (n_sk, n_p), diag)
+
+
+def _merge_pieces(rows, labs, lens, moms, P: int, M: int, shape, diag) -> SegmentComponents:
+    """Voronoi ``SegmentComponents`` from the contributions (point row, cell label, length, moment) of every part of
+    every half-segment: the parts of one cell in one dual segment are merged (lengths and moments summed)."""
+    n_sk, n_p = shape
     rows, labs, lens, moms = (np.concatenate(x) for x in (rows, labs, lens, moms))
     keep = lens > 0
-    key = rows[keep].astype(np.int64) * len(gpos) + labs[keep]
+    key = rows[keep].astype(np.int64) * M + labs[keep]
     ukey, inv = np.unique(key, return_inverse=True)
     L_ = np.bincount(inv, weights=lens[keep]); M_ = np.bincount(inv, weights=moms[keep])
-    prow, plab = ukey // len(gpos), ukey % len(gpos)
+    prow, plab = ukey // M, ukey % M
     counts = np.bincount(prow, minlength=P)
     K = max(int(counts.max()), 1)
     start = np.concatenate([[0], np.cumsum(counts)[:-1]])
@@ -204,9 +216,66 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
     cell[prow, slot] = plab
     length[prow, slot] = L_
     offset[prow, slot] = np.where(L_ > 0, M_ / np.where(L_ > 0, L_, 1.0), 0.0)
-    diag = dict(n_sub=S, sub_over_min_cell=float(L_half.max() / S / size.min()) if size is not None else None)
     shp = (n_sk, n_p, K)
     return SegmentComponents(cell.reshape(shp), length.reshape(shp), offset.reshape(shp), 1.0, "voronoi", diag).compact()
+
+
+def grid_segments(points, shape, box: float, *, chunk: int = 1_000_000) -> SegmentComponents:
+    """The Voronoi pieces of the dual segments of ``points`` for a periodic regular grid of cells (fast path).
+
+    The cells are those of ``cells.cells_on_grid``: generators at the nodes x_j = j box / N_j (C order), so the cell
+    of node j is the cube |x - x_j| <= box / (2 N) per axis, and a position belongs to the node round(x N / box) mod N.
+    Every straight half-segment A + t (B - A) crosses the planes halfway between nodes at exact parameters t; the
+    parts between consecutive crossings take the cell of their midpoint, and the parts of one cell in one dual
+    segment are merged as in ``voronoi_segments``. Exact (no sub-sampling, no k-d tree, no selection).
+
+    Parameters
+    ----------
+    points : (N_sk, N, 3) sampling points [cMpc] (unwrapped along the path).
+    shape : (N_x, N_y, N_z) grid shape; box : periodic box side [cMpc].
+    chunk : half-segments per vectorised block (memory).
+
+    Returns
+    -------
+    SegmentComponents (weight 1, kind "voronoi"), cell = the flat C-order index of the grid cell.
+    """
+    pts = np.asarray(points, dtype=np.float64)
+    n_sk, n_p = pts.shape[:2]
+    A, Bl, Bh, _ = _halves(pts)
+    P = A.shape[0]
+    N = np.asarray(shape, dtype=np.int64)
+    dx = float(box) / N.astype(np.float64)
+    M = int(np.prod(N))
+    rows, labs, lens, moms = [], [], [], []
+    for B, sign in ((Bl, -1.0), (Bh, 1.0)):
+        D = B - A
+        Lh = np.linalg.norm(D, axis=-1)
+        for c0 in range(0, P, chunk):
+            sl = slice(c0, c0 + chunk)
+            u0, du = A[sl] / dx, D[sl] / dx                                   # positions in units of the spacing
+            f0 = np.floor(u0 + 0.5)                                           # the node of the start
+            nmax = np.abs(np.floor(u0 + du + 0.5) - f0).max(axis=0).astype(np.int64)   # crossings per axis (at most)
+            ts = [np.zeros((u0.shape[0], 1)), np.ones((u0.shape[0], 1))]
+            for i in range(3):
+                if nmax[i] == 0:
+                    continue
+                m = np.arange(nmax[i])[None, :]
+                s_i = np.sign(du[:, i:i + 1])
+                face = f0[:, i:i + 1] + s_i * (0.5 + m)                       # the planes ahead of the start
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    t = (face - u0[:, i:i + 1]) / du[:, i:i + 1]
+                ts.append(np.where((s_i != 0) & (t > 0) & (t < 1), t, 1.0))
+            T = np.sort(np.concatenate(ts, axis=1), axis=1)
+            lo, hi = T[:, :-1], T[:, 1:]
+            mid = 0.5 * (lo + hi)
+            idx = np.mod(np.floor(u0[:, None, :] + mid[..., None] * du[:, None, :] + 0.5).astype(np.int64), N)
+            lab = (idx[..., 0] * N[1] + idx[..., 1]) * N[2] + idx[..., 2]
+            lh = Lh[sl][:, None]
+            rows.append(np.broadcast_to(np.arange(c0, c0 + u0.shape[0])[:, None], lab.shape).ravel())
+            labs.append(lab.ravel())
+            lens.append(((hi - lo) * lh).ravel())
+            moms.append((sign * 0.5 * (hi ** 2 - lo ** 2) * lh ** 2).ravel())
+    return _merge_pieces(rows, labs, lens, moms, P, M, (n_sk, n_p), dict(grid=tuple(int(n) for n in N)))
 
 
 @partial(jax.jit, static_argnames=("S", "k_chunk"))
@@ -379,7 +448,7 @@ class CellCrossings:
     Attributes
     ----------
     s_lo, s_hi : (N_sk, M) path coordinates [cMpc] of the ends of every crossing (padded: s_lo = s_hi = 0).
-    cell : (N_sk, M) int, index into the GasCells (-1: padding).
+    cell : (N_sk, M) int, index into the cells (-1: padding).
     diagnostics : dict (``max_gap``: largest mismatch [cMpc] between consecutive ends, 0 for straight paths).
     """
     s_lo: np.ndarray

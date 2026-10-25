@@ -1,4 +1,7 @@
-"""Cell selection (layer 4): streaming k-d tree selection of the gas cells that can reach a set of paths.
+"""Cell selection (layer 4): streaming k-d tree selection of the gas cells of a snapshot that can reach a set of paths.
+
+The selection rule, its radii and its back ends are ``core.selection``'s (the same for every source of cells); this
+module applies them to a snapshot streamed from disk, block by block.
 
 The paths are the sampling points of a ``SkewerBundle`` (any shape: straight, curved, crossing
 the box faces; positions in comoving Mpc, unwrapped along the path). A periodic k-d tree is built
@@ -34,83 +37,11 @@ from typing import Callable, Optional, Sequence
 import numpy as np
 from scipy.spatial import cKDTree
 
+from skewerjax.core.selection import (_nearest_distance_cpu, _nearest_distance_jztree, jztree_available,  # noqa: F401
+                                      max_path_spacing, resolve_backend, select_cells, selection_radius, wrap_positions)
 from skewerjax.simulations.gas_cells import GasCells
 
 GEOMETRY_DATASETS = ("Coordinates", "Masses", "Density")
-
-
-def wrap_positions(x, box: float) -> np.ndarray:
-    """Wrap positions into [0, box) (guarding against x mod box == box in floating point)."""
-    y = np.mod(np.asarray(x, dtype=np.float64), box)
-    return np.where(y >= box, 0.0, y)
-
-
-def max_path_spacing(paths) -> float:
-    """Largest distance between consecutive points of the (unwrapped) paths [cMpc]."""
-    p = np.asarray(paths, dtype=np.float64)
-    if p.ndim != 3 or p.shape[-1] != 3 or p.shape[1] < 2:
-        raise ValueError(f"paths must be (N_sk, N_pts >= 2, 3), got {p.shape}.")
-    return float(np.max(np.linalg.norm(np.diff(p, axis=1), axis=-1)))
-
-
-def selection_radius(size, mode: str, ds: float, voronoi_factor: float = 2.5, voronoi_min: float = 0.0):
-    """Per-cell selection radius [cMpc] (see module docstring)."""
-    size = np.asarray(size, dtype=np.float64)
-    if mode == "tophat":
-        return size + 0.5 * ds
-    if mode == "voronoi":
-        return np.maximum(voronoi_factor * size, voronoi_min) + 0.5 * ds
-    raise ValueError(f"mode must be 'tophat' or 'voronoi', got {mode!r}.")
-
-
-def jztree_available() -> bool:
-    """True if jztree imports and JAX sees a CUDA device (the conditions of ``backend="jztree"``)."""
-    try:
-        import jztree  # noqa: F401
-        import jax
-        return any(d.platform == "gpu" for d in jax.devices())
-    except Exception:                                   # ImportError, or no GPU platform initialised
-        return False
-
-
-def resolve_backend(backend: str) -> str:
-    """"cpu", "jztree" or "auto" -> "cpu" / "jztree"; "jztree" without jztree or a CUDA device raises."""
-    if backend not in ("cpu", "jztree", "auto"):
-        raise ValueError(f"backend must be 'cpu', 'jztree' or 'auto', got {backend!r}.")
-    if backend == "auto":
-        return "jztree" if jztree_available() else "cpu"
-    if backend == "jztree" and not jztree_available():
-        raise RuntimeError("backend='jztree' needs the optional package jztree (CUDA wheels, `pip install \"jztree[cuda12]\"`) "
-                           "and a CUDA device visible to JAX; use backend='cpu' or 'auto'.")
-    return backend
-
-
-def _nearest_distance_cpu(tree: cKDTree, pos: np.ndarray, rad: np.ndarray, workers: int) -> np.ndarray:
-    """Distance of every cell to its nearest path point, inf beyond the cell's radius (periodic cKDTree)."""
-    d = np.full(rad.size, np.inf)
-    edges = np.unique(np.geomspace(rad.min(), rad.max(), 33))          # radius bins: a tight bound per bin
-    which = np.clip(np.searchsorted(edges, rad, side="left"), 0, edges.size - 1)
-    for b in np.unique(which):
-        m = which == b
-        d[m] = tree.query(pos[m], k=1, distance_upper_bound=float(rad[m].max()), workers=workers)[0]
-    return d
-
-
-def _nearest_distance_jztree(pts: np.ndarray, pos: np.ndarray, box: float, tree: cKDTree, rad: np.ndarray,
-                             margin: float = 1e-6) -> np.ndarray:
-    """The same distance from JZ-TREE on the GPU (k = 1 nearest path point, periodic ``boxsize``).
-
-    jztree's working precision is not documented, so the cells within ``margin`` (relative) of their radius are
-    re-measured in float64 with the host tree: the decision d <= r is then the CPU back end's for every cell.
-    """
-    import jax.numpy as jnp
-    import jztree
-    rnn, _ = jztree.knn.knn(jnp.asarray(pts), 1, boxsize=box, part_query=jnp.asarray(pos))
-    d = np.asarray(rnn, dtype=np.float64).reshape(-1)
-    border = np.abs(d - rad) <= margin * np.maximum(rad, 1.0)
-    if border.any():
-        d[border] = tree.query(pos[border], k=1)[0]
-    return d
 
 
 def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_factor: float = 2.5,
@@ -121,8 +52,8 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_fac
 
     Parameters
     ----------
-    reader : layer-1 reader (``iter_blocks``, ``read_rows``, ``to_gas_cells``, ``header``), or a ``GasCells`` already
-        in memory (e.g. toy cells): the same selection rule on those cells, without streaming.
+    reader : layer-1 reader (``iter_blocks``, ``read_rows``, ``to_gas_cells``, ``header``), or cells already in memory
+        (``GasCells``, ``core.Cells``): then ``core.selection.select_cells``, the same rule without streaming.
     paths : (N_sk, N_pts, 3) sampling points [cMpc], e.g. ``SkewerBundle.spatial_points``.
     mode : "voronoi" (default deposition) or "tophat" (fake_spectra's kernel); "voronoi" selects
         a superset of "tophat" for voronoi_factor >= 1.
@@ -137,8 +68,9 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_fac
     GasCells of the selected cells, physical units (``reader.to_gas_cells``), with ``ids`` =
     (file_index << 40) | row, so that every cell can be traced back to the snapshot.
     """
-    if isinstance(reader, GasCells):
-        return _select_in_memory(reader, paths, mode, voronoi_factor, voronoi_min, workers, backend)
+    if hasattr(reader, "positions") and hasattr(reader, "take"):       # cells already in memory (GasCells or core.Cells)
+        return select_cells(reader, paths, mode=mode, voronoi_factor=voronoi_factor, voronoi_min=voronoi_min, workers=workers,
+                            backend=backend)
     from skewerjax.simulations.readers import GAS_DATASETS
     datasets = tuple(GAS_DATASETS if datasets is None else datasets)
     missing = set(GEOMETRY_DATASETS) - set(datasets)
@@ -176,22 +108,3 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", voronoi_fac
     if n_sel == 0:
         raise RuntimeError("no gas cell is within reach of the paths.")
     return GasCells.concatenate(parts)
-
-
-def _select_in_memory(cells: GasCells, paths, mode: str, voronoi_factor: float, voronoi_min: float, workers: int,
-                      backend: str) -> GasCells:
-    """``select_cells_near_paths`` for cells already in memory: the same radii and distances, one block."""
-    box = cells.box
-    ds = max_path_spacing(paths)
-    pts = np.asarray(paths, dtype=np.float64).reshape(-1, 3)
-    pts = pts if box is None else wrap_positions(pts, box)
-    tree = cKDTree(pts) if box is None else cKDTree(pts, boxsize=box)
-    pos = np.asarray(cells.positions, dtype=np.float64)
-    pos = pos if box is None else wrap_positions(pos, box)
-    rad = selection_radius(cells.size_cMpc, mode, ds, voronoi_factor, voronoi_min)
-    backend = resolve_backend(backend)
-    d = _nearest_distance_jztree(pts, pos, box, tree, rad) if backend == "jztree" else _nearest_distance_cpu(tree, pos, rad, workers)
-    sel = np.nonzero(d <= rad)[0]
-    if sel.size == 0:
-        raise RuntimeError("no gas cell is within reach of the paths.")
-    return cells.take(sel)

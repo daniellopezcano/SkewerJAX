@@ -1,14 +1,17 @@
 #!/usr/bin/env python
 """tau of uniform gas against the closed forms of the review notes: static natural and
-thermal lines (Sec. analytic_no_expansion) and radiation domination with natural and thermal broadening."""
+thermal lines (Sec. analytic_no_expansion) and radiation domination with natural and thermal broadening.
+
+The gas is a set of cells (``core.Cells``) whose generating points are the sampling points of the skewers: the
+Voronoi cell of a point of a straight skewer is its dual segment, so each skewer is cut into its dual segments, with
+the values of the closed forms (uniform density; one temperature per skewer)."""
 from _common import Checks, figure_backend
 
 C = Checks("check_optical_depth_analytic", __doc__)
 import numpy as np                                                        # noqa: E402
 import jax.numpy as jnp                                                   # noqa: E402
-from skewerjax.core import (Constant, Cosmology, Fields, LineBundle, LogRamp, ScalarField, SkewerBundle, VectorField,
-                            VelocityRamp, analytic as an, compute_optical_depth, line_wavelength_grid_A, phys,
-                            plane_points)                                 # noqa: E402
+from skewerjax.core import (Cosmology, LineBundle, SkewerBundle, analytic as an, cell_pieces, cells_from_values,  # noqa: E402
+                            compute_optical_depth, line_wavelength_grid_A, phys, plane_points)
 
 lines = LineBundle(["HI-LyA", "HI-LyB", "SiIII-1206"])
 null = LineBundle(["nullHI-LyA", "nullHI-LyB", "nullSiIII1206"])         # A_21 = 0: purely thermal lines
@@ -16,11 +19,17 @@ T_tiny = float(np.finfo(np.float32).tiny)
 rad = Cosmology(H0=phys.H0, Omega_r_0=1.0, Omega_m_0=0.0, Omega_k_0=0.0, Omega_lambda_0=0.0)
 
 
-def fields(T, n, L):
-    sp = lambda: {"temperature": ScalarField(LogRamp(*T, L, 3)), "velocity": VectorField(VelocityRamp(0.0, 0.0, L)),
-                  "number_density": ScalarField(LogRamp(*n, L, 2)), "turbulence": ScalarField(Constant(0.0)),
-                  "collisional": ScalarField(Constant(0.0))}
-    return Fields({"HI": sp(), "SiIII": sp()})
+def log_ramp(lo, hi, L, axis):
+    """10^(log lo + (log hi - log lo) x_axis / L) at the generating points (axis 1 = y, 2 = z)."""
+    return lambda x: 10 ** (np.log10(lo) + (np.log10(hi) - np.log10(lo)) * x[:, axis] / L)
+
+
+def gas(pts, T, n, L):
+    """Cells at the sampling points (static gas): temperature a log ramp along z, density a log ramp along y."""
+    gen = np.unique(np.asarray(pts, dtype=np.float64).reshape(-1, 3), axis=0)
+    dx = float(np.min(np.linalg.norm(np.diff(np.asarray(pts, dtype=np.float64), axis=-2), axis=-1)))
+    dens = log_ramp(*n, L, 1)
+    return cells_from_values(gen, None, {"HI": dens, "SiIII": dens}, temperature=log_ramp(*T, L, 2), volumes=np.full(gen.shape[0], dx ** 3))
 
 
 def per_line(f, lb, v, a_dagger=1.0):
@@ -35,9 +44,9 @@ Lk = 1e-3
 pts = plane_points(Lk, "x", Lk / 2, 3, n_pp)
 sb = SkewerBundle(spatial_points=pts, manual_scale_factors=jnp.ones_like(pts[None, ..., 0]))
 v = jnp.linspace(-200, 200, 512)
-F_i = fields((T_tiny, T_tiny), (1e-9, 1e-3), Lk)
-tau = compute_optical_depth(sb, v, lines, F_i, a_dagger=jnp.ones_like(sb.scale_factors[0]))
-n_sk = F_i["HI"]["number_density"](jnp.stack([jnp.ones(3), jnp.full(3, Lk / 2), jnp.linspace(0, Lk, 3), jnp.full(3, Lk / 2)], -1))
+F_i = gas(pts, (T_tiny, T_tiny), (1e-9, 1e-3), Lk)
+tau = compute_optical_depth(sb, v, lines, F_i, a_dagger=1.0)
+n_sk = jnp.asarray(log_ramp(1e-9, 1e-3, Lk, 1)(np.asarray(pts)[:, 0]))
 ref = per_line(lambda j, wl: an.tau_static_natural(wl, lines.lambda0_A[j:j + 1], lines.A21_GHz[j:j + 1], lines.f_osc[j:j + 1],
                                                    sb.a0, Lk * jnp.ones(3), n_sk)[0], lines, v)
 cases["static, T = 0 (natural)"] = (v, tau, ref, 1e-6)
@@ -45,9 +54,9 @@ cases["static, T = 0 (natural)"] = (v, tau, ref, 1e-6)
 pts = plane_points(Lk, "y", Lk / 2, 3, n_pp)
 sb = SkewerBundle(spatial_points=pts, manual_scale_factors=jnp.ones_like(pts[None, ..., 0]))
 v = jnp.linspace(-3000.0, 3000.0, 1024)
-F_ii = fields((1e4, 1e8), (1e-7, 1e-7), Lk)
-tau = compute_optical_depth(sb, v, null, F_ii, a_dagger=jnp.ones_like(sb.scale_factors[0]))
-T_sk = F_ii["HI"]["temperature"](sb.quadri_vectors[0])[:, 0]
+F_ii = gas(pts, (1e4, 1e8), (1e-7, 1e-7), Lk)
+tau = compute_optical_depth(sb, v, null, F_ii, a_dagger=1.0)
+T_sk = jnp.asarray(log_ramp(1e4, 1e8, Lk, 2)(np.asarray(pts)[:, 0]))
 ref = per_line(lambda j, wl: an.tau_static_thermal(wl, null.lambda0_A[j:j + 1], null.mass_amu[j:j + 1], null.f_osc[j:j + 1], sb.a0,
                                                    Lk * jnp.ones(3), 1e-7 * jnp.ones(3), T_sk)[0], null, v)
 cases["static, A_21 = 0 (thermal)"] = (v, tau, ref, 1e-6)
@@ -66,23 +75,23 @@ def rad_bundle(n, plane=False):
 
 
 sb = rad_bundle(128)
-F_iii = fields((T_tiny, T_tiny), (1e-7, 1e-7), L5)
-a_d = jnp.repeat(jnp.asarray(sb.a0)[:, None], 128, axis=1)
+F_iii = gas(sb.spatial_points, (T_tiny, T_tiny), (1e-7, 1e-7), L5)
+a_d = jnp.asarray(sb.a0)
 tau = compute_optical_depth(sb, v_rad, lines, F_iii, a_dagger=a_d, resolution_tolerance=None)
 ref = per_line(lambda j, wl: an.tau_radiation_natural(wl, lines.lambda0_A[j:j + 1], lines.A21_GHz[j:j + 1], lines.f_osc[j:j + 1], sb.a0,
                                                       sb.x0, jnp.array([-L5, 0.0]), jnp.array([0.0, L5]), jnp.array([1e-7, 1e-7]))[0], lines, v_rad)
-from skewerjax.core import pieces_from_fields, resolution_report           # noqa: E402
-rep = resolution_report(pieces_from_fields(sb, F_iii, lines, a_dagger=a_d), lines, 0.25)
+from skewerjax.core import resolution_report                               # noqa: E402
+rep = resolution_report(cell_pieces(F_iii, lines, skewer_bundle=sb, a_dagger=a_d), lines, 0.25)
 C.check("radiation domination, T = 0: the resolution check flags the unresolved natural lines (max W / width)",
         float(np.min(rep["max_ratio"])), 0.25, expect=True)
 cases["radiation domination, T = 0 (natural, unresolved comb)"] = (v_rad, tau, ref, None)
 # (iv) radiation domination, A_21 = 0, two temperatures: second-order convergence to the analytic F
 v = jnp.linspace(-4000.0, 4000.0, 1024)
-F_iv = fields((5e4, 5e6), (5e-11, 5e-11), L5)
 errs = []
 for n in ((84, 168) if C.quick else (42, 84, 168, 336)):
     sb = rad_bundle(n, plane=True)
-    tau = compute_optical_depth(sb, v, null, F_iv, a_dagger=jnp.repeat(jnp.asarray(sb.a0)[:, None], n, axis=1), resolution_tolerance=None)
+    F_iv = gas(sb.spatial_points, (5e4, 5e6), (5e-11, 5e-11), L5)
+    tau = compute_optical_depth(sb, v, null, F_iv, a_dagger=jnp.asarray(sb.a0), resolution_tolerance=None)
     ref = per_line(lambda j, wl: an.tau_radiation_thermal(wl, null.lambda0_A[j:j + 1], null.f_osc[j:j + 1], null.mass_amu[j:j + 1],
                                                           jnp.array([5e4, 5e6]), sb.a0, sb.x0, jnp.array([-L5, 0.0]), jnp.array([0.0, L5]),
                                                           jnp.array([5e-11, 5e-11]))[0], null, v)

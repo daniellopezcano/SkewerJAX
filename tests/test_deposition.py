@@ -1,8 +1,9 @@
 """Voronoi deposition: the JAX backend against the NumPy default, and the Voronoi-adapted cell crossings (toy mesh)."""
 import numpy as np
 
-from skewerjax.simulations import absorbers as ab_
-from skewerjax.simulations import deposition as dep
+from skewerjax.core import Cells
+from skewerjax.core import absorbers as ab_
+from skewerjax.core import deposition as dep
 
 BOX = 10.0
 
@@ -57,7 +58,8 @@ def test_split_crossings_keep_the_column():
     frame = ab_.SnapshotFrame(a_snap=0.25, velfac=300.0, path_length=s[:, -1])
     cols = []
     for tol in (None, 0.25, 0.05):
-        A = ab_.absorbers_from_crossings(cr, pts, n, T, vel, 0.25, "SiIII", 28.0855, frame=frame, tolerance=tol)
+        cells = Cells(g, size ** 3, {"SiIII": {"number_density": n, "temperature": T, "velocity": vel}}, box=BOX)
+        A = ab_.absorbers_from_crossings(cr, pts, cells, "SiIII", 28.0855, a_data=0.25, frame=frame, tolerance=tol)
         cols.append((A.n * A.length).sum(-1))
         if tol is not None:
             assert A.meta["max_split"] > 1

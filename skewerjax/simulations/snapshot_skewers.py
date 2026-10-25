@@ -1,8 +1,11 @@
-"""Skewers through a simulation snapshot (layers 1-6): fields, columns and tau for any extraction / integration options.
+"""Skewers through a simulation snapshot: the gas cells, columns and tau for any extraction / integration options.
 
 ``SimulationSkewers`` holds the sampling points of a set of skewers (a ``SkewerBundle``'s points), the gas cells
-selected near them, the deposited segments and the frames. It returns per-cell properties, deposited absorbers,
-columns along the skewers, ``core.Fields`` at the points, and tau(v), for
+selected near them, the deposited segments and the frames. After the gas physics it turns the selected cells into
+``core.Cells`` (``to_cells``: per ion, the comoving density, temperature and peculiar velocity), the container shared
+with the toy models, and from there follows the core's route (deposition, ``core.absorbers``, ``core.Pieces``,
+``core.compute_optical_depth``). It returns per-cell properties, the cells, deposited absorbers, columns along the
+skewers and tau(v), for
 
 * ``ExtractionOptions``: how the fields are extracted from the cells (deposition geometry, mass and temperature
   constants, ionisation model): layers 3 and 5;
@@ -26,13 +29,13 @@ import h5py
 import jax.numpy as jnp
 import numpy as np
 
+from skewerjax.core import absorbers as ab_
+from skewerjax.core import deposition as dep
+from skewerjax.core.cells import Cells
 from skewerjax.core.constants import phys
 from skewerjax.core.cosmology import Cosmology
-from skewerjax.core.fields import Fields, SampledField, ScalarField, VectorField
 from skewerjax.core.lines import LineBundle
 from skewerjax.core.skewers import axis_aligned_skewer_points, path_geometry
-from skewerjax.simulations import absorbers as ab_
-from skewerjax.simulations import deposition as dep
 from skewerjax.simulations import gas_physics as gp
 from skewerjax.simulations import selection as sel
 
@@ -239,6 +242,25 @@ class SimulationSkewers:
             d.update(override)
         return d
 
+    def to_cells(self, species, ext: ExtractionOptions = ExtractionOptions(), override: Optional[dict] = None) -> Cells:
+        """The selected cells as ``core.Cells``, the container of the gas shared with the toy models.
+
+        species : a species key (e.g. "HI", as in ``LineBundle.species_keys``), an ``Ion``, or a sequence of them.
+        Per species: ``number_density`` = n_ion a_snap^3 [comoving cm^-3] (``properties``), ``temperature`` [K] and
+        ``velocity`` [km/s, physical peculiar] of every selected cell; positions [cMpc] and volumes [cMpc^3] of the
+        cells, the periodic box and the snapshot ids. ``override`` replaces per-cell inputs (``cell_inputs``).
+        """
+        items = [species] if isinstance(species, (str, gp.Ion)) else list(species)
+        ions = [x if isinstance(x, gp.Ion) else gp.ion_from_species(x) for x in items]
+        a = self.header.a
+        per, ci = {}, None
+        for ion in ions:
+            ci = self.cell_inputs(ion, ext, override)
+            per[ion.species] = {"number_density": np.asarray(ci["n"], dtype=np.float64) * a ** 3,
+                                "temperature": np.asarray(ci["T"], dtype=np.float64), "velocity": np.asarray(ci["vel"], dtype=np.float64)}
+        vol = np.asarray(self.cells.volumes) if not (override and "size" in override) else np.asarray(ci["size"], dtype=np.float64) ** 3
+        return Cells(np.asarray(ci["pos"], dtype=np.float64), vol, per, box=self.box, ids=self.cells.ids)
+
     def segments(self, kind: str, inputs: Optional[dict] = None) -> dep.SegmentComponents:
         """Deposited pieces of every dual segment ("voronoi" or "tophat"); cached for the selected cells."""
         if kind not in ("voronoi", "tophat"):
@@ -262,14 +284,14 @@ class SimulationSkewers:
                   frame=None) -> ab_.Absorbers:
         """Deposited absorbers of every skewer (one per piece of cell in each dual segment; for
         ``deposition="voronoi_crossings"`` one per sub-piece of each cell crossing, split with ``frame``'s Hubble rate)."""
-        ci = self.cell_inputs(ion, ext, override)
+        cells = self.to_cells(ion, ext, override)
         if ext.deposition == "voronoi_crossings":
             if override and "pos" in override:
                 raise ValueError("deposition='voronoi_crossings' uses the selected cells' own positions.")
-            return ab_.absorbers_from_crossings(self.crossings(), self.points, ci["n"], ci["T"], ci["vel"], self.header.a,
-                                                ci["species"], ci["mass"], frame=frame)
-        seg = self.segments(ext.deposition, ci if override and "pos" in override else None)
-        return ab_.absorbers_from_components(seg, self.points, ci["n"], ci["T"], ci["vel"], self.header.a, ci["species"], ci["mass"])
+            return ab_.absorbers_from_crossings(self.crossings(), self.points, cells, ion.species, ion.mass_amu, a_data=self.header.a,
+                                                frame=frame)
+        seg = self.segments(ext.deposition, self.cell_inputs(ion, ext, override) if override and "pos" in override else None)
+        return ab_.absorbers_from_components(seg, self.points, cells, ion.species, ion.mass_amu, a_data=self.header.a)
 
     def column_per_pixel(self, ion: gp.Ion, ext: ExtractionOptions = ExtractionOptions(), nbins: Optional[int] = None,
                          override: Optional[dict] = None, weight: Optional[str] = None) -> np.ndarray:
@@ -285,7 +307,8 @@ class SimulationSkewers:
         return np.where(N > 0, NQ / np.maximum(N, 1e-300), 0.0)
 
     def point_values(self, ion: gp.Ion, ext: ExtractionOptions = ExtractionOptions()) -> dict:
-        """The deposited fields at the sampling points: segment averages over each point's dual segment.
+        """The deposited fields at the sampling points, for figures: segment averages over each point's dual segment
+        (tau never uses them; it sums the pieces of the cells).
 
         n = sum_p n_p l_p / w_i (the exact column of the segment over its line element); T and the peculiar
         velocity are column-weighted over the pieces (length-weighted where the segment holds no ion).
@@ -313,25 +336,6 @@ class SimulationSkewers:
         a = self.header.a
         return dict(n=n, n_com=n * a ** 3, T=T, velocity=vel, v_los=np.sum(vel * self.tangents, -1),
                     column=col * ab_.MPC_CM * a, line_elements=self.line_elements)
-
-    def fields(self, species, ext: ExtractionOptions = ExtractionOptions()) -> Fields:
-        """A ``Fields`` of the simulation at the sampling points, for the species keys ``species`` (e.g.
-        ``["HI", "SiIII"]``, as in ``LineBundle.species_keys``).
-
-        Every sampler is a ``SampledField`` of ``point_values``: ``temperature`` [K], ``velocity`` [km/s],
-        ``number_density`` [comoving cm^-3, what ``core.compute_optical_depth`` takes], ``turbulence`` and
-        ``collisional`` (0). Call them with this bundle's quadri-vectors, e.g. ``fields.sample(qv, los)``.
-        ``core.compute_optical_depth(bundle, v, lines, fields)`` integrates one piece per dual segment with these
-        segment averages; ``optical_depth`` / ``tau`` integrate the deposited pieces instead (the default).
-        """
-        out = {}
-        for sp in ([species] if isinstance(species, str) else list(species)):
-            pv = self.point_values(gp.ion_from_species(sp), ext)
-            zeros = np.zeros_like(pv["T"])
-            out[sp] = {"temperature": ScalarField(SampledField(pv["T"])), "velocity": VectorField(SampledField(pv["velocity"])),
-                       "number_density": ScalarField(SampledField(pv["n_com"])),
-                       "turbulence": ScalarField(SampledField(zeros)), "collisional": ScalarField(SampledField(zeros))}
-        return Fields(out)
 
     def optical_depth(self, line_bundle, velocities_kms=None, ext: ExtractionOptions = ExtractionOptions(),
                       integ: IntegrationOptions = IntegrationOptions(), check: Optional[float] = 0.25, *,
@@ -385,8 +389,9 @@ class SimulationSkewers:
         ``compute_optical_depth(sk.pieces(HI, lya), v, lya, velocity_period=True)``."""
         fr = self.frame(integ.frame)
         T_scale = gp.FAKE_SPECTRA_B2_RATIO if ext.b_constants == "fake_spectra" else 1.0
-        return ab_.absorber_pieces(self.absorbers(ion, ext, frame=fr), fr, line_bundle.n_lines, skewers=skewers, T_scale=T_scale,
-                                   n_scale=integ.normalisation)
+        seg = self.segments("voronoi" if ext.deposition == "voronoi_crossings" else ext.deposition)
+        return ab_.cell_pieces(self.to_cells(ion, ext), line_bundle, points=self.points, frame=fr, deposition=ext.deposition,
+                               segments=seg, a_data=self.header.a, T_scale=T_scale, n_scale=integ.normalisation, skewers=skewers)
 
     def tau_key(self, ion: gp.Ion, line_bundle, velocities_kms, ext: ExtractionOptions, integ, override_key: str = "",
                 velocity_period=False) -> str:

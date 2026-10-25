@@ -1,23 +1,27 @@
-"""Absorbers (layer 6): the deposited pieces of every skewer, their frame a(s), and tau through the core.
+"""Absorbers: the deposited pieces of every skewer, their frame a(s), and the pieces of the optical-depth sum.
 
-What the optical-depth integral needs (review notes, Eq. tau_straight_los) is, along the path, the
-comoving density of the absorbing ion, its temperature, its *peculiar* velocity and the length of each piece. The
-Hubble flow is not a field: it enters through the scale factor a(s), set by the frame at every piece's centroid.
+What the optical-depth integral needs (review notes, Eq. tau_straight_los) is, along the path, the comoving density
+of the absorbing species, its temperature, its *peculiar* velocity and the length of each piece. The Hubble flow is
+not a field: it enters through the scale factor a(s), set by the frame at every piece's centroid.
 
-``Absorbers`` flattens the pieces of all skewers (cell pieces, sphere overlaps, ...) into one list per skewer (path
-coordinate s of the centroid, density, piece length, T, line-of-sight peculiar velocity). ``absorber_pieces`` turns
-them into ``core.Pieces``, and ``tau_absorbers`` integrates them with ``core.compute_optical_depth``, the same entry
-point as every other field source:
+The route from the gas to tau is the same for every source of gas (``core.cells.Cells``, from a toy model or from a
+simulation):
 
-    tau(v) = sum_p  C f  n_com,p a_p^-2  phi_p(v)  l_p .
+    Cells + sampling points --selection--> cells within reach --deposition--> pieces of every dual segment
+          --``absorbers_from_components``--> ``Absorbers`` (one species) --``absorber_pieces``--> ``core.Pieces``
+          --``core.compute_optical_depth``--> tau(v) = sum_p  C f  n_com,p a_p^-2  phi_p(v)  l_p .
+
+``cell_pieces`` runs the whole chain for every species of a ``LineBundle``; ``compute_optical_depth(bundle, v, lines,
+cells)`` calls it. ``tau_absorbers`` integrates the absorbers of one species skewer by skewer (bounded memory,
+optional pixel averaging).
 
 Periodicity is not a property of the frame or of the pieces: it is ``compute_optical_depth``'s ``velocity_period``
 (default: none), passed through by ``tau_absorbers``.
 
 Frames (NumPy, host side):
 
-* ``ExactFrame`` (SkewerJAX default): a(s) from the cosmology along the path; the spectral coordinate is the notes'
-  v_dagger with a_dagger = a(s = 0).
+* ``ExactFrame`` (SkewerJAX default): a(s) along the path (from the bundle's scale factors, or from the cosmology);
+  the spectral coordinate is the notes' v_dagger.
 * ``SnapshotFrame``: one scale factor a_snap for every point and the linear Hubble flow u = velfac s + v_pec as a
   line-of-sight velocity c tanh(u / c) (fake_spectra's frame, ``spectra.py`` L221-L228; matched option).
 """
@@ -30,8 +34,10 @@ from typing import Optional
 import jax.numpy as jnp
 import numpy as np
 
+from skewerjax.core import deposition as dep
 from skewerjax.core.constants import phys
 from skewerjax.core.optical_depth import Pieces, compute_optical_depth
+from skewerjax.core.selection import select_cells
 from skewerjax.core.skewers import path_geometry
 
 MPC_CM = 3.085678e24
@@ -75,19 +81,28 @@ class ExactFrame:
     Parameters
     ----------
     s_grid : (N_sk, N) path coordinates [cMpc] of the sampling points (increasing).
-    a_grid : (N_sk, N) scale factors there (``scale_factors_along_paths``).
+    a_grid : (N_sk, N) scale factors there (``scale_factors_along_paths``, or a ``SkewerBundle``'s).
     a_dagger : reference scale factor of the spectral coordinate (default a(s = 0) of skewer 0).
+    photon_sign : None (the simulation convention: the observer is before the first point and the photons travel
+        towards decreasing s) or (N_sk,) +1 / -1, the direction of the photons along s of every skewer
+        (``SkewerBundle.array_direction``).
+    a_dagger_per_skewer : optional (N_sk,) a_dagger of every skewer (instead of one value).
     """
     s_grid: np.ndarray
     a_grid: np.ndarray
     a_dagger_value: Optional[float] = None
+    photon_sign: Optional[np.ndarray] = None
+    a_dagger_per_skewer: Optional[np.ndarray] = None
 
     def scale_factors(self, skewer: int, s):
         lna = np.interp(np.asarray(s), self.s_grid[skewer], np.log(self.a_grid[skewer]))
         return np.exp(lna)
 
     def velocity(self, skewer: int, s, v_los):
-        return np.asarray(v_los, dtype=np.float64)
+        """The velocity along -(photon direction) [km/s] of gas with velocity ``v_los`` along +s."""
+        if self.photon_sign is None:
+            return np.asarray(v_los, dtype=np.float64)
+        return -float(self.photon_sign[skewer]) * np.asarray(v_los, dtype=np.float64)
 
     @property
     def a_dagger(self):
@@ -130,14 +145,14 @@ def scale_factors_along_paths(s, a_ref: float, cosmology, s_ref=None) -> np.ndar
 # --------------------------------------------------------------------------- absorbers
 @dataclass
 class Absorbers:
-    """Flattened components of the sampling points of N_sk skewers (padded per skewer).
+    """The pieces of N_sk skewers for one species, flattened per skewer (padded).
 
     Arrays are (N_sk, M); padded entries have ``n = 0`` and ``cell = -1``.
 
-    s [cMpc] path coordinate; n [physical cm^-3 at the data epoch] density inside the piece
-    (deposition weight included); length [cMpc] piece length; T [K]; v_los [km/s] peculiar velocity
-    along the tangent (positive away from the observer); cell, point: provenance indices;
-    a_data: scale factor of the data.
+    s [cMpc] path coordinate of the centroid; n [comoving cm^-3] density inside the piece (deposition weight
+    included); length [cMpc] piece length; T [K]; v_los [km/s] peculiar velocity along the tangent (positive towards
+    increasing s); turbulence [m/s], collisional [GHz] (None: 0); cell, point: provenance indices (cell of the
+    ``Cells`` used, sampling point of the dual segment); a_data: the scale factor of the data (a snapshot's), or None.
     """
     s: np.ndarray
     n: np.ndarray
@@ -146,21 +161,27 @@ class Absorbers:
     v_los: np.ndarray
     cell: np.ndarray
     point: np.ndarray
-    a_data: float
+    a_data: Optional[float]
     species: str
     mass_amu: float
     meta: dict = field(default_factory=dict)
+    turbulence: Optional[np.ndarray] = None
+    collisional: Optional[np.ndarray] = None
 
     @property
     def n_skewers(self) -> int:
         return self.s.shape[0]
 
-    def column_cm2(self) -> np.ndarray:
-        """(N_sk, M) physical column of every absorber at the data epoch [cm^-2]."""
-        return self.n * self.length * MPC_CM * self.a_data
+    def column_cm2(self, a: Optional[float] = None) -> np.ndarray:
+        """(N_sk, M) physical column of every absorber at scale factor ``a`` (default: the data's) [cm^-2]:
+        n_com l / a^2."""
+        a = self.a_data if a is None else a
+        if a is None:
+            raise ValueError("column_cm2 needs a scale factor (these absorbers have no a_data).")
+        return self.n * self.length * MPC_CM / a ** 2
 
     def with_values(self, **kw) -> "Absorbers":
-        d = {k: getattr(self, k) for k in ("s", "n", "length", "T", "v_los", "cell", "point")}
+        d = {k: getattr(self, k) for k in ("s", "n", "length", "T", "v_los", "cell", "point", "turbulence", "collisional")}
         d.update(kw)
         return Absorbers(**d, a_data=self.a_data, species=self.species, mass_amu=self.mass_amu, meta=dict(self.meta))
 
@@ -171,20 +192,30 @@ def _pad_stack(rows, fill):
                                      np.full(m - len(r), fill)]) for r in rows])
 
 
-def absorbers_from_components(seg, points, n_cell, T_cell, velocity_cell, a_data: float, species: str,
-                              mass_amu: float) -> Absorbers:
-    """Turn a ``SegmentComponents`` (deposition) into ``Absorbers``.
+def _species_values(cells, species: str):
+    """(n [comoving cm^-3], T [K], velocity (M, 3) [km/s], turbulence [m/s] or None, collisional [GHz] or None)."""
+    f = cells.species[species]
+    v = lambda k: np.asarray(f[k], dtype=np.float64)
+    return (v("number_density"), v("temperature"), v("velocity"), v("turbulence") if "turbulence" in f else None,
+            v("collisional") if "collisional" in f else None)
+
+
+def absorbers_from_components(seg, points, cells, species: str, mass_amu: float, *, a_data: Optional[float] = None) -> Absorbers:
+    """Turn a ``SegmentComponents`` (deposition) of ``cells`` into the ``Absorbers`` of ``species``.
 
     Parameters
     ----------
-    seg : SegmentComponents for ``points`` (N_sk, N, 3).
-    n_cell, T_cell : (M_cells,) ion density [physical cm^-3] and temperature [K] of the cells.
-    velocity_cell : (M_cells, 3) physical peculiar velocities [km/s].
+    seg : SegmentComponents for ``points`` (N_sk, N, 3), with cell indices into ``cells``.
+    cells : ``core.Cells`` (the species' comoving density, temperature, peculiar velocity and, if given, turbulence
+        and collisional term).
+    mass_amu : mass of the species [u] (thermal widths of ``sampling_check``); a_data : scale factor of the data.
     """
     g = path_geometry(jnp.asarray(points, dtype=jnp.float64))
     s_pt, tan = np.asarray(g["s"]), np.asarray(g["tangents"])
-    n_cell, T_cell, vel = (np.asarray(x, dtype=np.float64) for x in (n_cell, T_cell, velocity_cell))
-    rows = {k: [] for k in ("s", "n", "length", "T", "v_los", "cell", "point")}
+    n_cell, T_cell, vel, turb, coll = _species_values(cells, species)
+    keys = ("s", "n", "length", "T", "v_los", "cell", "point") + (("turbulence",) if turb is not None else ()) \
+        + (("collisional",) if coll is not None else ())
+    rows = {k: [] for k in keys}
     for k in range(seg.cell.shape[0]):
         live = seg.cell[k] >= 0
         pi, ki = np.nonzero(live)
@@ -196,13 +227,17 @@ def absorbers_from_components(seg, points, n_cell, T_cell, velocity_cell, a_data
         rows["v_los"].append(np.sum(vel[c] * tan[k][pi], axis=-1))
         rows["cell"].append(c)
         rows["point"].append(pi)
-    fills = dict(s=0.0, n=0.0, length=0.0, T=1e4, v_los=0.0, cell=-1, point=-1)
-    return Absorbers(**{k: _pad_stack(v, fills[k]) for k, v in rows.items()}, a_data=float(a_data),
+        if turb is not None:
+            rows["turbulence"].append(turb[c])
+        if coll is not None:
+            rows["collisional"].append(coll[c])
+    fills = dict(s=0.0, n=0.0, length=0.0, T=1e4, v_los=0.0, cell=-1, point=-1, turbulence=0.0, collisional=0.0)
+    return Absorbers(**{k: _pad_stack(v, fills[k]) for k, v in rows.items()}, a_data=None if a_data is None else float(a_data),
                      species=species, mass_amu=float(mass_amu), meta=dict(kind=seg.kind))
 
 
-def absorbers_from_crossings(cross, points, n_cell, T_cell, velocity_cell, a_data: float, species: str, mass_amu: float,
-                             *, frame=None, tolerance: Optional[float] = 0.25, max_split: int = 64) -> Absorbers:
+def absorbers_from_crossings(cross, points, cells, species: str, mass_amu: float, *, a_data: Optional[float] = None, frame=None,
+                             tolerance: Optional[float] = 0.25, max_split: int = 64, split=None) -> Absorbers:
     """Absorbers of the Voronoi-adapted segmentation: every cell crossing, split into equal sub-pieces.
 
     A crossing of length l holds one cell, so n, T and v_pec are constant on it; only a(s) and the Hubble
@@ -213,25 +248,23 @@ def absorbers_from_crossings(cross, points, n_cell, T_cell, velocity_cell, a_dat
 
     Parameters
     ----------
-    cross : ``CellCrossings`` of ``points`` (N_sk, N, 3) [cMpc]; n_cell, T_cell, velocity_cell : as
+    cross : ``CellCrossings`` of ``points`` (N_sk, N, 3) [cMpc]; cells, species, mass_amu, a_data : as
         ``absorbers_from_components``; frame : the frame of the integral (its ``hubble_rate``).
+    split : optional list of (n_crossings_k,) integer splits per skewer, used instead of the criterion (the same
+        sub-pieces for several species: ``crossing_splits``).
     """
     g = path_geometry(jnp.asarray(points, dtype=jnp.float64))
     s_pt, tan = np.asarray(g["s"]), np.asarray(g["tangents"])
-    n_cell, T_cell, vel = (np.asarray(x, dtype=np.float64) for x in (n_cell, T_cell, velocity_cell))
-    rows = {k: [] for k in ("s", "n", "length", "T", "v_los", "cell", "point")}
-    n_split = []
+    n_cell, T_cell, vel, turb, coll = _species_values(cells, species)
+    keys = ("s", "n", "length", "T", "v_los", "cell", "point") + (("turbulence",) if turb is not None else ()) \
+        + (("collisional",) if coll is not None else ())
+    rows = {k: [] for k in keys}
+    q_list = crossing_splits(cross, T_cell, mass_amu, frame, tolerance, max_split) if split is None else split
     for k in range(cross.cell.shape[0]):
         live = cross.cell[k] >= 0
         lo, hi, c = cross.s_lo[k][live], cross.s_hi[k][live], cross.cell[k][live]
         l = hi - lo
-        if frame is None or tolerance is None:
-            q = np.ones(c.size, np.int64)
-        else:
-            b = np.sqrt(2.0 * phys.kB * T_cell[c] / mass_amu) / 1e3
-            W = frame.hubble_rate(k, 0.5 * (lo + hi)) * l
-            q = np.clip(np.ceil(W / (tolerance * np.maximum(b, 1e-30))), 1, max_split).astype(np.int64)
-        n_split.append(q)
+        q = q_list[k]
         rep = np.repeat(np.arange(c.size), q)
         j = np.arange(rep.size) - np.repeat(np.cumsum(q) - q, q)
         s = lo[rep] + (j + 0.5) * l[rep] / q[rep]
@@ -240,12 +273,33 @@ def absorbers_from_crossings(cross, points, n_cell, T_cell, velocity_cell, a_dat
         rows["s"].append(s); rows["n"].append(n_cell[cc]); rows["length"].append(l[rep] / q[rep])
         rows["T"].append(T_cell[cc]); rows["v_los"].append(np.sum(vel[cc] * tan[k][pt], axis=-1))
         rows["cell"].append(cc); rows["point"].append(pt)
-    fills = dict(s=0.0, n=0.0, length=0.0, T=1e4, v_los=0.0, cell=-1, point=-1)
-    q_all = np.concatenate(n_split) if n_split else np.zeros(0, np.int64)
+        if turb is not None:
+            rows["turbulence"].append(turb[cc])
+        if coll is not None:
+            rows["collisional"].append(coll[cc])
+    fills = dict(s=0.0, n=0.0, length=0.0, T=1e4, v_los=0.0, cell=-1, point=-1, turbulence=0.0, collisional=0.0)
+    q_all = np.concatenate(q_list) if len(q_list) else np.zeros(0, np.int64)
     meta = dict(kind="voronoi_crossings", max_split=int(q_all.max()) if q_all.size else 0,
                 mean_split=float(q_all.mean()) if q_all.size else 0.0)
-    return Absorbers(**{k: _pad_stack(v, fills[k]) for k, v in rows.items()}, a_data=float(a_data),
+    return Absorbers(**{k: _pad_stack(v, fills[k]) for k, v in rows.items()}, a_data=None if a_data is None else float(a_data),
                      species=species, mass_amu=float(mass_amu), meta=meta)
+
+
+def crossing_splits(cross, T_cell, mass_amu: float, frame=None, tolerance: Optional[float] = 0.25, max_split: int = 64) -> list:
+    """Per skewer, the number of equal sub-pieces q of every cell crossing (``absorbers_from_crossings``)."""
+    out = []
+    for k in range(cross.cell.shape[0]):
+        live = cross.cell[k] >= 0
+        lo, hi, c = cross.s_lo[k][live], cross.s_hi[k][live], cross.cell[k][live]
+        l = hi - lo
+        if frame is None or tolerance is None:
+            q = np.ones(c.size, np.int64)
+        else:
+            b = np.sqrt(2.0 * phys.kB * np.asarray(T_cell)[c] / mass_amu) / 1e3
+            W = frame.hubble_rate(k, 0.5 * (lo + hi)) * l
+            q = np.clip(np.ceil(W / (tolerance * np.maximum(b, 1e-30))), 1, max_split).astype(np.int64)
+        out.append(q)
+    return out
 
 
 # --------------------------------------------------------------------------- sampling check
@@ -285,9 +339,10 @@ def absorber_pieces(ab: Absorbers, frame, n_lines: int, *, skewers=None, density
                     n_scale: float = 1.0) -> Pieces:
     """The absorbers of ``skewers`` (default all) as ``core.Pieces`` (N_sk, M), padded with empty pieces.
 
-    Every absorber is one piece: at its centroid s, with the frame's a(s), the velocity the frame injects along the
-    path (photons travel towards decreasing s), T x ``T_scale``, the comoving density n_com = n a_data^3 x ``n_scale``
-    (``density_scaling="fixed_column"``: n a_data a(s)^2) and its length. Its width in velocity is the frame's Hubble
+    Every absorber is one piece: at its centroid s, with the frame's a(s), the velocity along the photon (the frame's
+    injected velocity; photons travel towards decreasing s unless the frame says otherwise), T x ``T_scale``, the
+    comoving density n x ``n_scale`` (``density_scaling="fixed_column"``: n (a(s) / a_data)^2, fake_spectra's column at
+    the data epoch), its turbulence and collisional term, and its length. Its width in velocity is the frame's Hubble
     rate times its length (n, T and v_pec are constant inside a cell). ``T_scale`` and ``n_scale`` are matched-mode
     knobs (fake_spectra's b constants and 7/8 chords).
     """
@@ -296,12 +351,19 @@ def absorber_pieces(ab: Absorbers, frame, n_lines: int, *, skewers=None, density
     a = np.stack([frame.scale_factors(k, s[i]) for i, k in enumerate(ks)])
     u = np.stack([frame.velocity(k, s[i], vl[i]) for i, k in enumerate(ks)])
     W = np.stack([frame.hubble_rate(k, s[i]) for i, k in enumerate(ks)]) * l
-    n_com = n * n_scale * (ab.a_data ** 3 if density_scaling == "comoving" else ab.a_data * a ** 2)
+    if density_scaling == "comoving":
+        n_com = n * n_scale
+    else:
+        if ab.a_data is None:
+            raise ValueError("density_scaling='fixed_column' needs absorbers with a_data.")
+        n_com = n * n_scale * a ** 2 / ab.a_data ** 2
     lines = lambda x: jnp.broadcast_to(jnp.asarray(x)[None], (n_lines,) + x.shape)
-    zeros = np.zeros(T.shape)
-    return Pieces(a_dagger=jnp.full(s.shape, frame.a_dagger), scale_factor=jnp.asarray(a), length_m=jnp.asarray(l) * phys.Mpc_to_m,
-                  temperature=lines(T * T_scale), turbulence=lines(zeros), collisional=lines(zeros), los_velocity=lines(-u),
-                  number_density=lines(n_com), width_kms=lines(W),
+    opt = lambda x: np.zeros(T.shape) if x is None else np.asarray(x)[list(ks)]
+    a_sk = getattr(frame, "a_dagger_per_skewer", None)
+    a_d = jnp.full(s.shape, frame.a_dagger) if a_sk is None else jnp.broadcast_to(jnp.asarray(np.asarray(a_sk)[list(ks)])[:, None], s.shape)
+    return Pieces(a_dagger=a_d, scale_factor=jnp.asarray(a), length_m=jnp.asarray(l) * phys.Mpc_to_m,
+                  temperature=lines(T * T_scale), turbulence=lines(opt(ab.turbulence)), collisional=lines(opt(ab.collisional)),
+                  los_velocity=lines(-u), number_density=lines(n_com), width_kms=lines(W),
                   velocity_span_kms=jnp.asarray([frame.velocity_span(k) for k in ks]))
 
 
@@ -377,8 +439,8 @@ def tau_by_path_bins(ab: Absorbers, line_bundle, velocities_kms, frame, s_edges,
 
 # --------------------------------------------------------------------------- columns
 def column_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarray:
-    """(N_sk, nbins) physical column [cm^-2] of the absorbers binned exactly into ``nbins`` equal
-    position pixels of a periodic path of length ``path_length`` [cMpc]. Each absorber is the
+    """(N_sk, nbins) physical column [cm^-2] at the data epoch (``a_data``) of the absorbers binned exactly into
+    ``nbins`` equal position pixels of a periodic path of length ``path_length`` [cMpc]. Each absorber is the
     interval [s - l/2, s + l/2] (a piece of one convex cell or sphere inside one segment)."""
     out = np.zeros((ab.n_skewers, nbins))
     dz = path_length / nbins
@@ -386,7 +448,7 @@ def column_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarra
         live = ab.n[k] > 0
         lo = ab.s[k][live] - 0.5 * ab.length[k][live]
         hi = lo + ab.length[k][live]
-        dens = ab.n[k][live] * MPC_CM * ab.a_data
+        dens = ab.n[k][live] * MPC_CM / ab.a_data ** 2
         j0, j1 = np.floor(lo / dz).astype(np.int64), np.floor(hi / dz).astype(np.int64)
         n = j1 - j0 + 1
         cell = np.repeat(np.arange(lo.size), n)
@@ -395,3 +457,117 @@ def column_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarra
         keep = length > 0
         out[k] = np.bincount(np.mod(j[keep], nbins), weights=dens[cell[keep]] * length[keep], minlength=nbins)
     return out
+
+
+# --------------------------------------------------------------------------- the route: cells -> pieces
+DEPOSITIONS = ("voronoi", "tophat", "voronoi_crossings")
+
+
+def deposit(cells, points, *, deposition: str = "voronoi", select: bool = True, selection_backend: str = "cpu",
+            grid_fast_path: bool = True):
+    """Selection and deposition of ``cells`` along ``points`` (N_sk, N, 3) [cMpc]: (the cells the indices refer to,
+    ``SegmentComponents``).
+
+    deposition : "voronoi" (default: the exact pieces of the Voronoi cells in every dual segment; for a grid of cells,
+        ``grid_segments``, unless ``grid_fast_path=False``), "tophat" (spheres of radius V^(1/3), the fake_spectra
+        option) or "voronoi_crossings" (the Voronoi pieces, joined per cell crossing by ``cell_pieces``).
+    select : first keep the cells within reach of the points (``core.selection.select_cells``; not needed by the grid
+        fast path).
+    """
+    if deposition not in DEPOSITIONS:
+        raise ValueError(f"deposition must be one of {DEPOSITIONS}, got {deposition!r}.")
+    pts = np.asarray(points, dtype=np.float64)
+    if deposition != "tophat" and grid_fast_path and cells.grid is not None and cells.box is not None:
+        return cells, dep.grid_segments(pts, cells.grid, cells.box)
+    mode = "tophat" if deposition == "tophat" else "voronoi"
+    use = select_cells(cells, pts, mode=mode, backend=selection_backend) if select else cells
+    if deposition == "tophat":
+        return use, dep.tophat_segments(pts, use.positions, use.size_cMpc, use.box)
+    return use, dep.voronoi_segments(pts, use.positions, use.box, gas_size=use.size_cMpc)
+
+
+def bundle_frame(skewer_bundle, *, a_dagger=None, ii_cosmology: int = 0) -> ExactFrame:
+    """The ``ExactFrame`` of a ``SkewerBundle``: a(s) interpolated in ln a between its points (where a(x) was solved),
+    its photon directions, and a_dagger (default: the bundle's ``a0``; a scalar, or (N_sk,) per skewer)."""
+    pts = np.asarray(skewer_bundle.spatial_points, dtype=np.float64)
+    s = np.asarray(path_geometry(jnp.asarray(pts))["s"])
+    a = np.asarray(skewer_bundle.quadri_vectors[ii_cosmology][..., 0], dtype=np.float64)
+    a_d = np.asarray(skewer_bundle.a0 if a_dagger is None else a_dagger, dtype=np.float64)
+    if a_d.ndim > 1 or (a_d.ndim == 1 and a_d.size not in (1, pts.shape[0])):
+        raise ValueError(f"a_dagger must be a scalar or one value per skewer ({pts.shape[0]},), got shape {a_d.shape}.")
+    per = None if a_d.size <= 1 or np.all(a_d == a_d.ravel()[0]) else np.broadcast_to(a_d, (pts.shape[0],)).copy()
+    return ExactFrame(s, a, a_dagger_value=float(np.ravel(a_d)[0]), photon_sign=np.asarray(skewer_bundle.array_direction),
+                      a_dagger_per_skewer=per)
+
+
+def cell_pieces(cells, line_bundle, *, skewer_bundle=None, points=None, frame=None, a_dagger=None, ii_cosmology: int = 0,
+                deposition: str = "voronoi", segments=None, select: bool = True, selection_backend: str = "cpu",
+                grid_fast_path: bool = True, crossing_tolerance: Optional[float] = 0.25, T_scale: float = 1.0,
+                n_scale: float = 1.0, density_scaling: str = "comoving", a_data: Optional[float] = None, skewers=None,
+                return_parts: bool = False):
+    """The pieces of the optical-depth sum for every line of ``line_bundle``, from ``cells`` along a set of paths.
+
+    The one route from the gas to tau, for every source of cells (toy models, simulations):
+
+    1. selection of the cells within reach of the points, and deposition into the pieces of every dual segment
+       (``deposit``; for ``deposition="voronoi_crossings"`` the pieces are joined per cell crossing and split into
+       equal sub-pieces of velocity width <= ``crossing_tolerance`` b of the narrowest species);
+    2. per species, the ``Absorbers`` of its cells (``absorbers_from_components`` / ``absorbers_from_crossings``);
+    3. ``absorber_pieces`` in the frame: a(s) at every centroid and the velocity along the photon.
+
+    Every species shares the same pieces (one deposition), so a line's fields are those of its species.
+
+    Parameters
+    ----------
+    cells : ``core.Cells`` holding every species of ``line_bundle``.
+    skewer_bundle : the paths and their a(x) (``bundle_frame``: a_dagger default its ``a0``); or give ``points``
+        (N_sk, N, 3) [cMpc] and a ``frame`` (``ExactFrame`` / ``SnapshotFrame``) instead.
+    deposition, select, selection_backend, grid_fast_path : see ``deposit``; segments : a ``SegmentComponents`` already
+        computed for ``points`` (its cell indices refer to ``cells``), used instead.
+    T_scale, n_scale, density_scaling, a_data : see ``absorber_pieces`` (matched-mode knobs; defaults change nothing).
+    skewers : optional indices of the skewers to return.
+    return_parts : also return dict(cells, segments, absorbers {species: Absorbers}, frame, crossings).
+
+    Returns
+    -------
+    ``core.Pieces`` (N_lines, N_sk, N_p) (and the parts).
+    """
+    from dataclasses import replace
+    if skewer_bundle is not None:
+        points = np.asarray(skewer_bundle.spatial_points, dtype=np.float64)
+        frame = bundle_frame(skewer_bundle, a_dagger=a_dagger, ii_cosmology=ii_cosmology) if frame is None else frame
+    elif points is None or frame is None:
+        raise ValueError("give a skewer_bundle, or points and a frame.")
+    pts = np.asarray(points, dtype=np.float64)
+    species = list(line_bundle.species_keys)
+    missing = [sp for sp in species if sp not in cells.species]
+    if missing:
+        raise ValueError(f"the cells hold no {missing} (they hold {cells.species_keys}).")
+    if segments is None:
+        use, seg = deposit(cells, pts, deposition="voronoi" if deposition == "voronoi_crossings" else deposition, select=select,
+                           selection_backend=selection_backend, grid_fast_path=grid_fast_path)
+    else:
+        use, seg = cells, segments
+    mass = {sp: float(np.asarray(line_bundle.mass_amu)[line_bundle.indices_for_species(sp)[0]]) for sp in species}
+    cross = None
+    if deposition == "voronoi_crossings":
+        cross = dep.cell_crossings(seg, pts)
+        per_sp = [crossing_splits(cross, np.asarray(use.species[sp]["temperature"]), mass[sp], frame, crossing_tolerance)
+                  for sp in species]
+        split = [np.max(np.stack([q[k] for q in per_sp]), axis=0) for k in range(len(per_sp[0]))]
+        abs_ = {sp: absorbers_from_crossings(cross, pts, use, sp, mass[sp], a_data=a_data, split=split) for sp in species}
+    else:
+        abs_ = {sp: absorbers_from_components(seg, pts, use, sp, mass[sp], a_data=a_data) for sp in species}
+    kw = dict(skewers=skewers, density_scaling=density_scaling, T_scale=T_scale, n_scale=n_scale)
+    per = {sp: absorber_pieces(abs_[sp], frame, 1, **kw) for sp in species}
+    p0 = per[species[0]]
+    n_l = line_bundle.n_lines
+    rows = {f: [None] * n_l for f in ("temperature", "turbulence", "collisional", "los_velocity", "number_density", "width_kms")}
+    for sp in species:
+        for j in line_bundle.indices_for_species(sp):
+            for f in rows:
+                rows[f][j] = getattr(per[sp], f)[0]
+    pieces = replace(p0, **{f: jnp.stack(v) for f, v in rows.items()})
+    if return_parts:
+        return pieces, dict(cells=use, segments=seg, absorbers=abs_, frame=frame, crossings=cross)
+    return pieces
