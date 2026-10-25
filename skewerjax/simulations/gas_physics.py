@@ -136,7 +136,7 @@ def temperature(u, n_e, *, X: float = 0.76, gamma: float = 5.0 / 3.0, constants:
 
 
 def doppler_b_kms(T, mass_amu: float):
-    """Thermal Doppler parameter b = sqrt(2 k_B T / (A m_u)) [km/s] (as ``core.optical_depth.voigt_widths_GHz``)."""
+    """Thermal Doppler parameter b = sqrt(2 k_B T / (A m_u)) [km/s] (as ``core.line_profiles.voigt_widths_GHz``)."""
     return jnp.sqrt(2.0 * phys.kB * jnp.asarray(T) / mass_amu) / 1e3
 
 

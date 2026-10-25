@@ -1,31 +1,34 @@
 # Usage guide
 
 This guide is the reference companion of the notebooks. It lists the entry points of each subpackage, the conventions they
-share and the options that control speed and memory. The notebooks (`notebooks/00_quickstart`, `00_quickstart_step_by_step`, `01`–`08`) show
+share and the options that control speed and memory. The notebooks (`notebooks/00_quickstart`, `00_quickstart_step_by_step`, `01`–`09`) show
 the same tools at work, step by step.
 
 ```mermaid
 flowchart LR
     subgraph A["core"]
         L[LineBundle, Cosmology] --> S[SkewerBundle]
-        G["PowerLawGRF → grf_cells"] --> CE[Cells]
         S --> LS["cell_pieces: select_cells → deposition → absorbers → Pieces"]
-        CE --> LS
+        CE[Cells] --> LS
+        L --> LP["line_profiles: Voigt φ of the gas"]
         LS --> T["compute_optical_depth → optical_depth_from_pieces / _sharded"]
+        LP --> T
         T --> O[DeltaFieldBuilder] --> ST[OverfluxStatistics1D / 3D]
     end
-    subgraph B["simulations"]
-        R[ArepoHDF5Reader] --> SS["SimulationSkewers: selection, gas physics → to_cells"]
+    subgraph B["simulations (field sources)"]
+        G["PowerLawGRF → grf_cells (grid, uniform, density-weighted)"]
+        R[ArepoHDF5Reader] --> SC["snapshot_cells (a region) / SimulationSkewers.to_cells (near skewers)"]
     end
     subgraph C["comparison"]
         FS[FakeSpectraSource] --- MT[matched_tau] --- BM[benchmark]
     end
-    SS --> CE
-    MT --> SS
+    G --> CE
+    SC --> CE
+    MT --> SC
 ```
 
 Dependencies run one way only: `comparison` uses `simulations`, `simulations` uses `core`, and nothing in `core`
-imports the other subpackages. `skewerjax.utils.plotting` is outside them.
+imports the other subpackages. `simulations` holds every source of gas cells: the toy fields and the snapshots. `skewerjax.utils.plotting` is outside them.
 
 ## Conventions
 
@@ -36,9 +39,10 @@ imports the other subpackages. `skewerjax.utils.plotting` is outside them.
   (a, x, y, z).
 - **Cells.** Every source of gas is a set of Voronoi cells, `core.Cells`: generating points, volumes (size V^(1/3)),
   the periodic box and, per species, `number_density`, `temperature`, `velocity` (and optional `turbulence`,
-  `collisional`). Toy models fill it directly (`grf_cells`: by default the nodes of the grid, whose cells are the grid
-  cells; or any generating points, with `voronoi_volumes`); simulations after their gas physics
-  (`SimulationSkewers.to_cells`).
+  `collisional`). The field sources of `skewerjax.simulations` fill it: the toy fields (`grf_cells`: by default the
+  nodes of the grid, whose cells are the grid cells; or any generating points, e.g. `uniform_generators`,
+  `density_weighted_generators`, with `voronoi_volumes`) and the snapshots after their gas physics (`snapshot_cells`
+  for a region of the box, `SimulationSkewers.to_cells` for the cells near a set of skewers).
 - **Pieces.** τ is a sum over pieces, fragments of the path inside one cell (and one dual segment), each evaluated at
   its centroid (a, a⁻², the line centre) with its cell's values. `cell_pieces` (selection, deposition, absorbers) builds
   them for every source; they reach the kernel as `core.Pieces` through `compute_optical_depth`.
@@ -66,7 +70,8 @@ imports the other subpackages. `skewerjax.utils.plotting` is outside them.
 | lines | `LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id=...)` | any id of `core/lines_table.dat` (`LINES`) |
 | background | `Cosmology(H0, Omega_r_0, Omega_m_0, Omega_k_0, Omega_lambda_0)` | batches of cosmologies; `solve_a_of_x(rtol, atol)` |
 | skewers | `SkewerBundle(spatial_points, cosmologies, a0, x0, ...)` | `ICs_defined_at_index`, `ICs_at_emission_or_absorption`, `manual_scale_factors` |
-| gas cells | `Cells(positions, volumes, species, box)`, `cells_from_values`, `cells_on_grid`, `grf_cells(delta, grf, n_bar, ...)` | `generators=` (default: the grid nodes), `temperature` / `velocity` as arrays or functions of the generating points, `voronoi_volumes` |
+| gas cells | `Cells(positions, volumes, species, box)`, `cells_from_values`, `cells_on_grid`, `grid_points`, `voronoi_volumes` | (filled by the sources of `skewerjax.simulations`) |
+| line profiles | `core.line_profiles`: `line_profiles(v, lines, temperature=..., los_velocity=..., scale_factor=..., a_dagger=...)`, `voigt_line_profiles`, `voigt_widths_GHz`, `voigt_width_kms` | `voigt` (`"ExoJAX"`, `"convolution"`, `"harris"`: first order in the damping parameter, a ≤ 10⁻³, exact above), `detuning` (`"exact"`, `"linear"`), `velocity_period` |
 | τ | `compute_optical_depth(bundle, v, lines, cells, a_dagger=...)` or `compute_optical_depth(pieces, v, lines)` | `deposition` (`"voronoi"` default, `"tophat"`, `"voronoi_crossings"`), `line_frame`, `velocity_period`, `voigt`, `detuning`, `resolution_tolerance`, `v_chunk`, `piece_chunk`, `batch_size`, `per_piece`, `dtype`, `devices` |
 | τ (layers) | `select_cells` → `voronoi_segments` / `grid_segments` / `tophat_segments` → `absorbers_from_components` → `absorber_pieces` (all in `cell_pieces`) → `Pieces` → `optical_depth_from_pieces` → `optical_depth_kernel` | `resolution_report(pieces, lines)`; `voronoi_segments(..., backend="jax")`; `tau_absorbers`, `tau_by_path_bins` |
 | frames | `compute_optical_depth(..., line_frame="reference")`, `wrap_to_ref_line`, `velocities_in_line_frames`, `line_wavelength_grid_A` | |
@@ -75,6 +80,15 @@ imports the other subpackages. `skewerjax.utils.plotting` is outside them.
 | metal models | `fit_mcdonald_a`, `fit_ma_model_profiled` | |
 
 ## `skewerjax.simulations`
+
+**Toy fields.**
+
+| task | entry point | main options |
+|---|---|---|
+| Gaussian random field | `PowerLawGRF(A_s, k_0, n_s, L=..., N=...)` (or `k_min`, `k_max`, `N_k`); `sample(key)`, `power(k, mu)`, `power_at(*k_components)`, `power_monopole(k)`, `variance()` | optional, off by default: `beta` (Kaiser (1 + beta mu^2)^2), `sigma_fog`, `fog` (`"lorentzian"`, `"gaussian"`), `A_bao`, `r_bao`, `sigma_bao` (a Gaussian bump in xi, exact transform in 1D/2D/3D); `los_axis` (default: the last axis); P >= 0 is checked at construction |
+| toy gas cells | `grf_cells(delta, grf, n_bar, ...)` | `generators=` (default: the grid nodes; `uniform_generators(grf, M, seed=)`, `density_weighted_generators(delta, grf, M, seed=)`: point density proportional to 1 + delta), `temperature` / `velocity` as arrays or functions of the generating points, `volumes` |
+
+**Snapshots.**
 
 ```python
 from skewerjax.core import LineBundle
@@ -95,8 +109,12 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
   `SimulationSkewers(..., selection_backend=...)`: `"cpu"` (default, SciPy's periodic `cKDTree`); `"jztree"` (CUDA GPU,
   needs the optional package jztree; borderline cells re-checked in float64 so the set is the CPU one); `"auto"` (the
   GPU when jztree and a CUDA device are present, else the CPU).
-- **Cells:** `sk.to_cells(species)` gives the selected cells as `core.Cells` (per ion: n_ion a_snap³, T, the peculiar
-  velocity), the container of the toy models. The deposition is the core's (`core.deposition`; `voronoi_segments(...,
+- **Cells without skewers:** `snapshot_cells(reader, species, lo, hi, margin=...)` gives the cells of a periodic
+  sub-box as `core.Cells` (`select_cells_in_region`, then `gas_to_cells`); the margin keeps every cell whose generating
+  point can be the nearest to a point of the region. Cost on TNG50-4: one pass over the positions (about 1 s with a
+  warm file cache) plus the gas physics of the kept cells.
+- **Cells near skewers:** `sk.to_cells(species)` gives the selected cells as `core.Cells` (per ion: n_ion a_snap³, T,
+  the peculiar velocity), the container of the toy fields, with the values of `snapshot_cells` for the same cells. The deposition is the core's (`core.deposition`; `voronoi_segments(...,
   backend="jax")` computes the same pieces in JAX). `SimulationSkewers.crossings()` keeps the cell crossings of the
   skewers alongside their points (`CellCrossings`).
 - **Integration options** (`IntegrationOptions`): `frame`, `normalisation`, `detuning`, `dtype`. Periodicity is not one
@@ -164,7 +182,7 @@ python scripts/benchmarks/single_cpu_modes.py --results benchmark_results/single
 
 The benchmark runs every configuration in its own process with its own CPU set and thread count. It skips the
 configurations whose result already exists, and it caps each one at `--cap` seconds. The notebook
-`08_fake_spectra_comparison` (Part 2) only reads the results (`RESULTS_DIR`).
+`09_fake_spectra_comparison` (Part 2) only reads the results (`RESULTS_DIR`).
 
 ## Figures: `skewerjax.utils.plotting`
 
@@ -193,10 +211,11 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
 - Line styles per mode: `MODE_STYLES`; labels with units: `LABELS`; sizes: `FIGSIZES`.
 - `plot_dag(highlight, external=False)`: the dependency graph of the ingredients (`DAG_NODES`, `DAG_EDGES`).
 - Path geometry: `geometry_style(name)`, the one style of points, midpoints, dual segments, tangents, line elements,
-  piece ends and generators (03 and 05).
+  piece ends and generators (03).
 - Tutorial figures: `plot_line_table`, `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,
   `plot_isotropic_recovery` (+ `correlation_binned`), `plot_kpar_kperp_maps`, `plot_pk_mu_wedges` (`MU_WEDGES`, + `power_kmu`,
-  `field_power_modes`, `binned_power`, `power_map_kpar_kperp`), `plot_nH_T_fractions`, `plot_deposition_steps`
+  `field_power_modes`, `input_power_modes`, `binned_power`, `power_map_kpar_kperp`; k_par along `grf.los_axis`, and the
+  input of an anisotropic `PowerLawGRF` evaluated at every mode), `plot_nH_T_fractions`, `plot_deposition_steps`
   (+ `cell_colors`, `voronoi_polygons_2d`), `plot_voigt_limits`, `plot_frames_axes`, `plot_periodic_pieces`,
   `plot_effect_fluxes`, `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
   `plot_line_frames`, `plot_flux_vs_analytic`, `plot_terms_by_order`,

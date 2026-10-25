@@ -1,15 +1,15 @@
-"""The Voigt function V(x; sigma, gamma) = (G * L)(x) (review notes, Eq. line_profile), three implementations."""
+"""The Voigt function V(x; sigma, gamma) = (G * L)(x) (review notes, Eq. line_profile), four implementations."""
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from exojax.opacity.lpf.lpf import voigtone
-from scipy.special import wofz
+from scipy.special import dawsn, wofz
 
-VOIGT_MODES = ("ExoJAX", "convolution", "scipy_wofz")
+VOIGT_MODES = ("ExoJAX", "convolution", "harris", "scipy_wofz")
 
 
 def gaussian(x: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:
@@ -75,17 +75,71 @@ def voigt_exojax(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray) -> jnp.
     return jax.vmap(voigtone, in_axes=(0, None, None))(x, jnp.maximum(sigma, tiny), jnp.maximum(gamma, tiny))
 
 
-def log10_voigt(x, sigma, gamma, *, mode: Literal["ExoJAX", "convolution", "scipy_wofz"] = "ExoJAX", **kwargs: Any):
+# First-order expansion of H(a, u) = Re w(u + i a) in the damping parameter a (Harris 1948, ApJ 108, 112), the scheme
+# of fake_spectra (fastvoigt.h, commit 2aebe44; singleabs.h ``profile``):
+#     H(a, u) = exp(-u^2) + a H1(u) + O(a^2),   H1(u) = 2 u Im w(u) - 2 / sqrt(pi) = (2 / sqrt(pi)) (2 u Daw(u) - 1),
+# H1 tabulated on [0, U_MAX] (N_TAB intervals) and interpolated linearly; past U_MAX the Gaussian has underflowed and
+# H1 is its asymptotic series. For a > HARRIS_A_MAX the expansion is not used (fake_spectra calls Faddeeva::w there;
+# here ExoJAX's ``voigtone``). The Gaussian is evaluated exactly (fake_spectra tabulates it with a Taylor correction,
+# good to 1e-8).
+HARRIS_U_MAX, HARRIS_N_TAB, HARRIS_A_MAX = 6.0, 1024, 1e-3
+_HARRIS_U = np.arange(HARRIS_N_TAB + 2) * (HARRIS_U_MAX / HARRIS_N_TAB)
+_HARRIS_H1 = (2.0 / np.sqrt(np.pi)) * (2.0 * _HARRIS_U * dawsn(_HARRIS_U) - 1.0)
+
+
+def harris_H(u: jnp.ndarray, a: jnp.ndarray) -> jnp.ndarray:
+    """H(a, u) to first order in a (no fallback): exp(-u^2) + a H1(u) for |u| < 6, the asymptotic
+    a / (sqrt(pi) u^2) (1 + 3/(2u^2) + 15/(4u^4) + 105/(8u^6) + 945/(16u^8)) beyond. u, a broadcastable (dimensionless)."""
+    au = jnp.abs(u)
+    t = jnp.minimum(au, HARRIS_U_MAX) * (HARRIS_N_TAB / HARRIS_U_MAX)          # the table index, as in fastvoigt.h
+    i = jnp.minimum(jnp.floor(t), HARRIS_N_TAB).astype(jnp.int32)
+    tab = jnp.asarray(_HARRIS_H1, dtype=au.dtype)
+    h1 = tab[i] + (t - i) * (tab[i + 1] - tab[i])                              # linear interpolation, no search
+    inner = jnp.exp(-au * au) + a * h1
+    u2 = 1.0 / jnp.maximum(au, HARRIS_U_MAX) ** 2                 # safe in the inner region (not used there)
+    wing = a / jnp.sqrt(jnp.pi) * u2 * (1.0 + u2 * (1.5 + u2 * (3.75 + u2 * (13.125 + 59.0625 * u2))))
+    return jnp.where(au >= HARRIS_U_MAX, wing, inner)
+
+
+def voigt_harris(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray, *, a_max: Optional[float] = HARRIS_A_MAX) -> jnp.ndarray:
+    """V(x; sigma, gamma) = H(a, u) / (sqrt(2 pi) sigma), u = x / (sqrt(2) sigma), a = gamma / (sqrt(2) sigma), with H to
+    first order in a (``harris_H``), as fake_spectra evaluates it.
+
+    x, sigma, gamma broadcastable (e.g. x (N, N_v) with sigma, gamma (N, 1)). Elements with a > ``a_max`` take the exact
+    evaluation (``voigt_exojax``); one ``lax.cond`` on the whole batch skips it when every a <= a_max (under an outer
+    ``vmap`` both branches run). ``a_max=None``: the expansion everywhere. jit / vmap / grad (piecewise linear in |u|
+    through the table).
+    """
+    x = jnp.asarray(x)
+    tiny = jnp.finfo(x.dtype).tiny
+    s = jnp.maximum(jnp.asarray(sigma, dtype=x.dtype), tiny)
+    g = jnp.maximum(jnp.asarray(gamma, dtype=x.dtype), 0.0)
+    a = g / (jnp.sqrt(2.0) * s)
+    fast = harris_H(x / (jnp.sqrt(2.0) * s), a) / (jnp.sqrt(2.0 * jnp.pi) * s)
+    if a_max is None:
+        return fast
+    xb, sb, gb, ab = jnp.broadcast_arrays(x, s, jnp.maximum(g, tiny), a)
+
+    def mixed(_):
+        exact = jax.vmap(voigtone)(xb.ravel(), sb.ravel(), gb.ravel()).reshape(xb.shape)
+        return jnp.where(ab <= a_max, jnp.broadcast_to(fast, xb.shape), exact)
+
+    return jax.lax.cond(jnp.all(ab <= a_max), lambda _: jnp.broadcast_to(fast, xb.shape), mixed, None)
+
+
+def log10_voigt(x, sigma, gamma, *, mode: Literal["ExoJAX", "convolution", "harris", "scipy_wofz"] = "ExoJAX", **kwargs: Any):
     """log10 V(x; sigma, gamma) with one of ``VOIGT_MODES`` (case-insensitive).
 
-    "ExoJAX" and "convolution" are JAX (jit / vmap / grad); "scipy_wofz" is host-side NumPy and fails on tracers.
-    ``kwargs`` go to ``voigt_convolution``.
+    "ExoJAX", "convolution" and "harris" are JAX (jit / vmap / grad); "scipy_wofz" is host-side NumPy and fails on
+    tracers. ``kwargs`` go to ``voigt_convolution`` or ``voigt_harris``.
     """
     m = mode.lower()
     if m == "exojax":
         V = voigt_exojax(x, sigma, gamma)
     elif m == "convolution":
         V = voigt_convolution(x, sigma, gamma, **kwargs)
+    elif m == "harris":
+        V = voigt_harris(x, sigma, gamma, **kwargs)
     elif m == "scipy_wofz":
         V = voigt_scipy(np.asarray(x), np.asarray(sigma), np.asarray(gamma))
     else:

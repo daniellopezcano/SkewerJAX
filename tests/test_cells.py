@@ -12,8 +12,9 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from skewerjax.core import (Cells, Cosmology, LineBundle, PowerLawGRF, SkewerBundle, cell_pieces, cells_from_values, cells_on_grid,
-                            compute_optical_depth, grf_cells, grid_points, grid_segments, phys, voronoi_segments, voronoi_volumes)
+from skewerjax.core import (Cells, Cosmology, LineBundle, SkewerBundle, cell_pieces, cells_from_values, cells_on_grid, compute_optical_depth,
+                            grid_points, grid_segments, phys, voronoi_segments, voronoi_volumes)
+from skewerjax.simulations import PowerLawGRF, grf_cells
 
 BOX = 4.0
 SHAPE = (8, 6, 5)

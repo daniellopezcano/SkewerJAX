@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """Field extraction from TNG50-4 (read-only, ``/home/STORAGE/TNG50-4`` snapshot 25): per-cell H I physics, selection
 completeness, Voronoi deposition (exact pieces, conserved column for any spacing), the gas cells handed to the core
-(``core.Cells``, the container of the toy models too) and the tau inputs."""
+(``core.Cells``, the container of the toy models too), the cells of a sub-box without skewers (``snapshot_cells``) and the
+tau inputs."""
 from _common import TNG, Checks
 
 C = Checks("check_tng_fields", __doc__, quick_help="one skewer, coarser spacing scan, first 10^6 cells for the physics")
@@ -9,7 +10,7 @@ import numpy as np                                                        # noqa
 import jax.numpy as jnp                                                   # noqa: E402
 from scipy.spatial import cKDTree                                         # noqa: E402
 from skewerjax.core import absorber_pieces, axis_aligned_skewer_points, deposition as dep, path_geometry, phys  # noqa: E402
-from skewerjax.simulations import HI, ArepoHDF5Reader, Ion, SimulationSkewers, gas_physics as gp, select_cells_near_paths  # noqa: E402
+from skewerjax.simulations import HI, ArepoHDF5Reader, Ion, SimulationSkewers, gas_physics as gp, select_cells_near_paths, snapshot_cells  # noqa: E402
 from skewerjax.comparison import SKEWER_SETS                              # noqa: E402
 
 rd = ArepoHDF5Reader(*TNG)
@@ -43,7 +44,6 @@ for n, Sk in SK.items():
     _, i_sel = cKDTree(np.asarray(Sk.cells.positions), boxsize=L).query(probe, workers=-1)
     C.check(f"selection complete ({n}): fraction of probes whose nearest generator (over all {len(allpos):,}) is missed",
             np.mean(np.any(np.asarray(Sk.cells.positions)[i_sel] != allpos[i_all], axis=1)), 0)
-del allpos, tree_all
 top = select_cells_near_paths(rd, S.points, mode="tophat")
 C.check("tophat selection is a subset of the Voronoi selection (cells missing)", float(np.setdiff1d(top.ids, S.cells.ids).size), 0)
 for n, Sk in SK.items():
@@ -84,6 +84,22 @@ C.check("core.Cells of the snapshot: the toy models' keys and shapes (mismatches
                   for sp in ("HI", "SiIII"))), 0)
 C.check("core.Cells density = n_ion a_snap^3, comoving (max rel)",
         np.abs(cl.species["HI"]["number_density"] / (np.asarray(S.properties(HI)["n_ion"]) * H.a ** 3) - 1).max(), 1e-15)
+# 4. the snapshot as gas cells without skewers: a sub-box (snapshot_cells), complete, and the same values as to_cells
+centre = S.points[0, S.points.shape[1] // 2]
+lo, hi, margin = centre - 3.0, centre + 3.0, 1.0
+sub = snapshot_cells(rd, ["HI", "SiIII"], lo, hi, margin=margin)
+inside = lambda x, a, b: np.all(np.mod(x - a, L) < b - a, axis=1)
+C.check("sub-box cells: every cell of the snapshot in the region and its margin, and no other (count mismatch)",
+        abs(int(inside(allpos, lo - margin, hi + margin).sum()) - len(sub)) + int((~inside(sub.positions, lo - margin, hi + margin)).sum()), 0)
+common, ia, ib = np.intersect1d(sub.ids, cl.ids, return_indices=True)
+C.check(f"sub-box cells = to_cells of the skewer on the {common.size} common cells (max |diff|, every field and species)",
+        max(np.abs(sub.species[sp][f][ia] - cl.species[sp][f][ib]).max() for sp in ("HI", "SiIII") for f in ("number_density", "temperature", "velocity")), 0)
+probe = lo + np.random.default_rng(3).uniform(0.0, 1.0, (20000, 3)) * (hi - lo)
+k_sub = cKDTree(sub.positions, boxsize=L).query(np.mod(probe, L))[1]
+j_all = tree_all.query(np.mod(probe, L))[1]
+C.check("sub-box: the nearest generator of every point of the region is a kept cell (probes whose cell differs)",
+        float(np.any(allpos[j_all] != sub.positions[k_sub], axis=1).sum()), 0)
+del allpos, tree_all
 
 if C.outdir is not None:
     from _common import figure_backend

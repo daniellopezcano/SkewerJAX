@@ -418,40 +418,43 @@ LABELS = {  # one label (with its unit) per quantity, in every notebook
     "kP": r"$k P_{\rm 1D}/\pi$", "xi": r"$\xi_{\rm 1D}$", "lag": r"$\Delta v\ [\mathrm{km\,s^{-1}}]$", "delta": r"$\delta_F$",
     "sigma": r"$\Sigma_{\rm gas}\ [\mathrm{M_\odot\,ckpc^{-2}}]$",
 }
-FIGSIZES = {"wide": (20, 6), "single": (13, 6), "tall": (13, 9), "triple": (22, 6), "grid": (22, 12), "dag": (22, 6.0)}
+FIGSIZES = {"wide": (20, 6), "single": (13, 6), "tall": (13, 9), "triple": (22, 6), "grid": (22, 12), "dag": (24, 6.6)}
 
 # The dependency graph of the ingredients, derived from the code. Columns are topological levels; the two field sources
-# (toy samplers and simulation outputs) are interchangeable inputs of the gas fields, side by side in one column.
+# (toy fields and simulation outputs) are interchangeable inputs of the gas cells, side by side in one column.
 DAG_NODES = {   # key: (column, row, name, detail)
     "lines": (0, 1.45, "lines", "LineBundle"),
     "cosmology": (0, -1.2, "cosmology", "Cosmology"),
     "skewers": (1, -1.2, "skewers", "SkewerBundle, a(x)"),
-    "samplers": (2, 0.52, "toy models", "PowerLawGRF → cells"),
+    "samplers": (2, 0.52, "toy fields", "PowerLawGRF → cells"),
     "simulation": (2, -0.52, "simulation outputs", "TNG snapshot → cells"),
     "fields": (3, 0.0, "gas cells", "Voronoi cells: n, T, v"),
-    "tau": (4, 0.0, "optical depth", r"$\tau(v)$, $F=e^{-\tau}$"),
-    "overflux": (5, 0.0, "overflux", r"$\delta_F$ per line, total"),
-    "stats": (6, 0.0, "statistics", "P1D, ξ1D, P3D, ξ3D"),
+    "profiles": (4, 1.45, "line profiles", r"Voigt $\phi_j(v)$ of the gas"),
+    "deposition": (4, 0.0, "deposition", "cells → pieces"),
+    "tau": (5, 0.0, "optical depth", r"$\tau(v)$, $F=e^{-\tau}$"),
+    "overflux": (6, 0.0, "overflux", r"$\delta_F$ per line, total"),
+    "stats": (7, 0.0, "statistics", "P1D, ξ1D, P3D, ξ3D"),
     "fake_spectra": (3, -0.8, "fake_spectra", "external reference"),
 }
 # (from, to, kind, label, route): kind "solid" required | "optional" optional input or data table | "external";
 # route = waypoints between the two ends: "h" leaves horizontally then turns, "v" leaves vertically then turns.
 DAG_EDGES = (
     ("cosmology", "skewers", "optional", "a(x) (or manual)", None),
-    ("skewers", "simulation", "solid", "paths", "v"),
-    ("skewers", "tau", "solid", "points, a(x): pieces", "h"),
     ("lines", "simulation", "optional", "ion masses", "v"),
     ("samplers", "fields", "solid", None, None),
     ("simulation", "fields", "solid", None, None),
-    ("fields", "tau", "solid", None, None),
-    ("lines", "tau", "solid", None, "h"),
+    ("fields", "deposition", "solid", None, None),
+    ("skewers", "deposition", "solid", "points, a(x)", "h"),
+    ("deposition", "tau", "solid", "pieces", None),
+    ("lines", "profiles", "solid", "atomic data", None),
+    ("profiles", "tau", "solid", None, "h"),
     ("tau", "overflux", "solid", None, None),
     ("lines", "overflux", "optional", "line offsets Δv (frames)", "h"),
     ("overflux", "stats", "solid", None, None),
 )
 DAG_EXTERNAL = (("simulation", "fake_spectra", None), ("fake_spectra", "tau", "compared"))   # same snapshot, compared τ
 DAG_NOTEBOOKS = {"lines": "01", "cosmology": "02", "skewers": "03", "samplers": "04", "fields": "04, 05", "simulation": "05",
-                 "tau": "06", "overflux": "07", "stats": "07", "fake_spectra": "08"}
+                 "profiles": "06", "deposition": "07", "tau": "07", "overflux": "08", "stats": "08", "fake_spectra": "09"}
 _DAG_W, _DAG_H = 0.80, 0.56
 
 
@@ -477,7 +480,9 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
     Arrows point from an ingredient to what needs it. Solid: a required input. Dashed: optional, or data only (the
     cosmology can be replaced by manual a(x); the simulation reads only ion masses from the line table; the overflux
     reads only the line offsets Δv to put every line on the reference frame). The two sources of gas are interchangeable:
-    both produce the same container, Voronoi gas cells, which the optical depth cuts into pieces along the skewers. ``external`` adds fake_spectra, the external reference code (comparison notebook only).
+    both produce the same container, Voronoi gas cells, which the deposition cuts into pieces along the skewers; the
+    optical depth sums the line profiles of the pieces. ``external`` adds fake_spectra, the external reference code
+    (comparison notebook only).
     ``notebooks`` writes the notebook of every ingredient under its box. Returns (fig, ax).
     """
     from matplotlib.lines import Line2D
@@ -485,13 +490,12 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize or FIGSIZES["dag"], layout="constrained")
     ax.set_axis_off()
-    ax.set(xlim=(-0.5, 6.5), ylim=(-1.62, 1.86))
+    ax.set(xlim=(-0.5, 7.5), ylim=(-1.62, 2.1))
     fg, on, ext_c = plt.rcParams["text.color"], PALETTE["cyan"], PALETTE["yellow"]
     on_fill = mpl.colors.to_rgba(on, 0.30)                      # the one highlight: a light fill and a coloured edge
     w, h = _DAG_W, _DAG_H
     nodes = {k: v for k, v in DAG_NODES.items() if external or k != "fake_spectra"}
-    lanes = {("lines", "tau"): -0.2, ("lines", "overflux"): 0.2, ("lines", "simulation"): 0.12,
-             ("skewers", "simulation"): -0.12, ("skewers", "tau"): 0.0}
+    lanes = {("lines", "overflux"): 0.44, ("lines", "simulation"): 0.12, ("profiles", "tau"): 0.0}
     # the group of interchangeable field sources
     gx, gy = DAG_NODES["samplers"][0], 0.5 * (DAG_NODES["samplers"][1] + DAG_NODES["simulation"][1])
     gh = DAG_NODES["samplers"][1] - DAG_NODES["simulation"][1] + h + 0.34
@@ -507,7 +511,7 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
             pts = [(nodes[a][0] + w / 2, nodes[a][1]), (nodes[b][0] - 0.2, nodes[a][1]), (nodes[b][0] - 0.2, nodes[b][1] - h / 2)]
         elif (a, b) == ("simulation", "fake_spectra"):
             pts = [(nodes[a][0] + w / 2, nodes[a][1] - 0.15), (nodes[b][0] - w / 2, nodes[a][1] - 0.15)]
-        elif (a, b) == ("skewers", "tau"):
+        elif (a, b) == ("skewers", "deposition"):
             pts = [(nodes[a][0] + w / 2, nodes[a][1]), (nodes[b][0], nodes[a][1]), (nodes[b][0], nodes[b][1] - h / 2)]
         else:
             pts = _dag_route(a, b, route, nodes, lanes.get((a, b), 0.0))
@@ -528,7 +532,7 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
             seg = max(range(len(pts) - 1), key=lambda k: np.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]))
             (x0, y0), (x1, y1) = pts[seg], pts[seg + 1]
             vert = abs(x1 - x0) < 1e-9
-            f = 0.3 if (a, b) == ("skewers", "tau") else 0.5
+            f = 0.3 if (a, b) == ("skewers", "deposition") else 0.5
             xl, yl = x0 + f * (x1 - x0) + (0.03 if vert else 0.0), 0.5 * (y0 + y1) + (0.0 if vert else 0.035)
             if route is None and not vert and abs(x1 - x0) < 0.5:
                 yl = max(nodes[a][1], nodes[b][1]) + h / 2 + 0.04
@@ -1085,7 +1089,7 @@ def plot_voronoi_discretisations(seed: int = 3, n_cells: int = 90, every: int = 
 def plot_line_frames(v, phi, phi_analytic, line_bundle, v_centre, *, a_dagger: float, a_obs: float = 1.0, band: float = 1e-6,
                      figsize=(22, 13)):
     """Line profiles in their own line-centred frames and on the observed-wavelength axis, against the analytic
-    profile (notebook 06).
+    profile (notebook 07).
 
     v (N_v,) line-centred velocity v_dagger [km/s] of every line; phi, phi_analytic (N_lines, N_v) [ns];
     v_centre : the absorber's line-centre velocity v_c = c ln(a_dagger / a) [km/s] (the same in every frame).
@@ -1141,7 +1145,7 @@ def plot_line_frames(v, phi, phi_analytic, line_bundle, v_centre, *, a_dagger: f
 def plot_flux_vs_analytic(v, F, F_analytic, line_bundle, lam_obs, lam_centre, *, zoom_kms: float = 80.0,
                           skewer_labels=None, band: float = 1e-2, figsize=(22, 13)):
     """F against the closed form on the observed-wavelength axis, and a zoom on every line centre with its
-    residual (notebook 06).
+    residual (notebook 07).
 
     v (N_v,) line-centred v_dagger [km/s]; F, F_analytic (N_lines, N_sk, N_v); lam_obs (N_lines, N_sk, N_v) the observed
     wavelength of every pixel; lam_centre (N_lines, N_sk) where the absorption is centred (dashed) on that axis. The rest
@@ -1188,7 +1192,7 @@ def _pair_label(pair):
 
 def plot_terms_by_order(stats, kind: str = "P", *, orders=None, max_lag: Optional[float] = None, linthresh: Optional[float] = None,
                         figsize=None):
-    """P1D or xi1D of the total overflux split by order and, within each order, into its terms (notebook 07).
+    """P1D or xi1D of the total overflux split by order and, within each order, into its terms (notebook 08).
 
     One panel per order n (default every order with a non-zero contribution, the order-0 normalisation term
     included); the terms (A, B) and (B, A) of ``stats.*_total_from_terms_contributions`` are drawn as one curve "A–B"
@@ -1247,9 +1251,9 @@ def grf_p1d_along_axis(grf, k_par, axis: int = 1, return_sigma: bool = False):
     """
     tr = [i for i in range(3) if i != axis]
     ka, kb = (2 * np.pi * np.fft.fftfreq(grf.shape[i], d=grf.dx[i]) for i in tr)
-    kperp2 = (ka[:, None] ** 2 + kb[None, :] ** 2).ravel()
     kp = np.asarray(k_par, dtype=float)
-    P = np.asarray(grf.power(np.sqrt(kp[:, None] ** 2 + kperp2[None, :])))
+    comps = {axis: kp[:, None, None], tr[0]: ka[None, :, None], tr[1]: kb[None, None, :]}
+    P = np.asarray(grf.power_at(*(comps[i] for i in range(3)))).reshape(kp.size, -1)     # P(k, mu): mu along grf.los_axis
     area = grf.L[tr[0]] * grf.L[tr[1]]
     if return_sigma:
         return P.sum(-1) / area, np.sqrt((P ** 2).sum(-1)) / area
@@ -1257,7 +1261,7 @@ def grf_p1d_along_axis(grf, k_par, axis: int = 1, return_sigma: bool = False):
 
 
 def plot_p1d_input_vs_measured(k, curves: dict, reference, *, ref_label: str = "input", axs=None, k_range=None, figsize=(15, 10)):
-    """Measured P1D curves against an input spectrum, with their ratios (notebook 07).
+    """Measured P1D curves against an input spectrum, with their ratios (notebook 08).
 
     curves : {label: (P (N_k,), sigma (N_k,) or None, colour, style dict)}; reference (N_k,): the expected spectrum on
     the same k. Top: k P / pi on log axes; bottom: P / reference. Returns (fig, axs)."""
@@ -1435,13 +1439,14 @@ def _bin_modes(k, P, w, edges):
     return kb[keep], Pm[keep], err[keep], W[keep]
 
 
-def power_map_kpar_kperp(m, edges_par, edges_perp):
-    """Mean P over draws and modes in bins of (k_par = |k| along the last axis, k_perp = |k| across it).
+def power_map_kpar_kperp(m, edges_par, edges_perp, los_axis: int = -1):
+    """Mean P over draws and modes in bins of (k_par = |k| along ``los_axis``, k_perp = |k| across it).
 
     m : ``field_power_modes`` output. Returns (P (n_par, n_perp) with NaN where a bin has no mode, n_modes (weighted),
     error of P (scatter between draws), n_indep (independent complex modes of the half space, for the Gaussian error))."""
     kv = m["kvec"]
-    kpar, kperp = np.abs(kv[:, -1]), np.linalg.norm(kv[:, :-1], axis=-1)
+    los = los_axis % kv.shape[1]
+    kpar, kperp = np.abs(kv[:, los]), np.linalg.norm(np.delete(kv, los, axis=1), axis=-1)
     ip = np.digitize(kpar, edges_par) - 1
     iq = np.digitize(kperp, edges_perp) - 1
     ok = (ip >= 0) & (ip < len(edges_par) - 1) & (iq >= 0) & (iq < len(edges_perp) - 1) & (m["k"] > 0)
@@ -1515,12 +1520,23 @@ def plot_nH_T_fractions(n_H, T, x_HI, f_SiIII, sf, cloudy_grid, *, n_thr: float 
 
 
 
-def plot_voigt_limits(x, sigma, gamma, curves: dict, ref_key: str = "scipy_wofz", *, linthresh: float = 1e-6, figsize=(15, 11)):
+def plot_voigt_limits(x, sigma, gamma, curves: dict, ref_key: str = "scipy_wofz", *, linthresh: float = 1e-6,
+                      expansion: dict = None, figsize=None):
     """Voigt profiles V(x; sigma, gamma) for extreme (sigma, gamma) pairs, every implementation in ``curves`` = {name:
     (N_pairs, N_x)} on the reference ``ref_key`` (thick, light), and their relative residuals (symlog, ``linthresh``).
-    The pairs show the Gaussian limit (gamma << sigma), the Lorentzian limit (sigma << gamma) and the mixed cases."""
+    The pairs show the Gaussian limit (gamma << sigma), the Lorentzian limit (sigma << gamma) and the mixed cases.
+
+    expansion : optional {"u": (N_u,) u >= 0, "residuals": {a: (N_u,) |H_approx / H - 1|}, "label": str,
+        "u_switch": float}: panel (c), the relative error of an approximation of H(a, u) = Re w(u + i a) against the exact
+        one, one line per damping parameter a (sequential colours), with its core (|u| < 3, Gaussian), transition and
+        wings (|u| > ``u_switch``) marked. Returns (fig, axs): 2 axes, or 3 with ``expansion``.
+    """
     from matplotlib.lines import Line2D
-    fig, (ax, axr) = plt.subplots(2, 1, figsize=figsize, sharex=True, gridspec_kw={"height_ratios": [2.2, 1]}, layout="constrained")
+    n_rows = 2 if expansion is None else 3
+    figsize = figsize or ((15, 11) if expansion is None else (15, 16))
+    fig, axs = plt.subplots(n_rows, 1, figsize=figsize, gridspec_kw={"height_ratios": [2.2, 1, 1.25][:n_rows]}, layout="constrained")
+    ax, axr = axs[0], axs[1]
+    axr.sharex(ax)
     cols = [PALETTE[k] for k in ("blue", "red", "green", "yellow", "cyan", "purple")]
     styles = {name: st for name, st in zip([k for k in curves if k != ref_key], (MODE_STYLES["default"], MODE_STYLES["matched"], MODE_STYLES["alternative"]))}
     ref = np.asarray(curves[ref_key])
@@ -1543,7 +1559,27 @@ def plot_voigt_limits(x, sigma, gamma, curves: dict, ref_key: str = "scipy_wofz"
     axr.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
     axr.set(xlabel="x", ylabel="V / reference − 1", ylim=(-0.05, 0.05))
     axr.axhline(0, color=FG, lw=1)
-    return fig, np.array([ax, axr])
+    if expansion is not None:
+        axe = axs[2]
+        u = np.asarray(expansion["u"])
+        u_sw = float(expansion.get("u_switch", 6.0))
+        res = expansion["residuals"]
+        cmap = plt.get_cmap(CMAPS["line"])
+        la = np.log10(np.asarray(list(res), dtype=float))
+        for k, (a, r) in enumerate(res.items()):
+            f = 0.5 if np.ptp(la) == 0 else (la[k] - la.min()) / np.ptp(la)
+            axe.loglog(u, np.maximum(np.asarray(r), 1e-12), color=cmap(0.3 + 0.7 * f), lw=2.2, label=rf"$a$ = {a:g}")
+        axe.axvspan(u.min(), 3.0, color=PALETTE["grey"], alpha=0.18, lw=0)
+        axe.axvline(u_sw, color=DIM, ls=":", lw=1.8)
+        top = 0.93
+        for xt, txt in ((np.sqrt(u.min() * 3.0), "core (Gaussian)"), (np.sqrt(3.0 * u_sw), "transition"),
+                        (np.sqrt(u_sw * u.max()), "wings (series)")):
+            axe.text(xt, top, txt, transform=axe.get_xaxis_transform(), ha="center", va="top", fontsize=FONT_MIN["annotation"], color=FG)
+        axe.set(xlim=(u.min(), u.max()), ylim=(1e-10, 1e-3), xlabel=r"$u = x/(\sqrt{2}\,\sigma)$",
+                ylabel=r"$|H_{\rm approx}/H - 1|$")
+        axe.set_title(expansion.get("label", "approximation"), fontsize=FONT_MIN["title"])
+        axe.legend(loc="lower left", fontsize=FONT_MIN["legend"], ncols=len(res))
+    return fig, np.asarray(axs)
 
 
 
@@ -1570,6 +1606,12 @@ def field_power_modes(deltas, L):
     nyq = np.pi * shape[-1] / Ls[-1]
     w = np.where((last == 0) | (np.isclose(last, nyq) & (shape[-1] % 2 == 0)), 1.0, 2.0)
     return dict(k=np.linalg.norm(kvec, axis=-1), kvec=kvec, P=P.reshape(d.shape[0], -1), w=w)
+
+
+def input_power_modes(grf, m):
+    """The input P of ``grf`` at the modes of a ``field_power_modes`` output (|k| and, for an anisotropic input, mu
+    along ``grf.los_axis``), shaped as one draw (1, modes): the exact expectation of every measured mode."""
+    return np.asarray(grf.power_at(*m["kvec"].T))[None]
 
 
 def binned_power(deltas, L, edges, *, which: str = "iso"):
@@ -1622,7 +1664,7 @@ def plot_effect_fluxes(v, tau_base, isolated: dict, *, window=None, skewer: int 
     return fig, axs
 
 
-# --------------------------------------------------------------------------- path geometry (notebooks 03 and 05)
+# --------------------------------------------------------------------------- path geometry (notebook 03)
 def geometry_style(name: str) -> dict:
     """The style of one element of the path geometry, the same in every figure (03 in 3D, 05 in 2D).
 
@@ -1701,7 +1743,7 @@ def _wrapped_offsets(n: int, dx: float) -> np.ndarray:
 
 
 def correlation_binned(deltas, L, edges, grf=None, *, r_max_fraction: float = 0.25, cov_k_cut: float = 16.0,
-                       max_exact: float = 5e7):
+                       max_exact: float = 2e8):
     """xi(|r|) of periodic fields, binned in |r| over the minimum-image separations of the grid.
 
     Measured: xi(r) = (1/N) sum_x delta(x) delta(x + r) = irfftn(|rfftn(delta)|^2) / N (Wiener-Khinchin), averaged over
@@ -1716,8 +1758,9 @@ def correlation_binned(deltas, L, edges, grf=None, *, r_max_fraction: float = 0.
 
     (|delta_k|^2 is exponential with variance P^2; the modes k and -k are the same). Every bin is dominated by the few
     largest-scale modes of the box, so the bins are strongly correlated: they move together. The diagonal is exact;
-    when the grid has more than ``max_exact`` (modes x bins), the off-diagonal terms keep the modes with |k| <=
-    ``cov_k_cut`` fundamental modes only (the dominant ones). Without ``grf``: the scatter between draws / sqrt(N_real).
+    when the grid has more than ``max_exact`` (modes x bins; 2e8 is about 1.6 GB of work arrays), the off-diagonal terms
+    keep the modes with |k| <= ``cov_k_cut`` fundamental modes only (the dominant ones for a red spectrum; a bluer one
+    needs the exact sum). Without ``grf``: the scatter between draws / sqrt(N_real).
     Returns (r_b, xi_b, err, n_sep, xi_input_b or None, cov or None).
     """
     d = np.asarray(deltas, dtype=float)
@@ -1747,7 +1790,7 @@ def correlation_binned(deltas, L, edges, grf=None, *, r_max_fraction: float = 0.
         import scipy.fft as sfft
         kk = [2 * np.pi * np.fft.fftfreq(n, h) for n, h in zip(shape[:-1], dx[:-1])] + [2 * np.pi * np.fft.rfftfreq(shape[-1], dx[-1])]
         kmod = np.sqrt(sum(np.meshgrid(*[k ** 2 for k in kk], indexing="ij")))
-        Pk = np.asarray(grf.power(kmod))
+        Pk = np.asarray(grf.power_at(*np.meshgrid(*kk, indexing="ij", sparse=True)))     # P(k, mu) of every mode
         xi_in = np.fft.irfftn(Pk, s=shape, axes=axes)[sub] / np.prod(dx)
         xin = np.bincount(j[ok], weights=xi_in.ravel()[ok], minlength=nb) / np.maximum(cnt, 1)
         # c_b(k) = Re FFT of the bin's indicator over the separations / n_b; w: half-space multiplicity
@@ -1804,9 +1847,10 @@ def plot_isotropic_recovery(cases: dict, *, n_bins: int = 18, n_r_bins: int = 16
         kmax = min(np.pi * N / L for N, L in zip(grf.shape, grf.L))
         edges = np.geomspace(0.999 * kmin, kmax, n_bins + 1)
         kb, Pb, eb, _ = _bin_modes(m["k"], m["P"], m["w"], edges)
-        Pin_b = _bin_modes(m["k"], np.asarray(grf.power(m["k"]))[None], m["w"], edges)[1]
+        Pin_b = _bin_modes(m["k"], input_power_modes(grf, m), m["w"], edges)[1]
         kk = np.geomspace(kb[0], kb[-1], 300)
-        axs[0, c].plot(kk, np.asarray(grf.power(kk)), color=FG, lw=2, label="input P(k)")
+        lab = "input P(k), averaged over directions" if getattr(grf, "anisotropic", False) and grf.ndim > 1 else "input P(k)"
+        axs[0, c].plot(kk, np.asarray(grf.power_monopole(kk)), color=FG, lw=2, label=lab)
         axs[0, c].errorbar(kb, Pb, eb, fmt="o", ms=6, capsize=3, color=col, label=f"measured ({deltas.shape[0]} draws)")
         axs[1, c].errorbar(kb, Pb / Pin_b - 1, eb / Pin_b, fmt="o", ms=6, capsize=3, color=col)
         axs[0, c].set(xscale="log", yscale="log", title=title, ylabel=r"$P(k)$")
@@ -1834,13 +1878,13 @@ def plot_isotropic_recovery(cases: dict, *, n_bins: int = 18, n_r_bins: int = 16
     return fig, axs, out
 
 
-def power_kmu(m, k_edges, mu_edges):
-    """P in bins of (|k|, mu = |k_par| / |k|), k_par along the last axis: mean over draws and modes.
+def power_kmu(m, k_edges, mu_edges, los_axis: int = -1):
+    """P in bins of (|k|, mu = |k_par| / |k|), k_par along ``los_axis``: mean over draws and modes.
 
     m : ``field_power_modes`` output. Returns (k_b (n_mu, n_k), P_b, err (scatter between draws / sqrt(N_real), or the
     Gaussian P / sqrt(n) for one draw), n_indep (half-space modes))."""
     k, kv, w = m["k"], m["kvec"], m["w"]
-    mu = np.abs(kv[:, -1]) / np.maximum(k, 1e-300)
+    mu = np.abs(kv[:, los_axis]) / np.maximum(k, 1e-300)
     ik = np.digitize(k, k_edges) - 1
     im = np.clip(np.digitize(mu, mu_edges) - 1, 0, len(mu_edges) - 2)        # mu = 1 into the last wedge
     ok = (ik >= 0) & (ik < len(k_edges) - 1) & (k > 0)
@@ -1874,8 +1918,8 @@ def plot_kpar_kperp_maps(cases: dict, *, figsize=(20, 9)):
         m = field_power_modes(deltas, grf.L)
         kmax = min(np.pi * N / L for N, L in zip(grf.shape, grf.L))
         e = hybrid_k_edges(2 * np.pi / min(grf.L), kmax, n_lin=6, n_log=20)
-        Pm, W, _, Nind = power_map_kpar_kperp(m, e, e)
-        Pin = power_map_kpar_kperp(dict(m, P=np.asarray(grf.power(m["k"]))[None]), e, e)[0]
+        Pm, W, _, Nind = power_map_kpar_kperp(m, e, e, grf.los_axis)
+        Pin = power_map_kpar_kperp(dict(m, P=input_power_modes(grf, m)), e, e, grf.los_axis)[0]
         kc = np.sqrt(e[1:] * e[:-1])
         good = np.isfinite(Pm) & (Pm > 0) & np.isfinite(Pin)
         norm = mpl.colors.LogNorm(np.nanmin(Pm[good]), np.nanmax(Pm[good]))
@@ -1886,7 +1930,7 @@ def plot_kpar_kperp_maps(cases: dict, *, figsize=(20, 9)):
         levels = 10.0 ** np.arange(np.ceil(np.log10(norm.vmin)), np.log10(norm.vmax))
         kf = np.geomspace(e[0], e[-1], 300)
         KP, KQ = np.meshgrid(kf, kf, indexing="ij")
-        ci = ax.contour(kf, kf, np.asarray(grf.power(np.hypot(KP, KQ))).T, levels=levels, colors=FG, linewidths=1.4, linestyles="--")
+        ci = ax.contour(kf, kf, np.asarray(grf.power(np.hypot(KP, KQ), KP / np.hypot(KP, KQ))).T, levels=levels, colors=FG, linewidths=1.4, linestyles="--")
         cm = ax.contour(kc, kc, np.ma.masked_invalid(Pm).T, levels=levels, colors=PALETTE["red"], linewidths=1.6, linestyles="-")
         ax.clabel(ci, fmt=lambda x: f"$10^{{{np.log10(x):.0f}}}$", fontsize=FONT_MIN["floor"], inline=False)
         ax.plot([], [], color=FG, ls="--", label="input iso-power contours")
@@ -1898,7 +1942,8 @@ def plot_kpar_kperp_maps(cases: dict, *, figsize=(20, 9)):
         chi2 = float(np.nanmean(pull ** 2))
         out[title] = chi2
         ax.set(xscale="log", yscale="log", xlim=(e[0], e[-1]), ylim=(e[0], e[-1]), aspect="equal", title=title,
-               xlabel=r"$k_\parallel$ (last axis) [Mpc$^{-1}$]", ylabel=r"$k_\perp$ [Mpc$^{-1}$]")
+               xlabel=r"$k_\parallel$ (" + ("last axis" if grf.los_axis == grf.ndim - 1 else f"axis {grf.los_axis}") + r") [Mpc$^{-1}$]",
+               ylabel=r"$k_\perp$ [Mpc$^{-1}$]")
     return fig, axs[0], out
 
 
@@ -1909,7 +1954,7 @@ MU_COLORS = ("blue", "cyan", "green", "red")             # one colour per wedge,
 
 
 def plot_pk_mu_wedges(cases: dict, *, mu_edges=MU_WEDGES, n_bins: int = 14, figsize=(24, 13)):
-    """P(k) in wedges of mu = |k_par| / |k| (k_par along the last axis), measured against the input (notebook 04); the
+    """P(k) in wedges of mu = |k_par| / |k| (k_par along ``grf.los_axis``), measured against the input (notebook 04); the
     way Lya 3D analyses show the anisotropic signal, wedge by wedge.
 
     One column per case: on top, every wedge in one panel (points with error bars: measured, scatter between draws /
@@ -1927,8 +1972,8 @@ def plot_pk_mu_wedges(cases: dict, *, mu_edges=MU_WEDGES, n_bins: int = 14, figs
         m = field_power_modes(deltas, grf.L)
         kmax = min(np.pi * N / L for N, L in zip(grf.shape, grf.L))
         edges = np.geomspace(2 * np.pi / min(grf.L), kmax, n_bins + 1)
-        kb, Pb, eb, _ = power_kmu(m, edges, mu_edges)
-        Pin = power_kmu(dict(m, P=np.asarray(grf.power(m["k"]))[None]), edges, mu_edges)[1]
+        kb, Pb, eb, _ = power_kmu(m, edges, mu_edges, grf.los_axis)
+        Pin = power_kmu(dict(m, P=input_power_modes(grf, m)), edges, mu_edges, grf.los_axis)[1]
         out[title] = []
         a0, a1 = axs[0, c], axs[1, c]
         shift = np.exp(0.025 * (np.arange(nm) - (nm - 1) / 2))      # a small offset in k per wedge, so every point shows
@@ -1949,7 +1994,7 @@ def plot_pk_mu_wedges(cases: dict, *, mu_edges=MU_WEDGES, n_bins: int = 14, figs
     return fig, axs, out
 
 
-# --------------------------------------------------------------------------- selection -> deposition -> tau (notebook 06)
+# --------------------------------------------------------------------------- selection -> deposition -> tau (notebook 07)
 def cell_colors(cells) -> dict:
     """{cell index: colour} for the crossed cells, in the order given: Tol's bright palette without its grey, cycled
     (colour-blind safe, qualitative; neighbours along a path never share a colour unless more than six are crossed)."""
@@ -1973,8 +2018,9 @@ def voronoi_polygons_2d(generators, box: float) -> list:
     return [vor.vertices[vor.regions[vor.point_region[n0 + i]]] for i in range(len(g))]
 
 
-def plot_deposition_steps(cells, selected, bundle, seg, ab, frame, v, tau_pieces, *, plane_axes=(0, 1), figsize=(22, 21)):
-    """Selection -> deposition -> tau on toy cells, drawn from the objects of each step (notebook 06).
+def plot_deposition_steps(cells, selected, bundle, seg, ab, frame, v, tau_pieces, *, tau_pieces_periodic=None,
+                          period: float = None, plane_axes=(0, 1), figsize=None):
+    """Selection -> deposition -> tau on toy cells, drawn from the objects of each step (notebook 07).
 
     cells : every ``core.Cells`` of the toy box (generators in one plane: the cells are its 2D Voronoi cells), with
     ``ids`` = their indices (the velocities are those of the species of ``ab``); selected : the cells kept by the
@@ -1982,17 +2028,25 @@ def plot_deposition_steps(cells, selected, bundle, seg, ab, frame, v, tau_pieces
     ``SkewerBundle`` (one skewer in that plane, along ``plane_axes[0]``); seg : the ``SegmentComponents`` of the Voronoi
     deposition; ab : its ``Absorbers``; frame : the ``ExactFrame``; v : (N_v,) [km/s]; tau_pieces : (N_p, N_v) the
     contribution of every piece (``compute_optical_depth(..., per_piece=True)``), in the order of ``ab``.
+    tau_pieces_periodic : optional (N_p, N_v), the same with ``velocity_period`` (period ``period`` [km/s]): adds (d).
 
     (a) the plane: every cell outlined, the crossed ones filled in their own colour (``cell_colors``), their generators
     and peculiar velocities (arrows, in-plane); the skewer with the styles of 03 (points, midpoints, dual segments) and
     the ends of the pieces. (b) along the same axis: n of every piece (bars in its cell's colour) and the dual segments.
     (c) tau: every piece's profile in its cell's colour and their sum; per crossed cell, a marker at the Hubble
     velocity of its centroid and an arrow to its line centre, shifted by the line-of-sight projection of its peculiar
-    velocity. Returns (fig, axs, colours).
+    velocity. (d) the periodic spectrum on the axis of (c): the period [0, P) and, shaded, its copies; every piece's
+    wrapped profile in its cell's colour and their sum, on the sum of (c) (thick, light); per cell whose line centre
+    is outside the period, an arrow from it to its image inside (effect (i)); the wings that cross an end re-enter at
+    the other (effect (ii)). Returns (fig, axs, colours).
     """
     from matplotlib.collections import PolyCollection
     from skewerjax.core.constants import phys
     from skewerjax.core.skewers import path_geometry
+    periodic = tau_pieces_periodic is not None
+    if periodic and period is None:
+        raise ValueError("tau_pieces_periodic needs its period [km/s].")
+    figsize = figsize or ((22, 27) if periodic else (22, 21))
     i0, i1 = plane_axes
     box = cells.box
     ids = np.asarray(selected.ids)                                # selected index -> index in ``cells``
@@ -2008,7 +2062,8 @@ def plot_deposition_steps(cells, selected, bundle, seg, ab, frame, v, tau_pieces
     tau_p = np.asarray(tau_pieces)[live][order]
     colors = cell_colors(c_p)
     x0 = pts[0, 0]
-    fig, axs = plt.subplots(3, 1, figsize=figsize, gridspec_kw={"height_ratios": [2.0, 1.0, 1.7]}, layout="constrained")
+    ratios = [2.0, 1.0, 1.7] + ([1.7] if periodic else [])
+    fig, axs = plt.subplots(len(ratios), 1, figsize=figsize, gridspec_kw={"height_ratios": ratios}, layout="constrained")
     axs[1].sharex(axs[0])                                         # (a) and (b): the same x axis [cMpc]
     polys = voronoi_polygons_2d(gen, box)
     axs[0].add_collection(PolyCollection(polys, facecolors="none", edgecolors=DIM, linewidths=0.8))
@@ -2053,21 +2108,52 @@ def plot_deposition_steps(cells, selected, bundle, seg, ab, frame, v, tau_pieces
     axs[2].plot(v, tot, color=FG, lw=2.6, label=r"$\tau$: the sum over the pieces")
     for t, c in zip(tau_p, c_p):
         axs[2].plot(v, t, color=colors[int(c)], lw=1.6, alpha=0.9)
+    rows = {}
     for r, c in enumerate(colors):                                # one row per cell, in the order of the path
         y = tot.max() * (1.1 + 0.09 * (r % 4))
         k = np.nonzero(c_p == c)[0]
         w = l_p[k] * n_p[k]
         vh, vc = np.average(v_H[k], weights=w), np.average(v_c[k], weights=w)
+        rows[c] = (y, vc)
         axs[2].scatter([vh], [y], marker="o", s=70, facecolors="none", edgecolors=colors[c], linewidths=2, zorder=8)
         axs[2].annotate("", (vc, y), (vh, y), arrowprops=dict(arrowstyle="-|>", color=colors[c], lw=2.0, shrinkA=4, shrinkB=0))
     axs[2].scatter([], [], marker="o", s=70, facecolors="none", edgecolors=FG, linewidths=2,
                    label=r"Hubble velocity of the cell's pieces, $v_H = c\ln(a_\dagger/a)$; arrow: $+\,v_\parallel$")
     axs[2].set(xlabel=LABELS["v_dagger"], ylabel=r"$\tau$ ($\mathrm{Ly}\alpha$)", ylim=(0, 1.75 * tot.max()))
     axs[2].legend(loc="upper right", fontsize=FONT_MIN["legend"], ncols=2)
+    if periodic:
+        axd = axs[3]
+        axd.sharex(axs[2])
+        P = float(period)
+        tau_w = np.asarray(tau_pieces_periodic)[live][order]
+        tot_w = tau_w.sum(0)
+        for lo, hi in ((min(v[0], 0.0), 0.0), (P, max(v[-1], P))):
+            axd.axvspan(lo, hi, color=PALETTE["grey"], alpha=0.22, lw=0)
+        for vb in (0.0, P):
+            axd.axvline(vb, color=DIM, ls=":", lw=1.8)
+        axd.plot(v, tot, color=FG, **MODE_STYLES["reference"], label=r"$\tau$ without wrap, as in (c)")
+        axd.plot(v, tot_w, color=FG, lw=2.6, label=r"$\tau$ with velocity_period=True: periodic, period $P$")
+        for t, c in zip(tau_w, c_p):
+            axd.plot(v, t, color=colors[int(c)], lw=1.6, alpha=0.9)
+        top_w = max(tot_w.max(), tot.max())
+        out = [c for c, (_, vc) in rows.items() if vc < 0.0 or vc >= P]
+        for r, c in enumerate(out):                               # effect (i): the line centre's image in [0, P), above the curves
+            vc = rows[c][1]
+            y = top_w * (1.1 + 0.08 * r)
+            img = vc - P * np.floor(vc / P)
+            axd.scatter([vc], [y], marker="o", s=70, facecolors="none", edgecolors=colors[c], linewidths=2, zorder=8)
+            axd.annotate("", (img, y), (vc, y), arrowprops=dict(arrowstyle="-|>", color=colors[c], lw=2.0, ls="--", shrinkA=4, shrinkB=0))
+        if out:
+            axd.plot([], [], color=FG, lw=2.0, ls="--", label=r"(i) line centre $v_c$ outside the period $\to$ $v_c \mp P$")
+        ytop = top_w * (1.3 + 0.08 * len(out))
+        for xt, txt in ((0.5 * (v[0] + 0.0), "copy"), (0.5 * P, r"one period $[0, P)$"), (0.5 * (P + v[-1]), "copy")):
+            axd.text(xt, 0.97 * ytop, txt, ha="center", va="top", fontsize=FONT_MIN["annotation"], color=FG)
+        axd.set(xlabel=LABELS["v_dagger"], ylabel=r"$\tau$ ($\mathrm{Ly}\alpha$), periodic", ylim=(0, ytop))
+        axd.legend(loc="upper center", bbox_to_anchor=(0.5, -0.17), ncols=3, fontsize=FONT_MIN["legend"])
     return fig, axs, colors
 
 
-# --------------------------------------------------------------------------- frames and periodicity (notebook 06)
+# --------------------------------------------------------------------------- frames and periodicity (notebook 07)
 def plot_frames_axes(v, F_own, line_bundle, *, v_ref=None, F_ref=None, a_dagger: float, a_obs: float = 1.0, centres=None,
                      figsize=(22, 15)):
     """The same flux in each line's own frame, on the global velocity axis and in observed wavelength: three axes.

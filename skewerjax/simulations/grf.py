@@ -1,8 +1,7 @@
-"""Toy models: power-law Gaussian random fields, and the gas cells they define (``grf_cells``).
+"""Toy field source: power-law Gaussian random fields (``PowerLawGRF``) in 1D, 2D and 3D.
 
-A toy model enters the optical depth like a simulation does: as ``core.cells.Cells``. ``grf_cells`` turns one
-``PowerLawGRF`` realisation delta into the densities n = n_bar (1 + delta) of a set of Voronoi cells, with temperatures
-and velocities given as arrays or as functions of the generating points.
+A field source of ``skewerjax.simulations``: the realisation becomes gas cells with ``toy_cells.grf_cells``, the same
+container (``core.Cells``) as a snapshot (``snapshot_skewers``).
 """
 from __future__ import annotations
 
@@ -66,6 +65,35 @@ class PowerLawGRF:
         so mode (b) always gives an even N. If k_max / k_min is not an integer, or if all
         three values are given and k_max != N_k k_min, a ``ValueError`` is raised.
 
+    Optional terms (all off by default; review notes, Sec. xi3D, for the anisotropic Lya picture)
+    ----------------------------------------------------------------------------------------------
+    The spectrum becomes
+
+        P(k, mu) = [P_pl(k) + P_BAO(k)] K(mu) D(k mu),   P_pl = A_s (k / k_0)^(n_s - 1),
+
+    with mu = |k_par| / |k| the cosine of the angle to the line of sight, the grid axis ``los_axis`` (default: the last
+    axis, the k_par of ``utils.plotting``; give the axis of the skewers, e.g. 1 for skewers along y). In 1D, mu = 1.
+
+    * Kaiser-like anisotropy (``beta``): K(mu) = (1 + beta mu^2)^2 (Kaiser 1987), >= 0 for every beta.
+    * Fingers of God (``sigma_fog`` [length], ``fog``): a damping along the line of sight with one dispersion,
+      D = 1 / (1 + (k mu sigma)^2) (``"lorentzian"``, an exponential pairwise-velocity distribution) or
+      exp(-(k mu sigma)^2) (``"gaussian"``); 0 < D <= 1. ``sigma_fog`` must be >= 0.
+    * BAO-like feature (``A_bao``, ``r_bao``, ``sigma_bao`` [length], all three or none): a Gaussian bump in the
+      correlation function, xi_BAO(r) = A_bao [g(r - r_bao) + g(r + r_bao)], g(u) = exp(-u^2 / (2 sigma_bao^2)) (the
+      mirror term is the even extension; it is below A_bao exp(-r_bao^2 / 2 sigma_bao^2) for r >= 0), added to P(k)
+      through its exact d-dimensional Fourier transform P_BAO(k) = int d^d r xi_BAO(|r|) e^{-i k.r}:
+
+          1D: P_BAO = 2 A_bao G(k) cos(k r_bao),
+          2D: P_BAO = 2 pi A_bao int_0^inf r [g(r - r_bao) + g(r + r_bao)] J_0(k r) dr   (Gauss-Legendre, 256 nodes on
+              r_bao +- 10 sigma_bao, and J_0 from Abramowitz & Stegun 9.4.1 / 9.4.3, |error| < 5e-8),
+          3D: P_BAO = 4 pi A_bao G(k) [sigma_bao^2 cos(k r_bao) + r_bao sin(k r_bao) / k],
+
+      with G(k) = sigma_bao sqrt(2 pi) exp(-k^2 sigma_bao^2 / 2).
+
+    A Gaussian field needs P >= 0 at every mode. K and D are never negative, so the condition is P_pl + P_BAO >= 0;
+    it is checked at construction on a dense k grid that covers every mode of the box (and at every mode in 1D and
+    2D), and a ``ValueError`` names the k where it fails. The k = 0 mode stays zero.
+
     Positions are x_j = j L / N (j = 0..N-1), and wavenumbers are angular,
     k = 2 pi fftfreq(N, d=L/N) [1 / length units], as in ``P1D_xi1D.py``.
 
@@ -103,6 +131,9 @@ class PowerLawGRF:
         Grid mode (a).
     k_min, k_max, N_k : float or tuple, float or tuple, int or tuple
         Grid mode (b).
+    beta, sigma_fog, fog : the Kaiser and Fingers-of-God terms (None: off).
+    A_bao, r_bao, sigma_bao : the BAO bump [field^2], [length], [length] (None: off).
+    los_axis : the grid axis of the line of sight (default: the last one).
 
     Notes
     -----
@@ -114,7 +145,8 @@ class PowerLawGRF:
     * Memory: one real field plus one rfft half-spectrum (complex, ~N_pix/2 entries).
     """
 
-    def __init__(self, A_s, k_0, n_s, *, L=None, N=None, k_min=None, k_max=None, N_k=None):
+    def __init__(self, A_s, k_0, n_s, *, L=None, N=None, k_min=None, k_max=None, N_k=None, beta=None, sigma_fog=None,
+                 fog: str = "lorentzian", A_bao=None, r_bao=None, sigma_bao=None, los_axis: int = -1):
         mode_a = L is not None or N is not None
         mode_b = any(v is not None for v in (k_min, k_max, N_k))
         if mode_a == mode_b:
@@ -167,21 +199,57 @@ class PowerLawGRF:
         self.A_s, self.k_0, self.n_s = A_s, k_0, n_s
         self.shape: Tuple[int, ...] = N_ax
         self.L: Tuple[float, ...] = L_ax
+        if not -len(N_ax) <= int(los_axis) < len(N_ax):
+            raise ValueError(f"los_axis = {los_axis} is not an axis of a {len(N_ax)}D grid.")
+        self.los_axis = int(los_axis) % len(N_ax)
+        if fog not in ("lorentzian", "gaussian"):
+            raise ValueError(f"fog must be 'lorentzian' or 'gaussian', got {fog!r}.")
+        self.fog = fog
+        bao = (A_bao, r_bao, sigma_bao)
+        if any(x is not None for x in bao) and any(x is None for x in bao):
+            raise ValueError("the BAO term needs all of A_bao, r_bao and sigma_bao (or none).")
+        self.beta, self.sigma_fog, self.A_bao, self.r_bao, self.sigma_bao = beta, sigma_fog, A_bao, r_bao, sigma_bao
+        concrete = lambda x: x is not None and not isinstance(x, jax.core.Tracer)
+        if concrete(sigma_fog) and float(sigma_fog) < 0.0:
+            raise ValueError(f"sigma_fog must be >= 0, got {sigma_fog}.")
+        if concrete(sigma_bao) and not float(sigma_bao) > 0.0:
+            raise ValueError(f"sigma_bao must be > 0, got {sigma_bao}.")
+        if concrete(r_bao) and float(r_bao) < 0.0:
+            raise ValueError(f"r_bao must be >= 0, got {r_bao}.")
+        if self.A_bao is not None and all(concrete(x) for x in (A_s, k_0, n_s) + bao):
+            self._check_positive()
 
     # -- pytree -------------------------------------------------------------
+    _OPTIONAL = ("beta", "sigma_fog", "A_bao", "r_bao", "sigma_bao")
+
     def tree_flatten(self):
-        return (self.A_s, self.k_0, self.n_s), (self.shape, self.L)
+        opt = tuple(n for n in self._OPTIONAL if getattr(self, n) is not None)       # the terms switched on are leaves
+        return (self.A_s, self.k_0, self.n_s) + tuple(getattr(self, n) for n in opt), (self.shape, self.L, opt, self.fog, self.los_axis)
 
     @classmethod
     def tree_unflatten(cls, aux, leaves):
         obj = object.__new__(cls)
-        obj.A_s, obj.k_0, obj.n_s = leaves
-        obj.shape, obj.L = aux
+        obj.shape, obj.L, opt, obj.fog, obj.los_axis = aux
+        obj.A_s, obj.k_0, obj.n_s = leaves[:3]
+        for n in cls._OPTIONAL:
+            setattr(obj, n, None)
+        for n, x in zip(opt, leaves[3:]):
+            setattr(obj, n, x)
         return obj
 
     def __repr__(self):
+        extra = "".join(f", {n}={getattr(self, n)}" for n in self._OPTIONAL if getattr(self, n) is not None)
+        if self.sigma_fog is not None:
+            extra += f", fog={self.fog!r}"
+        if self.anisotropic and self.ndim > 1:
+            extra += f", los_axis={self.los_axis}"
         return (f"PowerLawGRF(A_s={self.A_s}, k_0={self.k_0}, n_s={self.n_s}, "
-                f"L={self.L}, N={self.shape})")
+                f"L={self.L}, N={self.shape}{extra})")
+
+    @property
+    def anisotropic(self) -> bool:
+        """True if a Kaiser or Fingers-of-God term is on (then P depends on mu)."""
+        return self.beta is not None or self.sigma_fog is not None
 
     # -- grid ---------------------------------------------------------------
     @property
@@ -240,25 +308,105 @@ class PowerLawGRF:
         return k_vec, jnp.sqrt(sum(k ** 2 for k in k_vec))
 
     # -- spectrum -----------------------------------------------------------
-    def power(self, k):
-        """P(k) = A_s (k / k_0)^(n_s - 1) for k > 0, and 0 at k = 0 [length^d].
+    def power(self, k, mu=None):
+        """P(k, mu) for k > 0, and 0 at k = 0 [length^d] (class docstring).
 
-        Uses the double-``where`` pattern, so no inf / NaN appears for n_s < 1, in the
-        value or in its gradient.
+        Without the optional terms, P(k) = A_s (k / k_0)^(n_s - 1). ``mu`` = |k_par| / |k| (broadcastable to k) is
+        needed when a Kaiser or Fingers-of-God term is on, except in 1D where mu = 1. Uses the double-``where`` pattern,
+        so no inf / NaN appears for n_s < 1, in the value or in its gradient.
         """
         k = jnp.asarray(k)
         pos = k > 0
         k_safe = jnp.where(pos, k, self.k_0)
-        return jnp.where(pos, self.A_s * (k_safe / self.k_0) ** (self.n_s - 1.0), 0.0)
+        p = self.A_s * (k_safe / self.k_0) ** (self.n_s - 1.0)
+        if self.A_bao is not None:
+            p = p + self.bao_power(k_safe)
+        if self.anisotropic:
+            if self.ndim == 1:
+                mu = 1.0
+            elif mu is None:
+                raise ValueError("this PowerLawGRF is anisotropic: give mu = |k_par| / |k| (power(k, mu)).")
+            mu = jnp.asarray(mu)
+            if self.beta is not None:
+                p = p * (1.0 + self.beta * mu ** 2) ** 2
+            if self.sigma_fog is not None:
+                x2 = (k_safe * mu * self.sigma_fog) ** 2
+                p = p / (1.0 + x2) if self.fog == "lorentzian" else p * jnp.exp(-x2)
+        return jnp.where(pos, p, 0.0)
+
+    def mu_grid(self, k_vec, k_mod):
+        """mu = |k_par| / |k| on a ``k_grid`` (k_par along ``los_axis``; 0 at k = 0)."""
+        return jnp.abs(k_vec[self.los_axis]) / jnp.where(k_mod > 0, k_mod, 1.0)
+
+    def power_grid(self, real: bool = True):
+        """P of every mode of the FFT grid (``k_grid(real)`` layout): what ``sample`` and ``variance`` use."""
+        k_vec, k_mod = self.k_grid(real=real)
+        if not self.anisotropic:
+            return self.power(k_mod)
+        return self.power(k_mod, self.mu_grid(k_vec, k_mod))
+
+    def power_at(self, *k_components):
+        """P at wavevectors given by their components along the d grid axes (broadcastable arrays [1 / length]):
+        |k| and mu = |k_los| / |k| along ``los_axis``. The input spectrum at any set of modes (theory curves)."""
+        if len(k_components) != self.ndim:
+            raise ValueError(f"power_at needs {self.ndim} components, got {len(k_components)}.")
+        k_components = [jnp.asarray(c) for c in k_components]
+        k_mod = jnp.sqrt(sum(c ** 2 for c in k_components))
+        if not self.anisotropic:
+            return self.power(k_mod)
+        return self.power(k_mod, jnp.abs(k_components[self.los_axis]) / jnp.where(k_mod > 0, k_mod, 1.0))
+
+    def power_monopole(self, k, n_mu: int = 64):
+        """P(k) averaged over the directions of k [length^d]: mu uniform on [0, 1] in 3D, the polar angle uniform in 2D
+        (Gauss-Legendre, ``n_mu`` nodes); P(k) itself in 1D or without a Kaiser / Fingers-of-God term."""
+        k = jnp.asarray(k)
+        if not self.anisotropic or self.ndim == 1:
+            return self.power(k)
+        t, w = np.polynomial.legendre.leggauss(n_mu)
+        if self.ndim == 3:
+            mu, wt = 0.5 * (t + 1.0), 0.5 * w
+        else:
+            mu, wt = np.cos(0.25 * np.pi * (t + 1.0)), 0.5 * w
+        return jnp.sum(wt * self.power(k[..., None], mu), axis=-1)
+
+    def bao_power(self, k):
+        """P_BAO(k) [length^d], the exact Fourier transform of the Gaussian bump in xi (class docstring); k > 0."""
+        k = jnp.asarray(k)
+        A, r0, sg = self.A_bao, self.r_bao, self.sigma_bao
+        G = sg * jnp.sqrt(2.0 * jnp.pi) * jnp.exp(-0.5 * (k * sg) ** 2)
+        if self.ndim == 1:
+            return 2.0 * A * G * jnp.cos(k * r0)
+        if self.ndim == 3:
+            return 4.0 * jnp.pi * A * G * (sg ** 2 * jnp.cos(k * r0) + r0 * jnp.sin(k * r0) / k)
+        t, w = np.polynomial.legendre.leggauss(256)                       # 2D: the Hankel transform, by quadrature
+        lo = jnp.maximum(0.0, r0 - 10.0 * sg)
+        hi = r0 + 10.0 * sg
+        r = lo + 0.5 * (hi - lo) * (t + 1.0)
+        wr = 0.5 * (hi - lo) * w
+        f = wr * r * (jnp.exp(-0.5 * ((r - r0) / sg) ** 2) + jnp.exp(-0.5 * ((r + r0) / sg) ** 2))
+        return 2.0 * jnp.pi * A * jnp.sum(f * bessel_j0(k[..., None] * r), axis=-1)
+
+    def _check_positive(self):
+        """P_pl + P_BAO >= 0 on a dense k grid covering every mode (and at every mode in 1D and 2D); ValueError if not."""
+        kmin = min(self.k_min)
+        kmax = float(np.sqrt(sum(k ** 2 for k in self.k_max)))
+        k = np.unique(np.concatenate([np.geomspace(0.5 * kmin, 1.01 * kmax, 4000), np.linspace(0.5 * kmin, 1.01 * kmax, 4000)]))
+        if self.ndim <= 2:
+            k = np.unique(np.concatenate([k, np.asarray(self.k_grid(real=True)[1]).ravel()]))
+            k = k[k > 0]
+        iso = np.asarray(self.A_s * (k / self.k_0) ** (self.n_s - 1.0) + self.bao_power(jnp.asarray(k)))
+        if iso.min() < 0.0:
+            j = int(np.argmin(iso))
+            raise ValueError(f"PowerLawGRF: P(k) < 0 at k = {k[j]:.4g} (P_pl + P_BAO = {iso[j]:.3g}): not a valid Gaussian field. "
+                             f"Lower A_bao (= {self.A_bao}) or widen sigma_bao.")
 
     def variance(self):
-        """Expected real-space variance sigma^2 = (1/V) sum_{k != 0} P(|k|) on this grid."""
-        _, k_mod = self.k_grid(real=True)
+        """Expected real-space variance sigma^2 = (1/V) sum_{k != 0} P(k) on this grid."""
         n_last = self.shape[-1]
         w = jnp.full(n_last // 2 + 1, 2.0).at[0].set(1.0)   # rfft half-axis -> full-grid weights
         if n_last % 2 == 0:
             w = w.at[-1].set(1.0)
-        return jnp.sum(w * self.power(k_mod)) / self.volume
+        return jnp.sum(w * self.power_grid()) / self.volume
 
     # -- sampling -----------------------------------------------------------
     def sample(self, key: jax.Array, return_modes: bool = False):
@@ -284,96 +432,22 @@ class PowerLawGRF:
 def _sample_power_law_grf(grf: PowerLawGRF, key: jax.Array, return_modes: bool):
     dtype = jnp.result_type(float)                      # float64 under x64
     white_k = jnp.fft.rfftn(jax.random.normal(key, grf.shape, dtype=dtype))
-    _, k_mod = grf.k_grid(real=True)
     # <|white_k|^2> = N_pix  ->  <|FFT(delta)|^2> = N_pix P / dV  ->  <P_hat> = P
-    fft_delta = white_k * jnp.sqrt(grf.power(k_mod) / grf.cell_volume)
+    fft_delta = white_k * jnp.sqrt(grf.power_grid() / grf.cell_volume)
     delta = jnp.fft.irfftn(fft_delta, s=grf.shape)
     if return_modes:
         return delta, fft_delta * grf.cell_volume
     return delta
 
 
-def interpolate_periodic(field: jnp.ndarray, pos_xyz: jnp.ndarray, L_box) -> jnp.ndarray:
-    """Periodic trilinear interpolation of a grid ``field`` (values at the nodes x_j = j L / N) at world positions.
-
-    field   : (Nx, Ny, Nz) real
-    pos_xyz : (M, 3) positions, periodic in [0, L_box)
-    L_box   : float or (3,) array, box side(s) (anisotropic boxes allowed)
-    returns : (M,) sampled values
-    """
-    Nx, Ny, Nz = field.shape
-    N = jnp.array([Nx, Ny, Nz], dtype=pos_xyz.dtype)
-    u = (jnp.mod(pos_xyz, L_box) / L_box) * N
-    i0 = jnp.floor(u).astype(jnp.int32)
-    f = u - i0.astype(u.dtype)
-
-    ix0 = jnp.mod(i0[:, 0], Nx); ix1 = jnp.mod(ix0 + 1, Nx)
-    iy0 = jnp.mod(i0[:, 1], Ny); iy1 = jnp.mod(iy0 + 1, Ny)
-    iz0 = jnp.mod(i0[:, 2], Nz); iz1 = jnp.mod(iz0 + 1, Nz)
-    fx, fy, fz = f[:, 0], f[:, 1], f[:, 2]
-
-    c000 = field[ix0, iy0, iz0]; c100 = field[ix1, iy0, iz0]
-    c010 = field[ix0, iy1, iz0]; c110 = field[ix1, iy1, iz0]
-    c001 = field[ix0, iy0, iz1]; c101 = field[ix1, iy0, iz1]
-    c011 = field[ix0, iy1, iz1]; c111 = field[ix1, iy1, iz1]
-
-    c00 = c000 * (1 - fx) + c100 * fx
-    c10 = c010 * (1 - fx) + c110 * fx
-    c01 = c001 * (1 - fx) + c101 * fx
-    c11 = c011 * (1 - fx) + c111 * fx
-    c0 = c00 * (1 - fy) + c10 * fy
-    c1 = c01 * (1 - fy) + c11 * fy
-    return c0 * (1 - fz) + c1 * fz
-
-
-# --------------------------------------------------------------------------- toy gas cells
-def grf_cells(delta, grf: PowerLawGRF, n_bar: dict, *, generators=None, temperature=1e4, velocity=0.0, turbulence=None,
-              collisional=None, volumes: str = "voronoi", samples_per_cell: int = 32, seed: int = 0):
-    """``core.Cells`` of the gas of one 3D ``PowerLawGRF`` realisation: n = n_bar (1 + delta) for every species.
-
-    No transform, clipping or threshold: delta is the realisation as drawn (its variance is ``grf.variance()``). The
-    amplitude must keep 1 + delta > 0; a warning is issued when the minimum over the cells is <= 0.
-
-    Parameters
-    ----------
-    delta : (N_x, N_y, N_z) one realisation (``grf.sample(key)``), on the nodes x_j = j L / N_j.
-    grf : the cubic 3D ``PowerLawGRF`` of ``delta`` (its box ``grf.L`` is the periodic box of the cells).
-    n_bar : {species: mean comoving density [cm^-3]} (e.g. {"HI": 1e-12, "SiIII": 2e-14}).
-    generators : None (default): the nodes of the grid, whose Voronoi cells are exactly the grid cells (cubes of side
-        L / N centred on the nodes): the gas is the realisation itself, piecewise constant, an exact GRF at grid
-        resolution (``cells.cells_on_grid``). Or (M, 3) generating points [same length unit as the box], e.g. random
-        ones (a moving mesh): each takes delta interpolated trilinearly at its position (``interpolate_periodic``), so
-        the gas is the realisation smoothed by the interpolation and by its own cells.
-    temperature [K], velocity [km/s], turbulence [m/s], collisional [GHz] : per cell, as in ``cells.cells_from_values``:
-        a scalar, an array (on the grid (N_x, N_y, N_z)[, 3] for the default generators, else (M,)[, 3]), a callable
-        of the generating points (M, 3), or a dict {species: one of those}.
-    volumes : generators given only: "voronoi" (default, ``cells.voronoi_volumes`` with ``samples_per_cell`` and
-        ``seed``: each cell's own volume, so its size V^(1/3) is the simulation's definition) or "mean" (L^3 / M).
-    """
-    from skewerjax.core.cells import cells_from_values, cells_on_grid, voronoi_volumes
-    if grf.ndim != 3 or len(set(grf.L)) != 1:
-        raise ValueError(f"grf_cells needs a cubic 3D PowerLawGRF, got L = {grf.L}.")
-    d = np.asarray(delta, dtype=np.float64)
-    if d.shape != grf.shape:
-        raise ValueError(f"delta must have the grid shape {grf.shape}, got {d.shape}.")
-    box = float(grf.L[0])
-    if generators is None:
-        one = 1.0 + d
-        n = {sp: nb * one for sp, nb in n_bar.items()}
-        cells = cells_on_grid(box, n, temperature=temperature, velocity=velocity, turbulence=turbulence, collisional=collisional)
-    else:
-        pos = np.mod(np.asarray(generators, dtype=np.float64), box)
-        one = 1.0 + np.asarray(interpolate_periodic(jnp.asarray(d), jnp.asarray(pos), box))
-        if volumes == "voronoi":
-            vol = voronoi_volumes(pos, box, samples_per_cell=samples_per_cell, seed=seed)
-        elif volumes == "mean":
-            vol = np.full(pos.shape[0], box ** 3 / pos.shape[0])
-        else:
-            raise ValueError(f"volumes must be 'voronoi' or 'mean', got {volumes!r}.")
-        n = {sp: nb * one for sp, nb in n_bar.items()}
-        cells = cells_from_values(pos, box, n, temperature=temperature, velocity=velocity, turbulence=turbulence,
-                                  collisional=collisional, volumes=vol)
-    if float(one.min()) <= 0.0:
-        warnings.warn(f"grf_cells: min(1 + delta) = {float(one.min()):.3f} <= 0, so the density is negative somewhere; "
-                      "lower A_s.", stacklevel=2)
-    return cells
+def bessel_j0(x):
+    """J_0(x) (jax.numpy): Abramowitz & Stegun 9.4.1 for |x| <= 3 and 9.4.3 for |x| > 3, |error| < 5e-8."""
+    x = jnp.abs(jnp.asarray(x))
+    small = x <= 3.0
+    y = (jnp.where(small, x, 3.0) / 3.0) ** 2
+    j_small = (1.0 + y * (-2.2499997 + y * (1.2656208 + y * (-0.3163866 + y * (0.0444479 + y * (-0.0039444 + y * 0.0002100))))))
+    xl = jnp.where(small, 3.0, x)
+    z = 3.0 / xl
+    f0 = 0.79788456 + z * (-0.00000077 + z * (-0.00552740 + z * (-0.00009512 + z * (0.00137237 + z * (-0.00072805 + z * 0.00014476)))))
+    th = xl - 0.78539816 + z * (-0.04166397 + z * (-0.00003954 + z * (0.00262573 + z * (-0.00054125 + z * (-0.00029333 + z * 0.00013558)))))
+    return jnp.where(small, j_small, f0 * jnp.cos(th) / jnp.sqrt(xl))

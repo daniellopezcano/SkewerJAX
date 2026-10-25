@@ -6,7 +6,8 @@ import jax.numpy as jnp  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from skewerjax.core import Cosmology, LineBundle, PowerLawGRF, SkewerBundle, phys  # noqa: E402
+from skewerjax.core import Cosmology, LineBundle, SkewerBundle, phys  # noqa: E402
+from skewerjax.simulations import PowerLawGRF  # noqa: E402
 from skewerjax.utils import plotting as pl  # noqa: E402
 
 

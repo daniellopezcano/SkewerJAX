@@ -15,7 +15,8 @@ the dual segments of the sampling points (``core.absorbers.cell_pieces``). So th
 profile has an error O((W_p / b_p)^2), W_p the variation of the line centre across the piece (the Hubble flow only:
 the peculiar velocity is constant in a cell).
 
-Layers (all pure; the last one only adds eager checks and options):
+The line profiles phi_pj come from ``core.line_profiles``. Layers (all pure; the last one only adds eager checks and
+options):
 
 * ``optical_depth_kernel``: the pieces of one skewer, arrays in, (N_lines, N_v) out (jit);
 * ``optical_depth_from_pieces``: every skewer of a ``Pieces`` pytree, ``lax.map`` over skewers (jit);
@@ -28,7 +29,6 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from functools import partial
-from math import prod
 from typing import Optional
 
 import jax
@@ -39,66 +39,8 @@ from jax.sharding import Mesh, PartitionSpec
 from jax.typing import ArrayLike
 
 from skewerjax.core.constants import phys
+from skewerjax.core.line_profiles import voigt_line_profiles, voigt_width_kms, voigt_widths_GHz
 from skewerjax.core.spectral import frequency_offset_GHz, line_centre_velocity_kms
-from skewerjax.core.voigt import log10_voigt
-
-
-# --------------------------------------------------------------------------- line widths and profiles
-def voigt_widths_GHz(temperature, turbulence, collisional, lambda0_A, A21_GHz, mass_amu):
-    """Gaussian sigma and Lorentzian gamma [GHz] per (line, point).
-
-    b_th = sqrt(2 k_B T / m) [m/s], b = b_th + b_turb (a linear sum, as implemented so far; the notes add them in
-    quadrature), sigma = b / (sqrt(2) lambda), gamma = (A_21 + A_coll) / (4 pi).
-    temperature [K], turbulence [m/s], collisional [GHz] : (N_lines, N_points); the per-line arrays (N_lines,).
-    """
-    gamma = (A21_GHz[:, None] + collisional) / (4.0 * jnp.pi)
-    v_th_ms = jnp.sqrt(2.0 * phys.kB * temperature / mass_amu[:, None])
-    sigma = (v_th_ms + turbulence) * 10.0 / (jnp.sqrt(2.0) * lambda0_A[:, None])
-    return sigma, gamma
-
-
-def voigt_width_kms(sigma_GHz, gamma_GHz, lambda0_A):
-    """Width of a Voigt profile as an equivalent Doppler parameter [km/s].
-
-    f_G = 2 sqrt(ln 2) sqrt(2) sigma lambda, f_L = 2 gamma lambda, f_V = 0.5346 f_L + sqrt(0.2166 f_L^2 + f_G^2)
-    (better than 0.02 %); returns f_V / (2 sqrt(ln 2)): the thermal b for a Doppler line, finite for T -> 0.
-    sigma_GHz, gamma_GHz : (N_lines, ...); lambda0_A : (N_lines,) [A].
-    """
-    lam = jnp.reshape(jnp.asarray(lambda0_A), (-1,) + (1,) * (jnp.ndim(sigma_GHz) - 1))
-    to_kms = lam * 1e-4                                  # GHz x A -> km/s
-    f_G = 2.0 * jnp.sqrt(jnp.log(2.0)) * jnp.sqrt(2.0) * sigma_GHz * to_kms
-    f_L = 2.0 * gamma_GHz * to_kms
-    f_V = 0.5346 * f_L + jnp.sqrt(0.2166 * f_L ** 2 + f_G ** 2)
-    return f_V / (2.0 * jnp.sqrt(jnp.log(2.0)))
-
-
-def voigt_line_profiles(nu_GHz: ArrayLike, sigma_GHz: ArrayLike, gamma_GHz: ArrayLike, voigt: str = "ExoJAX") -> jnp.ndarray:
-    """phi = V(nu; sigma, gamma) [ns] (Eq. line_profile), unit area in nu. nu (N, N_v); sigma, gamma (N,)."""
-    log10_phi = jax.vmap(lambda x, s, g: log10_voigt(x, s, g, mode=voigt), in_axes=(0, 0, 0))(nu_GHz, sigma_GHz, gamma_GHz)
-    return 10.0 ** log10_phi
-
-
-def line_profiles(velocities_kms: ArrayLike, line_bundle, *, temperature, los_velocity=0.0, scale_factor=1.0, a_dagger=1.0,
-                  turbulence=0.0, collisional=0.0, voigt: str = "ExoJAX", velocity_period: Optional[float] = None,
-                  detuning: str = "exact") -> jnp.ndarray:
-    """phi_ij(v) [ns] of every line j for gas elements i, on the line-centred velocities (N_v,) [km/s].
-
-    The elements are given by arrays broadcastable to (N,): temperature [K], los_velocity [km/s, along the photon],
-    scale_factor a, turbulence [m/s], collisional [GHz]; a_dagger is the reference scale factor of v_dagger. Every line
-    takes the same elements (e.g. the cells crossed by a path). ``velocity_period`` and ``detuning`` as in
-    ``frequency_offset_GHz``. Returns (N_lines, N, N_v).
-    """
-    velocities_kms = jnp.asarray(velocities_kms)
-    T, u, a, tb, co = jnp.broadcast_arrays(*(jnp.atleast_1d(jnp.asarray(x, dtype=float)) for x in
-                                             (temperature, los_velocity, scale_factor, turbulence, collisional)))
-    n_lines, n = int(line_bundle.n_lines), T.shape[0]
-    rep = lambda x: jnp.broadcast_to(x[None], (n_lines, n))
-    lam = jnp.asarray(line_bundle.lambda0_A)
-    sigma, gamma = voigt_widths_GHz(rep(T), rep(tb), rep(co), lam, jnp.asarray(line_bundle.A21_GHz), jnp.asarray(line_bundle.mass_amu))
-    nu = frequency_offset_GHz(velocities_kms, lam, jnp.asarray(a_dagger, dtype=float), a, rep(u), velocity_period=velocity_period,
-                              detuning=detuning)
-    phi = voigt_line_profiles(nu.reshape(n_lines * n, -1), sigma.reshape(-1), gamma.reshape(-1), voigt)
-    return phi.reshape(n_lines, n, -1)
 
 
 # --------------------------------------------------------------------------- the optical depth of one skewer
@@ -326,7 +268,8 @@ def compute_optical_depth(source, velocities_kms: ArrayLike, line_bundle, cells=
         [km/s] for every skewer. With a period P, every detuning v - v_c is replaced by its nearest image in
         [-P/2, P/2): a piece whose line centre falls outside the period absorbs at the other end, and the wings that
         cross one end re-enter at the other (only the nearest image is kept).
-    voigt : "ExoJAX" (default) or "convolution" ("scipy_wofz" cannot run inside the jitted kernel).
+    voigt : "ExoJAX" (default), "convolution" or "harris" (first order in the damping parameter, the matched
+        fast mode; ``core.voigt.voigt_harris``) ("scipy_wofz" cannot run inside the jitted kernel).
     detuning : "exact" (default) or "linear" (fake_spectra's first-order mapping; matched mode).
     resolution_tolerance : warn when more than 1e-3 of the column sits in pieces wider than this fraction of the line
         width in velocity (``resolution_report``); None disables the check.

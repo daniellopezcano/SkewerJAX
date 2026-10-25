@@ -9,9 +9,11 @@ C = Checks("check_jax", __doc__)
 import numpy as np                                                        # noqa: E402
 import jax
 import jax.numpy as jnp
-from skewerjax.core import (phys, LineBundle, Cosmology, SkewerBundle, Cells, PowerLawGRF, cells_from_values, cell_pieces,
-                            interpolate_periodic, plane_points, path_geometry, line_elements, overflux_terms, equivalent_width_kms)
+from skewerjax.core import (phys, LineBundle, Cosmology, SkewerBundle, Cells, cells_from_values, cell_pieces, plane_points, path_geometry,
+                            line_elements, overflux_terms, equivalent_width_kms)
+from skewerjax.simulations import PowerLawGRF, interpolate_periodic
 from skewerjax.core import skewers as skw, voigt as V, spectral as sp_, optical_depth as od, analytic as an
+from skewerjax.core.line_profiles import line_profiles, voigt_line_profiles, voigt_width_kms, voigt_widths_GHz
 from skewerjax.core.stats import two_point as tp, contaminants as cm
 tol = 1e-12
 
@@ -119,20 +121,20 @@ jit_check("velocities_in_line_frames", lambda l: sp_.velocities_in_line_frames(v
 # widths, profiles, tau
 T3 = jnp.asarray(rng.uniform(1e3, 1e6, size=(4, 3, 10))); tb3 = jnp.asarray(rng.uniform(0, 5e3, size=(4, 3, 10)))
 co3 = jnp.asarray(rng.uniform(0, 1.0, size=(4, 3, 10)))
-W = lambda T, tb, co: od.voigt_widths_GHz(T, tb, co, lam, lb.A21_GHz, lb.mass_amu)
+W = lambda T, tb, co: voigt_widths_GHz(T, tb, co, lam, lb.A21_GHz, lb.mass_amu)
 jit_check("voigt_widths_GHz", W, T3[0], tb3[0], co3[0])
 vmap_check("voigt_widths_GHz (skewers)", W, (T3, tb3, co3))
 sg, gm = W(T3[0], tb3[0], co3[0])
-jit_check("voigt_width_kms", od.voigt_width_kms, sg, gm, lam)
+jit_check("voigt_width_kms", voigt_width_kms, sg, gm, lam)
 nu = sp_.frequency_offset_GHz(vel, lam, 0.31, a_pts[0], vlos[0]).reshape(30, 64)
-jit_check("voigt_line_profiles (ExoJAX)", lambda n, s, g: od.voigt_line_profiles(n, s, g, "ExoJAX"), nu, sg.reshape(-1), gm.reshape(-1))
+jit_check("voigt_line_profiles (ExoJAX)", lambda n, s, g: voigt_line_profiles(n, s, g, "ExoJAX"), nu, sg.reshape(-1), gm.reshape(-1))
 # the convolution needs a uniform grid that resolves the line (on ``nu`` above it underflows to 0 / NaN)
 nu_u = jnp.tile(jnp.linspace(-50.0, 50.0, 201)[None], (3, 1))
-jit_check("voigt_line_profiles (convolution)", lambda n, s, g: od.voigt_line_profiles(n, s, g, "convolution"), nu_u,
+jit_check("voigt_line_profiles (convolution)", lambda n, s, g: voigt_line_profiles(n, s, g, "convolution"), nu_u,
           jnp.array([1.0, 3.0, 8.0]), jnp.array([0.1, 0.5, 2.0]))
-jit_check("line_profiles", lambda T, u, a, b: od.line_profiles(vel, b, temperature=T, los_velocity=u, scale_factor=a, a_dagger=0.31),
+jit_check("line_profiles", lambda T, u, a, b: line_profiles(vel, b, temperature=T, los_velocity=u, scale_factor=a, a_dagger=0.31),
           T3[0, 0], vlos[0, 0], a_pts[0], lb)
-vmap_check("line_profiles (skewers)", lambda T, u, a: od.line_profiles(vel, lb, temperature=T, los_velocity=u, scale_factor=a, a_dagger=0.31),
+vmap_check("line_profiles (skewers)", lambda T, u, a: line_profiles(vel, lb, temperature=T, los_velocity=u, scale_factor=a, a_dagger=0.31),
            (T3[:, 0], vlos[:, 0], a_pts))
 w_m = jnp.asarray(rng.uniform(0.5, 1.5, size=(4, 10))) * 1e20
 n3 = jnp.asarray(rng.uniform(0, 1e-9, size=(4, 3, 10)))

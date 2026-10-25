@@ -2,7 +2,7 @@
 nearest-image limitation) and the GRF expectations."""
 import numpy as np
 
-from skewerjax.core import PowerLawGRF
+from skewerjax.simulations import PowerLawGRF
 from skewerjax.utils import tutorial as tu
 
 

@@ -315,7 +315,7 @@ def sampling_check(ab: Absorbers, frame, *, T_scale: float = 1.0, tolerance: flo
     with the same T, and heavier ions need finer sampling (b ~ A^-1/2).
 
     ``lorentz_hwhm_kms`` is the natural half width of the line in velocity, lambda (A_21 / 4 pi):
-    the width compared with W is that of the Voigt profile (``optical_depth.voigt_width_kms``),
+    the width compared with W is that of the Voigt profile (``line_profiles.voigt_width_kms``),
     which is the thermal b except for very cold gas (6e-3 km/s for Lya).
     """
     W = np.stack([frame.hubble_rate(k, ab.s[k]) for k in range(ab.n_skewers)]) * ab.length

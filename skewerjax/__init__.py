@@ -11,7 +11,7 @@ Three blocks, with dependencies in one direction only (comparison -> simulations
 
 Precision: SkewerJAX never changes JAX's configuration. Arrays follow ``jax_enable_x64`` as set by the user before
 the first computation (``jax.config.update("jax_enable_x64", True)``, as the notebooks and scripts do; float32
-otherwise). ``PowerLawGRF`` warns when x64 is off; ``voigt_convolution`` works in float64 when x64 is on; the
+otherwise). ``simulations.PowerLawGRF`` warns when x64 is off; ``voigt_convolution`` works in float64 when x64 is on; the
 simulation and comparison blocks hold host arrays in float64 NumPy.
 """
 __version__ = "0.0.1"

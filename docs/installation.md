@@ -105,7 +105,7 @@ benchmark read their snapshots from one environment variable:
 export SKEWERJAX_DATA=/path/to/folder/with/TNG50-4   # holds TNG50-4/ (and TNG50-3/, TNG50-2/ for the benchmark)
 ```
 
-It defaults to `/home/STORAGE`. The notebooks 04, 06, 08 and 09 read `SKEWERJAX_DATA` with the same default.
+It defaults to `/home/STORAGE`. The notebooks 00 (step by step), 05, 07 and 09 read `SKEWERJAX_DATA` with the same default.
 
 ## 5. Verify the installation
 

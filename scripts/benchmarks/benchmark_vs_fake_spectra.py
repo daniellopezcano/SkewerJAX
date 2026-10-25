@@ -6,6 +6,10 @@ skewers (Lya and Si III 1206), one process per configuration. The logic is ``ske
 
 Snapshots are read from ``$SKEWERJAX_DATA`` (default ``/home/STORAGE``). Sets: ``quick`` (TNG50-4: skewer count 1-64 on CPU and GPU, float32, thread counts), ``skewers`` (TNG50-4, 256 skewers),
 ``resolution`` (16 skewers in TNG50-3 and TNG50-2). Results that exist are skipped, so an interrupted run resumes.
+
+Raw results (one ``.json`` record and one ``.npz`` of spectra per configuration, ~15 MB for all sets) go to ``RESULTS``:
+``$SKEWERJAX_BENCHMARK_RAW``, by default ``claude_agents/assets/benchmarks`` (outside git). The ``.json`` records that
+notebook 09 reads are copied to ``notebooks/benchmark_records/suite``; rerun this script to rebuild the raw files.
 """
 import argparse
 import importlib.util
@@ -21,6 +25,7 @@ _spec.loader.exec_module(B)
 make_config, run_suite, config_id = B.make_config, B.run_suite, B.config_id
 
 STORAGE, SNAP = Path(os.environ.get("SKEWERJAX_DATA", "/home/STORAGE")), 25      # folder with TNG50-4/, TNG50-3/, TNG50-2/
+RESULTS = Path(os.environ.get("SKEWERJAX_BENCHMARK_RAW", Path(__file__).resolve().parents[2] / "claude_agents/assets/benchmarks"))
 
 
 def configs(name: str) -> list:
@@ -42,7 +47,7 @@ def configs(name: str) -> list:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--sets", default="quick", help="comma-separated: quick, skewers, resolution")
-    ap.add_argument("--results", default=str(Path(__file__).resolve().parents[2] / "claude_agents/tmp_files/20261021_2330/scratch/benchmarks"))
+    ap.add_argument("--results", default=str(RESULTS))
     ap.add_argument("--cap", type=float, default=1800.0, help="wall-time cap per configuration [s]")
     ap.add_argument("--list", action="store_true", help="print the configurations and exit")
     a = ap.parse_args()

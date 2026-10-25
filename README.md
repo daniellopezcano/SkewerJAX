@@ -4,15 +4,15 @@ SkewerJAX computes the optical depth τ(v) and the transmitted flux F = e^{−τ
 lines (Si III λ1206 and any other transition in its line table) along arbitrary skewers, together with their summary
 statistics: the overflux decomposition by line, P1D, ξ1D, P3D and ξ3D. It is written in JAX, so the whole chain can
 be compiled, vectorised and differentiated, and it runs on CPUs and GPUs. The gas is one container for every source,
-Voronoi gas cells (`core.Cells`): built from Gaussian random fields (toy models) or from hydrodynamical snapshots
-(Arepo/IllustrisTNG HDF5). A dedicated subpackage
+Voronoi gas cells (`core.Cells`): built from Gaussian random fields (toy fields, isotropic or with a Kaiser-like
+anisotropy, Fingers of God and a BAO feature) or from hydrodynamical snapshots (Arepo/IllustrisTNG HDF5). A dedicated subpackage
 reproduces the scheme of fake_spectra, so that the two codes can be compared option by option.
 
 **Key features**
 
 - **Exact light-cone geometry.** a(x) is integrated along each skewer (diffrax), every line is integrated in its own
   line-centred frame (or directly on a reference line's axis), and the detuning is exact.
-- **One field representation, one route for τ.** Toy models and simulations both produce Voronoi cells (`core.Cells`:
+- **One field representation, one route for τ.** Toy fields and simulations both produce Voronoi cells (`core.Cells`:
   generating points, volumes and, per species, density, temperature and peculiar velocity). One route takes them to
   τ: selection of the cells along the skewers, deposition into the exact pieces of the cells (`core.Pieces`), and the
   sum of one profile per piece at its centroid. Periodicity is one opt-in option, `velocity_period` (default: none).
@@ -34,13 +34,13 @@ reproduces the scheme of fake_spectra, so that the two codes can be compared opt
 ```mermaid
 flowchart LR
     C["<b>comparison</b><br/>fake_spectra scheme, matched mode,<br/>effect chain, benchmark"] --> B
-    B["<b>simulations</b><br/>readers, gas physics,<br/>streamed selection → cells"] --> A
-    A["<b>core</b><br/>lines, cosmology, skewers, gas cells, toy models,<br/>selection, deposition, Voigt, optical depth, statistics"]
+    B["<b>simulations</b><br/>the field sources: toy fields (GRF),<br/>snapshot readers, gas physics → cells"] --> A
+    A["<b>core</b><br/>lines, cosmology, skewers, gas cells,<br/>selection, deposition, Voigt, line profiles, optical depth, statistics"]
     U["utils.plotting"] -.-> A
 ```
 
-Dependencies run one way only. `core` imports nothing from the other subpackages, and the boundary between `simulations`
-and `core` is `core.Cells`, the gas cells shared with the toy models; `core.Pieces`, the constant-property pieces of
+Dependencies run one way only. `core` imports nothing from the other subpackages. `simulations` holds every source of
+gas cells (the toy fields and the snapshots), and the boundary between `simulations` and `core` is `core.Cells`; `core.Pieces`, the constant-property pieces of
 every skewer, is what the τ sum runs over. `docs/usage.md` lists the entry points of each
 subpackage.
 
@@ -49,7 +49,8 @@ subpackage.
 ```python
 import jax, jax.numpy as jnp, numpy as np
 jax.config.update("jax_enable_x64", True)          # SkewerJAX follows this flag; the validated tolerances are float64
-from skewerjax.core import LineBundle, Cosmology, SkewerBundle, grid_skewer_points, phys, PowerLawGRF, grf_cells, compute_optical_depth
+from skewerjax.core import LineBundle, Cosmology, SkewerBundle, grid_skewer_points, phys, compute_optical_depth
+from skewerjax.simulations import PowerLawGRF, grf_cells
 
 lines = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
 cosmo = Cosmology(H0=phys.H0, Omega_r_0=0.0, Omega_m_0=1.0, Omega_k_0=0.0, Omega_lambda_0=0.0)
@@ -85,27 +86,28 @@ paths and troubleshooting.
 
 Two entry points: `00_quickstart` (the whole chain on a toy box, compact) and `00_quickstart_step_by_step` (one
 simulated skewer followed from the snapshot to the statistics, one figure and the equations per step). Notebooks
-01–08 then open one ingredient each, in the order of the dependency graph (derived from the code; an arrow points
+01–09 then open one ingredient each, in the order of the dependency graph (derived from the code; an arrow points
 to what needs an ingredient; dashed: optional input or data only; the two field sources are interchangeable):
 
 ```mermaid
 flowchart LR
-    L["lines (01)"] --> T["optical depth τ, F (06)"]
+    L["lines (01)"] -- "atomic data" --> LP["line profiles (06)"]
+    LP --> T["optical depth τ, F (07)"]
     C["cosmology (02)"] -. "a(x), or manual" .-> K["skewers (03)"]
     subgraph SRC["sources of cells (interchangeable)"]
-        TS["toy models: GRF → cells (04)"]
+        TS["toy fields: GRF → cells (04)"]
         SIM["simulation outputs → cells (05)"]
     end
-    K -- paths --> SIM
     L -. "ion masses" .-> SIM
     TS --> F["gas cells (04, 05)"]
     SIM --> F
-    F --> T
-    K -- "points, a(x): pieces" --> T
-    T --> O["overflux δ_F (07)"]
+    F --> D["deposition: cells → pieces (07)"]
+    K -- "points, a(x)" --> D
+    D -- pieces --> T
+    T --> O["overflux δ_F (08)"]
     L -. "line offsets Δv" .-> O
-    O --> P["P1D, ξ1D, P3D, ξ3D (07)"]
-    SIM -. "fake_spectra, external (08)" .-> T
+    O --> P["P1D, ξ1D, P3D, ξ3D (08)"]
+    SIM -. "fake_spectra, external (09)" .-> T
 ```
 
 | notebook | content |
@@ -115,17 +117,18 @@ flowchart LR
 | `01_lines` | the line table, `Line` and `LineBundle` attributes, offsets Δv_j and line widths |
 | `02_cosmology` | a(x) along light rays against the closed forms, with each background's special point |
 | `03_skewers` | `SkewerBundle` conventions; one skewer in 3D with its points, midpoints, dual segments, tangents and line elements, and everything the bundle stores for it |
-| `04_fields_and_samplers` | toy models: Gaussian random fields in 1D/2D/3D (the recovered P(k), and ξ(r) with its exact covariance; the (k∥, k⊥) plane; P(k) in μ wedges), and their gas cells (`grf_cells`: grid generators, the deposited field against the projected input, random generators and their smoothing) |
-| `05_simulation_outputs` | from a TNG50-4 snapshot to gas cells: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, the selection, and the snapshot as `core.Cells` (`SimulationSkewers.to_cells`), the container of the toy models |
-| `06_line_profiles_and_optical_depth` | from cells to τ step by step (selection → deposition into pieces → τ, on toy cells), the τ integral as a sum over pieces, Voigt implementations, line profiles, closed forms, line-centred frames, the global axis and the observed wavelength, periodicity as an option (`velocity_period`: its two effects and the nearest image), τ from simulation outputs |
-| `07_summary_statistics` | δ_F of several lines, P1D/ξ1D by order and term (the two-line terms), and a systematic study of a GRF density n = n̄(1 + δ): 3D fields, 1D overdensities (discrete projection, window of the cells), 1D overfluxes (bias, thermal kernel, line offset), P3D and ξ3D, each against its expectation |
-| `08_fake_spectra_comparison` | the differences with fake_spectra one switch at a time (matched mode, effect chain, root causes) and the benchmark (strict single core, stages, memory, scaling, GPU; reads `notebooks/benchmark_records/`), with a summary per part |
+| `04_fields_and_samplers` | toy fields: Gaussian random fields in 1D/2D/3D, isotropic and with a Kaiser-like anisotropy, Fingers of God and a BAO bump (the recovered P(k), and ξ(r) with its exact covariance; the (k∥, k⊥) plane; P(k) in μ wedges), and their gas cells (`grf_cells`: grid cells, uniform and density-weighted generating points, and their effect on the measured P(k)) |
+| `05_simulation_outputs` | from a TNG50-4 snapshot to gas cells: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, and a region of the snapshot as `core.Cells` without skewers (`snapshot_cells`: the cell centres, the exact Voronoi tessellation of a plane, H I and Si III), the container of the toy fields |
+| `06_voigt_and_line_profiles` | the Voigt function (ExoJAX, FFT convolution, SciPy's Faddeeva function; Gaussian and Lorentzian limits) and the line profiles of gas elements (`core.line_profiles`) |
+| `07_deposition_and_optical_depth` | from cells to τ step by step (selection → deposition into pieces → τ, on toy cells), the τ integral as a sum over pieces, closed forms, line-centred frames, the global axis and the observed wavelength, periodicity as an option (`velocity_period`: its two effects and the nearest image), τ from simulation outputs |
+| `08_summary_statistics` | δ_F of several lines, P1D/ξ1D by order and term (the two-line terms), and a systematic study of a GRF density n = n̄(1 + δ): 3D fields, 1D overdensities (discrete projection, window of the cells), 1D overfluxes (bias, thermal kernel, line offset), P3D and ξ3D, each against its expectation |
+| `09_fake_spectra_comparison` | the differences with fake_spectra one switch at a time (matched mode, effect chain, root causes) and the benchmark (strict single core, stages, memory, scaling, GPU; reads `notebooks/benchmark_records/`), with a summary per part |
 
 Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: the white "paper" style by default,
 `use_style("dark")` for the dark one; Paul Tol's colour-blind-safe "bright" colours and colour maps in both, minimum
 font sizes). `use_backend()` (interactive ipympl figures in a live notebook) is left commented out in the setup cell.
 Every notebook opens with the dependency graph highlighting the ingredients it uses and the lines "Requires" /
-"Independent of". Notebooks `00_quickstart_step_by_step`, 05, 06 and 08 need TNG50 snapshots (see
+"Independent of". Notebooks `00_quickstart_step_by_step`, 05, 07 and 09 need TNG50 snapshots (see
 "Simulation data" in `docs/installation.md`).
 
 ## Validation, tests and benchmarks
@@ -165,21 +168,23 @@ On this machine fake_spectra is faster in every configuration, from 1.5× to 69�
   profiled.
 - **Memory:** fake_spectra uses 0.5 GB of host memory. SkewerJAX grows by about 60 MB per skewer (16 GB at 256).
 
-Notebook `08_fake_spectra_comparison` (Part 2) has the stage breakdown, the thread and memory scaling, and the
+Notebook `09_fake_spectra_comparison` (Part 2) has the stage breakdown, the thread and memory scaling, and the
 figures.
 
 ## Repository layout
 
 ```
 skewerjax/
-  core/            lines, constants, cosmology, skewers, gas cells and toy models, selection, deposition, absorbers
-                   (cells -> pieces), Voigt, spectral frames, optical depth (incl. sharding), overflux, analytic references
+  core/            lines, constants, cosmology, skewers, gas cells, selection, deposition, absorbers (cells -> pieces),
+                   Voigt, line profiles, spectral frames, optical depth (incl. sharding), overflux, analytic references
     stats/         P1D/xi1D, P3D/xi3D, shared two-point kernels, metal-contamination models
-  simulations/     readers, raw gas cells, gas physics, streamed selection, SimulationSkewers (-> core.Cells), maps
+  simulations/     the field sources (-> core.Cells): toy fields (grf: PowerLawGRF; toy_cells: grf_cells, generating
+                   points) and snapshots (readers, raw gas cells, gas physics, streamed selection, snapshot_cells,
+                   SimulationSkewers, maps)
     cloudy_tables/ CLOUDY ionisation tables (git submodule)
   comparison/      fake_spectra emulation, matched options and effect chain, fake_spectra driver and source, benchmark
   utils/plotting.py  shared style, dependency graph (plot_dag), figure helpers
-notebooks/         00-08 tutorials (delivered with outputs cleared), benchmark_records/ (saved benchmark records read by 08)
+notebooks/         00-09 tutorials (delivered with outputs cleared), benchmark_records/ (saved benchmark records read by 09)
 scripts/
   validation/      check_*.py and run_all.py
   benchmarks/      benchmark_vs_fake_spectra.py

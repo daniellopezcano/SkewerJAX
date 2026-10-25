@@ -10,7 +10,8 @@ from types import SimpleNamespace                                          # noq
 import numpy as np                                                        # noqa: E402
 import jax                                                                # noqa: E402
 import jax.numpy as jnp                                                   # noqa: E402
-from skewerjax.core import DeltaFieldBuilder, PowerLawGRF                 # noqa: E402
+from skewerjax.core import DeltaFieldBuilder                              # noqa: E402
+from skewerjax.simulations import PowerLawGRF                             # noqa: E402
 from skewerjax.core.stats import (OverfluxStatistics1D, OverfluxStatistics3D, fit_ma_model_profiled, fit_mcdonald_a,
                                   mcdonald_factor, xi_from_power)         # noqa: E402
 from skewerjax.utils.plotting import hybrid_k_edges, pk_sigma             # noqa: E402

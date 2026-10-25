@@ -3,6 +3,69 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — a fast Voigt mode, notebooks 06 and 07 restructured (2026-10-25, session 20261025_1357)
+
+### Added
+- **`voigt="harris"`** (`core.voigt.voigt_harris`, `harris_H`, `HARRIS_A_MAX`): H(a, u) to first order in the damping
+  parameter, e^(−u²) + a H₁(u) with H₁ = 2u Im w(u) − 2/√π tabulated (1024 intervals on [0, 6]) and a five-term
+  asymptotic series beyond u = 6, for a ≤ 10⁻³; the exact (ExoJAX) evaluation above. The scheme of fake_spectra
+  (`fastvoigt.h`; Harris 1948). Max relative error 1.3 × 10⁻⁵ (a = 10⁻³); 1.8× faster than the default on a H I
+  τ, slower when a bundle mixes in metal lines (the whole batch then takes the exact path). Through
+  `voigt_line_profiles`, `line_profiles`, `compute_optical_depth(..., voigt="harris")`. Default unchanged.
+- `plot_voigt_limits(..., expansion=)`: panel (c), the error of an approximation of H(a, u) over its range of a.
+- `plot_deposition_steps(..., tau_pieces_periodic=, period=)`: panel (d), the periodic spectrum on the axis of (c).
+
+### Changed
+- Notebook 06: the theory of the line profile of a gas element (V, σ, γ, v†, λ′, v_c, ν), moved from 07; the
+  "harris" mode in §1; new §3, exact against linearised detuning.
+- Notebook 07: §1 the integral → the sum over pieces (theory only); §2 the deposition step by step with the periodic
+  boundaries (the old §4 and its five-piece demo removed); §3–§5 renumbered. Cross-references in 00, 00b, 05, 06, 08.
+
+## Unreleased — the field sources in `simulations`, a line-profile module, an anisotropic / BAO GRF, notebooks 06–09 (2026-10-25, session 20261025_0340)
+
+### Added
+- **`PowerLawGRF` optional terms** (all off by default; the default draws, power and variance are bit-identical):
+  P(k, μ) = [P_pl(k) + P_BAO(k)] (1 + β μ²)² D(k μ σ_FoG), μ = |k∥|/|k| along `los_axis` (default: the last axis; μ = 1
+  in 1D). `beta` (Kaiser-like), `sigma_fog` and `fog` (`"lorentzian"` 1/(1 + x²), `"gaussian"` e^(−x²)), and a BAO
+  bump in ξ, `A_bao`, `r_bao`, `sigma_bao`: ξ_BAO(r) = A[g(r − r₀) + g(r + r₀)], added to P through its exact transform
+  (closed forms in 1D and 3D, a Hankel transform by Gauss–Legendre quadrature in 2D, `bessel_j0`). P_pl + P_BAO ≥ 0 is
+  checked at construction (`ValueError` naming the k). New methods: `power(k, mu)`, `power_grid`, `power_at(*k)`,
+  `power_monopole(k)`, `mu_grid`, `bao_power`; the terms switched on are pytree leaves.
+- **Generating points of the toy cells:** `uniform_generators(grf, M, seed=)` and `density_weighted_generators(delta,
+  grf, M, seed=)` (point density (M / L³)(1 + δ_j) in the grid cell of node j, drawn exactly).
+- **The snapshot as cells without skewers** (new `simulations/snapshot_cells.py`): `select_cells_in_region(reader, lo,
+  hi, margin=)` (streamed, periodic sub-box), `gas_to_cells(gas, species, ext)` and `snapshot_cells(reader, species,
+  lo, hi, margin=, ext=)` → `core.Cells`, with the values of `SimulationSkewers.to_cells` for the same cells
+  (`check_tng_fields.py`: bit-identical, complete, exact nearest generators inside the region).
+- `utils.plotting.input_power_modes`; `power_map_kpar_kperp(..., los_axis)` and `power_kmu(..., los_axis)`.
+- Tests: `test_toy_fields.py` (generators; the optional GRF terms against quadrature, positivity, `power_at`,
+  `power_monopole`, pytree).
+
+### Changed (breaking)
+- Moved, no aliases: `skewerjax.core.toy_fields` → `skewerjax.simulations.grf` (`PowerLawGRF`) and
+  `skewerjax.simulations.toy_cells` (`grf_cells`, `interpolate_periodic`); `skewerjax.core` no longer exports them
+  (import from `skewerjax.simulations`). The line widths and profiles (`voigt_widths_GHz`, `voigt_width_kms`,
+  `voigt_line_profiles`, `line_profiles`) moved from `core.optical_depth` to the new `core.line_profiles` (still
+  exported by `skewerjax.core`; the package attribute `skewerjax.core.line_profiles` is the function).
+- The theory curves of the GRF figures (`plot_isotropic_recovery`, `plot_kpar_kperp_maps`, `plot_pk_mu_wedges`,
+  `correlation_binned`, `grf_p1d_along_axis`, `tutorial.p1d_expected`, `p3d_expected_on_skewer_grid`,
+  `binned_input_power`) evaluate the input at every mode with its μ (`power_at`); for an isotropic input they are
+  unchanged (up to the order of the sums in |k|).
+- `plot_dag`: new nodes "line profiles" and "deposition" (lines → line profiles → optical depth; gas cells + skewers
+  → deposition → optical depth); no skewers → simulation edge; the toy node is "toy fields"; figure size (24, 6.6).
+- Notebooks: `06_line_profiles_and_optical_depth` split into `06_voigt_and_line_profiles` and
+  `07_deposition_and_optical_depth`; `07_summary_statistics` → `08_summary_statistics`; `08_fake_spectra_comparison`
+  → `09_fake_spectra_comparison`. 04 adds the anisotropic + BAO configuration and rewrites its §2 (grid, uniform and
+  density-weighted generating points); 05 §3 uses `snapshot_cells` (no skewers).
+
+### Fixed
+- `scripts/validation/check_jax.py` imported the module `core.line_profiles` as a package attribute, which is the
+  function of the same name: it now imports the names from the module.
+
+### Numerical changes
+- None for the moves (9 baseline configurations bit-identical: GRF draws, cells, profiles, toy τ, TNG50-4 τ); none for
+  `PowerLawGRF` with its optional terms off.
+
 ## Unreleased — one field representation: Voronoi cells for every source, one deposition route to τ (2026-10-25, session 20261025_0015)
 
 ### Added

@@ -17,11 +17,11 @@ inside a cell the gas is uniform. ``Cells`` holds
   ``collisional``           A_coll, GHz                               optional (0)
   ========================  ========================================  ============
 
-Nothing in it is specific to a source. Toy models fill it directly (``cells_on_grid``, ``cells_from_values``,
-``toy_fields.grf_cells``); a simulation fills it after its gas physics (``skewerjax.simulations``,
-``SimulationSkewers.cells``). The optical depth is computed from it along skewers by one route: selection
-(``core.selection``), deposition into pieces (``core.deposition``), pieces (``core.absorbers.cell_pieces``) and the
-sum over pieces (``core.optical_depth``).
+Nothing in it is specific to a source. The field sources of ``skewerjax.simulations`` fill it: the toy fields
+(``toy_cells.grf_cells``, on the general builders ``cells_on_grid`` and ``cells_from_values`` here), and the snapshots
+after their gas physics (``snapshot_cells`` for a region, ``SimulationSkewers.to_cells`` near skewers). The optical
+depth is computed from it along skewers by one route: selection (``core.selection``), deposition into pieces
+(``core.deposition``), pieces (``core.absorbers.cell_pieces``) and the sum over pieces (``core.optical_depth``).
 
 A regular grid of cells (``cells_on_grid``) carries ``grid`` = its shape: its generators are the nodes x_j = j box / N_j
 in C order, and its Voronoi cells are the cubes of side box / N centred on them, so the deposition can find the cell of
@@ -218,7 +218,7 @@ def cells_from_values(positions, box: Optional[float], number_density: dict, *, 
 
 def grid_points(box: float, shape) -> np.ndarray:
     """(N_x N_y N_z, 3) nodes x_j = j box / N_j of a periodic grid, in C order [cMpc]: the generating points of a grid
-    of cells, the centres of its cubic Voronoi cells (and the positions of ``PowerLawGRF.x_grid``)."""
+    of cells, the centres of its cubic Voronoi cells (and the positions of ``simulations.PowerLawGRF.x_grid``)."""
     axes = [np.arange(n) * (float(box) / n) for n in shape]
     return np.stack([g.ravel() for g in np.meshgrid(*axes, indexing="ij")], -1)
 
