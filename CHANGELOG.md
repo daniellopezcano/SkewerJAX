@@ -3,6 +3,25 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — notebook 07: the seam figure in three figures (2026-10-26)
+
+### Changed
+- `plot_deposition_steps` split into `plot_deposition_cells` (row (a)), `plot_deposition_pieces` (row (b)) and
+  `plot_deposition_rings` (rows (c)–(e)), sharing `_deposition_view` (the same pieces, colours and labels in all three).
+  The pieces shown are those within `half_range_cMpc` of the seam s = 0 ≡ L (replaces `regions`); the ring of v† shows
+  the fixed window ±`half_range_kms` around 0 ≡ P (default 300 km/s), the ring of s the window ±l; each centred on its
+  seam, without the grey neighbouring pieces. One velocity-arrow scale in the three figures (`arrow_kms`,
+  `arrow_cMpc`: 0.1 cMpc per 100 km/s, in every legend): the 3D cell velocities, and v∥ drawn from the centre of each
+  piece along s with its sign, overlapping arrows stacked by `_arrow_levels`. (a): larger panels, no pane grids,
+  red tangents, outlined box faces, a row of cell labels; whole rings of (c)–(e) larger, the explanations in one legend.
+- `_RingSector(aspect=)` (the depth from the window, so narrow and wide windows fill the same axis), `ticks` (values
+  before the seam as L − x with their decimals, the unit on the last tick), `rticks` and `labels` in page units.
+- `plot_deposition_rings`: (c)–(e) draw the piece on the velocity seam like every other piece (no bold outline, label
+  or dashed profile, no P/2 cut ray, no legend entries). `_density_norm`: one norm of `CMAPS["density"]` (tight log
+  range, 0.05 dex pad) for `plot_gas_cells` (04, 05) and the deposition figures (07).
+- Notebook 07, §1: the skewer sampled every 20 km/s (`DV_POINTS`, a visualisation choice, not converged), the figure
+  cell split in three with `HALF_RANGE_CMPC = 2.0` and `HALF_RANGE_KMS = 300.0`, and the reading of each figure.
+
 ## Unreleased — the fake_spectra comparison in two notebooks, and a new benchmark harness (2026-10-26)
 
 ### Changed

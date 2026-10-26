@@ -209,8 +209,9 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
 ```
 
 - Only the background, the foreground (`FG`, `BG`, `DIM`, `ENTITY_COLORS["total"]`) and the direction of the
-  sequential maps (`CMAPS["sequential"]`, `"hot"`, `"line"`: low values merge with the background) change between the
-  two styles. Import `FG`, `BG` after `use_style`.
+  sequential maps (`CMAPS["sequential"]`, `"hot"`, `"line"`, `"density"`: low values merge with the background) change
+  between the two styles. Import `FG`, `BG` after `use_style`. `CMAPS["density"]` (Tol's smooth rainbow, whole range)
+  colours the cell densities of `plot_gas_cells` and of the deposition figures, so that neighbouring cells stay distinct.
 
 - Colours: every discrete colour is Tol's "bright" scheme (`PALETTE` = `tol_colors.colorsets["bright"]`, vendored with
   identical values when `tol_colors` is not installed), in Tol's order (blue, red, green, yellow, cyan, purple, grey).
@@ -236,12 +237,15 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   view of a `core.Cells` along one skewer, `plot_gas_cells(cells, select_cells(cells, bundle.spatial_points), bundle)`:
   the cells it crosses in 3D (cubes, or Voronoi polyhedra), one row per species: density, temperature, peculiar
   velocity with one arrow per cell; 04 and 05),
-  `plot_deposition_steps(parts, bundle, regions, v, tau_pieces, period=)` (one simulation skewer from the parts of
-  `cell_pieces`, its end and its start side by side around the seam: the cells in 3D with the box faces and the
-  tangents, the pieces with their v∥ = v·t̂, then the same pieces on the ring of s (period L), on the ring of v†
-  (period P, at their line centres), and their dτ_p with `velocity_period=True` and the total τ; 07),
-  `plot_voigt_limits`, `plot_frames_axes` (panel (b): each line's own window relabelled at v − Δv_j;
-  `tau_scale={line: k}` draws a weak line as exp(−k τ), display only; `wrapped=` adds panel (d), what
+  `plot_deposition_cells`, `plot_deposition_pieces`, `plot_deposition_rings(parts, bundle, v, tau_pieces, period=,
+  half_range_cMpc=, half_range_kms=)` (one simulation skewer from the parts of `cell_pieces`, the pieces within
+  ±`half_range_cMpc` of its seam, its end and its start side by side: the cells in 3D with the box faces and the
+  tangents; the pieces with their v∥ = v·t̂ (one arrow scale in the three figures); the same pieces on the ring of s
+  (period L), on the ring of v† (period P, at their line centres, window ±`half_range_kms`), and their dτ_p with
+  `velocity_period=True` and the total τ; 07),
+  `plot_voigt_limits`, `plot_frames_axes` (one figure per case, all of the same size and layout: `{"own", "global",
+  "wavelength", "wrapped"}: (fig, ax)`; "global": each line's own window relabelled at v − Δv_j;
+  `tau_scale={line: k}` draws a weak line as exp(−k τ), display only; `wrapped=` adds "wrapped", what
   `wrap_to_ref_line` does to a periodic spectrum),
   `plot_effect_fluxes`, `plot_skewer_anatomy`, `plot_terms_by_order`,
   `plot_p1d_input_vs_measured` (+ `grf_p1d_along_axis`), `plot_cylinder(..., progress=p)` (one frame per call),

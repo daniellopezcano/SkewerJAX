@@ -52,13 +52,22 @@ _TOL_CMAPS = {      # Tol's sequential and diverging schemes (https://personal.s
     "BuRd": (["#2166AC", "#4393C3", "#92C5DE", "#D1E5F0", "#F7F7F7", "#FDDBC7", "#F4A582", "#D6604D", "#B2182B"], "#FFEE99"),
     "PRGn": (["#762A83", "#9970AB", "#C2A5CF", "#E7D4E8", "#F7F7F7", "#D9F0D3", "#ACD39E", "#5AAE61", "#1B7837"], "#FFEE99"),
 }
+# Tol's smooth rainbow (Fig. 21; tol_colors 2.2.0 ``rainbow_linear``, i.e. "rainbow_WhBr"): about 2.8x the perceptual
+# length (CIELAB) of iridescent, so cells of close densities stay distinct; reasonably clear in colour-blind vision.
+_TOL_CMAPS["rainbow_WhBr"] = (["#E8ECFB", "#DDD8EF", "#D1C1E1", "#C3A8D1", "#B58FC2", "#A778B4", "#9B62A7", "#8C4E99", "#6F4C9B",
+                               "#6059A9", "#5568B8", "#4E79C5", "#4D8AC6", "#4E96BC", "#549EB3", "#59A5A9", "#60AB9E", "#69B190",
+                               "#77B77D", "#8CBC68", "#A6BE54", "#BEBC48", "#D1B541", "#DDAA3C", "#E49C39", "#E78C35", "#E67932",
+                               "#E4632D", "#DF4828", "#DA2222", "#B8221E", "#95211B", "#721E17", "#521A13"], "#666666")
 _TOL_CMAPS["iridescentline"] = (_TOL_CMAPS["iridescent"][0][7:-1], "#999999")          # visible on white
 _TOL_CMAPS["iridescentline_dark"] = (_TOL_CMAPS["iridescent"][0][1:-7], "#999999")     # visible on black (reversed)
 # Sequential maps run from the background colour to the strongest one (low values merge with the background): light to
 # dark in the paper style, dark to bright in the dark style (``use_style`` switches them); diverging maps are the same.
 # "line": the sequential map for coloured lines and markers, without the end that would vanish on the background.
-_CMAPS_THEME = {"paper": {"sequential": "tol_iridescent", "hot": "tol_incandescent", "line": "tol_iridescentline"},
-                "dark": {"sequential": "tol_iridescent_r", "hot": "tol_incandescent_r", "line": "tol_iridescentline_dark_r"}}
+# "density": the number density of the cells (04, 05, 07), whole range, where neighbouring cells must stay distinct.
+_CMAPS_THEME = {"paper": {"sequential": "tol_iridescent", "hot": "tol_incandescent", "line": "tol_iridescentline",
+                          "density": "tol_rainbow_WhBr"},
+                "dark": {"sequential": "tol_iridescent_r", "hot": "tol_incandescent_r", "line": "tol_iridescentline_dark_r",
+                         "density": "tol_rainbow_WhBr_r"}}
 CMAPS = {**_CMAPS_THEME["paper"], "diverging": "tol_sunset", "diverging_alt": "tol_BuRd"}
 # Fixed colour of every entity (species and lines, quantities, codes, modes), the same in every notebook. Lines take
 # the bright colours in Tol's order (Lya blue, Si III red, ...); field quantities take the remaining ones.
@@ -232,7 +241,8 @@ def use_backend(interactive: Optional[bool] = None) -> str:
 
 
 def tol_cmap(name: str = "iridescent", reverse: bool = False):
-    """Tol colour map: sequential "iridescent", "incandescent", "YlOrBr"; diverging "sunset", "nightfall", "BuRd", "PRGn"."""
+    """Tol colour map: sequential "iridescent", "incandescent", "YlOrBr", "rainbow_WhBr" (smooth rainbow); diverging "sunset",
+    "nightfall", "BuRd", "PRGn"."""
     colors, bad = _TOL_CMAPS[name]
     cm = mpl.colors.LinearSegmentedColormap.from_list(f"tol_{name}" + ("_r" if reverse else ""), colors[::-1] if reverse else colors)
     cm.set_bad(bad)
@@ -1621,8 +1631,9 @@ def _draw_cells_3d(ax, faces, rgba, g, path, lo, hi, *, arrows=None, alpha: floa
     """Cells as 3D volumes on ``ax``: ``faces`` (one list of (n_v, 3) faces per cell) filled with ``rgba`` (one colour per
     cell, opacity ``alpha``), edges in the foreground colour, the generating points ``g`` (dots), the skewer ``path``
     (N, 3) as a line and, optionally, ``arrows`` (K, 3) from the generating points [cMpc]; limits ``lo``, ``hi`` (3,),
-    aspect 1:1:1, ``view`` = (elevation, azimuth); ``path_color``, ``arrow_color``: default the foreground colour. The
-    drawing of ``plot_gas_cells`` and ``plot_deposition_steps``."""
+    aspect 1:1:1, ``view`` = (elevation, azimuth); ``path_color``: default the foreground colour; ``arrow_color``: one
+    colour, or one per arrow (then drawn with a thin dark outline, visible over a cell of the same colour). The drawing
+    of ``plot_gas_cells`` and ``plot_deposition_cells``."""
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
     poly = [q for fc in faces for q in fc]
     fcol = np.repeat(np.asarray(rgba, dtype=float), [len(fc) for fc in faces], axis=0)
@@ -1631,7 +1642,14 @@ def _draw_cells_3d(ax, faces, rgba, g, path, lo, hi, *, arrows=None, alpha: floa
     ax.plot(*np.asarray(path).T, color=path_color or FG, lw=2.6, label="skewer")
     ax.scatter(*np.asarray(g).T, s=22, color=FG, depthshade=False, label="generating points")
     if arrows is not None:
-        ax.quiver(*np.asarray(g).T, *np.asarray(arrows).T, color=arrow_color or FG, lw=2.0, arrow_length_ratio=0.3, normalize=False)
+        per_arrow = arrow_color is not None and not isinstance(arrow_color, str) and np.ndim(arrow_color) == 2
+        q = ax.quiver(*np.asarray(g).T, *np.asarray(arrows).T, color=arrow_color if arrow_color is not None else FG, lw=2.4 if per_arrow else 2.0,
+                      arrow_length_ratio=0.3, normalize=False)
+        if per_arrow:                                                 # the lines of quiver: every shaft, every first head side, every second
+            from matplotlib import patheffects as pe
+            c = np.asarray(arrow_color, dtype=float)
+            q.set_color(np.concatenate([c, c, c]))
+            q.set_path_effects([pe.Stroke(linewidth=4.2, foreground=FG), pe.Normal()])
     ax.set(xlim=(lo[0], hi[0]), ylim=(lo[1], hi[1]), zlim=(lo[2], hi[2]))
     ax.set_box_aspect(np.asarray(hi) - np.asarray(lo), zoom=zoom)
     ax.view_init(*view)
@@ -1639,6 +1657,15 @@ def _draw_cells_3d(ax, faces, rgba, g, path, lo, hi, *, arrows=None, alpha: floa
         a_.set_major_locator(mpl.ticker.MaxNLocator(3))
         a_.set_label_text(f"{lab} [cMpc]")
         a_.labelpad = 10 if lab == "z" else 12
+
+
+def _density_norm(log_n, decades: float = np.inf):
+    """The norm of ``CMAPS["density"]`` for the cell densities (``plot_gas_cells``: 04, 05; the deposition figures: 07):
+    log10 n_com over the cells drawn, at most ``decades`` below the largest, widened by 0.05 dex at both ends so that
+    the extreme cells keep a colour off the ends of the map."""
+    hi = float(np.max(log_n))
+    lo = max(float(np.min(log_n)), hi - decades)
+    return mpl.colors.Normalize(lo - 0.05, max(hi, lo + 1e-3) + 0.05)
 
 
 def plot_gas_cells(cells, selected, path, species=None, *, skewer: int = 0, view=(24.0, -62.0), zoom: float = 1.1,
@@ -1655,8 +1682,8 @@ def plot_gas_cells(cells, selected, path, species=None, *, skewer: int = 0, view
     nearest generating point), as 3D volumes: cubes for grid cells; for Voronoi cells, polyhedra computed here only for
     the drawing (scipy's ``Voronoi`` on the generating points around them, periodic). Every panel shows the cells
     coloured by its column's quantity, with their edges, their generating points (dots) and the skewer (line):
-    (1) the comoving number density of the species (log, ``CMAPS["sequential"]``, its own colour bar, at most ``decades``
-    below its maximum: lower values take the lowest colour); (2) the
+    (1) the comoving number density of the species (log, ``CMAPS["density"]`` with ``_density_norm`` as in 07, its own
+    colour bar, at most ``decades`` below its maximum: lower values take the lowest colour); (2) the
     temperature (log, ``CMAPS["hot"]``); (3) the peculiar velocity: colour the component along the skewer v_par
     (``CMAPS["diverging"]``, symmetric) and one 3D arrow per cell, from its generating point. The temperature and
     velocity colour bars, and the arrow scale, are shared by the rows. ``view`` = (elevation, azimuth) [deg]; ``zoom``
@@ -1697,8 +1724,8 @@ def plot_gas_cells(cells, selected, path, species=None, *, skewer: int = 0, view
         name = re.sub(r"^([A-Z][a-z]?)([IVX]+)$", r"\1 \2", sp)        # "SiIII" -> "Si III"
         f = fields[sp]
         ln = np.log10(np.maximum(f["number_density"], 1e-300))
-        norm_n = mpl.colors.Normalize(max(ln.min(), ln.max() - decades), max(ln.max(), ln.min() + 1e-3))
-        cols = ((CMAPS["sequential"], norm_n, ln), (CMAPS["hot"], norm_t, logT[sp]), (CMAPS["diverging"], norm_v, v_par[sp]))
+        norm_n = _density_norm(ln, decades)
+        cols = ((CMAPS["density"], norm_n, ln), (CMAPS["hot"], norm_t, logT[sp]), (CMAPS["diverging"], norm_v, v_par[sp]))
         titles = (f"{name} density", f"{name} temperature", f"{name} peculiar velocity")
         labels = (rf"$\log_{{10}} n_{{\rm com}}$ [cm$^{{-3}}$] ({name})", r"$\log_{10} T$ [K] (shared by the rows)",
                   r"$v_\parallel$ along the skewer [km s$^{-1}$] (shared)")
@@ -2198,14 +2225,14 @@ def _path_at(points, s_pts, s):
 
 
 def _skewer_cells(parts, regions, species: str) -> dict:
-    """The pieces of one skewer and its cells as ``plot_deposition_steps`` draws them.
+    """The pieces of one skewer and its cells as the deposition figures (``plot_deposition_cells``, ...) draw them.
 
     parts : the parts of ``core.cell_pieces(..., return_parts=True)``; regions : ((s0, s1), (s2, s3)) [cMpc] two
     stretches of the path. Per piece (the absorbers of ``species``, skewer 0): live, s, l, cell, n, v_los, the Hubble
     velocity v_H of its centroid and its line centre v_c [km/s] (NaN where not live); cols: the live pieces of each
     stretch, in path order; labels {cell: "S1", "S2", ... for the first stretch, "E1", ... for the second} (a cell met in
-    both keeps its first); cells: the labelled cells; cmap, norm: log10 density of the labelled cells, on
-    ``CMAPS["sequential"]`` without its palest end; colour(c): the colour of any cell (clipped to the norm).
+    both keeps its first); cells: the labelled cells; cmap, norm: log10 density of the labelled cells (their range only),
+    on the whole of ``CMAPS["density"]`` (as ``plot_gas_cells``); colour(c): the colour of any cell (clipped to the norm).
     """
     from skewerjax.core.constants import phys
     ab, use, frame = parts["absorbers"][species], parts["cells"], parts["frame"]
@@ -2226,10 +2253,10 @@ def _skewer_cells(parts, regions, species: str) -> dict:
                 n_lab[key] += 1
                 labels[int(c)] = f"{key}{n_lab[key]}"
     cells_all = np.array(list(labels))
-    cmap = mpl.colors.ListedColormap(mpl.colormaps[CMAPS["sequential"]](np.linspace(0.2, 1.0, 256)))
+    cmap = mpl.colormaps[CMAPS["density"]]
     dens = np.asarray(use.species[species]["number_density"], dtype=float)
     log_n = np.log10(dens[cells_all])
-    norm = mpl.colors.Normalize(log_n.min() - 0.05, log_n.max() + 0.05)
+    norm = _density_norm(log_n)
     col = {int(c): cmap(norm(x)) for c, x in zip(cells_all, log_n)}
 
     def colour(c):
@@ -2255,37 +2282,46 @@ def _piece_labels(R) -> dict:
     return out
 
 
-def _spread(targets, gap: float, lo: float, hi: float) -> np.ndarray:
-    """Positions closest (least squares) to ``targets`` with neighbours at least ``gap`` apart, within [lo, hi]: the
-    1D label placement of ``plot_deposition_steps`` (clusters of overlapping labels merged and centred on their targets)."""
-    t = np.asarray(targets, dtype=float)
-    order = np.argsort(t)
-    ts = t[order]
-    clusters = []                                                    # [first index, count, position of the first]
-    for i, x in enumerate(ts):
-        clusters.append([i, 1, x])
-        while len(clusters) > 1 and clusters[-2][2] + clusters[-2][1] * gap > clusters[-1][2]:
-            a, b = clusters[-2], clusters.pop()
-            a[1] += b[1]
-            k = np.arange(a[0], a[0] + a[1])
-            a[2] = float(np.mean(ts[k] - (k - a[0]) * gap))
-        span = (clusters[-1][1] - 1) * gap
-        clusters[-1][2] = min(max(clusters[-1][2], lo), max(hi - span, lo))
-    pos = np.concatenate([c[2] + gap * np.arange(c[1]) for c in clusters])
-    out = np.empty_like(pos)
-    out[order] = pos
-    return out
+def _arrow_levels(x0, x1, y, *, pad: float, dy: float, boxes=()) -> np.ndarray:
+    """Greedy stacking of horizontal arrows spanning [x0, x1] at base heights ``y``: each arrow, in order of its left end,
+    takes the lowest level k (drawn at y + k dy) that is at least ``dy`` away in height from every arrow already placed
+    whose span, widened by ``pad``, overlaps its own, and at least ``dy / 2`` outside every fixed box (x0, x1, y0, y1)
+    of ``boxes`` (e.g. labels) that it overlaps. Returns the level of every arrow."""
+    lo, hi = np.minimum(x0, x1), np.maximum(x0, x1)
+    y = np.asarray(y, dtype=float)
+    lev = np.zeros(lo.size, dtype=int)
+    placed = []
+    for i in np.argsort(lo):
+        k = 0
+        while (any(lo[i] < hi[j] + pad and lo[j] < hi[i] + pad and abs(y[i] + k * dy - y[j] - lev[j] * dy) < dy - 1e-12 for j in placed)
+               or any(lo[i] < bx1 + pad and bx0 < hi[i] + pad and by0 - 0.5 * dy < y[i] + k * dy < by1 + 0.5 * dy
+                      for bx0, bx1, by0, by1 in boxes)):
+            k += 1
+        lev[i] = k
+        placed.append(i)
+    return lev
+
+
+def _label_fit(w_in: float, h_in: float, txt: str, fontsize: float):
+    """How a label fits in a box of ``w_in`` x ``h_in`` inches: "h" (horizontal), "v" (rotated by 90 degrees) or None
+    (it does not fit), with the label's estimated width and height [in]."""
+    tw, th = 0.62 * fontsize / 72.0 * len(txt) + 0.06, 1.05 * fontsize / 72.0 + 0.04
+    how = "h" if (w_in >= tw and h_in >= th) else ("v" if (w_in >= th and h_in >= tw) else None)
+    return how, tw, th
 
 
 class _RingSector:
     """A sector of a ring on Cartesian axes (equal aspect): angle th [rad] clockwise from 12 o'clock, the middle of the
     window [th_lo, th_hi] at 12 o'clock, radius r in [r_in, r_out] drawn at the display radius
-    ``depth`` (r_out - r_in) + (r - r_in): a large depth gives a gently curved band that fills a wide axis."""
+    ``depth`` (r_out - r_in) + (r - r_in). ``aspect``: the width / height of the band, which sets the depth (a narrow
+    window gets a larger depth, so that every window fills an axis of the same shape)."""
 
-    def __init__(self, th_lo, th_hi, r_in, r_out, depth=7.0):
+    def __init__(self, th_lo, th_hi, r_in, r_out, aspect=3.4):
         self.lo, self.hi, self.r_in, self.r_out = th_lo, th_hi, r_in, r_out
         self.mid = 0.5 * (th_lo + th_hi)
-        self.k = depth * (r_out - r_in)
+        sn, cs = np.sin(0.5 * (th_hi - th_lo)), np.cos(0.5 * (th_hi - th_lo))
+        depth = (aspect - 2 * sn) / max(2 * sn - aspect * (1 - cs), 1e-3)    # 2 (d + 1) sin / (d + 1 - d cos) = aspect
+        self.k = max(depth, 1.0) * (r_out - r_in)
 
     def xy(self, th, r):
         rho = self.k + (np.asarray(r, dtype=float) - self.r_in)
@@ -2304,7 +2340,14 @@ class _RingSector:
         ax.set_aspect("equal")
         ax.axis("off")
         pad = 0.02 * (x.max() - x.min())
-        ax.set(xlim=(x.min() - 3.0 * pad, x.max() + 1.5 * pad), ylim=(y.min() - 0.2 * pad, y.max() + 2.6 * pad))
+        ax.set(xlim=(x.min() - 4.0 * pad, x.max() + 2.5 * pad), ylim=(y.min() - 0.2 * pad, y.max() + 3.2 * pad))
+
+    def inch(self, ax):
+        """Inches per data unit of ``ax`` (equal aspect, the box shrunk to fit its limits)."""
+        fig = ax.get_figure()
+        pos = ax.get_position()
+        w, h = pos.width * fig.get_figwidth(), pos.height * fig.get_figheight()
+        return min(w / np.ptp(ax.get_xlim()), h / np.ptp(ax.get_ylim()))
 
     def wedge(self, ax, t0, t1, r0, r1, **kw):
         th = np.linspace(t0, t1, max(int(abs(t1 - t0) / 0.002) + 2, 3))
@@ -2322,151 +2365,168 @@ class _RingSector:
         ax.plot(*self.xy([th, th], [self.r_in if r0 is None else r0, self.r_out if r1 is None else r1]), **kw)
 
     def arrow(self, ax, t0, t1, r, *, color):
+        """An arrow along the ring, from angle t0 to t1 at radius r (an arc, with its head at t1)."""
         from matplotlib import patheffects as pe
-        ax.annotate("", self.xy(t1, r), self.xy(t0, r), arrowprops=dict(arrowstyle="-|>", color=color, lw=2.0, mutation_scale=11,
-                    shrinkA=0, shrinkB=0, path_effects=[pe.withStroke(linewidth=3.4, foreground=FG)]))
+        th = np.linspace(t0, t1, 12)
+        stroke = [pe.withStroke(linewidth=3.6, foreground=FG)]
+        ax.plot(*self.xy(th[:-1], np.full(th.size - 1, r)), color=color, lw=2.2, solid_capstyle="butt", path_effects=stroke, zorder=6)
+        ax.annotate("", self.xy(t1, r), self.xy(th[-2], r), arrowprops=dict(arrowstyle="-|>", color=color, lw=2.2, mutation_scale=13,
+                    shrinkA=0, shrinkB=0, path_effects=stroke), zorder=6)
 
-    def labels(self, ax, th, r_anchor, txt, colours, r_rows, gap, *, bold=()):
-        """Radial labels in staggered rows at the radii ``r_rows`` (alternating in angular order), each row spread at
-        least ``gap`` [rad] apart (``_spread``), each label tied to its anchor (th, r_anchor) by a thin leader line."""
-        th = np.asarray(th, dtype=float)
-        row = np.empty(th.size, dtype=int)
-        row[np.argsort(th)] = np.arange(th.size) % len(r_rows)
-        th_l = np.empty_like(th)
-        for k in range(len(r_rows)):
-            m = row == k
-            th_l[m] = _spread(th[m], gap, self.lo + 0.3 * gap, self.hi - 0.3 * gap)
-        for i, (t, ra, tl, s, c) in enumerate(zip(th, r_anchor, th_l, txt, colours)):
-            rr = r_rows[row[i]]
-            ax.plot(*self.xy([t, t, tl], [ra, r_rows[0] - 0.08, rr - 0.015]), color=DIM, lw=0.7, zorder=11)
-            ax.text(*self.xy(tl, rr), s, rotation=90.0 - np.degrees(tl - self.mid), rotation_mode="anchor", ha="left",
-                    va="center", fontsize=FONT_MIN["floor"], color=FG, zorder=12,
-                    bbox=dict(boxstyle="round,pad=0.12", facecolor=c, edgecolor=FG, lw=2.0 if i in bold else 0.5, alpha=0.9))
+    def piece_labels(self, ax, items, *, fontsize=FONT_MIN["floor"], placed=None) -> dict:
+        """Labels without leader lines: each inside its element (along the arc, or radial when the element is narrow),
+        else radial just outside it. ``items``: (th, dth, r0, r1, text, bold) per element (angle and angular width [rad],
+        radial extent), in order of priority; an element thinner than a line or outside the window gets no label, and a
+        label that would overlap one already drawn (``placed``: data boxes, updated) or leave the band is skipped.
+        Returns {text: (th, half angular width, r0, r1)} of the labels drawn."""
+        inch = self.inch(ax)
+        placed = [] if placed is None else placed
+        out = {}
+        for th, dth, r0, r1, txt, bold in items:
+            if not self.lo <= th <= self.hi:
+                continue
+            w_in = (self.k + 0.5 * (r0 + r1) - self.r_in) * abs(dth) * inch
+            how, tw, th_ = _label_fit(w_in, (r1 - r0) * inch, txt, fontsize)
+            if how is None and w_in < 0.02 and r1 - r0 > 0:
+                continue
+            arc, rad = (tw, th_) if how == "h" else (th_, tw)          # the label's extent along the arc and the radius [in]
+            rm = 0.5 * (r0 + r1) if how else r1 + 0.03 + 0.5 * rad / inch
+            if rm + 0.5 * rad / inch > self.r_out:
+                continue
+            half = 0.5 * arc / inch / (self.k + rm - self.r_in)
+            x, y = self.xy(np.array([th - half, th + half, th + half, th - half]), rm + 0.5 * rad / inch * np.array([-1, -1, 1, 1]))
+            bx = (x.min(), x.max(), y.min(), y.max())
+            if any(bx[0] < q[1] and q[0] < bx[1] and bx[2] < q[3] and q[2] < bx[3] for q in placed):
+                continue
+            placed.append(bx)
+            ax.text(*self.xy(th, rm), txt, rotation=-np.degrees(th - self.mid) + (0.0 if how == "h" else 90.0), rotation_mode="anchor",
+                    ha="center", va="center", fontsize=fontsize, color=FG, zorder=12, path_effects=_halo(),
+                    fontweight="bold" if bold else "normal")
+            out[txt] = (th, half, rm - 0.5 * rad / inch, rm + 0.5 * rad / inch)
+        return out
 
     def ticks(self, ax, per, step, unit):
-        """Angular ticks every ``step`` of the periodic coordinate (period ``per``), labelled in its units, outside."""
+        """Angular ticks every ``step`` of the periodic coordinate (period ``per``), labelled in its units, outside; the
+        seam 0 = per in bold, values before it as per - x."""
         lo_, hi_ = self.lo * per / (2 * np.pi), self.hi * per / (2 * np.pi)
-        for x in np.arange(np.ceil(lo_ / step) * step, hi_, step):
+        fmt = (lambda x: f"{x:.2f}") if unit == "cMpc" else (lambda x: f"{x:.0f}")
+        xs = np.arange(np.ceil(lo_ / step) * step, hi_ + 1e-9, step)
+        for x in xs:
             th = 2 * np.pi * x / per
             ax.plot(*self.xy([th, th], [self.r_out, self.r_out + 0.05]), color=FG, lw=1.2)
             seam = abs(x) < 1e-9
-            txt = (f"0 ≡ {per:.2f}" if unit == "cMpc" else f"0 ≡ {per:.0f}") if seam else f"{x + per if x < 0 else x:.0f}"
-            ax.text(*self.xy(th, self.r_out + 0.08), txt, rotation=-np.degrees(th - self.mid), rotation_mode="anchor", ha="center",
-                    va="bottom", fontsize=FONT_MIN["tick"], color=FG, fontweight="bold" if seam else "normal")
-        ax.text(*self.xy(self.hi, self.r_out + 0.08), f"  [{unit}]", rotation=-np.degrees(self.hi - self.mid), rotation_mode="anchor",
-                ha="left", va="bottom", fontsize=FONT_MIN["tick"], color=FG)
+            txt = f"0 ≡ {fmt(per)}" if seam else (fmt(x + per) if x < 0 else f"{x:g}")
+            ax.text(*self.xy(th, self.r_out + 0.08), txt + (f" {unit}" if x == xs[-1] else ""), rotation=-np.degrees(th - self.mid),
+                    rotation_mode="anchor", ha="center", va="bottom", fontsize=FONT_MIN["tick"], color=FG,
+                    fontweight="bold" if seam else "normal")
 
     def rticks(self, ax, r, labs, title):
         """Radial ticks and their title along the left edge of the sector."""
+        d = 1.0 / (self.inch(ax) * (self.k + 0.5 * (self.r_out - self.r_in)))  # one inch along the arc [rad]
         for rr, lab in zip(r, labs):
-            ax.plot(*self.xy([self.lo, self.lo - 0.004], [rr, rr]), color=FG, lw=1.2)
-            ax.text(*self.xy(self.lo - 0.006, rr), lab, ha="right", va="center", fontsize=FONT_MIN["tick"], color=FG)
-        x, y = self.xy(self.lo - 0.032, 0.5 * (min(r) + max(r)))
+            ax.plot(*self.xy([self.lo, self.lo - 0.06 * d], [rr, rr]), color=FG, lw=1.2)
+            ax.text(*self.xy(self.lo - 0.09 * d, rr), lab, ha="right", va="center", fontsize=FONT_MIN["tick"], color=FG,
+                    rotation=-np.degrees(self.lo - self.mid), rotation_mode="anchor")
+        x, y = self.xy(self.lo - 0.75 * d, 0.5 * (min(r) + max(r)))
         ax.text(x, y, title, ha="right", va="center", rotation=90.0 - np.degrees(self.lo - self.mid), fontsize=FONT_MIN["label"],
                 color=FG)
 
 
-def _full_ring(ins, ring, per: float, unit: str, draw, key: str):
-    """The whole ring on its own small axes ``ins`` (unit circle = the ring): the zoomed window of ``ring`` (grey wedge),
-    the seam at 12 o'clock, its value and that of the opposite point; ``draw(ins)`` adds the content; ``key`` below."""
-    ins.set_aspect("equal", anchor="N"); ins.axis("off")
+def _full_ring(ins, ring, per: float, unit: str, draw, title: str):
+    """The whole ring on its own axes ``ins`` (unit circle = the ring): the window of ``ring`` (grey wedge), the seam at
+    12 o'clock with its value, the opposite point; ``draw(ins)`` adds the content; ``title`` below."""
+    ins.set_aspect("equal", anchor="C"); ins.axis("off")
     th = np.linspace(0, 2 * np.pi, 361)
-    ins.plot(np.sin(th), np.cos(th), color=DIM, lw=1.0)
+    ins.plot(np.sin(th), np.cos(th), color=DIM, lw=1.2)
     tw_ = np.linspace(ring.lo, ring.hi, 40)
     ins.fill(np.r_[0.0, 1.6 * np.sin(tw_), 0.0], np.r_[0.0, 1.6 * np.cos(tw_), 0.0], color=PALETTE["grey"], alpha=0.4, lw=0)
     draw(ins)
-    ins.text(0, 1.8, f"0 ≡ {per:.2f}" if unit == "cMpc" else f"0 ≡ {per:.0f}", ha="center", va="bottom", fontsize=FONT_MIN["floor"],
-             color=FG, fontweight="bold")
-    ins.text(0, -1.8, f"{0.5 * per:.0f} {unit}" if unit != "cMpc" else f"{0.5 * per:.2f} {unit}", ha="center", va="top",
-             fontsize=FONT_MIN["floor"], color=FG)
-    ins.text(0, 0, "whole\nring", ha="center", va="center", fontsize=FONT_MIN["floor"], color=FG)
-    ins.text(-2.2, -2.5, key, ha="left", va="top", fontsize=FONT_MIN["annotation"], color=FG, linespacing=1.5)
-    ins.set(xlim=(-2.2, 2.2), ylim=(-6.2, 2.4))
+    fmt = (lambda x: f"{x:.2f}") if unit == "cMpc" else (lambda x: f"{x:.0f}")
+    ins.text(0, 1.8, f"0 ≡ {fmt(per)}", ha="center", va="bottom", fontsize=FONT_MIN["annotation"], color=FG, fontweight="bold")
+    ins.text(0, -1.78, f"{fmt(0.5 * per)} {unit}", ha="center", va="top", fontsize=FONT_MIN["annotation"], color=FG)
+    ins.text(0, -2.45, title, ha="center", va="top", fontsize=FONT_MIN["annotation"], color=FG, style="italic")
+    ins.set(xlim=(-1.75, 1.75), ylim=(-2.95, 2.4))
     return ins
 
 
-def plot_deposition_steps(parts, bundle, regions, v, tau_pieces, *, period: float, species: str = "HI",
-                          line_label: str = r"Ly$\alpha$", arrow_kms: float = 100.0, arrow_cMpc: float = 0.05, tau_clip=None,
-                          view=(22.0, -60.0), zoom: float = 1.5, figsize=(22, 27)):
-    """The deposition of one simulation skewer around its seam (notebook 07): the end and the start of the path side by
-    side, then the same pieces on the periodic rings of s and of v_dagger.
-
-    parts : the parts of ``core.cell_pieces(cells, lines, skewer_bundle=bundle, return_parts=True)``; bundle : the
-        ``SkewerBundle`` (one straight skewer through a periodic box, from one face to the opposite one);
-    regions : ((0, D), (L - D, L)) [cMpc] its start and its end (the pieces whose centroids lie in them are labelled);
-    v : (N_v,) a velocity grid over one period [0, P) [km/s]; tau_pieces : (N_p, N_v) every piece's tau on it with
-        ``velocity_period=True`` (``compute_optical_depth(pieces, v, line, per_piece=True, velocity_period=True)``, in
-        the order of the absorbers); period : P [km/s]; arrow_kms, arrow_cMpc : the scale of the v_par arrows of (b)
-        and (c), ``arrow_kms`` per ``arrow_cMpc`` of path; tau_clip : the top of the radial axis of (e) (sqrt(tau); default:
-        the largest tau in the window, rounded up).
-
-    The end of the path is on the left and its start on the right in every row, so the seam (s = 0 = L, and v = 0 = P)
-    is in the middle. Every cell has one colour (its density of ``species``) and one label (S1, ... at the start, E1,
-    ... at the end); every piece is labelled by its cell and a letter in path order (E3a, E3b, ...).
-    (a) the cells in 3D with their peculiar velocities (yellow), the skewer (red) with unit tangents (black) and the box
-    faces (green planes); (b) the pieces along the path: bars of height n_p and width l_p, the cell crossings (solid),
-    the ends of the dual segments (dotted), the box faces (green), each piece's v_par = v . t (yellow arrow along s);
-    (c) the pieces on the ring of s (periodic over L): angle s, height n_p, angular width l_p, v_par tangent to the
-    ring; (d) the same pieces on the ring of v_dagger (periodic over P): at their line centre v_c, angular width W_p
-    (they may overlap), the seam; the inset shows the P/2 cut of the piece on the seam; (e) every piece's d tau_p
-    (v_dagger) as ``velocity_period=True`` evaluates it and the total tau (all pieces). (c)-(e) share one angular
-    window around the seam (pieces outside the stretches in grey); each inset shows the whole ring.
-    Returns (fig, axs {"a": (end, start), "b": (end, start), "c", "d", "e"}, info).
-    """
-    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-    from matplotlib import patheffects as pe
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
+def _deposition_view(parts, bundle, half_range_cMpc: float, species: str, period=None) -> dict:
+    """What the three deposition figures of notebook 07 share: the pieces of one skewer whose centroids lie within
+    ``half_range_cMpc`` of its seam s = 0 = L (``_skewer_cells`` with the stretches [0, l) and [L - l, L)), their labels,
+    colours, Hubble widths W_p [km/s], the piece on the velocity seam and the common info of the figures."""
+    from skewerjax.core.constants import phys
     from skewerjax.core.skewers import path_geometry
-    use, frame = parts["cells"], parts["frame"]
-    box = use.box
-    P = float(period)
+    frame = parts["frame"]
     pts = np.asarray(bundle.spatial_points[0], dtype=float)
     geo = path_geometry(pts)
     s_pts, tan_pts = np.asarray(geo["s"]), np.asarray(geo["tangents"])
-    L = float(s_pts[-1])
-    R = _skewer_cells(parts, regions, species)
-    live, s_all, l_all, c_all, n_all, u_all = R["live"], R["s"], R["l"], R["cell"], R["n"], R["v_los"]
-    v_c_all, labels, col, cmap, norm = R["v_c"], R["labels"], R["colour"], R["cmap"], R["norm"]
-    W_all = np.where(live, frame.hubble_rate(0, np.where(live, s_all, 0.0)) * l_all, 0.0)     # W_p, as absorber_pieces
+    L, hr = float(s_pts[-1]), float(half_range_cMpc)
+    R = _skewer_cells(parts, ((0.0, hr), (L - hr, L)), species)
+    P = float(period) if period is not None else float(phys.c_kms * np.log(frame.a_dagger / frame.scale_factors(0, np.array([L]))[0]))
+    live, s_all, l_all = R["live"], R["s"], R["l"]
+    W = np.where(live, frame.hubble_rate(0, np.where(live, s_all, 0.0)) * l_all, 0.0)     # W_p, as absorber_pieces
     plab = _piece_labels(R)
     shown = np.array(sorted(plab, key=lambda i: s_all[i]), dtype=int)
-    head = species.rstrip("IVX")
-    name = f"{head} {species[len(head):]}" if head != species else species
-    green, red, yellow = PALETTE["green"], PALETTE["red"], ENTITY_COLORS["velocity"]
-    arrow_kw = dict(arrowstyle="-|>", color=yellow, lw=2.2, mutation_scale=12, shrinkA=0, shrinkB=0,
-                    path_effects=[pe.withStroke(linewidth=3.6, foreground=FG)])
-    v = np.asarray(v, dtype=float)
-    tw = np.asarray(tau_pieces, dtype=float)
-    kpc = arrow_cMpc / arrow_kms                                      # cMpc of arrow per km/s
     wrap = lambda x, per: np.mod(np.asarray(x) + 0.5 * per, per) - 0.5 * per
-    dist = np.abs(wrap(v_c_all[shown], P)) - 0.5 * W_all[shown]       # the piece on the velocity seam: [v_c -+ W/2] holds 0 = P
-    seam_p = int(shown[np.argmin(dist)])
-    vc_seam = float(wrap(v_c_all[seam_p], P))
-    fig = plt.figure(figsize=figsize, layout="constrained")
-    sf_a, sf_b, sf_r = fig.subfigures(3, 1, height_ratios=[2.6, 2.4, 8.3])
-    ax = {"a": [sf_a.add_subplot(1, 2, k + 1, projection="3d", computed_zorder=False) for k in range(2)],
-          "b": list(sf_b.subplots(1, 2, sharey=True))}
-    gr = sf_r.add_gridspec(3, 2, width_ratios=[1.0, 7.0], height_ratios=[1.0, 1.0, 1.05])
-    keys = {}
-    for r_, i in (("c", 0), ("d", 1), ("e", 2)):
-        keys[r_] = sf_r.add_subplot(gr[i, 0])
-        ax[r_] = sf_r.add_subplot(gr[i, 1])
-    info = dict(P=P, L=L, piece_labels={plab[i]: int(i) for i in shown}, n_pieces={}, n_cells={}, labels={},
-                seam_piece=plab[seam_p], seam_v_c=vc_seam, seam_W=float(W_all[seam_p]))
-    floor = 10 ** (np.log10(n_all[shown].min()) - 0.35)
-    top = 10 ** (np.log10(n_all[shown].max()) + 0.15)
-    h_med = float(np.median(np.asarray(use.size_cMpc)[c_all[shown]]))
-    for kp, k in enumerate((1, 0)):                                   # panel 0: the end (region 1), panel 1: the start
+    dist = np.abs(wrap(R["v_c"][shown], P)) - 0.5 * W[shown]           # the piece on the velocity seam: [v_c -+ W/2] holds 0 = P
+    seam = int(shown[np.argmin(dist)])
+    head = species.rstrip("IVX")
+    n_sh = R["n"][shown]
+    info = dict(P=P, L=L, half_range_cMpc=hr, piece_labels={plab[i]: int(i) for i in shown}, n_pieces={}, n_cells={}, labels={},
+                seam_piece=plab[seam], seam_v_c=float(wrap(R["v_c"][seam], P)), seam_W=float(W[seam]))
+    for k, side in enumerate(("start", "end")):
+        cells = R["cell"][R["cols"][k]]
+        _, first = np.unique(cells, return_index=True)
+        info["n_pieces"][side], info["n_cells"][side] = int(cells.size), int(first.size)
+        info["labels"][side] = [R["labels"][int(c)] for c in cells[np.sort(first)]]
+    return dict(R=R, L=L, P=P, hr=hr, pts=pts, s_pts=s_pts, tan_pts=tan_pts, W=W, plab=plab, shown=shown, seam=seam,
+                wrap=wrap, name=f"{head} {species[len(head):]}" if head != species else species, info=info,
+                floor=10 ** (np.log10(n_sh.min()) - 0.35), top=10 ** (np.log10(n_sh.max()) + 0.15))
+
+
+def _velocity_arrow_handle(arrow_kms: float, arrow_cMpc: float, what: str = r"$v_\parallel = \mathbf{v}\cdot\hat t$ (colour of its piece)"):
+    from matplotlib import patheffects as pe
+    from matplotlib.lines import Line2D
+    return Line2D([], [], color=PALETTE["grey"], lw=2.5, marker=">", markevery=[1], markersize=9, markeredgecolor=FG,
+                  path_effects=[pe.Stroke(linewidth=4.0, foreground=FG), pe.Normal()],
+                  label=rf"{what}: arrow of {arrow_cMpc:g} cMpc per {arrow_kms:.0f} km/s")
+
+
+def _halo(width: float = 3.0):
+    """A thin outline in the background colour around a text: legible over any fill colour."""
+    from matplotlib import patheffects as pe
+    return [pe.withStroke(linewidth=width, foreground=BG)]
+
+
+def plot_deposition_cells(parts, bundle, *, half_range_cMpc: float = 2.0, species: str = "HI", arrow_kms: float = 100.0,
+                          arrow_cMpc: float = 0.1, view=(20.0, -76.0), zoom: float = 1.3, figsize=(22, 7.5)):
+    """Row (a) of the deposition figures of notebook 07: the cells of one simulation skewer around its seam, in 3D.
+
+    parts : the parts of ``core.cell_pieces(cells, lines, skewer_bundle=bundle, return_parts=True)``; bundle : the
+    ``SkewerBundle`` (one straight skewer through a periodic box, from one face to the opposite one); half_range_cMpc :
+    l [cMpc], the cells of the pieces with centroids in s in [-l, l) around the seam s = 0 = L; arrow_kms, arrow_cMpc :
+    the scale of the velocity arrows (the same in ``plot_deposition_pieces`` and ``plot_deposition_rings``).
+
+    (a1) the end of the box (s in [L - l, L)), (a2) its start (s in [0, l)): the cells in the colour of their density of
+    ``species`` (one label on each: E1, ... at the end, S1, ... at the start), their peculiar velocities (arrows from
+    the generating points, in the colour of their cell), the skewer and its unit tangents t (red), the box face where
+    the path ends or starts (green plane). Returns (fig, (ax_end, ax_start), info).
+    """
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+    from matplotlib.lines import Line2D
+    D = _deposition_view(parts, bundle, half_range_cMpc, species)
+    R, use, box = D["R"], parts["cells"], parts["cells"].box
+    pts, s_pts, tan_pts, L = D["pts"], D["s_pts"], D["tan_pts"], D["L"]
+    green, red = PALETTE["green"], PALETTE["red"]
+    kpc = arrow_cMpc / arrow_kms                                      # cMpc of arrow per km/s
+    h_med = float(np.median(np.asarray(use.size_cMpc)[R["cell"][D["shown"]]]))
+    fig = plt.figure(figsize=figsize)
+    axs = [fig.add_axes([-0.085 + 0.495 * k, 0.18, 0.6, 0.73], projection="3d", computed_zorder=False) for k in range(2)]
+    for kp, k in enumerate((1, 0)):                                   # panel 0: the end (stretch 1), panel 1: the start
         idx = R["cols"][k]
-        side = ("start", "end")[k]
-        s_p, l_p, c_p, n_p = s_all[idx], l_all[idx], c_all[idx], n_all[idx]
+        s_p, l_p, c_p = R["s"][idx], R["l"][idx], R["cell"][idx]
         cells, first = np.unique(c_p, return_index=True)
         cells, first = cells[np.argsort(first)], np.sort(first)
-        info["n_pieces"][side], info["n_cells"][side] = int(idx.size), int(cells.size)
-        info["labels"][side] = [labels[int(c)] for c in cells]
-        # (a) the cells in 3D, the box face, the skewer and its tangents
-        a3 = ax["a"][kp]
+        a3 = axs[kp]
         pos = np.asarray(use.positions, dtype=float)[cells]
         near = _path_at(pts, s_pts, s_p[first])
         g = pos + box * np.round((near - pos) / box) if box is not None else pos
@@ -2478,193 +2538,331 @@ def plot_deposition_steps(parts, bundle, regions, v, tau_pieces, *, period: floa
         allv = np.concatenate([np.concatenate(f) for f in faces] + [seg_pts])
         lo, hi = allv.min(0), allv.max(0)
         lo[0], hi[0] = min(lo[0], x_face - 0.1), max(hi[0], x_face + 0.1)
-        _draw_cells_3d(a3, faces, [col(c) for c in cells], g, seg_pts, lo, hi, arrows=vel / 250.0 * h_med, view=view, zoom=zoom,
-                       path_color=red, arrow_color=yellow)
+        _draw_cells_3d(a3, faces, [R["colour"](c) for c in cells], g, seg_pts, lo, hi, arrows=vel * kpc, view=view, zoom=zoom,
+                       path_color=red, arrow_color=[R["colour"](c) for c in cells])
         quad = np.array([[x_face, lo[1], lo[2]], [x_face, hi[1], lo[2]], [x_face, hi[1], hi[2]], [x_face, lo[1], hi[2]]])
-        a3.add_collection3d(Poly3DCollection([quad], facecolors=[mpl.colors.to_rgba(green, 0.2)], edgecolors=green, linewidths=2.4,
-                                             zorder=0))
-        t_s = np.linspace(s_lo + 0.12 * (s_hi - s_lo), s_hi - 0.22 * (s_hi - s_lo), 3)
+        a3.add_collection3d(Poly3DCollection([quad], facecolors=[mpl.colors.to_rgba(green, 0.22)], edgecolors="none", zorder=0))
+        a3.plot(*quad[[0, 1, 2, 3, 0]].T, color=green, lw=4.0, zorder=14)                  # the outline of the box face, on top
+        t_s = np.linspace(s_lo + 0.15 * (s_hi - s_lo), s_hi - 0.25 * (s_hi - s_lo), 3)
         t0 = _path_at(pts, s_pts, t_s)
         t_dir = tan_pts[np.clip(np.searchsorted(s_pts, t_s), 0, len(s_pts) - 1)]
-        a3.quiver(*t0.T, *(0.22 * t_dir).T, color=FG, lw=3.0, arrow_length_ratio=0.35, zorder=15)
-        a3.text(*(t0[1] + 0.1 * t_dir[1] + np.array([0.0, 0.0, -0.06])), r"$\hat t$", color=FG, fontsize=FONT_MIN["label"], va="top",
-                zorder=20)
-        for c, gg in zip(cells, g):
-            a3.text(*(gg + np.array([0.0, 0.0, 0.25 * h_med])), labels[int(c)], fontsize=FONT_MIN["annotation"], color=FG,
-                    fontweight="bold", zorder=20)
-        a3.set_title(f"the {side} of the path: s = {regions[k][0]:.2f}–{regions[k][1]:.2f} cMpc, {cells.size} cells, "
-                     f"{idx.size} pieces\n(green plane: the box face x = {x_face:.2f}" + (" = L)" if k == 1 else ")"), pad=0)
-        # (b) the pieces along the path
-        b = ax["b"][kp]
-        b.bar(s_p - 0.5 * l_p, n_p - floor, bottom=floor, width=l_p, align="edge", color=[col(c) for c in c_p], edgecolor=FG,
-              linewidth=0.8)
-        b.bar([s_all[seam_p] - 0.5 * l_all[seam_p]] if seam_p in idx else [], [n_all[seam_p] - floor] if seam_p in idx else [],
-              bottom=floor, width=l_all[seam_p], align="edge", fill=False, edgecolor=FG, linewidth=2.6)
-        y_row = top * 10 ** 0.75                                       # the row of labels
-        mids = 0.5 * (s_pts[1:] + s_pts[:-1])
-        b.vlines(mids[(mids > s_lo) & (mids < s_hi)], floor, top * 10 ** 0.45, color=DIM, lw=1.2, ls=(0, (3.0, 2.5)))
-        brk = np.nonzero(np.diff(c_p))[0]
-        b.vlines(s_p[brk] + 0.5 * l_p[brk], floor, top * 10 ** 0.45, color=FG, lw=2.2)
-        b.axvline(x_face, color=green, lw=3.0)
-        for i in idx:
-            d = u_all[i] * kpc
-            b.annotate("", (s_all[i] + 0.5 * d, n_all[i] * 10 ** 0.12), (s_all[i] - 0.5 * d, n_all[i] * 10 ** 0.12), arrowprops=arrow_kw)
-        pad = 0.04 * (s_hi - s_lo)
-        xl = (s_lo - (pad if k == 0 else 0.3 * pad), s_hi + (pad if k == 1 else 0.3 * pad))
-        x_lab = _spread(s_p, 0.062 * (xl[1] - xl[0]) / 2.0, xl[0] + 0.02, xl[1] - 0.02)
-        for i, xl_ in zip(idx, x_lab):
-            b.plot([s_all[i], s_all[i], xl_], [n_all[i] * 10 ** 0.22, y_row / 10 ** 0.3, y_row / 10 ** 0.06], color=DIM, lw=0.7)
-            b.text(xl_, y_row, plab[int(i)], rotation=90, ha="center", va="bottom", fontsize=FONT_MIN["floor"], color=FG,
-                   bbox=dict(boxstyle="round,pad=0.12", facecolor=col(c_all[i]), edgecolor=FG, lw=2.0 if i == seam_p else 0.5,
-                             alpha=0.9))
-        b.set(xlim=xl, yscale="log", xlabel=LABELS["s"])
+        a3.quiver(*t0.T, *(0.25 * t_dir).T, color=red, lw=3.4, arrow_length_ratio=0.35, zorder=15)
+        a3.text(*(t0[1] + 0.12 * t_dir[1] + np.array([0.0, 0.0, -0.07])), r"$\hat t$", color=red, fontsize=FONT_MIN["label"] + 2,
+                va="top", zorder=20, bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.8))
+        for c, gg in zip(cells, g):                                   # each label on its cell, above its generating point
+            a3.text(gg[0], gg[1], gg[2] + 0.12 * h_med, R["labels"][int(c)], fontsize=FONT_MIN["annotation"], color=FG, fontweight="bold",
+                    ha="center", va="bottom", zorder=20, path_effects=_halo())
+        for a_ in (a3.xaxis, a3.yaxis, a3.zaxis):                     # axes, ticks and labels only: no panes, no grid
+            a_.pane.fill = False
+            a_.pane.set_edgecolor("none")
+        a3.grid(False)
+        a3.xaxis.set_major_locator(mpl.ticker.MaxNLocator(3))
+        for a_ in (a3.yaxis, a3.zaxis):
+            a_.set_major_locator(mpl.ticker.MaxNLocator(2))
+            a_.set_major_formatter(mpl.ticker.FormatStrFormatter("%.1f"))
+        for a_ in (a3.xaxis, a3.yaxis, a3.zaxis):
+            a_.set_minor_locator(mpl.ticker.NullLocator())
+        a3.xaxis.labelpad, a3.yaxis.labelpad, a3.zaxis.labelpad = 28, 22, 16
+        a3.tick_params(axis="y", pad=6)
+        a3.tick_params(axis="z", pad=8)
+        a3.set_title(f"{('start', 'end')[k]} of the box: {cells.size} cells", pad=-6)
+        for art in a3.collections + a3.lines + a3.texts:                # a 3D axis clips to a square box: draw on its whole rectangle
+            art.set_clip_on(False)
+    cax = fig.add_axes([0.56, 0.1, 0.36, 0.035])
+    fig.colorbar(mpl.cm.ScalarMappable(norm=R["norm"], cmap=R["cmap"]), cax=cax, orientation="horizontal",
+                 label=rf"$\log_{{10}} n_{{\rm com}}$ of {D['name']} [cm$^{{-3}}$]: the colour of a cell and of its pieces")
+    handles = [Line2D([], [], color=red, lw=2.6, marker=">", markevery=[1], markersize=9, label=r"skewer and its unit tangent $\hat t$"),
+               _velocity_arrow_handle(arrow_kms, arrow_cMpc, r"cell velocity $\mathbf{v}$ (colour of its cell)"),
+               Line2D([], [], color=green, lw=4.0, label="box face (the seam)"),
+               Line2D([], [], color=FG, ls="none", marker="o", markersize=5, label="generating point")]
+    fig.legend(handles=handles, loc="lower left", bbox_to_anchor=(0.02, 0.01), ncols=2, fontsize=FONT_MIN["legend"], frameon=False,
+               columnspacing=1.5)
+    add_panel_letters(axs, labels=["a1", "a2"], x=0.06, y=0.97, box=False)
+    fig.patches.append(mpl.patches.Rectangle((0, 0), 1, 1, transform=fig.transFigure, fill=False, edgecolor="none"))   # bbox_inches="tight"
+    return fig, tuple(axs), D["info"]                                                                                   # misses 3D axis labels: keep the page
+
+
+def plot_deposition_pieces(parts, bundle, *, half_range_cMpc: float = 2.0, species: str = "HI", arrow_kms: float = 100.0,
+                           arrow_cMpc: float = 0.1, figsize=(22, 8.5)):
+    """Row (b) of the deposition figures of notebook 07: the pieces of one simulation skewer around its seam, along s.
+
+    parts, bundle, half_range_cMpc, arrow_kms, arrow_cMpc : as ``plot_deposition_cells`` (the pieces with centroids in
+    s in [-l, l) around the seam). (b1) the end of the box, (b2) its start: each piece a bar of height n_p and width
+    l_p in the colour of its cell, labelled inside it by its cell and a letter in path order (E3a, E3b, ...; rotated in
+    a narrow bar, just above a bar too narrow for it; bold: the piece on the velocity seam), the cell crossings
+    (solid), the ends of the dual segments (dotted), the box face (green), and each piece's v_par = v . t as an arrow
+    in its colour from the centre of the piece along s (with its sign); arrows that would overlap each other or a
+    label are stacked (``_arrow_levels``). Returns (fig, (ax_end, ax_start), info).
+    """
+    from matplotlib import patheffects as pe
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    D = _deposition_view(parts, bundle, half_range_cMpc, species)
+    R, s_pts, L, plab, seam = D["R"], D["s_pts"], D["L"], D["plab"], D["seam"]
+    s_all, l_all, c_all, n_all, u_all, col = R["s"], R["l"], R["cell"], R["n"], R["v_los"], R["colour"]
+    floor, top = D["floor"], D["top"]
+    green = PALETTE["green"]
+    kpc = arrow_cMpc / arrow_kms
+    fs = FONT_MIN["floor"]                                            # piece labels: small, in their bars
+    fig, axs = plt.subplots(1, 2, figsize=figsize, sharey=True, layout="constrained")
+    panels = []
+    for kp, k in enumerate((1, 0)):
+        idx = R["cols"][k]
+        s_p, l_p, c_p, n_p = s_all[idx], l_all[idx], c_all[idx], n_all[idx]
+        s_lo, s_hi = s_p[0] - 0.5 * l_p[0], s_p[-1] + 0.5 * l_p[-1]
+        x_face = 0.0 if k == 0 else L
+        b = axs[kp]
+        b.bar(s_p - 0.5 * l_p, n_p - floor, bottom=floor, width=l_p, align="edge", color=[col(c) for c in c_p], edgecolor=FG, linewidth=0.8)
+        if seam in idx:
+            b.bar([s_all[seam] - 0.5 * l_all[seam]], [n_all[seam] - floor], bottom=floor, width=l_all[seam], align="edge", fill=False,
+                  edgecolor=FG, linewidth=3.0, zorder=3)
+        d = u_all[idx] * kpc                                          # the arrows: from the centre s_p to s_p + v_par kpc
+        b.axvline(x_face, color=green, lw=3.5)
         b.text(x_face, 0.03, " s = 0" if k == 0 else "s = L ", transform=b.get_xaxis_transform(), color=green,
                ha="left" if k == 0 else "right", va="bottom", fontsize=FONT_MIN["annotation"], fontweight="bold")
-    ax["b"][0].set_ylim(floor, top * 10 ** 1.45)
-    ax["b"][0].set_ylabel(rf"$n_{{\rm com}}$ of {name} [cm$^{{-3}}$]")
-    leg_b = [Patch(facecolor=PALETTE["grey"], edgecolor=FG, label=r"a piece $p$: a cell $\cap$ a dual segment ($n_p$, $\ell_p$)"),
-             Line2D([], [], color=FG, lw=2.2, label="cell crossing"),
-             Line2D([], [], color=DIM, lw=1.2, ls=(0, (3.0, 2.5)), label="end of a dual segment"),
-             Line2D([], [], color=green, lw=3.0, label="box face (the seam)"),
-             Line2D([], [], color=yellow, lw=2.5, marker=">", markevery=[1], markeredgecolor=FG,
-                    label=rf"$v_\parallel = \mathbf{{v}}\cdot\hat t$: {arrow_kms:.0f} km/s per {arrow_cMpc:g} cMpc")]
-    sf_b.legend(handles=leg_b, loc="outside lower center", ncols=5, fontsize=FONT_MIN["legend"], columnspacing=1.2, handlelength=1.8)
-    # (c), (d), (e): one angular window around the seam, the same for the three rings
-    su = wrap(s_all, L)                                               # s with the seam at 0: the end at s - L < 0
-    vu = wrap(v_c_all, P)
-    m_v = 50.0                                                        # km/s beyond the line centres, for the profiles of (e)
-    th_lo = min((2 * np.pi * (su[shown] - 0.5 * l_all[shown]) / L).min(), (2 * np.pi * (vu[shown] - 0.5 * W_all[shown] - m_v) / P).min())
-    th_hi = max((2 * np.pi * (su[shown] + 0.5 * l_all[shown]) / L).max(), (2 * np.pi * (vu[shown] + 0.5 * W_all[shown] + m_v) / P).max())
-    th_lo, th_hi = th_lo - 0.01 * (th_hi - th_lo), th_hi + 0.01 * (th_hi - th_lo)
-    R0, H = 1.0, 1.0                                                  # the ring and the height of the blocks
-    r_rows = (R0 + H + 0.2, R0 + H + 0.52)                            # two rows of labels
-    r_n = lambda n: R0 + H * (np.log10(n) - np.log10(floor)) / (np.log10(top) - np.log10(floor))
-    ring = _RingSector(th_lo, th_hi, R0 - 0.05, r_rows[1] + 0.36)
-    gap = 0.0122                                                      # label spacing within a row [rad]
-    th_cut = 2 * np.pi * np.mod(vc_seam + 0.5 * P, P) / P             # the P/2 cut of the seam piece
-    others = lambda centre, per: np.nonzero(live & ~np.isin(np.arange(live.size), shown)
-                                            & (np.abs(2 * np.pi * centre / per - ring.mid) < 0.5 * (th_hi - th_lo)))[0]
+        pad = 0.03 * (s_hi - s_lo)
+        a_lo, a_hi = min(s_lo, (s_p + d).min()), max(s_hi, (s_p + d).max())     # every arrow inside the axis
+        xl = (a_lo - (pad if k == 0 else 0.3 * pad), a_hi + (pad if k == 1 else 0.3 * pad))
+        b.set(xlim=xl, yscale="log", xlabel=LABELS["s"])
+        panels.append((b, idx, d, s_lo, s_hi, xl))
+    axs[0].set_ylim(floor, top * 10 ** 1.0)                           # provisional: the labels and arrows set the top below
+    axs[0].set_ylabel(rf"$n_{{\rm com}}$ of {D['name']} [cm$^{{-3}}$]")
+    axs[0].set_title(f"end of the box: s from L − {D['hr']:g} cMpc to L", pad=10)
+    axs[1].set_title(f"start of the box: s from 0 to {D['hr']:g} cMpc", pad=10)
+    handles = [Patch(facecolor=PALETTE["grey"], edgecolor=FG, label=r"piece $p$: a cell $\cap$ a dual segment ($n_p$, $\ell_p$)"),
+               Patch(facecolor="none", edgecolor=FG, lw=3.0, label=f"{plab[seam]}: the piece on the velocity seam"),
+               Line2D([], [], color=FG, lw=2.2, label="cell crossing"),
+               Line2D([], [], color=DIM, lw=1.3, ls=(0, (3.0, 2.5)), label="end of a dual segment"),
+               Line2D([], [], color=green, lw=3.5, label="box face (the seam)"),
+               _velocity_arrow_handle(arrow_kms, arrow_cMpc)]
+    fig.legend(handles=handles, loc="outside lower center", ncols=3, fontsize=FONT_MIN["legend"], columnspacing=1.6, handlelength=2.0)
+    add_panel_letters(axs, labels=["b1", "b2"], box=True)
+    fig.get_layout_engine().execute(fig)
+    y_top = np.log10(top) + 1.0
+    for _ in range(2):                                                # the label sizes in dex depend on the top of the axis
+        dex_in = (y_top - np.log10(floor)) / (axs[0].get_position().height * figsize[1])    # dex per inch
+        out, y_top_new = [], np.log10(top)
+        for b, idx, d, s_lo, s_hi, xl in panels:
+            in_x = b.get_position().width * figsize[0] / (xl[1] - xl[0])                       # inches per cMpc
+            place, boxes = [], []
+            for i in idx:
+                txt = plab[int(i)]
+                y_n = np.log10(n_all[i])
+                how, tw, th = _label_fit(l_all[i] * in_x, (y_n - np.log10(floor)) / dex_in, txt, fs)
+                if how is None:                                       # too narrow: just above the bar, rotated
+                    y0_ = y_n + 0.02
+                    for x0_, x1_, _, yb1 in boxes:                    # above another label it would touch
+                        if abs(s_all[i] - 0.5 * (x0_ + x1_)) * in_x < th:
+                            y0_ = max(y0_, yb1 + 0.02)
+                    boxes.append((s_all[i] - 0.5 * th / in_x, s_all[i] + 0.5 * th / in_x, y0_, y0_ + tw * dex_in))
+                    place.append((i, "above", y0_))
+                else:
+                    place.append((i, how, 0.5 * (y_n + np.log10(floor))))
+            y0 = np.log10(n_all[idx]) + 0.12                          # an arrow above its bar, or above its label
+            lev = _arrow_levels(s_all[idx], s_all[idx] + d, y0, pad=0.012 * (s_hi - s_lo), dy=0.16, boxes=boxes)
+            y_ar = y0 + 0.16 * lev
+            out.append((place, y_ar))
+            y_top_new = max(y_top_new, y_ar.max(), max((bx[3] for bx in boxes), default=-np.inf))
+        y_top = y_top_new + 0.25
+    axs[0].set_ylim(floor, 10 ** y_top)
+    for (b, idx, d, s_lo, s_hi, xl), (place, y_ar) in zip(panels, out):
+        for (i, how, y_), dd, ya in zip(place, d, y_ar):
+            cc = col(c_all[i])
+            b.annotate("", (s_all[i] + dd, 10 ** ya), (s_all[i], 10 ** ya), zorder=6,
+                       arrowprops=dict(arrowstyle="-|>", color=cc, lw=2.4, mutation_scale=14, shrinkA=0, shrinkB=0,
+                                       path_effects=[pe.withStroke(linewidth=4.0, foreground=FG)]))
+            b.plot([s_all[i]], [10 ** ya], "o", color=cc, markersize=5, markeredgecolor=FG, zorder=7)
+            b.text(s_all[i], 10 ** y_, plab[int(i)], rotation=0 if how == "h" else 90, ha="center",
+                   va="bottom" if how == "above" else "center", fontsize=fs, color=FG, zorder=8, path_effects=_halo(),
+                   fontweight="bold" if i == seam else "normal")
+        y_cut = 10 ** (y_ar.max() + 0.12)
+        mids = 0.5 * (s_pts[1:] + s_pts[:-1])
+        b.vlines(mids[(mids > s_lo) & (mids < s_hi)], floor, y_cut, color=DIM, lw=1.3, ls=(0, (3.0, 2.5)), zorder=1)
+        c_p, s_p, l_p = c_all[idx], s_all[idx], l_all[idx]
+        brk = np.nonzero(np.diff(c_p))[0]
+        b.vlines(s_p[brk] + 0.5 * l_p[brk], floor, y_cut, color=FG, lw=2.2, zorder=2)
+    return fig, tuple(axs), D["info"]
 
-    def blocks(a_, centre, width, per, with_arrows=False):
-        for i in others(centre, per):                                 # pieces outside the stretches: grey, unlabelled
-            ring.wedge(a_, 2 * np.pi * (centre[i] - 0.5 * width[i]) / per, 2 * np.pi * (centre[i] + 0.5 * width[i]) / per, R0,
-                       r_n(n_all[i]), facecolor=PALETTE["grey"], alpha=0.35, lw=0)
+
+def plot_deposition_rings(parts, bundle, v, tau_pieces, *, period: float, half_range_cMpc: float = 2.0,
+                          half_range_kms: float = 300.0, species: str = "HI", line_label: str = r"Ly$\alpha$",
+                          arrow_kms: float = 100.0, arrow_cMpc: float = 0.1, tau_clip=None, tau_min: float = 1e-3, figsize=(22, 21)):
+    """Rows (c)-(e) of the deposition figures of notebook 07: the pieces of ``plot_deposition_pieces`` on the periodic
+    rings of s and of v_dagger, and their optical depths.
+
+    parts, bundle, half_range_cMpc, arrow_kms, arrow_cMpc : as ``plot_deposition_cells`` (the same pieces, colours and
+    labels as ``plot_deposition_pieces``); v : (N_v,) a velocity grid over one period [0, P) [km/s]; tau_pieces :
+    (N_p, N_v) every piece's tau on it with ``velocity_period=True`` (``compute_optical_depth(pieces, v, line,
+    per_piece=True, velocity_period=True)``, in the order of the absorbers); period : P [km/s]; half_range_kms : the
+    window of (d) and (e), v_dagger in [-v_range, v_range] around the seam 0 = P [km/s] (fixed: it does not follow the
+    pieces; choose it to hold their line centres after the peculiar-velocity shift; pieces beyond it are cut at its
+    edges); tau_clip : the top of the radial axis of (e) (default: the largest tau in the window, rounded up to a power
+    of ten); tau_min : its bottom (log axis; smaller tau, e.g. the zeros away from a profile, sit on the ring).
+
+    (c) the ring of s (period L), window [-l, l) around the seam s = 0 = L: angle s, angular width l_p, height n_p,
+    v_par along the ring from the centre of each piece (the scale of (b), in the colour of the piece); (d) the ring of
+    v_dagger (period P): each piece at its line centre v_c, angular width W_p (they may overlap); (e) every piece's
+    d tau_p(v_dagger) as ``velocity_period=True`` evaluates it, and the total tau of all the pieces of the skewer (radius
+    ~ log tau). Each element carries its piece label, inside it or next to it (at the peak of a profile), when it is
+    large enough and the label does not overlap another (``_RingSector.piece_labels``). On the left of every row, the
+    whole ring with the window in grey. Returns (fig, {"c", "d", "e"}, info).
+    """
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    D = _deposition_view(parts, bundle, half_range_cMpc, species, period=period)
+    R, L, P, plab, shown, wrap = D["R"], D["L"], D["P"], D["plab"], D["shown"], D["wrap"]
+    s_all, l_all, c_all, n_all, u_all, col, live, W_all = R["s"], R["l"], R["cell"], R["n"], R["v_los"], R["colour"], R["live"], D["W"]
+    floor, top = D["floor"], D["top"]
+    green = PALETTE["green"]
+    kpc = arrow_cMpc / arrow_kms
+    v = np.asarray(v, dtype=float)
+    tw = np.asarray(tau_pieces, dtype=float)
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(3, 2, left=0.005, right=0.995, top=0.965, bottom=0.075, width_ratios=[1.15, 4.6], wspace=0.0, hspace=0.16)
+    ax = {r_: fig.add_subplot(gs[i, 1]) for i, r_ in enumerate("cde")}
+    keys = {r_: fig.add_subplot(gs[i, 0]) for i, r_ in enumerate("cde")}
+    R0, H = 1.0, 1.0                                                  # the ring and the height of the blocks
+    r_out = R0 + H + 0.8                                              # room above the blocks: arrows and labels
+    r_n = lambda n: R0 + H * (np.log10(n) - np.log10(floor)) / (np.log10(top) - np.log10(floor))
+    th_s = 2 * np.pi * D["hr"] / L                                   # the windows: [-l, l) on the ring of s, [-v_range, v_range] on that of v
+    th_v = 2 * np.pi * float(half_range_kms) / P
+    ring_s = _RingSector(-th_s, th_s, R0 - 0.05, r_out)
+    ring_v = _RingSector(-th_v, th_v, R0 - 0.05, r_out)
+    tick_n = 10.0 ** np.arange(np.ceil(np.log10(floor)), np.log10(top) + 1e-9)
+    n_lab = [rf"$10^{{{int(np.log10(t))}}}$" for t in tick_n]
+
+    def blocks(a_, ring, centre, width, per):
+        """The pieces as blocks, cut at the edges of the window; their labels (largest first), inside or next to them."""
+        items = []
         for i in shown:
             cc = col(c_all[i])
-            ring.wedge(a_, 2 * np.pi * (centre[i] - 0.5 * width[i]) / per, 2 * np.pi * (centre[i] + 0.5 * width[i]) / per, R0,
-                       r_n(n_all[i]), facecolor=mpl.colors.to_rgba(cc, 0.4), edgecolor=cc if i != seam_p else FG,
-                       lw=1.8 if i != seam_p else 2.6, zorder=3 if i != seam_p else 4)
-        th_c = 2 * np.pi * centre[shown] / per
-        if with_arrows:
-            for i, t in zip(shown, th_c):
-                dt = 2 * np.pi * u_all[i] * kpc / per
-                ring.arrow(a_, t - 0.5 * dt, t + 0.5 * dt, r_n(n_all[i]) + 0.05, color=yellow)
-        ring.labels(a_, th_c, r_n(n_all[shown]) + (0.1 if with_arrows else 0.02), [plab[int(i)] for i in shown],
-                    [col(c_all[i]) for i in shown], r_rows, gap, bold=[int(np.nonzero(shown == seam_p)[0][0])])
+            t0, t1 = 2 * np.pi * (centre[i] - 0.5 * width[i]) / per, 2 * np.pi * (centre[i] + 0.5 * width[i]) / per
+            t0, t1 = max(t0, ring.lo), min(t1, ring.hi)
+            if t1 <= t0:
+                continue
+            ring.wedge(a_, t0, t1, R0, r_n(n_all[i]), facecolor=mpl.colors.to_rgba(cc, 0.45), edgecolor=cc, lw=1.8, zorder=3)
+            items.append((0.5 * (t0 + t1), t1 - t0, R0, float(r_n(n_all[i])), plab[int(i)], False))
+        items.sort(key=lambda it: -it[1] * (it[3] - it[2]))
+        return items
 
     def radial(ins, th, r, **kw):
         ins.plot(r * np.sin(th), r * np.cos(th), **kw)
 
-    def ins_seam(ins, seam_kw, cut=False):
+    def ins_seam(ins, seam_kw):
         radial(ins, 0.0, np.array([0.45, 1.75]), **seam_kw)
-        if cut:
-            radial(ins, th_cut, np.array([0.0, 1.75]), color=col(c_all[seam_p]), lw=2.6, ls="--",
-                   path_effects=[pe.withStroke(linewidth=4.2, foreground=FG)])
-            ins.text(1.3 * np.sin(th_cut) + 0.3, 1.3 * np.cos(th_cut), r"$v_c + P/2$", ha="left", va="center",
-                     fontsize=FONT_MIN["floor"], color=FG)
+
+    def ins_pieces(ins, centre, per):
+        for i in shown:                                              # the selected pieces, as short coloured ticks on the ring
+            radial(ins, 2 * np.pi * centre[i] / per, np.array([0.82, 1.18]), color=col(c_all[i]), lw=2.0)
 
     # (c) the ring of s
+    su = wrap(s_all, L)                                               # s with the seam at 0: the end at s - L < 0
     c_ = ax["c"]
-    ring.frame(c_, R0)
-    blocks(c_, su, l_all, L, with_arrows=True)
-    ring.ray(c_, 0.0, color=green, lw=3.0)
-    ring.ticks(c_, L, 1.0, "cMpc")
-    ring.rticks(c_, r_n(np.array([1e-12, 1e-11])), [r"$10^{-12}$", r"$10^{-11}$"], r"$n_{\rm com}$ [cm$^{-3}$]")
-    c_.set_title(r"(c) the pieces on the ring of $s$ (period $L$): height $n_p$, width $\ell_p$, $v_\parallel$ along the ring", pad=2)
-    ins = {"c": _full_ring(keys["c"], ring, L, "cMpc", lambda i_: ins_seam(i_, dict(color=green, lw=2.5)),
-                           "coloured: the pieces of (b)\ngrey: the other pieces\n" r"yellow: $v_\parallel$, scale of (b)" "\n"
-                           r"green: the seam $s = 0 \equiv L$" "\n(the box faces)")}
+    ring_s.frame(c_, R0)
+    labs = ring_s.piece_labels(c_, blocks(c_, ring_s, su, l_all, L))
+    th0 = 2 * np.pi * su[shown] / L
+    th1 = 2 * np.pi * (su[shown] + u_all[shown] * kpc) / L            # v_par from the centre of each piece, scale of (b)
+    y0 = r_n(n_all[shown]) + 0.06
+    lev = _arrow_levels(th0, th1, y0, pad=0.006 * (2 * th_s), dy=0.085,              # the arrows clear the labels
+                        boxes=[(t - h, t + h, r0, r1) for t, h, r0, r1 in labs.values()])
+    r_ar = y0 + 0.085 * lev
+    for i, t0_, t1_, ra in zip(shown, th0, th1, r_ar):
+        ring_s.arrow(c_, t0_, t1_, ra, color=col(c_all[i]))
+        c_.plot(*ring_s.xy(t0_, ra), "o", color=col(c_all[i]), markersize=4.5, markeredgecolor=FG, zorder=7)
+    ring_s.ray(c_, 0.0, color=green, lw=3.5)
+    ring_s.ticks(c_, L, 1.0 if D["hr"] >= 1.0 else 0.25, "cMpc")
+    ring_s.rticks(c_, r_n(tick_n), n_lab, r"$n_{\rm com}$ [cm$^{-3}$]")
+    c_.set_title(rf"(c) the pieces on the ring of $s$ (period $L$), $s \in [-{D['hr']:g}, {D['hr']:g}]$ cMpc: "
+                 r"height $n_p$, width $\ell_p$, $v_\parallel$", pad=0)
+    _full_ring(keys["c"], ring_s, L, "cMpc", lambda i_: (ins_pieces(i_, su, L), ins_seam(i_, dict(color=green, lw=3.0))), "the ring of s")
     # (d) the ring of v_dagger: the same pieces at their line centres
+    vu = wrap(R["v_c"], P)
     d_ = ax["d"]
-    ring.frame(d_, R0)
-    blocks(d_, vu, W_all, P)
-    ring.ray(d_, 0.0, color=FG, lw=1.8, ls=":")
-    ring.ticks(d_, P, 50.0, "km/s")
-    ring.rticks(d_, r_n(np.array([1e-12, 1e-11])), [r"$10^{-12}$", r"$10^{-11}$"], r"$n_{\rm com}$ [cm$^{-3}$]")
-    d_.set_title(r"(d) the same pieces on the ring of $v_\dagger$ (period $P$): at $v_c = v_H + v_\parallel$, width $W_p$; "
-                 "they may overlap", pad=2)
-
-    ins["d"] = _full_ring(keys["d"], ring, P, "km/s", lambda i_: ins_seam(i_, dict(color=FG, lw=1.5, ls=":"), cut=True),
-                          r"dotted: the seam $v_\dagger = 0 \equiv P$" "\n" f"bold: {plab[seam_p]}, on the seam\n"
-                          rf"($v_c = P {vc_seam:+.1f}$, $W_p$ = {W_all[seam_p]:.1f} km/s)" "\n" f"dashed: its cut at " r"$v_c + P/2$")
+    ring_v.frame(d_, R0)
+    ring_v.piece_labels(d_, blocks(d_, ring_v, vu, W_all, P))
+    ring_v.ray(d_, 0.0, color=FG, lw=2.0, ls=":")
+    step = 100.0 if half_range_kms > 150 else 50.0
+    ring_v.ticks(d_, P, step, "km/s")
+    ring_v.rticks(d_, r_n(tick_n), n_lab, r"$n_{\rm com}$ [cm$^{-3}$]")
+    d_.set_title(rf"(d) the same pieces on the ring of $v_\dagger$ (period $P$), $v_\dagger \in [-{half_range_kms:g}, {half_range_kms:g}]$ "
+                 r"km/s: at $v_c = v_H + v_\parallel$, width $W_p$", pad=0)
+    _full_ring(keys["d"], ring_v, P, "km/s", lambda i_: (ins_pieces(i_, vu, P), ins_seam(i_, dict(color=FG, lw=2.0, ls=":"))),
+               r"the ring of $v_\dagger$")
     # (e) every piece's d tau_p on the ring of v_dagger, and the total
     e_ = ax["e"]
-    ring.frame(e_, R0)
+    ring_v.frame(e_, R0)
     vw = wrap(v, P)
     o = np.argsort(vw)
     vw, two = vw[o], tw[:, o]
     th_all = 2 * np.pi * vw / P
-    win = (th_all >= th_lo) & (th_all <= th_hi)
+    win = np.abs(th_all) <= th_v
     tot = two[live].sum(0)
-    t_top = float(np.ceil(tot[win].max())) if tau_clip is None else float(tau_clip)
-    r_t = lambda t: R0 + H * np.sqrt(np.minimum(np.asarray(t), t_top) / t_top)
-    th_v = th_all[win]
-    pk_th, pk_r = [], []
+    t_top = 1.5 * tot[win].max() if tau_clip is None else float(tau_clip)
+    lt0, lt1 = np.log10(tau_min), np.log10(t_top)
+    H_e = r_out - R0 - 0.35                                           # the band, but room for the labels above the peaks
+    r_t = lambda t: R0 + H_e * (np.log10(np.clip(np.asarray(t), tau_min, t_top)) - lt0) / (lt1 - lt0)    # log radius
+    th_w = th_all[win]
+    peaks = []
     for i in shown:
         t = two[i][win]
         cc = col(c_all[i])
-        ring.band(e_, th_v, R0, r_t(t), facecolor=mpl.colors.to_rgba(cc, 0.25), lw=0)
-        ring.line(e_, th_v, r_t(t), color=cc if i != seam_p else FG, lw=1.5 if i != seam_p else 2.0, ls="-" if i != seam_p else (0, (4, 2)),
-                  zorder=3 if i != seam_p else 4)
+        ring_v.band(e_, th_w, R0, r_t(t), facecolor=mpl.colors.to_rgba(cc, 0.25), lw=0)
+        ring_v.line(e_, th_w, np.where(t > tau_min, r_t(t), np.nan), color=cc, lw=1.6, zorder=3)     # not along the floor
         j = int(np.argmax(t))
-        pk_th.append(th_v[j]); pk_r.append(float(r_t(t[j])))
-    ring.line(e_, th_v, r_t(tot[win]), color=FG, lw=2.8, zorder=5)
-    ring.ray(e_, 0.0, color=FG, lw=1.8, ls=":")
-    ring.labels(e_, np.array(pk_th), np.array(pk_r) + 0.02, [plab[int(i)] for i in shown], [col(c_all[i]) for i in shown], r_rows, gap,
-                bold=[int(np.nonzero(shown == seam_p)[0][0])])
-    ring.ticks(e_, P, 50.0, "km/s")
-    tt = np.array([0.0, 1.0, 4.0, 9.0, 16.0, 25.0, 36.0])
-    tt = np.r_[tt[tt < 0.8 * t_top], t_top]
-    ring.rticks(e_, r_t(tt), [f"{x:g}" for x in tt], r"$d\tau_p$, $\tau$")
+        if t[j] > 3 * tau_min:                                        # a label at the peak of every visible profile
+            peaks.append((th_w[j], 0.0, float(r_t(t[j])), float(r_t(t[j])), plab[int(i)], False, t[j]))
+    peaks.sort(key=lambda it: -it[6])
+    ring_v.piece_labels(e_, [it[:6] for it in peaks])
+    ring_v.line(e_, th_w, r_t(tot[win]), color=FG, lw=3.0, zorder=5)
+    ring_v.ray(e_, 0.0, color=FG, lw=2.0, ls=":")
+    ring_v.ticks(e_, P, step, "km/s")
+    tt = 10.0 ** np.arange(np.ceil(lt0), lt1 + 1e-9)
+    ring_v.rticks(e_, r_t(tt), [rf"$10^{{{int(round(np.log10(x)))}}}$" for x in tt], r"$d\tau_p$, $\tau$")
     e_.set_title(rf"(e) from pieces to $\tau$: each piece's $d\tau_p(v_\dagger)$ ({line_label}, Voigt at its $T$, "
-                 r"velocity_period=True) and the total $\tau$", pad=2)
+                 r"velocity_period=True) and the total $\tau$", pad=0)
 
     def ins_e(i_):
         th = 2 * np.pi * np.mod(vw, P) / P
         oo = np.argsort(th)
-        rr = 1.0 + 0.6 * np.sqrt(tot[oo] / tot.max())
-        i_.plot(rr * np.sin(th[oo]), rr * np.cos(th[oo]), color=FG, lw=0.9)
-        ins_seam(i_, dict(color=FG, lw=1.5, ls=":"), cut=True)
-    ins["e"] = _full_ring(keys["e"], ring, P, "km/s", ins_e,
-                          r"coloured: $d\tau_p$ of the pieces" "\n" r"black: $\tau$, the sum of all pieces" "\n"
-                          r"radius $\propto \sqrt{\tau}$" "\n" f"dashed: {plab[seam_p]}, across the seam")
-    sf_a.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), ax=list(ax["a"]), location="bottom", shrink=0.4, aspect=35, pad=0.04,
-                 label=rf"$\log_{{10}} n_{{\rm com}}$ [cm$^{{-3}}$] of {name}: the colour of a cell and of its pieces in every row")
-    add_panel_letters(ax["a"] + ax["b"], labels=["a1", "a2", "b1", "b2"], box=False)
-    info.update(window_deg=(float(np.degrees(th_lo)), float(np.degrees(th_hi))), insets=ins,
-                tau_window_max=float(tot[win].max()))
-    return fig, {"a": tuple(ax["a"]), "b": tuple(ax["b"]), "c": ax["c"], "d": ax["d"], "e": ax["e"]}, info
+        rr = 1.0 + 0.6 * (np.log10(np.clip(tot[oo], tau_min, tot.max())) - lt0) / (np.log10(tot.max()) - lt0)
+        i_.plot(rr * np.sin(th[oo]), rr * np.cos(th[oo]), color=FG, lw=1.2)
+        ins_seam(i_, dict(color=FG, lw=2.0, ls=":"))
+    _full_ring(keys["e"], ring_v, P, "km/s", ins_e, r"$\tau$ on the whole ring")
+    handles = [Patch(facecolor=PALETTE["grey"], alpha=0.6, edgecolor=FG, label="a piece of (b), in the colour of its cell"),
+               _velocity_arrow_handle(arrow_kms, arrow_cMpc),
+               Line2D([], [], color=green, lw=3.5, label=r"seam $s = 0 \equiv L$ (the box faces)"),
+               Line2D([], [], color=FG, lw=2.0, ls=":", label=r"seam $v_\dagger = 0 \equiv P$"),
+               Line2D([], [], color=PALETTE["grey"], lw=1.6, label=rf"$d\tau_p$ of a piece (radius $\propto \log\tau$, from $\tau$ = {tau_min:g})"),
+               Line2D([], [], color=FG, lw=3.0, label=r"total $\tau$: every piece of the skewer")]
+    fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncols=3, fontsize=FONT_MIN["legend"], frameon=False,
+               columnspacing=1.6)
+    info = dict(D["info"], window_deg={"s": float(np.degrees(th_s)), "v": float(np.degrees(th_v))}, tau_window_max=float(tot[win].max()),
+                v_c_range=(float(np.nanmin(vu[shown] - 0.5 * W_all[shown])), float(np.nanmax(vu[shown] + 0.5 * W_all[shown]))))
+    return fig, {"c": ax["c"], "d": ax["d"], "e": ax["e"]}, info
 
 
 # --------------------------------------------------------------------------- frames and periodicity (notebook 07)
-def plot_frames_axes(v, F_own, line_bundle, *, v_ref=None, F_ref=None, a_dagger: float, a_obs: float = 1.0, centres=None,
-                     tau_scale=None, wrapped=None, figsize=None):
-    """The same flux in each line's own frame, on the global velocity axis and in observed wavelength: three axes.
+def plot_frames_axes(v, F_own, line_bundle, *, v_ref=None, F_ref=None, a_dagger: float, a_obs: float = 1.0, tau_scale=None,
+                     wrapped=None, figsize=(22, 7.5)) -> dict:
+    """The same flux in each line's own frame, on the global velocity axis and in observed wavelength: one figure per case.
 
-    v : (N_v,) line-centred velocities v_dagger [km/s]; F_own : (N_lines, N_v) every line in its own frame. (a) the
-    line-centred frames: the same gas absorbs at the same v_dagger in every line (dotted: ``centres``); (b) the global
-    velocity axis of the reference line: by default every line's own-frame flux relabelled, at v - delta_v_j (a change
-    of axis only: each line keeps exactly its computed range, shown by its two dash-dotted edges); or ``F_ref``
-    (N_lines, N_v_ref) on one grid ``v_ref``, e.g. from ``compute_optical_depth(..., line_frame="reference")``, which
-    evaluates every line over the whole of that grid; (c) the observed wavelength of every pixel,
-    ``spectral.line_wavelength_grid_A`` (lambda_obs = lambda_j (a_obs / a_dagger) e^{v/c}). ``tau_scale`` : {line id:
-    factor k}, display only: that line is drawn as F^k = exp(-k tau) in every panel and labelled "tau x k for
-    visibility" (a weak line next to Lya). ``wrapped`` : optional dict(v, tau, tau_ref, period) adding panel (d), what
-    ``optical_depth.wrap_to_ref_line`` does: ``tau`` (N_lines, N_v) every line in its own frame on a uniform grid ``v``
-    of exactly one period P (``velocity_period=P``), ``tau_ref`` = ``wrap_to_ref_line(tau, v, line_bundle,
-    velocity_period=P)``; every line other than the reference drawn before (dashed) and after (solid) the shift by
-    -delta_v_j modulo P, the reference line thin for context, an arrow from the strongest feature before to after.
-    Returns (fig, axs).
+    v : (N_v,) line-centred velocities v_dagger [km/s]; F_own : (N_lines, N_v) every line in its own frame. "own": the
+    line-centred frames, the same gas absorbs at the same v_dagger in every line; "global": the global velocity axis of
+    the reference line, by default every line's own-frame flux relabelled at v - delta_v_j (a change of axis only: each
+    line keeps exactly its computed range, shown by its two dash-dotted edges), or ``F_ref`` (N_lines, N_v_ref) on one
+    grid ``v_ref``, e.g. from ``compute_optical_depth(..., line_frame="reference")``, which evaluates every line over the
+    whole of that grid; "wavelength": the observed wavelength of every pixel, ``spectral.line_wavelength_grid_A``
+    (lambda_obs = lambda_j (a_obs / a_dagger) e^{v/c}). ``tau_scale`` : {line id: factor k}, display only: that line is
+    drawn as F^k = exp(-k tau) in every figure and labelled "tau x k for visibility" (a weak line next to Lya).
+    ``wrapped`` : optional dict(v, tau, tau_ref, period) adding "wrapped", what ``optical_depth.wrap_to_ref_line`` does:
+    ``tau`` (N_lines, N_v) every line in its own frame on a uniform grid ``v`` of exactly one period P
+    (``velocity_period=P``), ``tau_ref`` = ``wrap_to_ref_line(tau, v, line_bundle, velocity_period=P)``; every line other
+    than the reference drawn before (dashed) and after (solid) the shift by -delta_v_j modulo P, the reference line thin
+    for context, an arrow from the strongest feature before to after.
+
+    Every figure has the same size ``figsize``, the same axis box, y range, fonts and a legend band below the axis, so
+    that they can sit side by side; "own" and "wrapped" share the x range [0, P) (the period of ``wrapped``, else the
+    edges of the pixels of ``v``). Returns {case: (fig, ax)}.
     """
     from skewerjax.core.spectral import line_wavelength_grid_A
     v = np.asarray(v, dtype=float)
@@ -2677,54 +2875,74 @@ def plot_frames_axes(v, F_own, line_bundle, *, v_ref=None, F_ref=None, a_dagger:
     dv_j = np.asarray(line_bundle.delta_v, dtype=float)
     cols = [ENTITY_COLORS.get(l.id, species_color(l.id, j)) for j, l in enumerate(lines)]
     lam = np.asarray(line_wavelength_grid_A(v, line_bundle, a_dagger, a_obs))
-    n_rows = 3 if wrapped is None else 4
-    fig, axs = plt.subplots(n_rows, 1, figsize=figsize or ((22, 15) if wrapped is None else (22, 19.5)),
-                            gridspec_kw={"height_ratios": [2.0, 1.4, 1.4, 1.4][:n_rows]}, layout="constrained")
+    W, Hf = figsize
+    top, below, band, left, right = 0.85, 0.95, 0.9, 1.15, 0.35        # [in]: title, ticks + x label, legend, margins
+    rect = (left / W, (below + band) / Hf, 1 - (left + right) / W, 1 - (top + below + band) / Hf)
+    dv = float(np.median(np.diff(v))) if v.size > 1 else 1.0
+    x_frame = (0.0, float(wrapped["period"])) if wrapped is not None else (v[0] - 0.5 * dv, v[-1] + 0.5 * dv)
+
+    def new():
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_axes(rect)
+        fig.patches.append(mpl.patches.Rectangle((0, 0), 1, 1, transform=fig.transFigure, fill=False, edgecolor="none"))  # whole page
+        return fig, ax                                                                                                    # when inline
+
+    def finish(fig, ax, xlabel, ncols=2):
+        ax.set(xlabel=xlabel, ylabel=LABELS["F"], ylim=(-0.03, 1.08))
+        ax.margins(x=0.0)
+        h, lab = ax.get_legend_handles_labels()
+        fig.legend(h, lab, loc="upper center", bbox_to_anchor=(0.5, band / Hf), ncols=ncols, fontsize=FONT_MIN["legend"], frameon=False,
+                   columnspacing=2.0)
+
+    figs = {}
+    fig, ax = new()                                                   # own frames
     for j, l in enumerate(lines):
-        axs[0].plot(v, F_own[j], color=cols[j], lw=2.4 if j == 0 else 1.8, ls="-" if j == 0 else "--", label=f"{l.id}{sfx[j]}, own frame")
+        ax.plot(v, F_own[j], color=cols[j], lw=2.4 if j == 0 else 1.8, ls="-" if j == 0 else "--", label=f"{l.id}{sfx[j]}, own frame")
+    finish(fig, ax, r"line-centred velocity $v_\dagger$ [km/s] (each line in its own frame)")
+    ax.set_xlim(*x_frame)
+    figs["own"] = (fig, ax)
+    fig, ax = new()                                                   # global velocity axis
+    for j, l in enumerate(lines):
         shift = rf": at $v - \Delta v_j$ = $v$ {-dv_j[j]:+.0f} km/s" if dv_j[j] else ": unchanged (reference)"
-        if F_ref is None:                                          # a change of axis: the own-frame flux, relabelled
-            axs[1].plot(v - dv_j[j], F_own[j], color=cols[j], lw=2.0, label=f"{l.id}{sfx[j]}{shift}")
+        if F_ref is None:                                             # a change of axis: the own-frame flux, relabelled
+            ax.plot(v - dv_j[j], F_own[j], color=cols[j], lw=2.0, label=f"{l.id}{sfx[j]}{shift}")
             for edge in (v[0], v[-1]):
-                axs[1].axvline(edge - dv_j[j], color=cols[j], ls="-.", lw=1.2, path_effects=[])
+                ax.axvline(edge - dv_j[j], color=cols[j], ls="-.", lw=1.2, path_effects=[])
         else:
-            axs[1].plot(v_ref, F_ref[j], color=cols[j], lw=2.0, label=f"{l.id}{sfx[j]}{shift}")
-        axs[2].plot(lam[j], F_own[j], color=cols[j], lw=2.0, label=f"{l.id}{sfx[j]}: " + r"$\lambda_j\,(a_{\rm obs}/a_\dagger)\,e^{v_\dagger/c}$")
-        axs[2].axvline(l.lambda0_A * a_obs / a_dagger, color=cols[j], ls="-.", lw=1.2, path_effects=[])
-    if centres is not None:
-        for c0 in np.atleast_1d(centres):
-            axs[0].axvline(c0, color=FG, ls=":", lw=1.2, path_effects=[])
+            ax.plot(v_ref, F_ref[j], color=cols[j], lw=2.0, label=f"{l.id}{sfx[j]}{shift}")
     for j in range(1, len(lines)):
-        _textbox(axs[1], 0.02, 0.62 - 0.22 * (j - 1), rf"{lines[j].id}: $\Delta v_j = c\ln(\lambda_{{\rm ref}}/\lambda_j)$ = "
+        _textbox(ax, 0.02, 0.62 - 0.22 * (j - 1), rf"{lines[j].id}: $\Delta v_j = c\ln(\lambda_{{\rm ref}}/\lambda_j)$ = "
                  f"{dv_j[j]:+.1f} km/s;" "\n" rf"in its own frame it absorbs at the same $v_\dagger$ as {lines[0].id}",
-                 color=cols[j], transform=axs[1].transAxes)
-    axs[0].set(xlabel=r"line-centred velocity $v_\dagger$ [km/s] (each line in its own frame)", ylabel=LABELS["F"], xlim=(v[0], v[-1]))
-    axs[1].set(xlabel=f"global velocity axis: v on the {lines[0].id} frame [km/s]", ylabel=LABELS["F"])
-    axs[2].set(xlabel=r"observed wavelength $\lambda_{\rm obs}$ [Å]", ylabel=LABELS["F"])
-    if wrapped is not None:                                        # (d) wrap_to_ref_line: own frame -> reference frame, modulo P
+                 color=cols[j], transform=ax.transAxes)
+    finish(fig, ax, f"global velocity axis: v on the {lines[0].id} frame [km/s]")
+    figs["global"] = (fig, ax)
+    fig, ax = new()                                                   # observed wavelength
+    for j, l in enumerate(lines):
+        ax.plot(lam[j], F_own[j], color=cols[j], lw=2.0, label=f"{l.id}{sfx[j]}: " + r"$\lambda_j\,(a_{\rm obs}/a_\dagger)\,e^{v_\dagger/c}$")
+        ax.axvline(l.lambda0_A * a_obs / a_dagger, color=cols[j], ls="-.", lw=1.2, path_effects=[])
+    finish(fig, ax, r"observed wavelength $\lambda_{\rm obs}$ [Å]")
+    figs["wavelength"] = (fig, ax)
+    if wrapped is not None:                                           # wrap_to_ref_line: own frame -> reference frame, modulo P
         vw, P = np.asarray(wrapped["v"], dtype=float), float(wrapped["period"])
         tw, tr = np.asarray(wrapped["tau"], dtype=float), np.asarray(wrapped["tau_ref"], dtype=float)
         ref = line_bundle.ref_index() if line_bundle.ref_index() is not None else 0
-        axs[3].plot(vw, np.exp(-tw[ref]), color=cols[ref], lw=1.0, alpha=0.5, label=f"{lines[ref].id} (reference), for context")
+        fig, ax = new()
+        ax.plot(vw, np.exp(-tw[ref]), color=cols[ref], lw=1.0, alpha=0.5, label=f"{lines[ref].id} (reference), for context")
         for j in range(len(lines)):
             if j == ref:
                 continue
-            axs[3].plot(vw, np.exp(-k_[j] * tw[j]), color=cols[j], lw=1.6, ls="--", label=f"{lines[j].id}{sfx[j]}: own frame (before)")
-            axs[3].plot(vw, np.exp(-k_[j] * tr[j]), color=cols[j], lw=2.2,
-                        label=f"{lines[j].id}{sfx[j]}: wrap_to_ref_line, at $v - \Delta v_j$ modulo $P$ (after)")
+            ax.plot(vw, np.exp(-k_[j] * tw[j]), color=cols[j], lw=1.6, ls="--", label=f"{lines[j].id}{sfx[j]}: own frame (before)")
+            ax.plot(vw, np.exp(-k_[j] * tr[j]), color=cols[j], lw=2.2,
+                    label=f"{lines[j].id}{sfx[j]}: wrap_to_ref_line, at $v - \\Delta v_j$ modulo $P$ (after)")
             i0 = int(np.argmax(tw[j]))
             v1 = float(np.mod(vw[i0] - dv_j[j] - vw[0], P) + vw[0])
-            axs[3].annotate("", (v1, 0.35), (vw[i0], 0.35), arrowprops=dict(arrowstyle="-|>", color=cols[j], lw=2.2, mutation_scale=20,
-                                                                          connectionstyle="arc3,rad=-0.15"))
-            _textbox(axs[3], 0.5 * (vw[i0] + v1), 0.62, rf"$-\Delta v_j$ = {-dv_j[j]:+.0f} km/s, modulo $P$ = {P:.0f} km/s",
+            ax.annotate("", (v1, 0.35), (vw[i0], 0.35), arrowprops=dict(arrowstyle="-|>", color=cols[j], lw=2.2, mutation_scale=20,
+                                                                        connectionstyle="arc3,rad=-0.15"))
+            _textbox(ax, 0.5 * (vw[i0] + v1), 0.62, rf"$-\Delta v_j$ = {-dv_j[j]:+.0f} km/s, modulo $P$ = {P:.0f} km/s",
                      color=cols[j], ha="center")
-        axs[3].set(xlabel=f"v [km/s] on one period [0, P): each line's own frame (dashed), the {lines[ref].id} frame (solid)",
-                   ylabel=LABELS["F"], xlim=(vw[0], vw[-1]))
-    for ax in axs:
-        ax.set_ylim(-0.03, 1.08)
-        ax.legend(loc="lower right", fontsize=FONT_MIN["legend"])
-    if wrapped is not None:
-        axs[3].legend(loc="upper center", bbox_to_anchor=(0.5, -0.24), ncols=3, fontsize=FONT_MIN["legend"])
-    return fig, axs
+        finish(fig, ax, f"v [km/s] on one period [0, P): each line's own frame (dashed), the {lines[ref].id} frame (solid)")
+        ax.set_xlim(*x_frame)
+        figs["wrapped"] = (fig, ax)
+    return figs
 
 

@@ -32,6 +32,9 @@ def test_style_and_dag():
     fig.canvas.draw()
     pl.use_style()
     assert pl.FG == "black" and pl.ENTITY_COLORS["total"] == "black" and pl.CMAPS["sequential"] == "tol_iridescent"
+    assert pl.CMAPS["density"] == "tol_rainbow_WhBr" and pl.CMAPS["density"] in matplotlib.colormaps
+    nrm = pl._density_norm(np.array([-13.0, -12.0, -11.0]), decades=1.5)   # one norm for 04, 05, 07: tight, 0.05 dex pad
+    assert np.isclose(nrm.vmin, -12.55) and np.isclose(nrm.vmax, -10.95)
     # every edge starts and ends on the drawn outline of its boxes (the box plus its pad)
     ew, eh = pl._DAG_W / 2 + pl._DAG_PAD, pl._DAG_H / 2 + pl._DAG_PAD
     on_outline = lambda p, k: (np.isclose(abs(p[0] - pl.DAG_NODES[k][0]), ew) and abs(p[1] - pl.DAG_NODES[k][1]) <= eh) or \
@@ -110,7 +113,8 @@ def test_fifth_pass_figures():
     lines = LB(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
     v = np.linspace(0, 400, 200)
     F = np.exp(-np.exp(-((v - 200) / 10) ** 2))[None] * np.ones((2, 1))
-    pl.plot_frames_axes(v, F, lines, v_ref=v, F_ref=F, a_dagger=0.25, centres=[200.0])[0].canvas.draw()
+    for fig, _ in pl.plot_frames_axes(v, F, lines, v_ref=v, F_ref=F, a_dagger=0.25).values():
+        fig.canvas.draw()
     for theme in ("dark", "paper"):
         pl.use_style(theme)
         pl.plot_dag(("lines", "cosmology", "skewers"))[0].canvas.draw()
@@ -147,10 +151,11 @@ def test_gas_cells_along_a_skewer():
         assert np.isclose(info["path_length"], 2.5)
 
 
-def test_deposition_steps_on_voronoi_cells():
-    """plot_deposition_steps from the parts of cell_pieces: the two ends of a periodic skewer through random Voronoi cells,
-    every piece's tau on one period with velocity_period; pieces labelled by cell, one piece on the velocity seam, the
-    label spreading keeps its spacing; plot_frames_axes relabels each line's own window on the global axis (the reference
+def test_deposition_figures_on_voronoi_cells():
+    """plot_deposition_cells, _pieces and _rings from the parts of cell_pieces: the pieces of a periodic skewer through
+    random Voronoi cells within half_range_cMpc of its seam, every piece's tau on one period with velocity_period; the
+    same pieces and labels in the three figures, one piece on the velocity seam, the ring windows centred on the seam,
+    labels fit inside their elements or go next to them, stacked arrows never overlap each other or a label; plot_frames_axes relabels each line's own window on the global axis (the reference
     line stays within it) and, with ``wrapped``, draws wrap_to_ref_line's result."""
     from skewerjax.core import cell_pieces, cells_from_values, compute_optical_depth, voronoi_volumes, wrap_to_ref_line
     box = 4.0
@@ -168,20 +173,31 @@ def test_deposition_steps_on_voronoi_cells():
     P = float(pieces.velocity_span_kms[0])
     v_ring = (np.arange(400) + 0.5) * P / 400
     dtau = np.asarray(compute_optical_depth(pieces, v_ring, lya, per_piece=True, velocity_period=True, resolution_tolerance=None))[0, 0]
-    fig, axs, info = pl.plot_deposition_steps(parts, sb, ((0.0, 0.6), (box - 0.6, box)), v_ring, dtau, period=P)
-    fig.canvas.draw()
-    assert set(axs) == {"a", "b", "c", "d", "e"} and all(n > 1 for n in info["n_cells"].values())
+    infos = []
+    for f in (lambda: pl.plot_deposition_cells(parts, sb, half_range_cMpc=0.6),
+              lambda: pl.plot_deposition_pieces(parts, sb, half_range_cMpc=0.6),
+              lambda: pl.plot_deposition_rings(parts, sb, v_ring, dtau, period=P, half_range_cMpc=0.6, half_range_kms=0.25 * P)):
+        fig, axs, info = f()
+        fig.canvas.draw()
+        assert not pl.check_fonts(fig)
+        infos.append(info)
+    assert all(i["piece_labels"] == info["piece_labels"] and i["seam_piece"] == info["seam_piece"] for i in infos)
+    assert set(axs) == {"c", "d", "e"} and all(n > 1 for n in info["n_cells"].values())
+    assert np.allclose(info["window_deg"]["s"], 360 * 0.6 / box) and np.allclose(info["window_deg"]["v"], 90.0)   # centred: +-l, +-v_range
     assert len(info["piece_labels"]) == sum(info["n_pieces"].values())
     assert all(lab.rstrip("abcdefghijklmnopqrstuvwxyz") in info["labels"]["start"] + info["labels"]["end"] for lab in info["piece_labels"])
     assert info["seam_piece"] in info["piece_labels"] and abs(info["seam_v_c"]) < 0.5 * P
-    t = np.array([0.0, 0.01, 0.02, 0.5, 0.9])
-    q = pl._spread(t, 0.1, 0.0, 1.0)                                          # labels at least 0.1 apart, in [0, 1], in order
-    assert np.all(np.diff(q) >= 0.1 - 1e-12) and q.min() >= 0.0 and q.max() <= 1.0
+    assert [pl._label_fit(w, h, "S1a", 13)[0] for w, h in ((1.0, 0.5), (0.3, 1.0), (0.05, 1.0))] == ["h", "v", None]
+    x0 = np.array([0.0, 0.05, 0.1, 0.5]); x1 = x0 + 0.2; y = np.zeros(4)
+    lev = pl._arrow_levels(x0, x1, y, pad=0.0, dy=1.0)                       # the three overlapping arrows on three levels
+    assert sorted(lev[:3]) == [0, 1, 2] and lev[3] == 0
+    assert pl._arrow_levels(x0[3:], x1[3:], y[3:], pad=0.0, dy=1.0, boxes=[(0.55, 0.6, -0.2, 1.2)])[0] == 2   # above a label
     two = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
     v = np.arange(0.5, P, 1.0)
     F = np.exp(-np.stack([np.exp(-((v - 50) / 5) ** 2), 0.1 * np.exp(-((v - 50) / 3) ** 2)]))
-    fig, axs = pl.plot_frames_axes(v, F, two, a_dagger=0.25, tau_scale={"SiIII-1206": 10.0})
-    fig.canvas.draw()
+    figs = pl.plot_frames_axes(v, F, two, a_dagger=0.25, tau_scale={"SiIII-1206": 10.0})
+    assert list(figs) == ["own", "global", "wavelength"]
+    axs = [ax for _, ax in figs.values()]
     np.testing.assert_allclose(axs[0].get_lines()[1].get_ydata(), F[1] ** 10, rtol=1e-12)        # display only: exp(-10 tau)
     assert "for visibility" in axs[0].get_lines()[1].get_label()
     lya_line = axs[1].get_lines()[0].get_xdata()
@@ -190,11 +206,14 @@ def test_deposition_steps_on_voronoi_cells():
     v1 = (np.arange(200) + 0.5) * P / 200                                     # (d): wrap_to_ref_line on one period
     tau1 = np.stack([np.exp(-((v1 - 50) / 5) ** 2), 0.1 * np.exp(-((v1 - 50) / 3) ** 2)])[:, None]
     tau1_ref = np.asarray(wrap_to_ref_line(tau1, v1, two, velocity_period=P))
-    fig, axs = pl.plot_frames_axes(v, F, two, a_dagger=0.25, tau_scale={"SiIII-1206": 10.0},
-                                   wrapped=dict(v=v1, tau=tau1[:, 0], tau_ref=tau1_ref[:, 0], period=P))
-    fig.canvas.draw()
-    assert len(axs) == 4
-    np.testing.assert_allclose(axs[3].get_lines()[2].get_ydata(), np.exp(-10.0 * tau1_ref[1, 0]), rtol=1e-12)
+    figs = pl.plot_frames_axes(v, F, two, a_dagger=0.25, tau_scale={"SiIII-1206": 10.0},
+                               wrapped=dict(v=v1, tau=tau1[:, 0], tau_ref=tau1_ref[:, 0], period=P))
+    for fig, ax in figs.values():                                             # one figure per case, all of the same layout
+        fig.canvas.draw()
+        assert not pl.check_fonts(fig) and tuple(fig.get_size_inches()) == (22, 7.5)
+    assert len({tuple(np.round(ax.get_position().bounds, 9)) for _, ax in figs.values()}) == 1
+    assert figs["own"][1].get_xlim() == figs["wrapped"][1].get_xlim() == (0.0, P)
+    np.testing.assert_allclose(figs["wrapped"][1].get_lines()[2].get_ydata(), np.exp(-10.0 * tau1_ref[1, 0]), rtol=1e-12)
 
 
 def test_quickstart_and_tutorial_figures():
