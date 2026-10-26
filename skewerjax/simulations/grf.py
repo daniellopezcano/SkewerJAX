@@ -95,7 +95,7 @@ class PowerLawGRF:
     2D), and a ``ValueError`` names the k where it fails. The k = 0 mode stays zero.
 
     Positions are x_j = j L / N (j = 0..N-1), and wavenumbers are angular,
-    k = 2 pi fftfreq(N, d=L/N) [1 / length units], as in ``P1D_xi1D.py``.
+    k = 2 pi fftfreq(N, d=L/N) [1 / length units], as in ``core.stats.p1d``.
 
     FFT and normalisation (review notes, Eqs. P1D_delta_tilde_sample,
     P1D_sample_definition and xi1D_from_P1D_ensemble, generalised to d dimensions with

@@ -507,8 +507,8 @@ def segment_fields(seg: SegmentComponents, n, T, v_los) -> dict:
 
     Returns
     -------
-    dict of (N_sk, N): ``n_mean`` (segment average density = column / w), ``column_length``
-    (sum of weight n length), ``T`` and ``v_los`` (column-weighted means), ``n_components``.
+    dict of (N_sk, N): ``column_length`` (sum of weight n length; the segment average density is
+    column / w), ``T`` and ``v_los`` (column-weighted means), ``n_components``.
     """
     live = seg.cell >= 0
     c = np.maximum(seg.cell, 0)

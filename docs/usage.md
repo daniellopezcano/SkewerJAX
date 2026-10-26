@@ -16,7 +16,7 @@ flowchart LR
         T --> O[DeltaFieldBuilder] --> ST[OverfluxStatistics1D / 3D]
     end
     subgraph B["simulations (field sources)"]
-        G["PowerLawGRF → grf_cells (grid, uniform, density-weighted)"]
+        G["PowerLawGRF → grf_cells (the grid cells)"]
         R[ArepoHDF5Reader] --> SC["snapshot_cells (a region) / SimulationSkewers.to_cells (near skewers)"]
     end
     subgraph C["comparison"]
@@ -39,9 +39,8 @@ imports the other subpackages. `simulations` holds every source of gas cells: th
   (a, x, y, z).
 - **Cells.** Every source of gas is a set of Voronoi cells, `core.Cells`: generating points, volumes (size V^(1/3)),
   the periodic box and, per species, `number_density`, `temperature`, `velocity` (and optional `turbulence`,
-  `collisional`). The field sources of `skewerjax.simulations` fill it: the toy fields (`grf_cells`: by default the
-  nodes of the grid, whose cells are the grid cells; or any generating points, e.g. `uniform_generators`,
-  `density_weighted_generators`, with `voronoi_volumes`) and the snapshots after their gas physics (`snapshot_cells`
+  `collisional`). The field sources of `skewerjax.simulations` fill it: the toy fields (`grf_cells`: the cells of the
+  grid, the Voronoi cells of its nodes, i.e. cubes centred on them) and the snapshots after their gas physics (`snapshot_cells`
   for a region of the box, `SimulationSkewers.to_cells` for the cells near a set of skewers).
 - **Pieces.** τ is a sum over pieces, fragments of the path inside one cell (and one dual segment), each evaluated at
   its centroid (a, a⁻², the line centre) with its cell's values. `cell_pieces` (selection, deposition, absorbers) builds
@@ -86,7 +85,7 @@ imports the other subpackages. `simulations` holds every source of gas cells: th
 | task | entry point | main options |
 |---|---|---|
 | Gaussian random field | `PowerLawGRF(A_s, k_0, n_s, L=..., N=...)` (or `k_min`, `k_max`, `N_k`); `sample(key)`, `power(k, mu)`, `power_at(*k_components)`, `power_monopole(k)`, `variance()` | optional, off by default: `beta` (Kaiser (1 + beta mu^2)^2), `sigma_fog`, `fog` (`"lorentzian"`, `"gaussian"`), `A_bao`, `r_bao`, `sigma_bao` (a Gaussian bump in xi, exact transform in 1D/2D/3D); `los_axis` (default: the last axis); P >= 0 is checked at construction |
-| toy gas cells | `grf_cells(delta, grf, n_bar, ...)` | `generators=` (default: the grid nodes; `uniform_generators(grf, M, seed=)`, `density_weighted_generators(delta, grf, M, seed=)`: point density proportional to 1 + delta), `temperature` / `velocity` as arrays or functions of the generating points, `volumes` |
+| toy gas cells | `grf_cells(delta, grf, n_bar, ...)` | the cells of the grid (cubes centred on the nodes); `temperature` / `velocity` (and `turbulence`, `collisional`) as scalars, arrays on the grid or functions of the nodes |
 
 **Snapshots.**
 
@@ -215,7 +214,11 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
 - Tutorial figures: `plot_line_table`, `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,
   `plot_isotropic_recovery` (+ `correlation_binned`), `plot_kpar_kperp_maps`, `plot_pk_mu_wedges` (`MU_WEDGES`, + `power_kmu`,
   `field_power_modes`, `input_power_modes`, `binned_power`, `power_map_kpar_kperp`; k_par along `grf.los_axis`, and the
-  input of an anisotropic `PowerLawGRF` evaluated at every mode), `plot_nH_T_fractions`, `plot_deposition_steps`
+  input of an anisotropic `PowerLawGRF` evaluated at every mode), `plot_nH_T_fractions`, `plot_gas_cells` (the standard
+  view of a `core.Cells` along one skewer, `plot_gas_cells(cells, select_cells(cells, bundle.spatial_points), bundle)`:
+  the cells it crosses in 3D (cubes, or Voronoi polyhedra), one row per species: density, temperature, peculiar
+  velocity with one arrow per cell; 04 and 05),
+  `plot_deposition_steps`
   (+ `cell_colors`, `voronoi_polygons_2d`), `plot_voigt_limits`, `plot_frames_axes`, `plot_periodic_pieces`,
   `plot_effect_fluxes`, `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
   `plot_line_frames`, `plot_flux_vs_analytic`, `plot_terms_by_order`,

@@ -16,7 +16,8 @@ reproduces the scheme of fake_spectra, so that the two codes can be compared opt
   generating points, volumes and, per species, density, temperature and peculiar velocity). One route takes them to
   τ: selection of the cells along the skewers, deposition into the exact pieces of the cells (`core.Pieces`), and the
   sum of one profile per piece at its centroid. Periodicity is one opt-in option, `velocity_period` (default: none).
-  Voigt profiles come from ExoJAX, with an FFT convolution and SciPy's Faddeeva function as alternatives.
+  Voigt profiles come from ExoJAX, with an FFT convolution, a fast first-order expansion in the damping parameter
+  (`voigt="harris"`) and SciPy's Faddeeva function as alternatives.
 - **JAX-first containers and kernels.** Every container (`LineBundle`, `Cosmology`, `SkewerBundle`, `Cells`,
   `Pieces`, `GasCells`) is a pytree, and the τ sum works under `jit`, `vmap` and `grad`; the geometry (selection,
   deposition) runs on the host.
@@ -117,11 +118,11 @@ flowchart LR
 | `01_lines` | the line table, `Line` and `LineBundle` attributes, offsets Δv_j and line widths |
 | `02_cosmology` | a(x) along light rays against the closed forms, with each background's special point |
 | `03_skewers` | `SkewerBundle` conventions; one skewer in 3D with its points, midpoints, dual segments, tangents and line elements, and everything the bundle stores for it |
-| `04_fields_and_samplers` | toy fields: Gaussian random fields in 1D/2D/3D, isotropic and with a Kaiser-like anisotropy, Fingers of God and a BAO bump (the recovered P(k), and ξ(r) with its exact covariance; the (k∥, k⊥) plane; P(k) in μ wedges), and their gas cells (`grf_cells`: grid cells, uniform and density-weighted generating points, and their effect on the measured P(k)) |
-| `05_simulation_outputs` | from a TNG50-4 snapshot to gas cells: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, and a region of the snapshot as `core.Cells` without skewers (`snapshot_cells`: the cell centres, the exact Voronoi tessellation of a plane, H I and Si III), the container of the toy fields |
+| `04_fields_and_samplers` | toy fields: Gaussian random fields in 1D/2D/3D, isotropic and with a Kaiser-like anisotropy, Fingers of God and a BAO bump, and their gas cells (`grf_cells`: the cells of the grid; H I and Si III along one skewer in 3D) |
+| `05_simulation_outputs` | from a TNG50-4 snapshot to gas cells: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, and a region of the snapshot as `core.Cells` without skewers (`snapshot_cells`: H I and Si III on the Voronoi cells along one skewer, in 3D), the container of the toy fields |
 | `06_voigt_and_line_profiles` | the Voigt function (ExoJAX, FFT convolution, SciPy's Faddeeva function; Gaussian and Lorentzian limits) and the line profiles of gas elements (`core.line_profiles`) |
 | `07_deposition_and_optical_depth` | from cells to τ step by step (selection → deposition into pieces → τ, on toy cells), the τ integral as a sum over pieces, closed forms, line-centred frames, the global axis and the observed wavelength, periodicity as an option (`velocity_period`: its two effects and the nearest image), τ from simulation outputs |
-| `08_summary_statistics` | δ_F of several lines, P1D/ξ1D by order and term (the two-line terms), and a systematic study of a GRF density n = n̄(1 + δ): 3D fields, 1D overdensities (discrete projection, window of the cells), 1D overfluxes (bias, thermal kernel, line offset), P3D and ξ3D, each against its expectation |
+| `08_summary_statistics` | δ_F of several lines, P1D/ξ1D by order and term (the two-line terms), and a systematic study of a GRF density n = n̄(1 + δ): 3D fields, 1D overdensities (discrete projection, window of the cells), 1D overfluxes (bias, thermal kernel, line offset), P3D and ξ3D, each against its expectation; the statistics of `PowerLawGRF` draws (the recovered P(k), and ξ(r) with its exact covariance; the (k∥, k⊥) plane; P(k) in μ wedges) |
 | `09_fake_spectra_comparison` | the differences with fake_spectra one switch at a time (matched mode, effect chain, root causes) and the benchmark (strict single core, stages, memory, scaling, GPU; reads `notebooks/benchmark_records/`), with a summary per part |
 
 Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: the white "paper" style by default,
@@ -178,8 +179,8 @@ skewerjax/
   core/            lines, constants, cosmology, skewers, gas cells, selection, deposition, absorbers (cells -> pieces),
                    Voigt, line profiles, spectral frames, optical depth (incl. sharding), overflux, analytic references
     stats/         P1D/xi1D, P3D/xi3D, shared two-point kernels, metal-contamination models
-  simulations/     the field sources (-> core.Cells): toy fields (grf: PowerLawGRF; toy_cells: grf_cells, generating
-                   points) and snapshots (readers, raw gas cells, gas physics, streamed selection, snapshot_cells,
+  simulations/     the field sources (-> core.Cells): toy fields (grf: PowerLawGRF; toy_cells: grf_cells, the grid
+                   cells) and snapshots (readers, raw gas cells, gas physics, streamed selection, snapshot_cells,
                    SimulationSkewers, maps)
     cloudy_tables/ CLOUDY ionisation tables (git submodule)
   comparison/      fake_spectra emulation, matched options and effect chain, fake_spectra driver and source, benchmark

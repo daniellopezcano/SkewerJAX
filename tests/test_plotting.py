@@ -132,3 +132,23 @@ def test_xi_covariance_is_the_scatter_of_the_draws():
     per = np.stack([pl.correlation_binned(d[i:i + 1], g.L, edges)[1] for i in range(d.shape[0])])
     cov1 = pl.correlation_binned(d[:1], g.L, edges, g)[5]
     np.testing.assert_allclose(per.std(0, ddof=1), np.sqrt(np.diag(cov1)), rtol=0.1)
+
+
+def test_gas_cells_along_a_skewer():
+    """plot_gas_cells: the grid cubes and the Voronoi polyhedra crossed by one skewer through the periodic face."""
+    from skewerjax.core import cells_from_values, cells_on_grid, select_cells, voronoi_volumes
+    box, n = 4.0, 8
+    rng = np.random.default_rng(0)
+    vals = lambda m: dict(temperature=10 ** rng.uniform(4, 5, m), velocity=rng.normal(0, 50, (m, 3)))
+    grid = cells_on_grid(box, {"HI": 10 ** rng.uniform(-13, -11, (n,) * 3), "SiIII": np.full((n,) * 3, 1e-14)},
+                         **vals(n ** 3))
+    gen = rng.uniform(0, box, (600, 3))
+    vor = cells_from_values(gen, box, {"HI": 10 ** rng.uniform(-13, -11, 600)}, volumes=voronoi_volumes(gen, box), **vals(600))
+    pts = np.array([3.0, 1.1, 2.3]) + np.linspace(0, 2.5, 30)[:, None] * np.array([1.0, 0.6, 0.4]) / np.linalg.norm([1.0, 0.6, 0.4])
+    for cells, n_sp in ((grid, 2), (vor, 1)):
+        near = select_cells(cells, pts[None])
+        fig, axs, info = pl.plot_gas_cells(cells, near, pts)
+        pl.add_panel_letters(axs)
+        fig.canvas.draw()
+        assert axs.shape == (n_sp, 3) and 0 < info["n_crossed"] <= info["n_selected"] == len(near)
+        assert np.isclose(info["path_length"], 2.5)

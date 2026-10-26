@@ -82,7 +82,7 @@ class ExactFrame:
     ----------
     s_grid : (N_sk, N) path coordinates [cMpc] of the sampling points (increasing).
     a_grid : (N_sk, N) scale factors there (``scale_factors_along_paths``, or a ``SkewerBundle``'s).
-    a_dagger : reference scale factor of the spectral coordinate (default a(s = 0) of skewer 0).
+    a_dagger_value : reference scale factor of the spectral coordinate (default a(s = 0) of skewer 0).
     photon_sign : None (the simulation convention: the observer is before the first point and the photons travel
         towards decreasing s) or (N_sk,) +1 / -1, the direction of the photons along s of every skewer
         (``SkewerBundle.array_direction``).

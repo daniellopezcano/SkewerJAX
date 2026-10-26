@@ -3,7 +3,7 @@
 * ``grid_segments`` (the regular-grid fast path) gives the pieces of the generic ``voronoi_segments`` on the same
   cells, for straight and bent paths that cross the periodic faces;
 * ``Cells`` checks its inputs, is a pytree, and ``take`` / ``get`` behave;
-* ``cells_on_grid`` / ``grf_cells``: n = n_bar (1 + delta) exactly at the generators, interpolated for random ones;
+* ``cells_on_grid`` / ``grf_cells``: n = n_bar (1 + delta) exactly on the grid cells; ``voronoi_volumes`` of a grid;
 * ``cell_pieces``: the column of uniform cells is exact, several species share the pieces, and
   ``compute_optical_depth(bundle, v, lines, cells)`` is the sum over those pieces; the top-hat option runs on toy cells.
 """
@@ -80,7 +80,7 @@ def test_cells_container():
         Cells(pos, np.ones(n), {"HI": {**sp["HI"], "pressure": np.ones(n)}})                               # unknown field
 
 
-def test_grid_and_random_generators():
+def test_grid_cells_and_voronoi_volumes():
     grf = PowerLawGRF(A_s=0.01, k_0=2.0, n_s=-1.25, L=(BOX,) * 3, N=(16,) * 3)
     delta = np.asarray(grf.sample(jax.random.PRNGKey(3)))
     c = grf_cells(delta, grf, {"HI": 2.0, "SiIII": 0.5}, temperature=lambda x: 1e4 + 0 * x[:, 0], velocity=(1.0, 2.0, 3.0))
@@ -88,11 +88,6 @@ def test_grid_and_random_generators():
     np.testing.assert_allclose(c.species["HI"]["number_density"], 2.0 * (1.0 + delta.ravel()), rtol=1e-15)
     np.testing.assert_allclose(c.species["SiIII"]["velocity"][7], [1.0, 2.0, 3.0])
     np.testing.assert_allclose(c.volumes, (BOX / 16) ** 3)
-    # random generators at the nodes themselves recover the grid values; their Voronoi volumes add up to the box
-    gen = grid_points(BOX, grf.shape)[::7]
-    r = grf_cells(delta, grf, {"HI": 2.0}, generators=gen, samples_per_cell=8)
-    np.testing.assert_allclose(r.species["HI"]["number_density"], 2.0 * (1.0 + delta.ravel()[::7]), rtol=1e-12)
-    np.testing.assert_allclose(r.volumes.sum(), BOX ** 3, rtol=0.05)
     v = voronoi_volumes(grid_points(BOX, (4, 4, 4)), BOX, samples_per_cell=256)
     np.testing.assert_allclose(v, (BOX / 4) ** 3, rtol=0.2)
 

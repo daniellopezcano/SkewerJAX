@@ -152,7 +152,7 @@ class SkewerBundle:
 
     Attributes
     ----------
-    quadri_vectors : (N_cosmologies, N_sk, N_ppsk, 4) events (a, x, y, z), what the field samplers take.
+    quadri_vectors : (N_cosmologies, N_sk, N_ppsk, 4) events (a, x, y, z) of the sampling points.
     scale_factors, los_directions, comoving_positions_from_ICs, array_direction (+1 / -1), is_absorption.
 
     Notes
@@ -241,8 +241,8 @@ class SkewerBundle:
 
     @property
     def line_elements(self) -> jnp.ndarray:
-        """(N_sk, N_ppsk) line elements [cMpc]: the lengths of the dual segments, the pieces of fields known everywhere
-        (``optical_depth.pieces_from_fields``)."""
+        """(N_sk, N_ppsk) line elements [cMpc]: the lengths of the dual segments (from midpoint to
+        midpoint), which the deposition cuts into pieces (``absorbers.cell_pieces``)."""
         return line_elements(self.spatial_points)
 
     @property

@@ -2,7 +2,7 @@
 
 Three blocks, with dependencies in one direction only (comparison -> simulations -> core):
 
-* ``skewerjax.core`` (A): lines, cosmology, skewers, field samplers, line profiles, the tau integral, the overflux
+* ``skewerjax.core`` (A): lines, cosmology, skewers, the gas cells (``Cells``), the deposition, line profiles, the tau integral, the overflux
   and the summary statistics; self-contained.
 * ``skewerjax.simulations`` (B): reading hydrodynamical (or N-body) snapshots into the inputs of the core.
 * ``skewerjax.comparison`` (C): fake_spectra's scheme and results, compared with SkewerJAX's.

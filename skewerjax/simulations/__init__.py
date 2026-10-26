@@ -1,7 +1,7 @@
 """Block B, the field sources: everything that produces the gas cells of the core (``core.Cells``).
 
 Toy fields: ``grf`` (``PowerLawGRF``, Gaussian random fields with optional anisotropy and BAO) and ``toy_cells``
-(``grf_cells``; uniform and density-weighted generating points).
+(``grf_cells``: the realisation on the cells of its grid, cubes centred on the nodes).
 
 Snapshots: read hydro (or FGPA-painted N-body) snapshots and turn them into the gas cells of the core. Layers:
 ``readers`` (HDF5 I/O, NumPy) -> ``gas_cells`` (``GasCells``: the raw per-cell data of the snapshot) -> ``gas_physics``
@@ -14,7 +14,7 @@ skewers) or for the cells within reach of a set of skewers (``selection``, strea
 Depends on ``skewerjax.core`` only; the boundary with the core is ``core.Cells``.
 """
 from skewerjax.simulations.grf import PowerLawGRF
-from skewerjax.simulations.toy_cells import density_weighted_generators, grf_cells, interpolate_periodic, uniform_generators
+from skewerjax.simulations.toy_cells import grf_cells, interpolate_periodic
 from skewerjax.simulations.readers import ArepoHDF5Reader, SnapshotHeader
 from skewerjax.simulations.gas_cells import GasCells
 from skewerjax.simulations.gas_physics import HI, CloudyIonTable, Ion, ion_from_species, ion_properties

@@ -91,7 +91,7 @@ vmap_check("PowerLawGRF.power (n_s batch)", lambda n: PowerLawGRF(A_s=2.0, k_0=1
            (jnp.array([-1.0, -0.5, 0.5]),))
 dgrid = PowerLawGRF(A_s=0.04, k_0=2.0, n_s=-1.25, L=(50.0,) * 3, N=(16,) * 3).sample(key)          # sigma = 0.11
 pos_r = jnp.asarray(rng.uniform(-5, 60, size=(4, 9, 3)))
-jit_check("interpolate_periodic (random generators of grf_cells)", lambda g, p: interpolate_periodic(g, p, 50.0), dgrid, pos_r[0])
+jit_check("interpolate_periodic (grid field at arbitrary points)", lambda g, p: interpolate_periodic(g, p, 50.0), dgrid, pos_r[0])
 vmap_check("interpolate_periodic (batches of points)", lambda p: interpolate_periodic(dgrid, p, 50.0), (pos_r,))
 # Voigt
 xv = jnp.linspace(-50.0, 50.0, 201)

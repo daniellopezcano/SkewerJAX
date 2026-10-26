@@ -1,11 +1,11 @@
-"""grf_cells: n = n_bar (1 + delta) with no transform (grid generators reproduce the realisation, zero-mean delta,
-positivity check, one realisation shared by several species); the uniform and density-weighted generating points."""
+"""grf_cells: n = n_bar (1 + delta) with no transform on the grid cells (the realisation itself, zero-mean delta,
+positivity check, one realisation shared by several species); the optional terms of PowerLawGRF."""
 import warnings
 
 import jax
 import numpy as np
 
-from skewerjax.simulations import PowerLawGRF, density_weighted_generators, grf_cells, uniform_generators
+from skewerjax.simulations import PowerLawGRF, grf_cells
 
 
 def test_grid_cells_reproduce_n_bar_one_plus_delta():
@@ -27,26 +27,6 @@ def test_shared_realisation_and_negative_warning():
     assert any("min(1 + delta)" in str(x.message) for x in w)
     np.testing.assert_allclose(c.species["SiIII"]["number_density"] - 2.0, 2.0 * (c.species["HI"]["number_density"] - 1.0),
                                rtol=1e-12, atol=1e-12)
-
-
-def test_generators_reproducible_and_density_weighted():
-    grf = PowerLawGRF(A_s=0.04, k_0=2.0, n_s=-1.25, L=(20.0,) * 3, N=(8,) * 3)
-    delta = np.asarray(grf.sample(jax.random.PRNGKey(2)))
-    u = uniform_generators(grf, 4000, seed=3)
-    np.testing.assert_array_equal(u, uniform_generators(grf, 4000, seed=3))
-    np.testing.assert_array_equal(u, np.random.default_rng(3).uniform(0.0, 20.0, (4000, 3)))
-    M = 400_000
-    g = density_weighted_generators(delta, grf, M, seed=5)
-    np.testing.assert_array_equal(g, density_weighted_generators(delta, grf, M, seed=5))
-    assert g.shape == (M, 3) and g.min() >= 0.0 and g.max() < 20.0
-    # counts per grid cell (the cube centred on each node): Poisson with mean M (1 + delta_j) / N_cells
-    j = np.mod(np.floor(g / grf.dx[0] + 0.5).astype(int), 8)
-    counts = np.bincount(np.ravel_multi_index(j.T, (8,) * 3), minlength=512)
-    expected = M * (1.0 + delta.ravel()) / 512
-    pull = (counts - expected) / np.sqrt(expected)
-    assert abs(pull.mean()) < 0.2 and 0.8 < pull.std() < 1.2
-    slope = np.polyfit(delta.ravel(), counts / (M / 512) - 1.0, 1)[0]
-    assert abs(slope - 1.0) < 0.05, slope                                   # point density proportional to 1 + delta
 
 
 def test_grf_optional_terms():

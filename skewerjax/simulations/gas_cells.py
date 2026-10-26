@@ -10,8 +10,8 @@ a volume (hence a size) and a dictionary of per-cell fields, in SkewerJAX's unit
 
 It is a JAX pytree (fields and positions are leaves; ``box`` and ``a`` are static metadata), so
 it can be passed through ``jit``, ``vmap`` and ``tree_map``; it is format independent: readers
-(layer 1) produce it and the physics (layer 3) consumes it. After the physics, ``SimulationSkewers.cells``
-turns it into ``core.Cells``, the container of the gas shared with the toy models (per ion: comoving density,
+(layer 1) produce it and the physics (layer 3) consumes it. After the physics, ``SimulationSkewers.to_cells``
+(or ``snapshot_cells``) turns it into ``core.Cells``, the container of the gas shared with the toy models (per ion: comoving density,
 temperature, peculiar velocity), which the deposition and the optical depth take.
 """
 from __future__ import annotations

@@ -3,13 +3,54 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — toy cells on the grid only, a 3D figure of the cells along a skewer (2026-10-25, session 20261025_1854)
+
+### Changed
+- `plot_gas_cells(cells, selected, path, species=None, *, view=, zoom=, decades=, alpha=)`: the cells of `selected`
+  (`core.select_cells(cells, bundle.spatial_points)`) that one skewer passes through, in 3D: cubes for grid cells,
+  Voronoi polyhedra (scipy, periodic, computed for the drawing only) otherwise; one row per species, columns density,
+  temperature, peculiar velocity (colour v_par along the skewer, one 3D arrow per cell); edges, generating points and
+  the skewer drawn in every panel; T and v colour scales shared by the rows. Replaces the plane view and the histogram
+  column. `add_panel_letters` accepts 3D axes.
+- `grf_cells(delta, grf, n_bar, *, temperature, velocity, turbulence, collisional)`: the cells of the grid only (its
+  own Voronoi tessellation, cubes centred on the nodes).
+- Notebook 04: §2 builds the grid cells and ends with the new figure; the statistics of the draws (P(|k|), ξ(|r|),
+  the (k∥, k⊥) maps, the μ wedges) moved unchanged to notebook 08, §4. Notebook 05 §3 ends with the same figure on
+  the TNG Voronoi cells.
+
+### Removed
+- `uniform_generators`, `density_weighted_generators`, and the `generators=`, `volumes=`, `samples_per_cell=`, `seed=`
+  options of `grf_cells` (`interpolate_periodic` stays, a general utility used by `scripts/validation/check_jax.py`);
+  the comparison of the three sets of cells in notebook 04.
+
+## Unreleased — notebooks 04 and 05: one general GRF model, one figure of the gas cells (2026-10-25, session 20261025_1506)
+
+### Added
+- `plot_gas_cells(cells, species=...)`: the standard figure of a `core.Cells`, one row per species: on a plane, the
+  density with the cell boundaries and the generating points, the temperature, the peculiar velocity (colour across
+  the plane, arrows in it), and the density histogram of every cell. Notebooks 04 (toy cells) and 05 (snapshot) end
+  with it, followed by a cell that reads the container.
+
+### Changed
+- `plot_isotropic_recovery(..., n_lin=)`: the points are compared with the input averaged over the modes of their own
+  bin, at the same k, in both the P(k) panel and the ratio panel (the curve at the bin's k missed points by several
+  error bars where the input bends or oscillates within a bin); optional one-mode bins at low k; ratio axis fitted
+  to the data.
+- `plot_kpar_kperp_maps(..., n_lin=, n_log=)`: input contours from the input binned like the measurement; empty
+  rows or columns of bins merged (`_occupied_edges`). `plot_pk_mu_wedges`: the input of each wedge drawn at the same
+  offset k as its points.
+- `plot_nH_T_fractions`: the EOS fit drawn only over the densities of 99.5 % of the star-forming cells; labels in
+  mathtext.
+- Notebook 04 §1: the simple and the anisotropic GRF sections merged into one general model (theory built term by
+  term), with more draws (1D 4000, 2D 1000, 3D 128³ × 96) and finer k bins; sizes in the setup cell.
+
 ## Unreleased — a fast Voigt mode, notebooks 06 and 07 restructured (2026-10-25, session 20261025_1357)
 
 ### Added
 - **`voigt="harris"`** (`core.voigt.voigt_harris`, `harris_H`, `HARRIS_A_MAX`): H(a, u) to first order in the damping
   parameter, e^(−u²) + a H₁(u) with H₁ = 2u Im w(u) − 2/√π tabulated (1024 intervals on [0, 6]) and a five-term
   asymptotic series beyond u = 6, for a ≤ 10⁻³; the exact (ExoJAX) evaluation above. The scheme of fake_spectra
-  (`fastvoigt.h`; Harris 1948). Max relative error 1.3 × 10⁻⁵ (a = 10⁻³); 1.8× faster than the default on a H I
+  (`fastvoigt.h`; Harris 1948). Max relative error 1.3 × 10⁻⁵ (a = 10⁻³); about 2× faster (1–3× across runs) than the default on a H I
   τ, slower when a bundle mixes in metal lines (the whole batch then takes the exact path). Through
   `voigt_line_profiles`, `line_profiles`, `compute_optical_depth(..., voigt="harris")`. Default unchanged.
 - `plot_voigt_limits(..., expansion=)`: panel (c), the error of an approximation of H(a, u) over its range of a.
