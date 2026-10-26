@@ -46,6 +46,7 @@ import jax
 import jax.numpy as jnp
 from scipy.spatial import cKDTree
 
+from skewerjax.core.selection import wrap_positions
 from skewerjax.core.skewers import path_geometry
 
 TOPHAT_NORM = 3.0 / (4.0 * np.pi)          # density inside a sphere of radius V^(1/3), per n_cell
@@ -73,6 +74,7 @@ class SegmentComponents:
 
     @property
     def n_components(self) -> np.ndarray:
+        """(N_sk, N) number of pieces of every dual segment."""
         return (self.cell >= 0).sum(axis=-1)
 
     def compact(self) -> "SegmentComponents":
@@ -92,13 +94,6 @@ class SegmentComponents:
 # --------------------------------------------------------------------------- helpers
 def _min_image(d, box):
     return d if box is None else d - box * jnp.round(d / box)
-
-
-def _wrap(x, box):
-    if box is None:
-        return np.asarray(x, dtype=np.float64)
-    y = np.mod(np.asarray(x, dtype=np.float64), box)
-    return np.where(y >= box, 0.0, y)
 
 
 def _halves(points):
@@ -161,7 +156,7 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
     n_sk, n_p = pts.shape[:2]
     A, Bl, Bh, _ = _halves(pts)
     P = A.shape[0]
-    gpos = _wrap(gas_positions, box)
+    gpos = wrap_positions(gas_positions, box)
     size = None if gas_size is None else np.asarray(gas_size, dtype=np.float64)
     L_half = np.stack([np.linalg.norm(Bl - A, axis=-1), np.linalg.norm(Bh - A, axis=-1)], axis=1)     # (P, 2)
     if n_sub is not None:
@@ -178,7 +173,7 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
     tree = cKDTree(gpos, boxsize=box) if box is not None else cKDTree(gpos)
     t = np.linspace(0.0, 1.0, S + 1)
     sub = np.stack([A[:, None, :] + t[None, :, None] * (B - A)[:, None, :] for B in (Bl, Bh)], axis=1)   # (P, 2, S+1, 3)
-    lab = tree.query(_wrap(sub.reshape(-1, 3), box), k=1, workers=-1)[1].reshape(P, 2, S + 1)
+    lab = tree.query(wrap_positions(sub.reshape(-1, 3), box), k=1, workers=-1)[1].reshape(P, 2, S + 1)
     rows, labs, lens, moms = [], [], [], []
     t0, t1 = jnp.asarray(t[:-1]), jnp.asarray(t[1:])
     for h, (B, sign) in enumerate(((Bl, -1.0), (Bh, 1.0))):
@@ -389,7 +384,7 @@ def _tophat_half(A, B, G, h, valid):
 
 def _tophat_pairs(A, r_half, gpos, size, box):
     """Candidate (point, cell) pairs with |x_i - g_c| <= h_c + r_i, as a padded (P, K) index array."""
-    tree = cKDTree(_wrap(A, box), boxsize=box) if box is not None else cKDTree(_wrap(A, box))
+    tree = cKDTree(wrap_positions(A, box), boxsize=box)
     lists = tree.query_ball_point(gpos, r=size + r_half.max(), workers=-1)
     cells = np.repeat(np.arange(len(gpos)), [len(l) for l in lists])
     pts = np.concatenate([np.asarray(l, dtype=np.int64) for l in lists]) if len(cells) else np.zeros(0, np.int64)
@@ -414,7 +409,7 @@ def tophat_segments(points, gas_positions, gas_size, box: Optional[float], *, ch
     n_sk, n_p = pts.shape[:2]
     A, Bl, Bh, _ = _halves(pts)
     r = np.maximum(np.linalg.norm(Bl - A, axis=-1), np.linalg.norm(Bh - A, axis=-1))
-    gpos, size = _wrap(gas_positions, box), np.asarray(gas_size, dtype=np.float64)
+    gpos, size = wrap_positions(gas_positions, box), np.asarray(gas_size, dtype=np.float64)
     idx = _tophat_pairs(A, r, gpos, size, box)
     valid = idx >= 0
     safe = np.maximum(idx, 0)
@@ -458,10 +453,12 @@ class CellCrossings:
 
     @property
     def length(self) -> np.ndarray:
+        """(N_sk, K) length of every crossing [cMpc] (0 in the empty slots)."""
         return np.where(self.cell >= 0, self.s_hi - self.s_lo, 0.0)
 
     @property
     def n_crossings(self) -> np.ndarray:
+        """(N_sk,) number of cell crossings of every skewer."""
         return (self.cell >= 0).sum(axis=-1)
 
 

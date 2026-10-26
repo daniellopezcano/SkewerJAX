@@ -51,6 +51,7 @@ LINES: Dict[str, Line] = _load_lines()
 
 
 def get_line(line_id: str) -> Line:
+    """The ``Line`` of ``line_id`` in ``lines_table.dat`` (KeyError if unknown)."""
     try:
         return LINES[line_id]
     except KeyError:
@@ -141,6 +142,7 @@ class LineBundle:
 
     # -- species bookkeeping
     def lines_for_species(self, species: str) -> List[Line]:
+        """The lines of ``species``, in bundle order."""
         return [l for l in self.lines if l.species == species]
 
     def indices_for_species(self, species: str) -> List[int]:
@@ -148,6 +150,7 @@ class LineBundle:
         return [i for i, l in enumerate(self.lines) if l.species == species]
 
     def delta_v_for_line(self, line_id: str) -> float:
+        """Delta v_j = c ln(lambda_ref / lambda_j) [km/s] of one line of the bundle."""
         for l in self.lines:
             if l.id == line_id:
                 return float(phys.c_kms * jnp.log(self.ref_line.lambda0_A / l.lambda0_A))

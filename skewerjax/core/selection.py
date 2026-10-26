@@ -26,14 +26,20 @@ optional: CPU-only installations never import it.
 """
 from __future__ import annotations
 
+import os
+from typing import Optional
+
 import numpy as np
 from scipy.spatial import cKDTree
 
 VORONOI_FACTOR = 2.5      # k of the "voronoi" selection radius k h_c + ds/2
 
 
-def wrap_positions(x, box: float) -> np.ndarray:
-    """Wrap positions into [0, box) (guarding against x mod box == box in floating point)."""
+def wrap_positions(x, box: Optional[float]) -> np.ndarray:
+    """Wrap positions into [0, box) (guarding against x mod box == box in floating point); ``box=None``: unchanged
+    (as float64)."""
+    if box is None:
+        return np.asarray(x, dtype=np.float64)
     y = np.mod(np.asarray(x, dtype=np.float64), box)
     return np.where(y >= box, 0.0, y)
 
@@ -79,14 +85,32 @@ def resolve_backend(backend: str) -> str:
     return backend
 
 
-def _nearest_distance_cpu(tree: cKDTree, pos: np.ndarray, rad: np.ndarray, workers: int) -> np.ndarray:
-    """Distance of every cell to its nearest path point, inf beyond the cell's radius (periodic cKDTree)."""
+def _query_workers(n: int, workers: int) -> int:
+    """Threads of one k-d tree query of ``n`` points: ``workers``, except that -1 (all cores) is capped at one thread
+    per 20 000 points (starting threads costs more than small queries)."""
+    if workers != -1:
+        return workers
+    return int(max(1, min(os.cpu_count() or 1, n // 20_000)))
+
+
+def _nearest_distance_cpu(tree: cKDTree, pos: np.ndarray, rad: np.ndarray, workers: int,
+                          candidates: Optional[np.ndarray] = None) -> np.ndarray:
+    """Distance of every cell to its nearest path point, inf beyond the cell's radius (periodic cKDTree).
+
+    The cells are queried in bins of radius (33 geometric edges above 10^6 cells, 5 below), each with the bin's largest
+    radius as the distance bound; ``candidates`` (bool mask): only these cells are queried, the others get inf (the
+    caller has shown they are beyond their radius). Neither the bins nor the mask change which cells have d <= rad.
+    """
     d = np.full(rad.size, np.inf)
-    edges = np.unique(np.geomspace(rad.min(), rad.max(), 33))          # radius bins: a tight bound per bin
+    edges = np.unique(np.geomspace(rad.min(), rad.max(), 33 if rad.size > 1_000_000 else 5))   # a tight bound per bin
     which = np.clip(np.searchsorted(edges, rad, side="left"), 0, edges.size - 1)
-    for b in np.unique(which):
-        m = which == b
-        d[m] = tree.query(pos[m], k=1, distance_upper_bound=float(rad[m].max()), workers=workers)[0]
+    bound = np.full(edges.size, -np.inf)
+    np.maximum.at(bound, which, rad)                                    # the largest radius of every bin (of all cells)
+    idx = np.arange(rad.size) if candidates is None else np.flatnonzero(candidates)
+    w = which[idx]
+    for b in np.flatnonzero(np.bincount(w, minlength=edges.size)):
+        sub = idx[w == b]
+        d[sub] = tree.query(pos[sub], k=1, distance_upper_bound=float(bound[b]), workers=_query_workers(sub.size, workers))[0]
     return d
 
 
@@ -120,10 +144,10 @@ def select_cells(cells, paths, *, mode: str = "voronoi", workers: int = -1, back
     box = cells.box
     ds = max_path_spacing(paths)
     pts = np.asarray(paths, dtype=np.float64).reshape(-1, 3)
-    pts = pts if box is None else wrap_positions(pts, box)
+    pts = wrap_positions(pts, box)
     tree = cKDTree(pts) if box is None else cKDTree(pts, boxsize=box)
     pos = np.asarray(cells.positions, dtype=np.float64)
-    pos = pos if box is None else wrap_positions(pos, box)
+    pos = wrap_positions(pos, box)
     rad = selection_radius(cells.size_cMpc, mode, ds)
     backend = resolve_backend(backend)
     d = _nearest_distance_jztree(pts, pos, box, tree, rad) if backend == "jztree" else _nearest_distance_cpu(tree, pos, rad, workers)

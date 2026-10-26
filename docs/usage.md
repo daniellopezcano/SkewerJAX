@@ -174,8 +174,10 @@ single CPU device.
 ```bash
 python scripts/validation/run_all.py [--quick] [--skip tng,fake] [--outdir validation_output]
 pytest                                                                  # tests/, CPU, seconds per test
+python scripts/dev/run_tests.py [test_module ...]                       # the same, without pytest
+python scripts/dev/check_markdown_math.py notebooks/*.ipynb             # the notebooks' markdown math (MathJax)
 SKEWERJAX_SLOW=1 pytest                                                 # also the TNG50-4 / fake_spectra checks
-python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick --results benchmark_results/suite
+python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick                   # raw results: benchmark_results/raw
 python scripts/benchmarks/single_cpu_modes.py --results benchmark_results/single_cpu    # one core, every integration mode
 ```
 
@@ -212,7 +214,11 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   edge is a dependency of the code, listed above `DAG_EDGES`).
 - Path geometry: `geometry_style(name)`, the one style of points, midpoints, dual segments, tangents, line elements,
   piece ends and generators (03).
-- Tutorial figures: `plot_line_table`, `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,
+- Helpers: `add_panel_letters(axes, labels=None, box=True)` ((a), (b), ... or any labels such as "a1", "a2"),
+  `shade_outside_window(ax, v, period, end)` (the part of a velocity axis outside [0, P), with its edge dotted).
+- Tutorial figures: `plot_toy_box` (00), `plot_slab_and_skewer`, `plot_cell_crossings`, `plot_voigt_of_piece`,
+  `plot_tau_stretches`, `plot_wrap_tiles`, `plot_overflux_p1d_xi` (00b), `plot_grf_draws` (04), `plot_line_table`,
+  `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,
   `plot_isotropic_recovery` (+ `correlation_binned`), `plot_kpar_kperp_maps`, `plot_pk_mu_wedges` (`MU_WEDGES`, + `power_kmu`,
   `field_power_modes`, `input_power_modes`, `binned_power`, `power_map_kpar_kperp`; k_par along `grf.los_axis`, and the
   input of an anisotropic `PowerLawGRF` evaluated at every mode), `plot_nH_T_fractions`, `plot_gas_cells` (the standard
@@ -225,11 +231,9 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   split into its sources; 07), `plot_velocity_ring(parts, regions, v, tau_nowrap, tau_wrap, period=)` (the same wrap on
   a ring of circumference P: the no-wrap axis as a spiral, the wrapped one as a ring, both zoomed on the seam, and
   the whole skewer; 07), `plot_voigt_limits`, `plot_frames_axes` (panel (b): each line's own window relabelled at
-  v − Δv_j; `tau_scale={line: k}` draws a weak line as exp(−k τ), display only), `plot_periodic_pieces`,
-  `plot_effect_fluxes`, `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
-  `plot_line_frames`, `plot_flux_vs_analytic`, `plot_terms_by_order`,
+  v − Δv_j; `tau_scale={line: k}` draws a weak line as exp(−k τ), display only),
+  `plot_effect_fluxes`, `plot_skewer_anatomy`, `plot_terms_by_order`,
   `plot_p1d_input_vs_measured` (+ `grf_p1d_along_axis`), `plot_cylinder(..., progress=p)` (one frame per call),
   `plot_slab`, `plot_tau_buildup`, `plot_orders_superimposed`, `plot_pk_recovery`, the benchmark figures `plot_bench_*`.
-- `skewerjax.utils.tutorial`: the small toy set-ups of the notebooks (`toy_pieces`, `periodic_pieces_demo`) and the
-  expected spectra of a GRF along skewers (`p1d_expected`, `p3d_expected_on_skewer_grid`,
+- `skewerjax.utils.tutorial`: the expected spectra of a GRF along skewers (`p1d_expected`, `p3d_expected_on_skewer_grid`,
   `binned_input_power`).

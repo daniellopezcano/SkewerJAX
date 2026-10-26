@@ -89,14 +89,17 @@ class Ion:
 
     @property
     def metals_column(self) -> int:
+        """Column of the element in ``GFM_Metals`` (``GFM_METALS_ORDER``)."""
         return GFM_METALS_ORDER.index(self.element)
 
     @property
     def mass_amu(self) -> float:
+        """Atomic mass of the element [amu]."""
         return float(get_mass_amu([self.element])[self.element])
 
     @property
     def is_HI(self) -> bool:
+        """True for H I."""
         return self.element == "H" and self.stage == 1
 
 

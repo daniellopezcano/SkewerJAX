@@ -31,9 +31,17 @@ MODES = ("default", "crossings", "matched", "float32")
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _paths():
+    """``skewerjax.utils.paths`` alone (the launcher does not start JAX)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("skewerjax_paths", ROOT / "skewerjax/utils/paths.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def worker(mode: str, snap_base: str, n: int, repeats: int, out: Path):
     import importlib.util
-    import numpy as np
     import jax
     jax.config.update("jax_enable_x64", True)
     spec = importlib.util.spec_from_file_location("skewerjax_benchmark", ROOT / "skewerjax/comparison/benchmark.py")
@@ -84,7 +92,7 @@ def worker(mode: str, snap_base: str, n: int, repeats: int, out: Path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--results", required=True)
-    ap.add_argument("--snap-base", default=os.path.join(os.environ.get("SKEWERJAX_DATA", "/home/STORAGE"), "TNG50-4"))
+    ap.add_argument("--snap-base", default=str(_paths().DATA_DIR / "TNG50-4"))
     ap.add_argument("--n", type=int, default=16)
     ap.add_argument("--repeats", type=int, default=2)
     ap.add_argument("--modes", default=",".join(MODES))

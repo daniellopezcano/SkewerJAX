@@ -13,8 +13,9 @@ import logging                                                               # n
 logging.getLogger("jax._src.xla_bridge").setLevel(logging.CRITICAL)
 import jax                                                                   # noqa: E402
 
-DATA = os.environ.get("SKEWERJAX_DATA", "/home/STORAGE")       # the folder that holds TNG50-4/ (and TNG50-3/, TNG50-2/)
-TNG = (os.path.join(DATA, "TNG50-4"), 25)
+from skewerjax.utils.paths import snapshot_dir                              # noqa: E402
+
+TNG = (str(snapshot_dir("TNG50-4")), 25)                # $SKEWERJAX_DATA/TNG50-4 snapshot 25 (skewerjax.utils.paths)
 
 
 class Checks:

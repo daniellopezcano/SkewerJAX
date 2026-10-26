@@ -1,95 +1,15 @@
-"""Small toy set-ups of the tutorial notebooks (NumPy + the core), kept here so the notebooks stay readable.
+"""Small toy set-ups of the tutorial notebooks (NumPy), kept here so the notebooks stay readable.
 
-* ``toy_pieces``: ``core.Pieces`` of one skewer from plain arrays (centroid a, length, T, peculiar velocity, density).
-* ``periodic_pieces_demo``: a few pieces along a box, one with its line centre beyond the period (effect i) and a
-  damped absorber at the edge (effect ii), integrated without wrap and with ``velocity_period=True`` through
-  ``core.compute_optical_depth``; and the exact periodic sum over images against the nearest image.
 * ``p1d_expected``, ``p3d_expected_on_skewer_grid``: the expected spectra of a GRF along skewers (discrete transverse
   projection or aliasing, and the window of the representation along the line of sight: piecewise-constant cells,
   ``cell_window``, or linear interpolation, ``linear_interp_window``).
+* ``binned_input_power``: the input power of a GRF averaged in |k| bins.
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional
 
-import jax.numpy as jnp
 import numpy as np
-
-from skewerjax.core.constants import phys
-from skewerjax.core.cosmology import Cosmology
-from skewerjax.core.lines import LineBundle
-from skewerjax.core.optical_depth import Pieces, compute_optical_depth
-from skewerjax.core.skewers import SkewerBundle
-
-
-def toy_pieces(line_bundle: LineBundle, a_dagger: float, a, length_cMpc, T, u_away_kms, n_com, velocity_span_kms: float) -> Pieces:
-    """``core.Pieces`` of one skewer from plain (N_p,) arrays: a at the centroids, lengths [cMpc], T [K], the peculiar
-    velocity along the path [km/s, positive away from the observer] and the comoving density [cm^-3].
-
-    The photon travels towards the observer, so its velocity along the photon is -u. The widths are 0 (no check).
-    """
-    nl = line_bundle.n_lines
-    rows = lambda x: jnp.broadcast_to(jnp.asarray(x, dtype=float)[None, None], (nl, 1, np.size(x)))
-    one = lambda x: jnp.asarray(x, dtype=float)[None]
-    z = np.zeros(np.size(a))
-    return Pieces(a_dagger=one(np.full(np.size(a), a_dagger)), scale_factor=one(a), length_m=one(np.asarray(length_cMpc) * phys.Mpc_to_m),
-                  temperature=rows(T), turbulence=rows(z), collisional=rows(z), los_velocity=rows(-np.asarray(u_away_kms)),
-                  number_density=rows(n_com), width_kms=rows(z), velocity_span_kms=jnp.asarray([float(velocity_span_kms)]))
-
-
-def scale_factor_of_x(x_max_cMpc: float = 20.0, a_obs: float = 0.25, cosmology: Optional[Cosmology] = None, n: int = 4001):
-    """a(x) along a straight path that starts at the observer's end (x = 0, a = a_obs) [cMpc]: (x grid, a grid)."""
-    cosmology = cosmology or Cosmology(phys.H0, 0.0, 0.31, 0.0, 0.69)
-    x = np.linspace(0.0, x_max_cMpc, n)
-    sb = SkewerBundle(np.stack([x, 0 * x, 0 * x], -1)[None], a0=a_obs, x0=0.0, ICs_defined_at_index=0,
-                      ICs_at_emission_or_absorption="absorption", cosmologies=cosmology)
-    return x, np.asarray(sb.scale_factors[0, 0])
-
-
-PERIODIC_DEMO_PIECES = (            # s [cMpc], length [cMpc], log10 N [cm^-2], T [K], u [km/s, away from the observer]
-    (3.0, 0.3, 13.8, 1.5e4, 40.0),
-    (8.0, 0.4, 14.2, 2.0e4, -60.0),
-    (12.5, 0.3, 13.6, 1.0e4, 20.0),
-    (19.2, 0.3, 14.0, 2.0e4, 120.0),     # effect (i): its line centre falls beyond the period
-    (19.6, 0.2, 19.3, 1.0e4, 0.0),       # effect (ii): a damped absorber at the edge, at rest
-)
-
-
-def periodic_pieces_demo(L_cMpc: float = 20.0, a_obs: float = 0.25, pieces: Sequence = PERIODIC_DEMO_PIECES,
-                         line_id: str = "HI-LyA", dv_kms: float = 1.0, n_images: int = 200) -> dict:
-    """A few pieces along a box of side L (observer at s = 0, a(0) = a_obs), each with its own colour in the figure.
-
-    The spectrum is computed on one period [0, P), P = c ln(a(0) / a(L)) (the velocity span of the path), with
-    ``core.compute_optical_depth(..., per_piece=True)``: ``velocity_period=False`` (no wrap) and ``True`` (each detuning
-    replaced by its nearest image modulo P). Also: every piece's whole profile on an extended axis (where its
-    absorption is before any wrap), and for the damped piece the exact periodic sum over |n| <= ``n_images`` images
-    against the nearest image (the limitation of keeping one image).
-    """
-    lb = LineBundle([line_id], ref_line_id=line_id)
-    xg, ag = scale_factor_of_x(L_cMpc + 1.0, a_obs)
-    a_of = lambda x: np.exp(np.interp(np.asarray(x, dtype=float), xg, np.log(ag)))
-    P = float(phys.c_kms * np.log(a_obs / a_of(L_cMpc)))
-    s, ell, logN, T, u = (np.array([p[i] for p in pieces], dtype=float) for i in range(5))
-    a = a_of(s)
-    n_com = 10 ** logN / (ell * phys.Mpc_to_m * 1e2) * a ** 2           # sum_p n a^-2 l = N (physical column)
-    pc = toy_pieces(lb, a_obs, a, ell, T, u, n_com, P)
-    nb = int(round(P / dv_kms))
-    v = (np.arange(nb) + 0.5) * (P / nb)
-    tau = {k: np.asarray(compute_optical_depth(pc, v, lb, velocity_period=k, per_piece=True, resolution_tolerance=None))[0, 0]
-           for k in (False, True)}
-    v_ext = np.arange(-0.35 * P, 1.35 * P, P / nb)
-    tau_ext = np.asarray(compute_optical_depth(pc, v_ext, lb, per_piece=True, resolution_tolerance=None))[0, 0]
-    v_H = phys.c_kms * np.log(a_obs / a)
-    beta = -u / phys.c_kms
-    v_c = v_H + 0.5 * phys.c_kms * (np.log1p(-beta) - np.log1p(beta))
-    # the exact periodic sum of the damped piece: sum_n tau_1(v + n P), against the nearest image
-    j = int(np.argmax(logN))
-    one = toy_pieces(lb, a_obs, a[j:j + 1], ell[j:j + 1], T[j:j + 1], u[j:j + 1], n_com[j:j + 1], P)
-    exact = sum(np.asarray(compute_optical_depth(one, v + n * P, lb, resolution_tolerance=None))[0, 0]
-                for n in range(-n_images, n_images + 1))
-    return dict(v=v, P=P, L=L_cMpc, s=s, length=ell, logN=logN, T=T, u=u, v_H=v_H, v_c=v_c, tau_nowrap=tau[False],
-                tau_wrap=tau[True], v_ext=v_ext, tau_ext=tau_ext, strong=j, tau_strong_exact=exact,
-                tau_strong_nearest=tau[True][j], v_of_s=lambda x: phys.c_kms * np.log(a_obs / a_of(x)))
 
 
 # --------------------------------------------------------------------------- expectations for the GRF study of notebook 08

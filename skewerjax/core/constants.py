@@ -19,6 +19,7 @@ class PhysicalConstants:
 
     Gpc_to_m: float = 3.085678e25               # [m / Gpc]
     Mpc_to_m: float = 3.085678e22               # [m / Mpc]
+    Mpc_to_cm: float = 3.085678e24              # [cm / Mpc] (the Arepo / fake_spectra value)
     Gyr_to_s: float = 3.1536e16                 # [s / Gyr]
     g_to_amu: float = 1 / 1.66053906660e-24     # [amu / g]
 

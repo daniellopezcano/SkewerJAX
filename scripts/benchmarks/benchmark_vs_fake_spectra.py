@@ -4,28 +4,34 @@ skewers (Lya and Si III 1206), one process per configuration. The logic is ``ske
 
     python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick [--results DIR] [--cap 1800] [--list]
 
-Snapshots are read from ``$SKEWERJAX_DATA`` (default ``/home/STORAGE``). Sets: ``quick`` (TNG50-4: skewer count 1-64 on CPU and GPU, float32, thread counts), ``skewers`` (TNG50-4, 256 skewers),
+Snapshots are read from ``skewerjax.utils.paths.DATA_DIR`` (``$SKEWERJAX_DATA``, default ``/home/STORAGE``). Sets: ``quick`` (TNG50-4: skewer count 1-64 on CPU and GPU, float32, thread counts), ``skewers`` (TNG50-4, 256 skewers),
 ``resolution`` (16 skewers in TNG50-3 and TNG50-2). Results that exist are skipped, so an interrupted run resumes.
 
 Raw results (one ``.json`` record and one ``.npz`` of spectra per configuration, ~15 MB for all sets) go to ``RESULTS``:
-``$SKEWERJAX_BENCHMARK_RAW``, by default ``claude_agents/assets/benchmarks`` (outside git). The ``.json`` records that
-notebook 09 reads are copied to ``notebooks/benchmark_records/suite``; rerun this script to rebuild the raw files.
+``skewerjax.utils.paths.BENCHMARK_RAW_DIR`` (``$SKEWERJAX_BENCHMARK_RAW``, default ``benchmark_results/raw``,
+git-ignored); rerun this script to rebuild them. Notebook 09 reads copies of the ``.json`` records in
+``BENCHMARK_RECORDS_DIR / "suite"`` (``notebooks/benchmark_records/suite``).
 """
 import argparse
 import importlib.util
-import os
 import sys
 from pathlib import Path
 
-# the module alone (NumPy only), not the skewerjax package: this launcher process does not start JAX
-_f = Path(__file__).resolve().parents[2] / "skewerjax/comparison/benchmark.py"
-_spec = importlib.util.spec_from_file_location("skewerjax_benchmark", _f)
-B = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(B)
-make_config, run_suite, config_id = B.make_config, B.run_suite, B.config_id
 
-STORAGE, SNAP = Path(os.environ.get("SKEWERJAX_DATA", "/home/STORAGE")), 25      # folder with TNG50-4/, TNG50-3/, TNG50-2/
-RESULTS = Path(os.environ.get("SKEWERJAX_BENCHMARK_RAW", Path(__file__).resolve().parents[2] / "claude_agents/assets/benchmarks"))
+def _module(rel: str, name: str):
+    """One module of the package alone (NumPy only), not the skewerjax package: this launcher does not start JAX."""
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parents[2] / rel)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+B = _module("skewerjax/comparison/benchmark.py", "skewerjax_benchmark")
+make_config, run_suite, config_id = B.make_config, B.run_suite, B.config_id
+PATHS = _module("skewerjax/utils/paths.py", "skewerjax_paths")
+
+STORAGE, SNAP = PATHS.DATA_DIR, 25                    # folder with TNG50-4/, TNG50-3/, TNG50-2/
+RESULTS = PATHS.BENCHMARK_RAW_DIR
 
 
 def configs(name: str) -> list:

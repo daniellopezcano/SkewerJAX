@@ -150,8 +150,9 @@ Every notebook opens with the dependency graph highlighting the ingredients it u
 ```bash
 python scripts/validation/run_all.py --quick --skip tng,fake    # toy-input checks (~2 min)
 python scripts/validation/run_all.py                            # every check, incl. TNG50-4 and live fake_spectra
-pytest                                                          # tests/ (CPU, ~2 min); TNG50-4 tests skip without the data; SKEWERJAX_SLOW=1 adds the TNG scripts
-python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick --results benchmark_results
+pytest                                                          # tests/ (CPU, ~3 min); TNG50-4 tests skip without the data; SKEWERJAX_SLOW=1 adds the TNG scripts
+python scripts/dev/run_tests.py [test_module ...]               # the same suite without pytest
+python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick     # raw results: benchmark_results/raw (utils.paths)
 ```
 
 The validation scripts compare against closed forms (static and expanding media, Voigt limits, cosmological a(x)),
@@ -197,13 +198,15 @@ skewerjax/
                    SimulationSkewers, maps)
     cloudy_tables/ CLOUDY ionisation tables (git submodule)
   comparison/      fake_spectra emulation, matched options and effect chain, fake_spectra driver and source, benchmark
-  utils/plotting.py  shared style, dependency graph (plot_dag), figure helpers
+  utils/           plotting.py (shared style, dependency graph plot_dag, figure helpers), paths.py (data and
+                   benchmark folders outside the repository: SKEWERJAX_DATA, ...), tutorial.py (GRF expectations)
 notebooks/         00-09 tutorials (delivered with outputs cleared), benchmark_records/ (saved benchmark records read by 09)
 scripts/
   validation/      check_*.py and run_all.py
-  benchmarks/      benchmark_vs_fake_spectra.py
+  benchmarks/      benchmark_vs_fake_spectra.py, single_cpu_modes.py (raw outputs: benchmark_results/raw, git-ignored)
+  dev/             run_tests.py (the suite without pytest), check_markdown_math.py (the notebooks' markdown math)
   verify_install.py
-tests/             pytest suite (CPU, toy inputs)
+tests/             pytest suite (CPU, toy inputs; data/: reference arrays of the regression test)
 docs/              installation.md, usage.md
 ```
 

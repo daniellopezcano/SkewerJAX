@@ -33,7 +33,6 @@ from skewerjax.core import absorbers as ab_
 from skewerjax.core import deposition as dep
 from skewerjax.core.cells import Cells
 from skewerjax.core.constants import phys
-from skewerjax.core.cosmology import Cosmology
 from skewerjax.core.lines import LineBundle
 from skewerjax.core.skewers import axis_aligned_skewer_points, path_geometry
 from skewerjax.simulations import gas_physics as gp
@@ -108,6 +107,7 @@ def h5_write(group, d: dict):
 
 
 def h5_read(group) -> dict:
+    """The datasets of an HDF5 group as a dict (byte strings decoded to str); the inverse of ``h5_write``."""
     out = {}
     for k in group:
         v = group[k][()]
@@ -165,10 +165,7 @@ class SimulationSkewers:
         self.s = np.asarray(g["s"])
         self.line_elements = np.asarray(g["line_elements"])
         self.tangents = np.asarray(g["tangents"])
-        if cosmology is None:
-            H = self.header
-            cosmology = Cosmology(100 * H.h * 1e6 * phys.Gyr_to_s / phys.Gpc_to_m, 0.0, H.omega_m, 0.0, H.omega_l)
-        self.cosmology = cosmology
+        self.cosmology = self.header.cosmology() if cosmology is None else cosmology
         self.name, self.cache = name, cache
         self.scale_factors = None if scale_factors is None else np.asarray(scale_factors, dtype=np.float64)
         if self.scale_factors is not None and self.scale_factors.shape != self.points.shape[:2]:
@@ -335,7 +332,7 @@ class SimulationSkewers:
         n = col / np.maximum(self.line_elements, 1e-300)
         a = self.header.a
         return dict(n=n, n_com=n * a ** 3, T=T, velocity=vel, v_los=np.sum(vel * self.tangents, -1),
-                    column=col * ab_.MPC_CM * a, line_elements=self.line_elements)
+                    column=col * phys.Mpc_to_cm * a, line_elements=self.line_elements)
 
     def optical_depth(self, line_bundle, velocities_kms=None, ext: ExtractionOptions = ExtractionOptions(),
                       integ: IntegrationOptions = IntegrationOptions(), check: Optional[float] = 0.25, *,

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from skewerjax.utils.paths import snapshot_dir
+
 VALIDATION = Path(__file__).resolve().parents[1] / "scripts" / "validation"
 FAST = ["check_cosmology.py", "check_voigt.py", "check_line_frames.py", "check_optical_depth_analytic.py",
         "check_summary_statistics.py", "check_jax.py"]
@@ -24,7 +26,7 @@ def test_validation_script_quick(script):
     run_check(script)
 
 
-@pytest.mark.skipif(os.environ.get("SKEWERJAX_SLOW") != "1" or not (Path(os.environ.get("SKEWERJAX_DATA", "/home/STORAGE")) / "TNG50-4").exists(),
+@pytest.mark.skipif(os.environ.get("SKEWERJAX_SLOW") != "1" or not snapshot_dir("TNG50-4").exists(),
                     reason="needs TNG50-4 (and fake_spectra); set SKEWERJAX_SLOW=1")
 @pytest.mark.parametrize("script", SLOW)
 def test_validation_script_simulation(script):

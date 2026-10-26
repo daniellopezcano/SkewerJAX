@@ -87,7 +87,6 @@ C.check(f"GRF 3D ({n3}^3): binned P3D(|k|) = input (chi2 / dof)", np.mean(p ** 2
 
 if C.outdir is not None:
     figure_backend()
-    import matplotlib.pyplot as plt
     from skewerjax.utils.plotting import plot_orders_superimposed, plot_pk_recovery
     fig, _ = plot_pk_recovery(st_g.bin_p1d(edges), st_g.bin_p1d(edges, Pk=grf.power(st_g.k))[0], power=grf.power,
                               label=f"GRF, {n_s_} skewers", k_label="$k$", P_label="$P(k)$")

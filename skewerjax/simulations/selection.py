@@ -10,6 +10,8 @@ files.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 from scipy.spatial import cKDTree
 
@@ -18,6 +20,48 @@ from skewerjax.core.selection import (_nearest_distance_cpu, _nearest_distance_j
 from skewerjax.simulations.gas_cells import GasCells
 
 GEOMETRY_DATASETS = ("Coordinates", "Masses", "Density")
+PREFILTER_GRID = 64                       # cells per box side of the coarse occupancy grid of the paths
+
+
+class _PathOccupancy:
+    """The coarse periodic grid cells (``n`` per side, width h = box / n) that hold a path point, dilated by k cells
+    (Chebyshev, periodic) on demand. A cell at distance <= r from a path point lies within k = floor(r / h) + 2 grid
+    cells of it on every axis (+1 for the floor, +1 for rounding in x / h), so ``candidates(pos, r_max)`` keeps every
+    cell that can be within r_max of a path: a conservative prefilter of the k-d tree query."""
+
+    def __init__(self, pts: np.ndarray, box: float, n: int = PREFILTER_GRID):
+        self.n, self.h = int(n), float(box) / int(n)
+        occ = np.zeros((self.n,) * 3, dtype=bool)
+        i = np.floor(pts / self.h).astype(np.int64) % self.n
+        occ[i[:, 0], i[:, 1], i[:, 2]] = True
+        self._dilated = {0: occ}
+
+    def grid(self, k: int) -> Optional[np.ndarray]:
+        """The occupancy dilated by k cells, or None when it covers the whole box."""
+        if 2 * k + 1 >= self.n:
+            return None
+        if k not in self._dilated:
+            prev = self.grid(k - 1)
+            if prev is None:
+                return None
+            out = prev.copy()
+            for ax in range(3):
+                out = out | np.roll(out, 1, ax) | np.roll(out, -1, ax)
+            self._dilated[k] = out
+        return self._dilated[k]
+
+    def candidates(self, pos: np.ndarray, r_max: float) -> Optional[np.ndarray]:
+        """Mask of the positions (N, 3) in [0, box) that can be within ``r_max`` of a path; None: all of them."""
+        g = self.grid(int(np.floor(r_max / self.h)) + 2)
+        if g is None:
+            return None
+        flat = np.zeros(pos.shape[0], dtype=np.int32)
+        for ax in range(3):                                             # flat index of the grid cell, axis by axis
+            i = (pos[:, ax] * (1.0 / self.h)).astype(np.int32)         # positions >= 0: truncation is the floor
+            i %= self.n
+            flat *= self.n
+            flat += i
+        return g.ravel().take(flat)
 
 
 def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", max_rows: int = 4_000_000, workers: int = -1,
@@ -48,6 +92,7 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", max_rows: i
     pts = wrap_positions(np.asarray(paths, dtype=np.float64).reshape(-1, 3), box)
     tree = cKDTree(pts, boxsize=box)
     backend = resolve_backend(backend)
+    occ = _PathOccupancy(pts, box)
     parts = []
     n_sel = 0
     for fi, r0, base in reader.iter_blocks(GEOMETRY_DATASETS, max_rows=max_rows):
@@ -56,8 +101,8 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", max_rows: i
         rad = selection_radius(size, mode, ds)
         if backend == "jztree":
             d = _nearest_distance_jztree(pts, pos, box, tree, rad)
-        else:
-            d = _nearest_distance_cpu(tree, pos, rad, workers)
+        else:                                                # only the cells near the paths reach the tree
+            d = _nearest_distance_cpu(tree, pos, rad, workers, candidates=occ.candidates(pos, float(rad.max())))
         sel = np.nonzero(d <= rad)[0]
         if sel.size:
             raw = {k: base[k][sel] for k in GEOMETRY_DATASETS}

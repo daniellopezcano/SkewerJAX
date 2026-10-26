@@ -40,7 +40,7 @@ from jax.typing import ArrayLike
 
 from skewerjax.core.constants import phys
 from skewerjax.core.line_profiles import voigt_line_profiles, voigt_width_kms, voigt_widths_GHz
-from skewerjax.core.spectral import frequency_offset_GHz, line_centre_velocity_kms
+from skewerjax.core.spectral import frequency_offset_GHz
 
 
 # --------------------------------------------------------------------------- the optical depth of one skewer

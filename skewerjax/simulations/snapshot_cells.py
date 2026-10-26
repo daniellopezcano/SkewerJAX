@@ -7,7 +7,8 @@ whose generating points lie in a periodic sub-box (``select_cells_in_region``), 
 (``selection.select_cells_near_paths``) belongs to the deposition.
 
 Cost (TNG50-4, 19.3 M cells): one pass over the positions of the whole snapshot (24 bytes per cell, streamed in blocks
-of ``max_rows``), then the other datasets of the kept rows only; memory is one block plus the kept cells.
+of ``max_rows``; the region test runs axis by axis on the cells still inside), then the other datasets of the kept rows
+only; memory is one block plus the kept cells.
 """
 from __future__ import annotations
 
@@ -47,9 +48,13 @@ def select_cells_in_region(reader, lo, hi, *, margin: float = 0.0, max_rows: int
     origin, width = _region(lo, hi, margin, box)
     parts, n_sel = [], 0
     rest = [k for k in GAS_DATASETS if k != "Coordinates"]
+    order = np.argsort(width, kind="stable")                         # the narrowest axis first: most cells leave at once
     for fi, r0, base in reader.iter_blocks(("Coordinates",), max_rows=max_rows):
-        x = reader.positions_cMpc(base["Coordinates"])
-        sel = np.nonzero(np.all(np.mod(x - origin, box) < width, axis=1))[0]
+        c = base["Coordinates"]
+        sel = np.arange(c.shape[0])
+        for ax in order:                                              # the same test per axis, on the survivors only
+            x = reader.positions_cMpc(c[sel, ax])
+            sel = sel[np.mod(x - origin[ax], box) < width[ax]]
         if sel.size:
             lo_r, hi_r = r0 + int(sel[0]), r0 + int(sel[-1]) + 1          # one contiguous slab, indexed in memory
             slab = reader.read_rows(fi, rest, start=lo_r, stop=hi_r)

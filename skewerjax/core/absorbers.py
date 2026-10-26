@@ -40,8 +40,6 @@ from skewerjax.core.optical_depth import Pieces, compute_optical_depth
 from skewerjax.core.selection import select_cells
 from skewerjax.core.skewers import path_geometry
 
-MPC_CM = 3.085678e24
-
 
 # --------------------------------------------------------------------------- frames
 @dataclass
@@ -55,6 +53,7 @@ class SnapshotFrame:
     path_length: np.ndarray
 
     def scale_factors(self, skewer: int, s):
+        """The scale factor at path lengths ``s`` [cMpc]: a_snap everywhere."""
         return np.full(np.shape(s), self.a_snap)
 
     def velocity(self, skewer: int, s, v_los):
@@ -67,6 +66,7 @@ class SnapshotFrame:
 
     @property
     def a_dagger(self):
+        """The scale factor of the spectral axis: a_snap."""
         return self.a_snap
 
     def hubble_rate(self, skewer: int, s):
@@ -95,6 +95,7 @@ class ExactFrame:
     a_dagger_per_skewer: Optional[np.ndarray] = None
 
     def scale_factors(self, skewer: int, s):
+        """a(s) at path lengths ``s`` [cMpc] of skewer ``skewer``, interpolated in ln a."""
         lna = np.interp(np.asarray(s), self.s_grid[skewer], np.log(self.a_grid[skewer]))
         return np.exp(lna)
 
@@ -106,9 +107,11 @@ class ExactFrame:
 
     @property
     def a_dagger(self):
+        """The scale factor a_dagger of the spectral axis (default: a at the first point)."""
         return float(self.a_grid[0, 0]) if self.a_dagger_value is None else float(self.a_dagger_value)
 
     def hubble_rate(self, skewer: int, s):
+        """|dv_H/ds| = c |d ln a / ds| of the frame [km/s per cMpc]."""
         lna = np.log(self.a_grid[skewer])
         dlna = np.gradient(lna, self.s_grid[skewer])
         return phys.c_kms * np.abs(np.interp(np.asarray(s), self.s_grid[skewer], dlna))
@@ -170,6 +173,7 @@ class Absorbers:
 
     @property
     def n_skewers(self) -> int:
+        """Number of skewers N_sk."""
         return self.s.shape[0]
 
     def column_cm2(self, a: Optional[float] = None) -> np.ndarray:
@@ -178,9 +182,10 @@ class Absorbers:
         a = self.a_data if a is None else a
         if a is None:
             raise ValueError("column_cm2 needs a scale factor (these absorbers have no a_data).")
-        return self.n * self.length * MPC_CM / a ** 2
+        return self.n * self.length * phys.Mpc_to_cm / a ** 2
 
     def with_values(self, **kw) -> "Absorbers":
+        """A copy with some per-absorber arrays replaced (e.g. ``n=...``)."""
         d = {k: getattr(self, k) for k in ("s", "n", "length", "T", "v_los", "cell", "point", "turbulence", "collisional")}
         d.update(kw)
         return Absorbers(**d, a_data=self.a_data, species=self.species, mass_amu=self.mass_amu, meta=dict(self.meta))
@@ -448,7 +453,7 @@ def column_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarra
         live = ab.n[k] > 0
         lo = ab.s[k][live] - 0.5 * ab.length[k][live]
         hi = lo + ab.length[k][live]
-        dens = ab.n[k][live] * MPC_CM / ab.a_data ** 2
+        dens = ab.n[k][live] * phys.Mpc_to_cm / ab.a_data ** 2
         j0, j1 = np.floor(lo / dz).astype(np.int64), np.floor(hi / dz).astype(np.int64)
         n = j1 - j0 + 1
         cell = np.repeat(np.arange(lo.size), n)
@@ -463,16 +468,15 @@ def column_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarra
 DEPOSITIONS = ("voronoi", "tophat", "voronoi_crossings")
 
 
-def deposit(cells, points, *, deposition: str = "voronoi", select: bool = True, selection_backend: str = "cpu",
-            grid_fast_path: bool = True):
+def deposit(cells, points, *, deposition: str = "voronoi", selection_backend: str = "cpu", grid_fast_path: bool = True):
     """Selection and deposition of ``cells`` along ``points`` (N_sk, N, 3) [cMpc]: (the cells the indices refer to,
     ``SegmentComponents``).
 
     deposition : "voronoi" (default: the exact pieces of the Voronoi cells in every dual segment; for a grid of cells,
         ``grid_segments``, unless ``grid_fast_path=False``), "tophat" (spheres of radius V^(1/3), the fake_spectra
         option) or "voronoi_crossings" (the Voronoi pieces, joined per cell crossing by ``cell_pieces``).
-    select : first keep the cells within reach of the points (``core.selection.select_cells``; not needed by the grid
-        fast path).
+    selection_backend : backend of ``core.selection.select_cells``, which first keeps the cells within reach of the
+        points (skipped by the grid fast path).
     """
     if deposition not in DEPOSITIONS:
         raise ValueError(f"deposition must be one of {DEPOSITIONS}, got {deposition!r}.")
@@ -480,7 +484,7 @@ def deposit(cells, points, *, deposition: str = "voronoi", select: bool = True, 
     if deposition != "tophat" and grid_fast_path and cells.grid is not None and cells.box is not None:
         return cells, dep.grid_segments(pts, cells.grid, cells.box)
     mode = "tophat" if deposition == "tophat" else "voronoi"
-    use = select_cells(cells, pts, mode=mode, backend=selection_backend) if select else cells
+    use = select_cells(cells, pts, mode=mode, backend=selection_backend)
     if deposition == "tophat":
         return use, dep.tophat_segments(pts, use.positions, use.size_cMpc, use.box)
     return use, dep.voronoi_segments(pts, use.positions, use.box, gas_size=use.size_cMpc)
@@ -501,7 +505,7 @@ def bundle_frame(skewer_bundle, *, a_dagger=None, ii_cosmology: int = 0) -> Exac
 
 
 def cell_pieces(cells, line_bundle, *, skewer_bundle=None, points=None, frame=None, a_dagger=None, ii_cosmology: int = 0,
-                deposition: str = "voronoi", segments=None, select: bool = True, selection_backend: str = "cpu",
+                deposition: str = "voronoi", segments=None, selection_backend: str = "cpu",
                 grid_fast_path: bool = True, crossing_tolerance: Optional[float] = 0.25, T_scale: float = 1.0,
                 n_scale: float = 1.0, density_scaling: str = "comoving", a_data: Optional[float] = None, skewers=None,
                 return_parts: bool = False):
@@ -522,7 +526,7 @@ def cell_pieces(cells, line_bundle, *, skewer_bundle=None, points=None, frame=No
     cells : ``core.Cells`` holding every species of ``line_bundle``.
     skewer_bundle : the paths and their a(x) (``bundle_frame``: a_dagger default its ``a0``); or give ``points``
         (N_sk, N, 3) [cMpc] and a ``frame`` (``ExactFrame`` / ``SnapshotFrame``) instead.
-    deposition, select, selection_backend, grid_fast_path : see ``deposit``; segments : a ``SegmentComponents`` already
+    deposition, selection_backend, grid_fast_path : see ``deposit``; segments : a ``SegmentComponents`` already
         computed for ``points`` (its cell indices refer to ``cells``), used instead.
     T_scale, n_scale, density_scaling, a_data : see ``absorber_pieces`` (matched-mode knobs; defaults change nothing).
     skewers : optional indices of the skewers to return.
@@ -544,7 +548,7 @@ def cell_pieces(cells, line_bundle, *, skewer_bundle=None, points=None, frame=No
     if missing:
         raise ValueError(f"the cells hold no {missing} (they hold {cells.species_keys}).")
     if segments is None:
-        use, seg = deposit(cells, pts, deposition="voronoi" if deposition == "voronoi_crossings" else deposition, select=select,
+        use, seg = deposit(cells, pts, deposition="voronoi" if deposition == "voronoi_crossings" else deposition,
                            selection_backend=selection_backend, grid_fast_path=grid_fast_path)
     else:
         use, seg = cells, segments

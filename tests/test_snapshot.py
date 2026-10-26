@@ -4,9 +4,7 @@ missing): the reader (header, units, the streamed blocks), the selection streame
 (``select_cells_in_region``): the same cells, and complete; and the gas cells handed to the core
 (``SimulationSkewers.to_cells`` = ``gas_to_cells``). The whole-snapshot checks (selection against a brute-force search
 over 19.3 M cells, deposition, columns): ``scripts/validation/check_tng_fields.py`` (``SKEWERJAX_SLOW=1``)."""
-import os
 from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -15,8 +13,9 @@ from scipy.spatial import cKDTree
 from skewerjax.core import select_cells
 from skewerjax.simulations import (ArepoHDF5Reader, SimulationSkewers, gas_to_cells, select_cells_in_region,
                                    select_cells_near_paths)
+from skewerjax.utils.paths import snapshot_dir
 
-TNG = Path(os.environ.get("SKEWERJAX_DATA", "/home/STORAGE")) / "TNG50-4"
+TNG = snapshot_dir("TNG50-4")
 needs_tng = pytest.mark.skipif(not (TNG / "snapdir_025").is_dir(), reason=f"needs TNG50-4 snapshot 25 in {TNG}")
 
 

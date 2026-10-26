@@ -3,6 +3,52 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — cleanup, optimisation and reorganisation checkpoint (2026-10-26)
+
+No result changes: every notebook's printed numbers and arrays are identical to the run before the checkpoint, every
+figure is pixel-identical, and `tests/test_regression.py` compares the route with arrays of the pre-checkpoint code.
+
+### Removed
+- `utils.plotting`: `plot_spectra`, `zoom_inset` (imported by every notebook, never used), `plot_skewer_profiles`,
+  `recovery_summary`, `plot_flux_vs_analytic` (unused), `plot_line_frames`, `plot_voronoi_discretisations`,
+  `plot_paths_3d` + `box_edges_3d`, `plot_periodic_pieces` (only their smoke tests used them; superseded by
+  `plot_frames_axes`, `plot_gas_cells`, `plot_deposition_steps`).
+- `utils.tutorial`: `toy_pieces`, `scale_factor_of_x`, `PERIODIC_DEMO_PIECES`, `periodic_pieces_demo` (the two
+  periodic effects are tested by `tests/test_pieces.py::test_the_two_periodic_effects`).
+- `core.deposit(select=)`, `core.cell_pieces(select=)` (never passed; the selection always runs except on the grid fast
+  path). Dead imports in `core/optical_depth.py` and two scripts.
+- `tests/test_tutorial.py` (merged into `test_toy_fields.py`).
+
+### Changed
+- One wrap helper: `core.selection.wrap_positions(x, box)` accepts `box=None` and replaces `deposition._wrap`.
+- One Mpc: `phys.Mpc_to_cm` (3.085678e24, the same literal) replaces the `MPC_CM` constants of `core.absorbers` and
+  `simulations.readers`.
+- `SnapshotHeader.cosmology()`: the snapshot's flat ΛCDM as a `core.Cosmology`, used by `SimulationSkewers` and
+  notebooks 05, 07 instead of the repeated expression.
+- `utils.plotting`: `plot_deposition_steps` and `plot_velocity_ring` share `_skewer_cells` (labels S1.., E1.., X1..,
+  colours, line centres; replaces `_ring_cells`) and `_label_tracked`; `_cell_faces` (cubes or Voronoi polyhedra) is
+  shared by `plot_gas_cells` and `plot_deposition_steps`; `add_panel_letters(labels=, box=)` draws row/column letters.
+- Notebooks 00, 00 (step by step) and 04 keep only short calls; their inline figure code moved into the package.
+- Paths outside the repository come from `skewerjax.utils.paths` (`DATA_DIR` = `$SKEWERJAX_DATA`,
+  `BENCHMARK_RAW_DIR` = `$SKEWERJAX_BENCHMARK_RAW`, default `benchmark_results/raw`, `BENCHMARK_RECORDS_DIR`):
+  notebooks 00 (step by step), 05, 07, 09, the validation and benchmark scripts and the tests.
+- The test runner without pytest and the markdown-math checker moved to `scripts/dev/`.
+
+### Added
+- `utils.plotting`: `plot_toy_box` (00), `plot_slab_and_skewer`, `plot_cell_crossings`, `plot_voigt_of_piece`,
+  `plot_tau_stretches`, `plot_wrap_tiles`, `plot_overflux_p1d_xi` (00, step by step), `plot_grf_draws` (04),
+  `shade_outside_window`.
+- Tests: `test_regression.py` (+ `tests/data/regression_toy.npz`: the route and every optional mode on toy inputs),
+  `test_streamed_selection.py` (the streamed selections on a synthetic HDF5 snapshot against brute force),
+  `test_voigt_harris.py` (moved from the agent workspace), smoke tests of the new figure functions.
+
+### Performance (same results)
+- `select_cells_near_paths`: a coarse periodic occupancy grid of the paths skips the k-d tree for the cells that cannot
+  reach them (conservative: identical selections); exact per-bin bounds; threads sized to each query.
+- `select_cells_in_region` (`snapshot_cells`): the region test runs axis by axis on the surviving cells.
+- `core.select_cells`: 5 radius-bin edges (instead of 33) below 10⁶ cells and threads sized to each query (thread start-up dominated).
+- `_voronoi_faces`: the neighbourhood is built with array operations.
+
 ## Unreleased — notebook 07: the wrap on a ring, Si III visible (2026-10-26, session 20261026_0040)
 
 ### Added

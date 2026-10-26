@@ -36,8 +36,9 @@ from typing import Iterator, Optional, Sequence
 import h5py
 import numpy as np
 
+from skewerjax.core.constants import phys
+
 KPC_CM = 3.085678e21                     # 1 kpc [cm] (Arepo / fake_spectra value)
-MPC_CM = 3.085678e24                     # 1 Mpc [cm]
 GAS_GROUP = "PartType0"                  # the HDF5 group of the gas cells
 GAS_DATASETS = ("Coordinates", "Velocities", "Masses", "Density", "InternalEnergy",
                 "ElectronAbundance", "NeutralHydrogenAbundance", "GFM_Metals", "StarFormationRate")
@@ -66,12 +67,12 @@ class SnapshotHeader:
     @property
     def box_cMpc(self) -> float:
         """Box side [comoving Mpc, no h]."""
-        return self.box_code * self.unit_length_cm / self.h / MPC_CM
+        return self.box_code * self.unit_length_cm / self.h / phys.Mpc_to_cm
 
     @property
     def code_length_cMpc(self) -> float:
         """One code length in comoving Mpc (no h)."""
-        return self.unit_length_cm / self.h / MPC_CM
+        return self.unit_length_cm / self.h / phys.Mpc_to_cm
 
     @property
     def hubble_kms_mpc(self) -> float:
@@ -92,6 +93,12 @@ class SnapshotHeader:
     def density_cgs(self) -> float:
         """Code density -> physical g/cm^3 (h^2 / a^3 included)."""
         return self.unit_mass_g / self.unit_length_cm ** 3 * self.h ** 2 / self.a ** 3
+
+    def cosmology(self):
+        """The simulation's flat LCDM without radiation as a ``core.Cosmology`` (H0 = 100 h km/s/Mpc in 1/Gyr)."""
+        from skewerjax.core.cosmology import Cosmology
+        return Cosmology(H0=100 * self.h * 1e6 * phys.Gyr_to_s / phys.Gpc_to_m, Omega_r_0=0.0, Omega_m_0=self.omega_m,
+                         Omega_k_0=0.0, Omega_lambda_0=self.omega_l)
 
     def pixel_grid(self, res_kms: float) -> tuple[int, float]:
         """fake_spectra's periodic pixel grid: nbins = int(v_max / res), dv = v_max / nbins [km/s]

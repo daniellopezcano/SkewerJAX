@@ -98,14 +98,20 @@ Extras can be combined, e.g. `pip install -e ".[gpu,notebooks,comparison,dev]"`.
 ## 4. Simulation data
 
 SkewerJAX reads Arepo/TNG HDF5 snapshots with `ArepoHDF5Reader(base, snapnum)`, where `base` is the directory that
-contains `snapdir_XXX/`. Paths are always passed explicitly in code. The validation scripts, tests and the
-benchmark read their snapshots from one environment variable:
+contains `snapdir_XXX/`. Paths are always passed explicitly in code. The notebooks, validation scripts, tests and
+benchmarks take every path outside the repository from one module, `skewerjax.utils.paths`, each overridable by an
+environment variable:
 
 ```bash
-export SKEWERJAX_DATA=/path/to/folder/with/TNG50-4   # holds TNG50-4/ (and TNG50-3/, TNG50-2/ for the benchmark)
+export SKEWERJAX_DATA=/path/to/folder/with/TNG50-4   # DATA_DIR: holds TNG50-4/ (and TNG50-3/, TNG50-2/ for the benchmark)
+export SKEWERJAX_BENCHMARK_RAW=/path/to/raw          # BENCHMARK_RAW_DIR: raw benchmark outputs (~15 MB)
+export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the records notebook 09 reads
 ```
 
-It defaults to `/home/STORAGE`. The notebooks 00 (step by step), 05, 07 and 09 read `SKEWERJAX_DATA` with the same default.
+`DATA_DIR` defaults to `/home/STORAGE` (read only). The two benchmark folders default to `benchmark_results/raw` and
+`notebooks/benchmark_records` in the repository; both are git-ignored and rebuilt by
+`scripts/benchmarks/benchmark_vs_fake_spectra.py` (raw files) and `scripts/benchmarks/single_cpu_modes.py`; notebook 09
+reads copies of their `.json` records in `notebooks/benchmark_records/suite` and `notebooks/benchmark_records/single_cpu`.
 
 ## 5. Verify the installation
 
