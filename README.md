@@ -161,6 +161,11 @@ The validation scripts compare against closed forms (static and expanding media,
 check the recovery of input power spectra, the JAX transformations, and the field extraction from TNG50-4, and run
 fake_spectra itself.
 
+When a result looks wrong, `skewerjax.core.check_skewers(cells, bundle, lines)` runs independent checks of the pieces
+and of τ: coverage of the path, the column against a fine sampling of the cells, and the window integral.
+`return_info=True` on the entry points gives counts and timings per stage, and `skewerjax.core.enable_logging()`
+shows the package's log messages (see `docs/usage.md`, "Debugging and input checks").
+
 ## Benchmark
 
 The two codes run on identical skewers of TNG50 snapshot 25 (z = 3), computing Lyα and Si III λ1206 at 1 km/s

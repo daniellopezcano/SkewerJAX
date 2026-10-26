@@ -37,6 +37,7 @@ of times.
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from functools import partial
 from typing import Optional
@@ -46,7 +47,7 @@ import jax
 import jax.numpy as jnp
 from scipy.spatial import cKDTree
 
-from skewerjax.core.selection import wrap_positions
+from skewerjax.core.selection import VORONOI_FACTOR, wrap_positions
 from skewerjax.core.skewers import path_geometry
 
 TOPHAT_NORM = 3.0 / (4.0 * np.pi)          # density inside a sphere of radius V^(1/3), per n_cell
@@ -97,10 +98,10 @@ def _min_image(d, box):
 
 
 def _halves(points):
-    """Half-segments of every point: (A, B_back, B_fwd), each (P, 3), and the geometry dict."""
+    """Half-segments of every point: (A, B_back, B_fwd), each (P, 3) [cMpc]: the point and the midpoints around it."""
     g = path_geometry(jnp.asarray(points, dtype=jnp.float64))
     A = np.asarray(points, dtype=np.float64).reshape(-1, 3)
-    return A, np.asarray(g["mid_lo"]).reshape(-1, 3), np.asarray(g["mid_hi"]).reshape(-1, 3), g
+    return A, np.asarray(g["mid_lo"]).reshape(-1, 3), np.asarray(g["mid_hi"]).reshape(-1, 3)
 
 
 # --------------------------------------------------------------------------- Voronoi
@@ -147,14 +148,16 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
 
     Returns
     -------
-    SegmentComponents (weight 1); ``diagnostics`` holds ``n_sub`` and the sub-interval relative to
-    the smallest cell (and, for "jax", the candidate sizes used).
+    SegmentComponents (weight 1); ``diagnostics`` holds ``n_sub``, the sub-interval relative to
+    the smallest cell and, with ``gas_size`` ("numpy"), ``max_distance_over_size``, the largest distance from a
+    sub-point to its nearest generating point in units of that cell's size (a warning when it exceeds
+    ``VORONOI_FACTOR`` without a periodic box: the paths leave the gas); for "jax", the candidate sizes used.
     """
     if backend not in ("numpy", "jax"):
         raise ValueError(f"backend must be 'numpy' or 'jax', got {backend!r}.")
     pts = np.asarray(points, dtype=np.float64)
     n_sk, n_p = pts.shape[:2]
-    A, Bl, Bh, _ = _halves(pts)
+    A, Bl, Bh = _halves(pts)
     P = A.shape[0]
     gpos = wrap_positions(gas_positions, box)
     size = None if gas_size is None else np.asarray(gas_size, dtype=np.float64)
@@ -173,7 +176,8 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
     tree = cKDTree(gpos, boxsize=box) if box is not None else cKDTree(gpos)
     t = np.linspace(0.0, 1.0, S + 1)
     sub = np.stack([A[:, None, :] + t[None, :, None] * (B - A)[:, None, :] for B in (Bl, Bh)], axis=1)   # (P, 2, S+1, 3)
-    lab = tree.query(wrap_positions(sub.reshape(-1, 3), box), k=1, workers=-1)[1].reshape(P, 2, S + 1)
+    dist, lab = tree.query(wrap_positions(sub.reshape(-1, 3), box), k=1, workers=-1)
+    lab = lab.reshape(P, 2, S + 1)
     rows, labs, lens, moms = [], [], [], []
     t0, t1 = jnp.asarray(t[:-1]), jnp.asarray(t[1:])
     for h, (B, sign) in enumerate(((Bl, -1.0), (Bh, 1.0))):
@@ -190,6 +194,12 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
             lens.append(((hi - lo) * Lh).ravel())
             moms.append((sign * 0.5 * (hi ** 2 - lo ** 2) * Lh ** 2).ravel())
     diag = dict(n_sub=S, sub_over_min_cell=float(L_half.max() / S / size.min()) if size is not None else None)
+    if size is not None:                        # how far the path gets from the gas, in sizes of its nearest cell
+        diag["max_distance_over_size"] = float(np.max(dist / size[lab.reshape(-1)]))
+        if box is None and diag["max_distance_over_size"] > VORONOI_FACTOR:
+            warnings.warn(f"voronoi_segments: parts of the paths lie {diag['max_distance_over_size']:.1f} cell sizes from the nearest "
+                          f"generating point (more than {VORONOI_FACTOR}): the paths leave the (non-periodic) gas, and those "
+                          "stretches take the nearest cell's gas.", stacklevel=2)
     return _merge_pieces(rows, labs, lens, moms, P, len(gpos), (n_sk, n_p), diag)
 
 
@@ -236,7 +246,7 @@ def grid_segments(points, shape, box: float, *, chunk: int = 1_000_000) -> Segme
     """
     pts = np.asarray(points, dtype=np.float64)
     n_sk, n_p = pts.shape[:2]
-    A, Bl, Bh, _ = _halves(pts)
+    A, Bl, Bh = _halves(pts)
     P = A.shape[0]
     N = np.asarray(shape, dtype=np.int64)
     dx = float(box) / N.astype(np.float64)
@@ -288,7 +298,7 @@ def _voronoi_chunk(A, Bl, Bh, L_half, gpos, box, S: int, k_chunk: int):
 
     Returns (cell (C, 4S) int, length (C, 4S), moment (C, 4S), complete).
     """
-    mi = lambda d: d if box is None else d - box * jnp.round(d / box)
+    mi = lambda d: _min_image(d, box)
     c = jnp.mean(A, axis=0)
     neg, cand = jax.lax.top_k(-jnp.sum(mi(gpos - c) ** 2, axis=-1), k_chunk)
     cut = jnp.sqrt(-neg[-1])
@@ -407,7 +417,7 @@ def tophat_segments(points, gas_positions, gas_size, box: Optional[float], *, ch
     """
     pts = np.asarray(points, dtype=np.float64)
     n_sk, n_p = pts.shape[:2]
-    A, Bl, Bh, _ = _halves(pts)
+    A, Bl, Bh = _halves(pts)
     r = np.maximum(np.linalg.norm(Bl - A, axis=-1), np.linalg.norm(Bh - A, axis=-1))
     gpos, size = wrap_positions(gas_positions, box), np.asarray(gas_size, dtype=np.float64)
     idx = _tophat_pairs(A, r, gpos, size, box)

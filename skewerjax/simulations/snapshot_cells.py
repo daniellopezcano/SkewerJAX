@@ -17,7 +17,8 @@ import numpy as np
 from skewerjax.core.cells import Cells
 from skewerjax.simulations import gas_physics as gp
 from skewerjax.simulations.gas_cells import GasCells
-from skewerjax.simulations.snapshot_skewers import ExtractionOptions
+from skewerjax.simulations.selection import read_selected
+from skewerjax.simulations.snapshot_skewers import ExtractionOptions, ion_cell_fields
 
 
 def _region(lo, hi, margin: float, box: float):
@@ -56,10 +57,7 @@ def select_cells_in_region(reader, lo, hi, *, margin: float = 0.0, max_rows: int
             x = reader.positions_cMpc(c[sel, ax])
             sel = sel[np.mod(x - origin[ax], box) < width[ax]]
         if sel.size:
-            lo_r, hi_r = r0 + int(sel[0]), r0 + int(sel[-1]) + 1          # one contiguous slab, indexed in memory
-            slab = reader.read_rows(fi, rest, start=lo_r, stop=hi_r)
-            raw = {"Coordinates": base["Coordinates"][sel], **{k: v[r0 + sel - lo_r] for k, v in slab.items()}}
-            parts.append(reader.to_gas_cells(raw, ids=(np.int64(fi) << 40) | (r0 + sel).astype(np.int64)))
+            parts.append(read_selected(reader, fi, r0, sel, base, rest))
             n_sel += sel.size
     if n_sel == 0:
         raise RuntimeError("no gas cell in the region.")
@@ -83,9 +81,7 @@ def gas_to_cells(gas: GasCells, species, ext: ExtractionOptions = ExtractionOpti
             cloudy = gp.CloudyIonTable(1.0 / a - 1.0)
         P = gp.ion_properties(gas, ion, mass_unit=ext.mass_unit, T_constants=ext.T_constants, x_HI_model=ext.x_HI_model, cloudy=cloudy,
                               cloudy_density=ext.cloudy_density, cloudy_interpolation=ext.cloudy_interpolation)
-        per[ion.species] = {"number_density": np.asarray(P["n_ion"], dtype=np.float64) * a ** 3,
-                            "temperature": np.asarray(P["T"], dtype=np.float64),
-                            "velocity": np.asarray(gas.fields["velocity"], dtype=np.float64)}
+        per[ion.species] = ion_cell_fields(P["n_ion"], P["T"], gas.fields["velocity"], a)
     return Cells(np.asarray(gas.positions, dtype=np.float64), np.asarray(gas.volumes, dtype=np.float64), per, box=gas.box, ids=gas.ids)
 
 

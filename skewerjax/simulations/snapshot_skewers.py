@@ -96,6 +96,14 @@ def relevant_options(ext: ExtractionOptions, ion: gp.Ion) -> ExtractionOptions:
     return ext.replace(x_HI_model=d.x_HI_model)
 
 
+def ion_cell_fields(n_ion, T, velocity, a: float) -> dict:
+    """The per-species fields of ``core.Cells`` from the gas physics of a snapshot at scale factor ``a``:
+    ``number_density`` = n_ion a^3 [comoving cm^-3] (n_ion physical [cm^-3]), ``temperature`` [K] and ``velocity`` (N, 3)
+    [km/s, physical peculiar] (``SimulationSkewers.to_cells``, ``snapshot_cells.gas_to_cells``)."""
+    return {"number_density": np.asarray(n_ion, dtype=np.float64) * a ** 3, "temperature": np.asarray(T, dtype=np.float64),
+            "velocity": np.asarray(velocity, dtype=np.float64)}
+
+
 # --------------------------------------------------------------------------- HDF5 result cache
 def h5_write(group, d: dict):
     """Arrays and scalars as datasets of an HDF5 group (unicode stored as bytes, gzip above 4096)."""
@@ -253,8 +261,7 @@ class SimulationSkewers:
         per, ci = {}, None
         for ion in ions:
             ci = self.cell_inputs(ion, ext, override)
-            per[ion.species] = {"number_density": np.asarray(ci["n"], dtype=np.float64) * a ** 3,
-                                "temperature": np.asarray(ci["T"], dtype=np.float64), "velocity": np.asarray(ci["vel"], dtype=np.float64)}
+            per[ion.species] = ion_cell_fields(ci["n"], ci["T"], ci["vel"], a)
         vol = np.asarray(self.cells.volumes) if not (override and "size" in override) else np.asarray(ci["size"], dtype=np.float64) ** 3
         return Cells(np.asarray(ci["pos"], dtype=np.float64), vol, per, box=self.box, ids=self.cells.ids)
 

@@ -3,6 +3,33 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — revision checkpoint of notebooks 01–07: input checks, debugging tools, faster streamed selection (2026-10-26)
+
+No result changes: every array of the in-scope code bitwise identical to the previous commit (232 arrays, incl.
+TNG50-4), every printed number of the 13 notebooks identical.
+
+### Added
+- `core.validation` (internal): eager input checks with errors that name the field and its first bad entry, skipped
+  under tracing. Used by `Cells` (new `validate=True`), `SkewerBundle`, `Cosmology`, `LineBundle`, `select_cells`,
+  `cell_pieces` and `compute_optical_depth` (`check_pieces`, exported); a one-time warning when `jax_enable_x64` is off.
+- `core.diagnostics`: `check_skewers(cells, bundle, lines)` → `SkewerCheck` (coverage, column against a fine
+  nearest-generator sampling over all the cells with the missing cells listed, window integral on one period,
+  resolution); `enable_logging()`.
+- `return_info=True` on `select_cells`, `simulations.select_cells_near_paths`, `deposit`, `cell_pieces` and
+  `compute_optical_depth` (counts, lengths, columns, resolution, timings per stage, the window fraction).
+- Logging through `logging.getLogger("skewerjax.<module>")` (DEBUG; silent by default, `NullHandler`).
+- `voronoi_segments` diagnostic `max_distance_over_size`, with a warning when non-periodic paths leave the gas.
+- Tests: `test_robustness.py`, `test_diagnostics.py`, `test_regression_checkpoint.py` (+ `tests/data/regression_checkpoint*.npz`).
+
+### Changed
+- `select_cells_near_paths`: the coarse prefilter runs on the code coordinates (one more grid cell of dilation), and
+  only its survivors are converted to cMpc, sized and queried; the same cells, faster (see `STATE.md` §7).
+- `ArepoHDF5Reader.positions_cMpc` converts in place (one temporary fewer).
+- Merged duplicates: one absorber row builder (`absorbers._AbsorberRows`), `core.selection.path_tree` (both
+  selections), `simulations.selection.read_selected` (both streamed selections), `snapshot_skewers.ion_cell_fields`
+  (`to_cells`, `gas_to_cells`).
+- `Cells.select_species` raises `KeyError` naming the missing species.
+
 ## Unreleased — notebook 07: the seam figure in three figures (2026-10-26)
 
 ### Changed

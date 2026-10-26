@@ -71,7 +71,8 @@ imports the other subpackages. `simulations` holds every source of gas cells: th
 | skewers | `SkewerBundle(spatial_points, cosmologies, a0, x0, ...)` | `ICs_defined_at_index`, `ICs_at_emission_or_absorption`, `manual_scale_factors` |
 | gas cells | `Cells(positions, volumes, species, box)`, `cells_from_values`, `cells_on_grid`, `grid_points`, `voronoi_volumes` | (filled by the sources of `skewerjax.simulations`) |
 | line profiles | `core.line_profiles`: `line_profiles(v, lines, temperature=..., los_velocity=..., scale_factor=..., a_dagger=...)`, `voigt_line_profiles`, `voigt_widths_GHz`, `voigt_width_kms` | `voigt` (`"ExoJAX"`, `"convolution"`, `"harris"`: first order in the damping parameter, a ≤ 10⁻³, exact above), `detuning` (`"exact"`, `"linear"`), `velocity_period` |
-| τ | `compute_optical_depth(bundle, v, lines, cells, a_dagger=...)` or `compute_optical_depth(pieces, v, lines)` | `deposition` (`"voronoi"` default, `"tophat"`, `"voronoi_crossings"`), `line_frame`, `velocity_period`, `voigt`, `detuning`, `resolution_tolerance`, `v_chunk`, `piece_chunk`, `batch_size`, `per_piece`, `dtype`, `devices` |
+| τ | `compute_optical_depth(bundle, v, lines, cells, a_dagger=...)` or `compute_optical_depth(pieces, v, lines)` | `deposition` (`"voronoi"` default, `"tophat"`, `"voronoi_crossings"`), `line_frame`, `velocity_period`, `voigt`, `detuning`, `resolution_tolerance`, `v_chunk`, `piece_chunk`, `batch_size`, `per_piece`, `dtype`, `devices`, `return_info` |
+| debugging | `check_skewers(cells, bundle, lines)`, `enable_logging()`, `return_info=True` | see "Debugging and input checks" |
 | τ (layers) | `select_cells` → `voronoi_segments` / `grid_segments` / `tophat_segments` → `absorbers_from_components` → `absorber_pieces` (all in `cell_pieces`) → `Pieces` → `optical_depth_from_pieces` → `optical_depth_kernel` | `resolution_report(pieces, lines)`; `voronoi_segments(..., backend="jax")`; `tau_absorbers`, `tau_by_path_bins` |
 | frames | `compute_optical_depth(..., line_frame="reference")`, `wrap_to_ref_line`, `velocities_in_line_frames`, `line_wavelength_grid_A` | |
 | overflux | `DeltaFieldBuilder(tau, labels=...).build()` | every line subset and the exact decomposition of the total |
@@ -169,6 +170,59 @@ The skewers are padded to a multiple of the device count, and the padding is dro
 call falls back to `optical_depth_from_pieces`. To try several devices on one CPU, start Python with
 `XLA_FLAGS=--xla_force_host_platform_device_count=N`. This tests the code path only; XLA already uses all the cores of a
 single CPU device.
+
+## Debugging and input checks
+
+**Input checks.** The entry points check their inputs eagerly and raise a `ValueError` that names the field and its
+first bad entry. They are skipped for traced values, so `jit`, `vmap` and `grad` are unaffected:
+
+- `Cells`: positions, velocities and densities must be finite, volumes > 0, and temperatures, turbulence and collisional
+  terms ≥ 0. Negative densities are allowed (`grf_cells` warns about them).
+- `SkewerBundle`: points must be finite, with at least 2 per skewer, and `a0` > 0. `manual_scale_factors` must have
+  shape (N_cosmologies, N_sk, N_ppsk), and a(x) must stay finite and > 0 along every path.
+- `Cosmology`: the parameters must be finite, with H0 > 0. `LineBundle` needs at least one known line.
+- `select_cells`: when no cell is within reach, the error gives the closest cell's distance and selection radius.
+  The streamed version gives a hint about the units.
+- `cell_pieces`: the paths must have the right shape, the deposition must exist, the cells must hold every species,
+  and the segments must match the points.
+- `compute_optical_depth` checks:
+  - `line_frame`, `voigt` and `detuning`;
+  - that the chunk sizes are positive integers, and the shape and finiteness of the velocity grid;
+  - `velocity_period`;
+  - the shapes and values of the pieces (`check_pieces`).
+
+  It warns once if `jax_enable_x64` is off: SkewerJAX never sets that flag, and its tolerances are float64 ones. The
+  resolution check (`resolution_tolerance`) warns when the pieces are too wide in velocity for the line widths.
+
+**Diagnostics** (all off by default; when off they cost nothing):
+
+```python
+from skewerjax.core import check_skewers, compute_optical_depth, enable_logging
+report = check_skewers(cells, bundle, lines)          # when a result looks wrong
+print(report)                                         # coverage, column, window, resolution: ok / FAILED, with numbers
+tau, info = compute_optical_depth(bundle, v, lines, cells, return_info=True)
+enable_logging()                                      # the package's log messages (logger "skewerjax") on stderr
+```
+
+- `check_skewers(cells, bundle, lines)` returns a `SkewerCheck` (`report.ok`, `report.checks[name]`), with four
+  independent checks:
+  1. the pieces tile every path (Σ l_p = path length);
+  2. the column Σ n_p l_p of every species matches a fine sampling of the path. Each sample takes the nearest
+     generating point among *all* the cells, so a selection or deposition that misses cells fails, and the missing
+     cells are listed;
+  3. over one period with `velocity_period=True`, ∫ τ dv equals the value from the pieces, Σ C f n_p a_p⁻² l_p λ;
+  4. the resolution report.
+- `return_info=True` on `select_cells`, `simulations.select_cells_near_paths`, `deposit`, `cell_pieces` and
+  `compute_optical_depth` returns an extra dict:
+  - counts (cells, candidates, selected, pieces);
+  - path and piece lengths, and the columns per species;
+  - the resolution ratios and the time of every stage;
+  - for τ, the window fraction: ∫ τ dv over the grid divided by its value from the pieces.
+
+  With `return_parts`, `cell_pieces` returns (pieces, parts, info).
+- Logging: every module logs through `logging.getLogger("skewerjax.<module>")`, at DEBUG level, with counts and times
+  per stage. The package's logger has a `NullHandler`, so it stays silent unless configured, for example with
+  `enable_logging(logging.DEBUG)`.
 
 ## Validation, tests and benchmarks
 

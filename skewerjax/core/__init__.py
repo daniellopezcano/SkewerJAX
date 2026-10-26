@@ -22,12 +22,13 @@ from skewerjax.core.voigt import gaussian, log10_voigt, lorentzian, voigt_convol
 from skewerjax.core.spectral import (frequency_offset_GHz, line_centre_velocity_kms, line_wavelength_grid_A, local_wavelength_A,
                                      local_wavelength_from_observed_A, velocities_in_line_frames)
 from skewerjax.core.line_profiles import line_profiles, voigt_line_profiles, voigt_width_kms, voigt_widths_GHz
-from skewerjax.core.optical_depth import (Pieces, compute_optical_depth, optical_depth_from_pieces, optical_depth_kernel,
+from skewerjax.core.optical_depth import (Pieces, check_pieces, compute_optical_depth, optical_depth_from_pieces, optical_depth_kernel,
                                           optical_depth_sharded, resolution_report, wrap_to_ref_line)
 from skewerjax.core.absorbers import (Absorbers, ExactFrame, SnapshotFrame, absorber_pieces, absorbers_from_components,
                                       absorbers_from_crossings, bundle_frame, cell_pieces, column_per_pixel, deposit, sampling_check,
                                       scale_factors_along_paths, tau_absorbers, tau_by_path_bins)
 from skewerjax.core.overflux import DeltaFieldBuilder, equivalent_width_kms, overflux_terms
+from skewerjax.core.diagnostics import SkewerCheck, check_skewers, enable_logging
 from skewerjax.core import analytic, stats
 
 __all__ = [n for n in dir() if not n.startswith("_")]

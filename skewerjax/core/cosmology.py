@@ -7,6 +7,7 @@ import jax.numpy as jnp
 from jax.typing import ArrayLike
 
 from skewerjax.core.constants import phys
+from skewerjax.core.validation import check_values
 
 
 def da_dx(xx, aa, params, cc=phys.cc_Gpc_per_Gyr):
@@ -48,6 +49,8 @@ class Cosmology:
                              + ", ".join(f"{n}: {v.shape}" for n, v in zip(self._names, p))) from e
         self.H0, self.Omega_r_0, self.Omega_m_0, self.Omega_k_0, self.Omega_lambda_0 = p
         if not any(isinstance(v, jax.core.Tracer) for v in p):
+            for n, v in zip(self._names, p):
+                check_values(f"Cosmology: {n}", v, minimum=0.0 if n == "H0" else None, strict=True)
             density_sum = p[1] + p[2] + p[3] + p[4]
             if not jnp.allclose(density_sum, 1.0, atol=1e-4):
                 raise ValueError(f"Cosmological densities do not sum to 1: {density_sum}")

@@ -76,6 +76,10 @@ class LineBundle:
     """
 
     def __init__(self, line_ids: Sequence[str], ref_line_id: str = "HI-LyA"):
+        if isinstance(line_ids, str):
+            raise TypeError(f"line_ids must be a sequence of line ids, e.g. [{line_ids!r}], not a string.")
+        if len(line_ids) == 0:
+            raise ValueError("a LineBundle needs at least one line.")
         missing = [lid for lid in line_ids if lid not in LINES]
         if missing:
             raise ValueError(f"Unknown line IDs: {missing}")

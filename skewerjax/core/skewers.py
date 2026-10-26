@@ -9,6 +9,7 @@ import numpy as np
 from jax.typing import ArrayLike
 
 from skewerjax.core.cosmology import Cosmology
+from skewerjax.core.validation import check_values
 
 
 # --------------------------------------------------------------------------- polyline geometry
@@ -170,6 +171,10 @@ class SkewerBundle:
         if spatial_points.ndim != 3 or spatial_points.shape[-1] != 3:
             raise ValueError(f"spatial_points must be (N_sk, N_ppsk, 3), got {spatial_points.shape}")
         N_sk, N_ppsk = spatial_points.shape[:2]
+        if N_sk < 1 or N_ppsk < 2:
+            raise ValueError(f"a SkewerBundle needs at least one skewer of at least 2 points, got (N_sk, N_ppsk) = {(N_sk, N_ppsk)}.")
+        check_values("SkewerBundle: spatial_points [cMpc]", spatial_points)
+        check_values("SkewerBundle: a0", a0, minimum=0.0, strict=True)
         a0 = jnp.broadcast_to(jnp.asarray(a0), (N_sk,))
         x0 = jnp.broadcast_to(jnp.asarray(x0), (N_sk,))
         ic = jnp.asarray(ICs_defined_at_index)
@@ -198,13 +203,19 @@ class SkewerBundle:
         distances = jax.vmap(comoving_distances)(spatial_points, x0, ic, is_absorption)
         if manual_scale_factors is not None:
             scale_factors = jnp.asarray(manual_scale_factors)
-            if scale_factors.ndim != 3:
-                raise ValueError(f"manual_scale_factors must have shape (N_cosmologies, N_sk, N_ppsk), got {scale_factors.shape}")
+            if scale_factors.ndim != 3 or scale_factors.shape[1:] != (N_sk, N_ppsk):
+                raise ValueError(f"manual_scale_factors must have shape (N_cosmologies, N_sk, N_ppsk) = (., {N_sk}, {N_ppsk}), "
+                                 f"got {scale_factors.shape}")
         else:
             if cosmologies is None:
                 raise ValueError("When manual_scale_factors is not provided, you must supply the 'cosmologies' argument.")
             a_from_ics = jnp.swapaxes(jax.vmap(lambda a, d: _scale_factors(cosmologies, a, d))(a0, distances), 0, 1)
             scale_factors = jnp.where((ic == -1)[None, :, None], jnp.flip(a_from_ics, axis=-1), a_from_ics)
+        try:
+            check_values("SkewerBundle: scale factors a(x)", scale_factors, minimum=0.0, strict=True)
+        except ValueError as e:
+            raise ValueError(f"{e} The scale factor must stay finite and > 0 along every path: check a0, the cosmology and the "
+                             "path lengths (a path of emission longer than the distance to a = 0?), or manual_scale_factors.") from None
 
         self.spatial_points, self.a0, self.x0 = spatial_points, a0, x0
         self.ICs_defined_at_index, self.is_absorption, self.array_direction = ic, is_absorption, direction

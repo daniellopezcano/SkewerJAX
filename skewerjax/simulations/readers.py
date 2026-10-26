@@ -28,6 +28,7 @@ TNG conventions (https://www.tng-project.org/data/docs/specifications/, PartType
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,7 @@ from skewerjax.core.constants import phys
 
 KPC_CM = 3.085678e21                     # 1 kpc [cm] (Arepo / fake_spectra value)
 GAS_GROUP = "PartType0"                  # the HDF5 group of the gas cells
+logger = logging.getLogger(__name__)
 GAS_DATASETS = ("Coordinates", "Velocities", "Masses", "Density", "InternalEnergy",
                 "ElectronAbundance", "NeutralHydrogenAbundance", "GFM_Metals", "StarFormationRate")
 
@@ -163,6 +165,8 @@ class ArepoHDF5Reader:
             unit_mass_g=_attr(hdr, "UnitMass_in_g", _attr(par, "UnitMass_in_g", 1.989e43)),
             unit_velocity_cms=_attr(hdr, "UnitVelocity_in_cm_per_s", _attr(par, "UnitVelocity_in_cm_per_s", 1e5)),
             n_files=len(self.files), n_gas=n_gas)
+        logger.debug("ArepoHDF5Reader: %s, %d files, %d gas cells, z = %.3f, box %.4g cMpc", snapdir, len(self.files), n_gas,
+                     self.header.redshift, self.header.box_cMpc)
 
     # ------------------------------------------------------------------ raw access
     def n_rows(self, file_index: int) -> int:
@@ -202,8 +206,8 @@ class ArepoHDF5Reader:
     # ------------------------------------------------------------------ conversion (layer 1 -> 2)
     def positions_cMpc(self, coordinates) -> np.ndarray:
         """Code coordinates [ckpc/h] -> comoving Mpc (no h), wrapped into [0, box)."""
-        x = np.asarray(coordinates, dtype=np.float64) * self.header.code_length_cMpc
-        return np.mod(x, self.header.box_cMpc)
+        x = np.multiply(coordinates, self.header.code_length_cMpc, dtype=np.float64)
+        return np.mod(x, self.header.box_cMpc, out=x)
 
     def volumes_cMpc3(self, masses, density) -> np.ndarray:
         """Cell volume m / rho (comoving) [cMpc^3]."""

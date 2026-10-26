@@ -36,6 +36,7 @@ from jax import tree_util
 from scipy.spatial import cKDTree
 
 from skewerjax.core.selection import wrap_positions
+from skewerjax.core.validation import check_values
 
 REQUIRED = ("number_density", "temperature", "velocity")
 OPTIONAL = ("turbulence", "collisional")
@@ -55,12 +56,16 @@ class Cells:
     box : periodic box side [cMpc], or None for non-periodic data.
     ids : optional (M,) identifiers (e.g. the snapshot rows of the cells).
     grid : the shape (N_x, N_y, N_z) of a regular grid of cells in C order (``cells_on_grid``), else None.
+    validate : check the values (default): finite positions, velocities and densities, volumes > 0, temperatures,
+        turbulence and collisional terms >= 0, box > 0; ``ValueError`` names the field and the first bad cell. Negative
+        densities are allowed (``simulations.grf_cells`` warns about them). ``take`` and ``select_species`` skip it.
 
     JAX pytree (positions, volumes, every field and the ids are leaves; the species and field names, ``box`` and
     ``grid`` are static).
     """
 
-    def __init__(self, positions, volumes, species: dict, box: Optional[float] = None, ids=None, grid: Optional[tuple] = None):
+    def __init__(self, positions, volumes, species: dict, box: Optional[float] = None, ids=None, grid: Optional[tuple] = None,
+                 validate: bool = True):
         self.positions = positions
         self.volumes = volumes
         self.species = {sp: dict(f) for sp, f in species.items()}
@@ -85,6 +90,20 @@ class Cells:
                 want = (n, 3) if k == "velocity" else (n,)
                 if np.shape(v) != want:
                     raise ValueError(f"species {sp!r}, field {k!r}: shape {np.shape(v)}, expected {want}.")
+        if validate:
+            self._validate()
+
+    _MINIMUM = {"temperature": 0.0, "turbulence": 0.0, "collisional": 0.0}      # lower bounds of the fields (None: any)
+
+    def _validate(self):
+        """Finite values and physical ranges (class docstring); ``ValueError`` otherwise."""
+        if self.box is not None and not (np.isfinite(self.box) and self.box > 0):
+            raise ValueError(f"Cells: box must be a finite side > 0 [cMpc] or None, got {self.box}.")
+        check_values("Cells: positions [cMpc]", self.positions)
+        check_values("Cells: volumes [cMpc^3]", self.volumes, minimum=0.0, strict=True)
+        for sp, f in self.species.items():
+            for k, v in f.items():
+                check_values(f"Cells: species {sp!r}, {k}", v, minimum=self._MINIMUM.get(k))
 
     # -- pytree protocol
     def tree_flatten(self):
@@ -134,12 +153,15 @@ class Cells:
         idx = np.asarray(idx)
         return Cells(np.asarray(self.positions)[idx], np.asarray(self.volumes)[idx],
                      {sp: {k: np.asarray(v)[idx] for k, v in f.items()} for sp, f in self.species.items()}, self.box,
-                     None if self.ids is None else np.asarray(self.ids)[idx])
+                     None if self.ids is None else np.asarray(self.ids)[idx], validate=False)
 
     def select_species(self, species) -> "Cells":
         """The same cells with only the species ``species`` (a key or a sequence of keys)."""
         keys = [species] if isinstance(species, str) else list(species)
-        return Cells(self.positions, self.volumes, {sp: self.species[sp] for sp in keys}, self.box, self.ids, self.grid)
+        missing = [sp for sp in keys if sp not in self.species]
+        if missing:
+            raise KeyError(f"the cells hold no species {missing} (they hold {self.species_keys}).")
+        return Cells(self.positions, self.volumes, {sp: self.species[sp] for sp in keys}, self.box, self.ids, self.grid, validate=False)
 
     @staticmethod
     def merge_species(parts) -> "Cells":
@@ -152,7 +174,7 @@ class Cells:
         species = {}
         for p in parts:
             species.update(p.species)
-        return Cells(p0.positions, p0.volumes, species, p0.box, p0.ids, p0.grid)
+        return Cells(p0.positions, p0.volumes, species, p0.box, p0.ids, p0.grid, validate=False)
 
     def nbytes(self) -> int:
         """Host memory of the arrays [bytes]."""

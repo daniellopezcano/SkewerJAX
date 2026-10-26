@@ -10,17 +10,17 @@ files.
 """
 from __future__ import annotations
 
+import logging
+import time
 from typing import Optional
 
 import numpy as np
-from scipy.spatial import cKDTree
-
-from skewerjax.core.selection import (_nearest_distance_cpu, _nearest_distance_jztree, max_path_spacing, resolve_backend,
-                                      selection_radius, wrap_positions)
+from skewerjax.core.selection import _nearest_distance_cpu, _nearest_distance_jztree, path_tree, resolve_backend, selection_radius
 from skewerjax.simulations.gas_cells import GasCells
 
 GEOMETRY_DATASETS = ("Coordinates", "Masses", "Density")
 PREFILTER_GRID = 64                       # cells per box side of the coarse occupancy grid of the paths
+logger = logging.getLogger(__name__)
 
 
 class _PathOccupancy:
@@ -50,22 +50,33 @@ class _PathOccupancy:
             self._dilated[k] = out
         return self._dilated[k]
 
-    def candidates(self, pos: np.ndarray, r_max: float) -> Optional[np.ndarray]:
-        """Mask of the positions (N, 3) in [0, box) that can be within ``r_max`` of a path; None: all of them."""
-        g = self.grid(int(np.floor(r_max / self.h)) + 2)
+    def candidates(self, pos: np.ndarray, r_max: float, *, scale: float = 1.0, margin: int = 0) -> Optional[np.ndarray]:
+        """Mask of the positions (N, 3) in [0, box) that can be within ``r_max`` of a path; None: all of them.
+
+        ``scale``: the positions are given in another unit, x = scale pos (e.g. code coordinates and their length in
+        cMpc), so they need no conversion; ``margin``: extra grid cells of dilation (e.g. 1 for positions that may lie
+        just outside [0, box) or carry a different rounding)."""
+        g = self.grid(int(np.floor(r_max / self.h)) + 2 + int(margin))
         if g is None:
             return None
-        flat = np.zeros(pos.shape[0], dtype=np.int32)
-        for ax in range(3):                                             # flat index of the grid cell, axis by axis
-            i = (pos[:, ax] * (1.0 / self.h)).astype(np.int32)         # positions >= 0: truncation is the floor
-            i %= self.n
-            flat *= self.n
-            flat += i
-        return g.ravel().take(flat)
+        q = (pos * (scale / self.h)).astype(np.int32)                   # positions >= 0: truncation is the floor
+        q %= self.n
+        return g.ravel().take((q[:, 0] * self.n + q[:, 1]) * self.n + q[:, 2])
+
+
+def read_selected(reader, file_index: int, row_offset: int, sel, base: dict, rest) -> GasCells:
+    """``GasCells`` of the rows ``sel`` of one streamed block (``reader.iter_blocks``: file ``file_index``, first row
+    ``row_offset``, datasets ``base`` already read), with the datasets ``rest`` read from one contiguous slab of the file
+    (bounded by the block; indexed in memory, because h5py's scattered reads are slower), ids = (file_index << 40) | row."""
+    lo, hi = row_offset + int(sel[0]), row_offset + int(sel[-1]) + 1
+    slab = reader.read_rows(file_index, rest, start=lo, stop=hi)
+    raw = {k: v[sel] for k, v in base.items()}
+    raw.update({k: v[row_offset + sel - lo] for k, v in slab.items()})
+    return reader.to_gas_cells(raw, ids=(np.int64(file_index) << 40) | (row_offset + sel).astype(np.int64))
 
 
 def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", max_rows: int = 4_000_000, workers: int = -1,
-                            backend: str = "cpu") -> GasCells:
+                            backend: str = "cpu", return_info: bool = False) -> GasCells:
     """Stream the snapshot and keep the cells that can contribute to any of ``paths``.
 
     Parameters
@@ -79,38 +90,66 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", max_rows: i
     backend : "cpu" (default, scipy cKDTree), "jztree" (CUDA GPU; ImportError / RuntimeError if jztree or a CUDA
         device is missing) or "auto" (``resolve_backend``). Every back end selects the same cells.
 
+    return_info : also return dict(n_gas, n_blocks, n_candidates (cells left by the coarse prefilter), n_selected,
+        ds_cMpc, backend, timings {read, prefilter, query, read_selected} [s], time_s).
+
     Returns
     -------
     GasCells of the selected cells, physical units (``reader.to_gas_cells``), with ``ids`` =
-    (file_index << 40) | row, so that every cell can be traced back to the snapshot.
+    (file_index << 40) | row, so that every cell can be traced back to the snapshot (and the info).
     """
+    t0 = time.perf_counter()
     from skewerjax.simulations.readers import GAS_DATASETS
     rest = [k for k in GAS_DATASETS if k not in GEOMETRY_DATASETS]
     hdr = reader.header
     box = hdr.box_cMpc
-    ds = max_path_spacing(paths)
-    pts = wrap_positions(np.asarray(paths, dtype=np.float64).reshape(-1, 3), box)
-    tree = cKDTree(pts, boxsize=box)
+    pts, tree, ds = path_tree(paths, box)
     backend = resolve_backend(backend)
     occ = _PathOccupancy(pts, box)
     parts = []
-    n_sel = 0
+    n_sel = n_cand = n_blocks = 0
+    tm = dict(read=0.0, prefilter=0.0, query=0.0, read_selected=0.0)
+    t = time.perf_counter()
     for fi, r0, base in reader.iter_blocks(GEOMETRY_DATASETS, max_rows=max_rows):
-        pos = reader.positions_cMpc(base["Coordinates"])
-        size = np.cbrt(reader.volumes_cMpc3(base["Masses"], base["Density"]))
-        rad = selection_radius(size, mode, ds)
+        vol = reader.volumes_cMpc3(base["Masses"], base["Density"])
+        n_rows = vol.shape[0]
+        t1 = time.perf_counter()
+        tm["read"] += t1 - t
         if backend == "jztree":
+            pos, rad = reader.positions_cMpc(base["Coordinates"]), selection_radius(np.cbrt(vol), mode, ds)
             d = _nearest_distance_jztree(pts, pos, box, tree, rad)
-        else:                                                # only the cells near the paths reach the tree
-            d = _nearest_distance_cpu(tree, pos, rad, workers, candidates=occ.candidates(pos, float(rad.max())))
-        sel = np.nonzero(d <= rad)[0]
+            sel = np.nonzero(d <= rad)[0]
+            n_blk = n_rows
+            t2 = t1
+        else:
+            # The prefilter on the code coordinates (no conversion of the whole block; one more grid cell of dilation
+            # for their rounding and for coordinates just outside the box) and the largest radius of the block (the
+            # radius grows with the volume; 1e-9 of margin): only the cells that survive it are converted and queried.
+            r_max = float(selection_radius(np.cbrt(vol.max()), mode, ds)) * (1.0 + 1e-9)
+            cand = occ.candidates(base["Coordinates"], r_max, scale=hdr.code_length_cMpc, margin=1)
+            idx = np.arange(n_rows) if cand is None else np.flatnonzero(cand)
+            t2 = time.perf_counter()
+            pos, rad = reader.positions_cMpc(base["Coordinates"][idx]), selection_radius(np.cbrt(vol[idx]), mode, ds)
+            sel = idx[_nearest_distance_cpu(tree, pos, rad, workers) <= rad] if idx.size else idx
+            n_blk = idx.size
+        n_cand += n_blk
+        t3 = time.perf_counter()
+        tm["prefilter"] += t2 - t1
+        tm["query"] += t3 - t2
         if sel.size:
-            raw = {k: base[k][sel] for k in GEOMETRY_DATASETS}
-            lo, hi = r0 + int(sel[0]), r0 + int(sel[-1]) + 1     # one contiguous slab of the block (bounded by max_rows),
-            slab = reader.read_rows(fi, rest, start=lo, stop=hi)  # indexed in memory: h5py's scattered reads are slower
-            raw.update({k: v[r0 + sel - lo] for k, v in slab.items()})
-            parts.append(reader.to_gas_cells(raw, ids=(np.int64(fi) << 40) | (r0 + sel).astype(np.int64)))
+            parts.append(read_selected(reader, fi, r0, sel, base, rest))
             n_sel += sel.size
+        n_blocks += 1
+        t = time.perf_counter()
+        tm["read_selected"] += t - t3
+        logger.debug("select_cells_near_paths: file %d rows %d-%d: %d candidates, %d selected", fi, r0, r0 + n_rows, n_blk, sel.size)
     if n_sel == 0:
-        raise RuntimeError("no gas cell is within reach of the paths.")
-    return GasCells.concatenate(parts)
+        raise RuntimeError(f"no gas cell is within reach of the paths: none of the {hdr.n_gas} cells of the snapshot lies within "
+                           f"its selection radius of a path point (box = {box:.4g} cMpc, path spacing ds = {ds:.4g} cMpc). Are the "
+                           "paths in comoving Mpc without h (SkewerJAX's unit; the snapshot's code unit is ckpc/h)?")
+    out = GasCells.concatenate(parts)
+    info = dict(n_gas=hdr.n_gas, n_blocks=n_blocks, n_candidates=n_cand, n_selected=n_sel, ds_cMpc=ds, backend=backend, timings=tm,
+                time_s=time.perf_counter() - t0)
+    logger.debug("select_cells_near_paths: %d of %d cells selected (%d after the prefilter), %d blocks, %.2f s (%s)", n_sel, hdr.n_gas,
+                 n_cand, n_blocks, info["time_s"], ", ".join(f"{k} {v:.2f} s" for k, v in tm.items()))
+    return (out, info) if return_info else out

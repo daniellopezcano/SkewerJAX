@@ -26,6 +26,8 @@ options):
 """
 from __future__ import annotations
 
+import logging
+import time
 import warnings
 from dataclasses import dataclass
 from functools import partial
@@ -41,6 +43,9 @@ from jax.typing import ArrayLike
 from skewerjax.core.constants import phys
 from skewerjax.core.line_profiles import voigt_line_profiles, voigt_width_kms, voigt_widths_GHz
 from skewerjax.core.spectral import frequency_offset_GHz
+from skewerjax.core.validation import check_positive_int, check_shape, check_values, is_traced, warn_if_float32
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- the optical depth of one skewer
@@ -227,17 +232,38 @@ def _velocity_periods(velocity_period, pieces: Pieces) -> Optional[jnp.ndarray]:
     """(N_sk,) periods [km/s] of the option ``velocity_period``, or None (no wrap)."""
     if velocity_period is None or velocity_period is False:
         return None
-    n_sk = pieces.scale_factor.shape[0]
     if velocity_period is True:
         P = jnp.asarray(pieces.velocity_span_kms)
-        if not isinstance(P, jax.core.Tracer) and bool(jnp.any(P <= 0)):
-            raise ValueError("velocity_period=True: a skewer has no velocity span (a(first point) = a(last point)); "
-                             "give the period explicitly.")
-        return P
-    P = jnp.broadcast_to(jnp.asarray(velocity_period, dtype=pieces.scale_factor.dtype), (n_sk,))
-    if not isinstance(P, jax.core.Tracer) and bool(jnp.any(P <= 0)):
-        raise ValueError(f"velocity_period must be positive, got {velocity_period}.")
+        what = "velocity_period=True: a skewer has no velocity span (a(first point) = a(last point)); give the period explicitly."
+    else:
+        P = jnp.broadcast_to(jnp.asarray(velocity_period, dtype=pieces.scale_factor.dtype), (pieces.scale_factor.shape[0],))
+        what = f"velocity_period must be a finite period > 0 [km/s], got {velocity_period}."
+    if not is_traced(P):
+        with jax.ensure_compile_time_eval():
+            if not bool(jnp.all(jnp.isfinite(P) & (P > 0))):
+                raise ValueError(what)
     return P
+
+
+_PIECE_RANGES = (("scale_factor", 0.0, True), ("a_dagger", 0.0, True), ("length_m", 0.0, False), ("temperature", 0.0, False),
+                 ("turbulence", 0.0, False), ("collisional", 0.0, False), ("los_velocity", None, False),
+                 ("number_density", None, False), ("width_kms", 0.0, False))
+
+
+def check_pieces(pieces: Pieces, line_bundle=None) -> None:
+    """Shapes and values of ``pieces`` (eager; skipped under tracing): consistent shapes (N_lines, N_sk, N_p), N_lines =
+    ``line_bundle.n_lines``, finite values, scale factors > 0 and lengths, temperatures, widths >= 0. ``ValueError``
+    names the field and the first bad entry."""
+    n_l, n_sk, n_p = pieces.shape
+    if line_bundle is not None and n_l != line_bundle.n_lines:
+        raise ValueError(f"the pieces hold {n_l} lines, the line bundle {line_bundle.n_lines} ({[l.id for l in line_bundle.lines]}).")
+    for f in ("a_dagger", "scale_factor", "length_m"):
+        check_shape(f"Pieces.{f}", getattr(pieces, f), (n_sk, n_p))
+    for f in ("temperature", "turbulence", "collisional", "los_velocity", "number_density", "width_kms"):
+        check_shape(f"Pieces.{f}", getattr(pieces, f), (n_l, n_sk, n_p))
+    check_shape("Pieces.velocity_span_kms", pieces.velocity_span_kms, (n_sk,))
+    for f, lo, strict in _PIECE_RANGES:
+        check_values(f"Pieces.{f}", getattr(pieces, f), minimum=lo, strict=strict)
 
 
 def compute_optical_depth(source, velocities_kms: ArrayLike, line_bundle, cells=None, *, a_dagger: Optional[ArrayLike] = None,
@@ -245,7 +271,7 @@ def compute_optical_depth(source, velocities_kms: ArrayLike, line_bundle, cells=
                           line_frame: str = "own", velocity_period=False, voigt: str = "ExoJAX", detuning: str = "exact",
                           resolution_tolerance: Optional[float] = 0.25, v_chunk: Optional[int] = None,
                           piece_chunk: Optional[int] = None, batch_size: Optional[int] = None, per_piece: bool = False,
-                          dtype: Optional[str] = None, devices=None) -> jnp.ndarray:
+                          dtype: Optional[str] = None, devices=None, return_info: bool = False) -> jnp.ndarray:
     """tau (N_lines, N_sk, N_v) of every line along every skewer (F = exp(-tau)): the sum over the pieces of ``source``.
 
     Parameters
@@ -278,7 +304,35 @@ def compute_optical_depth(source, velocities_kms: ArrayLike, line_bundle, cells=
     per_piece : True returns every piece's contribution (N_lines, N_sk, N_p, N_v).
     dtype : opt-in kernel precision, e.g. "float32" (``optical_depth_from_pieces``); None keeps the input precision.
     devices : None (one device, the default) or a list of devices to split the skewers over (``optical_depth_sharded``).
+    return_info : also return dict(shape (N_lines, N_sk, N_p), n_v, line_frame, velocity_period (the (N_sk,) periods or
+        None), resolution (``resolution_report``, None without the check), pieces_info (``cell_pieces``'s, bundle sources
+        only), tau_max (N_lines, N_sk), tau_integral_kms (N_lines, N_sk) = sum_v tau dv over the grid, column_integral_kms
+        (N_lines, N_sk) = sum_p C f n_p a_p^-2 l_p lambda_j, its value from the pieces (every profile has unit area in
+        frequency; exact for the linear detuning, O(b / c) otherwise), window_fraction = their ratio (what the grid holds
+        of the absorption: 1 on one period with ``velocity_period``, up to the cut at P/2), timings {pieces, checks, tau}
+        [s] (tau waits for the result), time_s). Off by default: no cost.
+
+    Returns
+    -------
+    (N_lines, N_sk, N_v) optical depth ((N_lines, N_sk, N_p, N_v) with ``per_piece``), and the info.
     """
+    t0 = time.perf_counter()
+    if line_frame not in ("own", "reference"):
+        raise ValueError(f"line_frame must be 'own' or 'reference', got {line_frame!r}.")
+    if str(voigt).lower() not in ("exojax", "convolution", "harris"):
+        raise ValueError(f"voigt must be 'ExoJAX', 'convolution' or 'harris' (the jitted modes; 'scipy_wofz' is a host-side "
+                         f"reference, core.voigt.voigt_scipy), got {voigt!r}.")
+    if detuning not in ("exact", "linear"):
+        raise ValueError(f"detuning must be 'exact' or 'linear', got {detuning!r}.")
+    for name, x in (("v_chunk", v_chunk), ("piece_chunk", piece_chunk), ("batch_size", batch_size)):
+        check_positive_int(name, x)
+    v = jnp.asarray(velocities_kms)
+    if v.ndim not in (1, 2) or v.shape[-1] == 0 or (v.ndim == 2 and (line_frame == "reference" or v.shape[0] != line_bundle.n_lines)):
+        raise ValueError(f"velocities_kms must be (N_v,) or, with line_frame='own', one grid per line (N_lines={line_bundle.n_lines}, N_v); "
+                         f"got shape {v.shape}.")
+    check_values("velocities_kms", v)
+    if dtype is None:
+        warn_if_float32("compute_optical_depth")
     if isinstance(source, Pieces):
         if cells is not None or a_dagger is not None:
             raise ValueError("cells and a_dagger apply to a SkewerBundle source, not to Pieces.")
@@ -288,7 +342,12 @@ def compute_optical_depth(source, velocities_kms: ArrayLike, line_bundle, cells=
             raise ValueError("a SkewerBundle source needs the gas: compute_optical_depth(bundle, v, lines, cells).")
         from skewerjax.core.absorbers import cell_pieces          # (absorbers imports this module)
         pieces = cell_pieces(cells, line_bundle, skewer_bundle=source, a_dagger=a_dagger, ii_cosmology=ii_cosmology,
-                             deposition=deposition, selection_backend=selection_backend)
+                             deposition=deposition, selection_backend=selection_backend, return_info=return_info)
+        if return_info:
+            pieces, pieces_info = pieces
+    t1 = time.perf_counter()
+    check_pieces(pieces, line_bundle)
+    rep = None
     if resolution_tolerance is not None:
         rep = resolution_report(pieces, line_bundle, resolution_tolerance)
         if not rep["ok"]:
@@ -298,26 +357,43 @@ def compute_optical_depth(source, velocities_kms: ArrayLike, line_bundle, cells=
                             f"{rep['column_fraction'][j]:.1e} above tolerance {resolution_tolerance}"
                             for j in range(line_bundle.n_lines))
                 + ". Sample the skewers more densely.", stacklevel=2)
-    v = jnp.asarray(velocities_kms)
     if line_frame == "reference":
         v = v[None, :] + jnp.asarray(line_bundle.delta_v)[:, None]
-    elif line_frame != "own":
-        raise ValueError(f"line_frame must be 'own' or 'reference', got {line_frame!r}.")
     P = _velocity_periods(velocity_period, pieces)
     n_sk, m = pieces.scale_factor.shape
+    pieces_all = pieces
     if piece_chunk is not None:
         pieces = pieces.rows(int(piece_chunk))
         P = None if P is None else jnp.repeat(P, pieces.scale_factor.shape[0] // n_sk)
     kw = dict(voigt=voigt, detuning=detuning, velocity_period=P, v_chunk=v_chunk, batch_size=batch_size, per_piece=per_piece,
               dtype=dtype)
+    logger.debug("compute_optical_depth: %d lines x %d skewers x %d pieces, %d velocities (%s frame, velocity_period=%s, voigt %s, "
+                 "detuning %s, dtype %s)", line_bundle.n_lines, n_sk, m, v.shape[-1], line_frame, velocity_period, voigt, detuning, dtype)
+    t2 = time.perf_counter()
     tau = (optical_depth_sharded(pieces, v, line_bundle, devices=devices, **kw) if devices is not None
            else optical_depth_from_pieces(pieces, v, line_bundle, **kw))
-    if piece_chunk is None:
+    if piece_chunk is not None:
+        n_l, n_v = tau.shape[0], tau.shape[-1]
+        tau = tau.reshape(n_l, n_sk, -1, n_v)[:, :, :m] if per_piece else tau.reshape(n_l, n_sk, -1, n_v).sum(axis=2)
+    if not return_info:
         return tau
-    n_l, n_v = tau.shape[0], tau.shape[-1]
-    if per_piece:
-        return tau.reshape(n_l, n_sk, -1, n_v)[:, :, :m]
-    return tau.reshape(n_l, n_sk, -1, n_v).sum(axis=2)
+    tau = tau.block_until_ready()
+    t3 = time.perf_counter()
+    full = tau.sum(axis=2) if per_piece else tau
+    p, n_l = pieces_all, line_bundle.n_lines
+    amp = (phys.cross_section_prefactor * np.asarray(line_bundle.f_osc)[:, None, None] * np.asarray(p.number_density)
+           * np.asarray(p.scale_factor)[None] ** -2.0 * 1e2 * np.asarray(p.length_m)[None])
+    col_int = amp.sum(-1) * np.asarray(line_bundle.lambda0_A)[:, None] * 1e-4      # [km/s]: lambda [A] x 1e-4 = km/s per GHz
+    vv = np.broadcast_to(np.asarray(v, dtype=np.float64), (n_l, v.shape[-1]))
+    dv = np.stack([np.gradient(x) if x.size > 1 else np.ones(1) for x in vv])     # pixel widths (uniform grid: dv)
+    tau_int = (np.asarray(full, dtype=np.float64) * dv[:, None, :]).sum(-1)
+    info = dict(shape=(n_l, n_sk, m), n_v=int(v.shape[-1]), line_frame=line_frame, velocity_period=None if P is None else np.asarray(P),
+                resolution=rep, tau_max=np.asarray(full).max(-1), tau_integral_kms=tau_int, column_integral_kms=col_int,
+                window_fraction=tau_int / np.maximum(col_int, 1e-300), timings=dict(pieces=t1 - t0, checks=t2 - t1, tau=t3 - t2),
+                time_s=t3 - t0)
+    if not isinstance(source, Pieces):
+        info["pieces_info"] = pieces_info
+    return tau, info
 
 
 def wrap_to_ref_line(optical_depth: ArrayLike, velocities_kms: ArrayLike, line_bundle, *, velocity_period: Optional[float] = None,
