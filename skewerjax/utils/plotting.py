@@ -1718,21 +1718,14 @@ def plot_gas_cells(cells, selected, path, species=None, *, skewer: int = 0, view
     return fig, axs, info
 
 
-def plot_voigt_limits(x, sigma, gamma, curves: dict, ref_key: str = "scipy_wofz", *, linthresh: float = 1e-6,
-                      expansion: dict = None, figsize=None):
+def plot_voigt_limits(x, sigma, gamma, curves: dict, ref_key: str = "scipy_wofz", *, linthresh: float = 1e-6, figsize=None):
     """Voigt profiles V(x; sigma, gamma) for extreme (sigma, gamma) pairs, every implementation in ``curves`` = {name:
     (N_pairs, N_x)} on the reference ``ref_key`` (thick, light), and their relative residuals (symlog, ``linthresh``).
     The pairs show the Gaussian limit (gamma << sigma), the Lorentzian limit (sigma << gamma) and the mixed cases.
-
-    expansion : optional {"u": (N_u,) u >= 0, "residuals": {a: (N_u,) |H_approx / H - 1|}, "label": str,
-        "u_switch": float}: panel (c), the relative error of an approximation of H(a, u) = Re w(u + i a) against the exact
-        one, one line per damping parameter a (sequential colours), with its core (|u| < 3, Gaussian), transition and
-        wings (|u| > ``u_switch``) marked. Returns (fig, axs): 2 axes, or 3 with ``expansion``.
+    Returns (fig, axs): (a) the profiles, (b) the residuals below, sharing x.
     """
     from matplotlib.lines import Line2D
-    n_rows = 2 if expansion is None else 3
-    figsize = figsize or ((15, 11) if expansion is None else (15, 16))
-    fig, axs = plt.subplots(n_rows, 1, figsize=figsize, gridspec_kw={"height_ratios": [2.2, 1, 1.25][:n_rows]}, layout="constrained")
+    fig, axs = plt.subplots(2, 1, figsize=figsize or (15, 11), gridspec_kw={"height_ratios": [2.2, 1]}, layout="constrained")
     ax, axr = axs[0], axs[1]
     axr.sharex(ax)
     cols = [PALETTE[k] for k in ("blue", "red", "green", "yellow", "cyan", "purple")]
@@ -1757,26 +1750,6 @@ def plot_voigt_limits(x, sigma, gamma, curves: dict, ref_key: str = "scipy_wofz"
     axr.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
     axr.set(xlabel="x", ylabel="V / reference − 1", ylim=(-0.05, 0.05))
     axr.axhline(0, color=FG, lw=1)
-    if expansion is not None:
-        axe = axs[2]
-        u = np.asarray(expansion["u"])
-        u_sw = float(expansion.get("u_switch", 6.0))
-        res = expansion["residuals"]
-        cmap = plt.get_cmap(CMAPS["line"])
-        la = np.log10(np.asarray(list(res), dtype=float))
-        for k, (a, r) in enumerate(res.items()):
-            f = 0.5 if np.ptp(la) == 0 else (la[k] - la.min()) / np.ptp(la)
-            axe.loglog(u, np.maximum(np.asarray(r), 1e-12), color=cmap(0.3 + 0.7 * f), lw=2.2, label=rf"$a$ = {a:g}")
-        axe.axvspan(u.min(), 3.0, color=PALETTE["grey"], alpha=0.18, lw=0)
-        axe.axvline(u_sw, color=DIM, ls=":", lw=1.8)
-        top = 0.93
-        for xt, txt in ((np.sqrt(u.min() * 3.0), "core (Gaussian)"), (np.sqrt(3.0 * u_sw), "transition"),
-                        (np.sqrt(u_sw * u.max()), "wings (series)")):
-            axe.text(xt, top, txt, transform=axe.get_xaxis_transform(), ha="center", va="top", fontsize=FONT_MIN["annotation"], color=FG)
-        axe.set(xlim=(u.min(), u.max()), ylim=(1e-10, 1e-3), xlabel=r"$u = x/(\sqrt{2}\,\sigma)$",
-                ylabel=r"$|H_{\rm approx}/H - 1|$")
-        axe.set_title(expansion.get("label", "approximation"), fontsize=FONT_MIN["title"])
-        axe.legend(loc="lower left", fontsize=FONT_MIN["legend"], ncols=len(res))
     return fig, np.asarray(axs)
 
 

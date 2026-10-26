@@ -3,6 +3,15 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — notebook 06: two figures simplified (2026-10-25, session 20261025_2155)
+
+### Changed
+- `plot_voigt_limits(x, sigma, gamma, curves, ref_key, *, linthresh, figsize)`: profiles (a) and residuals (b) only; the
+  `expansion=` option and its panel (c), the error of the Harris expansion alone, are removed (the numbers stay printed
+  in notebook 06; `voigt="harris"` and its curve in (a)/(b) are unchanged).
+- Notebook 06 §3: the ratio panel against v − v_c is replaced by a residual panel under (a), sharing its axis:
+  φ_linear/φ_exact − 1 with the zero line and the line centres; text of §1 and §3 updated.
+
 ## Unreleased — checkpoint up to notebook 05: the DAG matches the code, systematic tests, clean-up (2026-10-25, session 20261025_2105)
 
 ### Changed
