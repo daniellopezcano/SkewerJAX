@@ -97,8 +97,3 @@ class GasCells:
                         np.concatenate([np.asarray(p.volumes) for p in parts]),
                         {k: np.concatenate([np.asarray(p.fields[k]) for p in parts]) for k in keys},
                         parts[0].box, parts[0].a, ids)
-
-    def nbytes(self) -> int:
-        """Host memory of the arrays [bytes]."""
-        leaves = tree_util.tree_leaves(self)
-        return int(sum(np.asarray(x).nbytes for x in leaves))

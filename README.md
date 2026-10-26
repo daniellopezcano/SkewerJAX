@@ -34,10 +34,24 @@ reproduces the scheme of fake_spectra, so that the two codes can be compared opt
 
 ```mermaid
 flowchart LR
-    C["<b>comparison</b><br/>fake_spectra scheme, matched mode,<br/>effect chain, benchmark"] --> B
-    B["<b>simulations</b><br/>the field sources: toy fields (GRF),<br/>snapshot readers, gas physics → cells"] --> A
-    A["<b>core</b><br/>lines, cosmology, skewers, gas cells,<br/>selection, deposition, Voigt, line profiles, optical depth, statistics"]
-    U["utils.plotting"] -.-> A
+    C["cosmology (02)"] -. "a(x), or manual" .-> K["skewers (03)"]
+    subgraph SRC["sources of cells (interchangeable)"]
+        TS["toy fields: GRF → cells (04)"]
+        SIM["simulation outputs → cells (05)"]
+    end
+    L["lines (01)"] -. "ion masses" .-> SIM
+    TS --> F["gas cells (04, 05)"]
+    SIM --> F
+    F --> D["deposition: cells → pieces (07)"]
+    K -- "points, a(x)" --> D
+    D -- "T, v∥, a" --> LP["line profiles (06)"]
+    L -- "atomic data: λ, A₂₁, m" --> LP
+    LP --> T["optical depth τ, F (07)"]
+    D -- "n ℓ / a² of the pieces" --> T
+    L -- "f, λ, line offsets Δv" --> T
+    T --> O["overflux δ_F (08)"]
+    O --> P["P1D, ξ1D, P3D, ξ3D (08)"]
+    SIM -. "fake_spectra, external (09)" .-> T
 ```
 
 Dependencies run one way only. `core` imports nothing from the other subpackages. `simulations` holds every source of
@@ -128,8 +142,7 @@ flowchart LR
 Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: the white "paper" style by default,
 `use_style("dark")` for the dark one; Paul Tol's colour-blind-safe "bright" colours and colour maps in both, minimum
 font sizes). `use_backend()` (interactive ipympl figures in a live notebook) is left commented out in the setup cell.
-Every notebook opens with the dependency graph highlighting the ingredients it uses and the lines "Requires" /
-"Independent of". Notebooks `00_quickstart_step_by_step`, 05, 07 and 09 need TNG50 snapshots (see
+Every notebook opens with the dependency graph highlighting the ingredients it uses. Notebooks `00_quickstart_step_by_step`, 05, 07 and 09 need TNG50 snapshots (see
 "Simulation data" in `docs/installation.md`).
 
 ## Validation, tests and benchmarks
@@ -137,7 +150,7 @@ Every notebook opens with the dependency graph highlighting the ingredients it u
 ```bash
 python scripts/validation/run_all.py --quick --skip tng,fake    # toy-input checks (~2 min)
 python scripts/validation/run_all.py                            # every check, incl. TNG50-4 and live fake_spectra
-pytest                                                          # tests/ (CPU); SKEWERJAX_SLOW=1 adds the TNG checks
+pytest                                                          # tests/ (CPU, ~2 min); TNG50-4 tests skip without the data; SKEWERJAX_SLOW=1 adds the TNG scripts
 python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick --results benchmark_results
 ```
 

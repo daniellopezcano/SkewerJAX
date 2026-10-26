@@ -2,8 +2,10 @@
 
 * ``grid_segments`` (the regular-grid fast path) gives the pieces of the generic ``voronoi_segments`` on the same
   cells, for straight and bent paths that cross the periodic faces;
-* ``Cells`` checks its inputs, is a pytree, and ``take`` / ``get`` behave;
-* ``cells_on_grid`` / ``grf_cells``: n = n_bar (1 + delta) exactly on the grid cells; ``voronoi_volumes`` of a grid;
+* ``Cells`` checks its inputs, is a pytree, and ``take`` / ``get`` / ``select_species`` / ``merge_species`` behave;
+  ``cells_from_values`` turns scalars, vectors, arrays, callables of the generators and per-species dicts into per-cell
+  values; ``cells_on_grid`` holds the cubes of the grid and ``voronoi_volumes`` estimates them (``grf_cells`` on top of
+  it: ``test_toy_fields``);
 * ``cell_pieces``: the column of uniform cells is exact, several species share the pieces, and
   ``compute_optical_depth(bundle, v, lines, cells)`` is the sum over those pieces; the top-hat option runs on toy cells.
 """
@@ -14,7 +16,6 @@ import pytest
 
 from skewerjax.core import (Cells, Cosmology, LineBundle, SkewerBundle, cell_pieces, cells_from_values, cells_on_grid, compute_optical_depth,
                             grid_points, grid_segments, phys, voronoi_segments, voronoi_volumes)
-from skewerjax.simulations import PowerLawGRF, grf_cells
 
 BOX = 4.0
 SHAPE = (8, 6, 5)
@@ -64,32 +65,59 @@ def test_cells_container():
     n = 5
     pos = np.random.default_rng(0).uniform(0, BOX, (n, 3))
     sp = {"HI": {"number_density": np.ones(n), "temperature": np.full(n, 1e4), "velocity": np.zeros((n, 3))}}
-    c = Cells(pos, np.ones(n), sp, box=BOX)
-    assert len(c) == n and c.species_keys == ("HI",)
+    c = Cells(pos, np.ones(n), sp, box=BOX, ids=np.arange(n) + 10)
+    assert len(c) == n and c.species_keys == ("HI",) and c.nbytes() == pos.nbytes + 8 * n * (1 + 1 + 1 + 3) + 8 * n
     np.testing.assert_array_equal(c.get("HI", "turbulence"), np.zeros(n))
+    with pytest.raises(KeyError):
+        c.get("HI", "pressure")
+    np.testing.assert_allclose(c.size_cMpc, 1.0)
     leaves, tree = jax.tree_util.tree_flatten(c)
     c2 = jax.tree_util.tree_unflatten(tree, leaves)
     assert c2.box == BOX and np.array_equal(c2.species["HI"]["temperature"], c.species["HI"]["temperature"])
     sub = c.take([0, 2])
-    assert len(sub) == 2 and sub.grid is None
+    assert len(sub) == 2 and sub.grid is None and list(sub.ids) == [10, 12]
+    si = Cells(pos, np.ones(n), {"SiIII": {**sp["HI"], "turbulence": np.full(n, 5.0)}}, box=BOX)
+    both = Cells.merge_species([c, si])
+    assert both.species_keys == ("HI", "SiIII") and both.select_species("SiIII").species_keys == ("SiIII",)
+    with pytest.raises(ValueError):
+        Cells.merge_species([c, si.take([0, 1])])                                                        # other cells
     with pytest.raises(ValueError):
         Cells(pos, np.ones(n), {"HI": {"number_density": np.ones(n), "temperature": np.ones(n)}})        # no velocity
     with pytest.raises(ValueError):
         Cells(pos, np.ones(n), {"HI": {**sp["HI"], "velocity": np.zeros(n)}})                              # velocity (M,)
     with pytest.raises(ValueError):
         Cells(pos, np.ones(n), {"HI": {**sp["HI"], "pressure": np.ones(n)}})                               # unknown field
+    with pytest.raises(ValueError):
+        Cells(pos, np.ones(n), sp, grid=(2, 2, 2))                                                        # not 5 cells
 
 
-def test_grid_cells_and_voronoi_volumes():
-    grf = PowerLawGRF(A_s=0.01, k_0=2.0, n_s=-1.25, L=(BOX,) * 3, N=(16,) * 3)
-    delta = np.asarray(grf.sample(jax.random.PRNGKey(3)))
-    c = grf_cells(delta, grf, {"HI": 2.0, "SiIII": 0.5}, temperature=lambda x: 1e4 + 0 * x[:, 0], velocity=(1.0, 2.0, 3.0))
-    assert c.grid == (16, 16, 16)
-    np.testing.assert_allclose(c.species["HI"]["number_density"], 2.0 * (1.0 + delta.ravel()), rtol=1e-15)
-    np.testing.assert_allclose(c.species["SiIII"]["velocity"][7], [1.0, 2.0, 3.0])
-    np.testing.assert_allclose(c.volumes, (BOX / 16) ** 3)
-    v = voronoi_volumes(grid_points(BOX, (4, 4, 4)), BOX, samples_per_cell=256)
-    np.testing.assert_allclose(v, (BOX / 4) ** 3, rtol=0.2)
+def test_builders_and_volumes():
+    rng = np.random.default_rng(2)
+    gen = rng.uniform(-BOX, 2 * BOX, (40, 3))                                      # wrapped into [0, box)
+    v = rng.normal(size=(40, 3))
+    c = cells_from_values(gen, BOX, {"HI": 1.0, "SiIII": np.arange(40.0)}, temperature={"HI": 1e4, "SiIII": lambda x: x[:, 2]},
+                          velocity=v, turbulence=(lambda x: 2.0 * x[:, 0]), collisional=0.3)
+    assert np.all((c.positions >= 0) & (c.positions < BOX))
+    np.testing.assert_allclose(c.positions, np.mod(gen, BOX))
+    np.testing.assert_allclose(c.volumes, BOX ** 3 / 40)                            # no volumes: the box shared equally
+    np.testing.assert_array_equal(c.species["HI"]["number_density"], np.ones(40))
+    np.testing.assert_array_equal(c.species["SiIII"]["temperature"], c.positions[:, 2])   # callables see the wrapped points
+    np.testing.assert_array_equal(c.species["HI"]["velocity"], v)
+    np.testing.assert_allclose(c.get("SiIII", "turbulence"), 2.0 * c.positions[:, 0])
+    np.testing.assert_allclose(c.get("HI", "collisional"), 0.3)
+    with pytest.raises(ValueError):
+        cells_from_values(gen, None, {"HI": 1.0})                                   # no box and no volumes
+    with pytest.raises(ValueError):
+        cells_from_values(gen, BOX, {"HI": np.ones(7)})                             # not one value per cell
+    g = cells_on_grid(BOX, {"HI": np.ones(SHAPE)}, velocity=np.ones(SHAPE + (3,)))
+    assert g.grid == SHAPE and len(g) == np.prod(SHAPE)
+    np.testing.assert_allclose(g.positions, grid_points(BOX, SHAPE))
+    np.testing.assert_allclose(g.volumes, np.prod([BOX / k for k in SHAPE]), rtol=1e-15)
+    with pytest.raises(ValueError):
+        cells_on_grid(BOX, {"HI": np.ones(SHAPE), "SiIII": np.ones((4, 4, 4))})     # one grid shape for every species
+    vv = voronoi_volumes(grid_points(BOX, (4, 4, 4)), BOX, samples_per_cell=256)
+    np.testing.assert_allclose(vv, (BOX / 4) ** 3, rtol=0.2)                        # Monte Carlo: 1/sqrt(256) per cell
+    np.testing.assert_allclose(vv.sum(), BOX ** 3, rtol=1e-12)
 
 
 def _bundle(n_sk=3, n=200):

@@ -6,13 +6,14 @@ else. It exposes:
 * ``header``: a :class:`SnapshotHeader` (redshift, cosmology, box, code units);
 * ``iter_blocks(datasets, max_rows)``: a stream over the gas, one block of at most ``max_rows``
   cells at a time, so memory is bounded by one block whatever the snapshot size;
-* ``read_rows(file_index, datasets, rows)``: a partial read of selected rows;
+* ``read_rows(file_index, datasets, start, stop)``: a partial read of a range of rows;
+* ``positions_cMpc``, ``volumes_cMpc3``: the generating points and volumes from raw datasets (the selection);
 * ``to_gas_cells(raw, ...)``: conversion of raw datasets to the generic, physical-unit container
   :class:`skewerjax.simulations.gas_cells.GasCells` (layer 2).
 
 Only :class:`ArepoHDF5Reader` (Arepo / IllustrisTNG HDF5, ``snapdir_XXX/snap_XXX.N.hdf5``) is
 implemented. A new format (Gadget SPH, Enzo/RAMSES grids, an N-body + FGPA box, a light cone)
-needs only a new reader with the same three methods; layers 2-6 are unchanged.
+needs only a new reader with the same methods; layers 2-6 are unchanged.
 
 TNG conventions (https://www.tng-project.org/data/docs/specifications/, PartType0):
 
@@ -37,7 +38,7 @@ import numpy as np
 
 KPC_CM = 3.085678e21                     # 1 kpc [cm] (Arepo / fake_spectra value)
 MPC_CM = 3.085678e24                     # 1 Mpc [cm]
-GFM_METALS_ORDER = ("H", "He", "C", "N", "O", "Ne", "Mg", "Si", "Fe")
+GAS_GROUP = "PartType0"                  # the HDF5 group of the gas cells
 GAS_DATASETS = ("Coordinates", "Velocities", "Masses", "Density", "InternalEnergy",
                 "ElectronAbundance", "NeutralHydrogenAbundance", "GFM_Metals", "StarFormationRate")
 
@@ -118,17 +119,16 @@ class ArepoHDF5Reader:
     ----------
     base : directory that contains ``snapdir_XXX`` (e.g. ``/home/STORAGE/TNG50-4``).
     snapnum : snapshot number.
-    part_type : HDF5 group of the gas, default ``"PartType0"``.
 
     Notes
     -----
     Read-only: files are opened with ``h5py.File(..., "r")`` for each access and never written.
     """
 
-    def __init__(self, base, snapnum: int, part_type: str = "PartType0"):
+    def __init__(self, base, snapnum: int):
         self.base = Path(base)
         self.snapnum = int(snapnum)
-        self.part_type = part_type
+        self.part_type = GAS_GROUP
         snapdir = self.base / f"snapdir_{self.snapnum:03d}"
         if not snapdir.is_dir():
             raise FileNotFoundError(f"no snapshot directory {snapdir}")
@@ -142,7 +142,7 @@ class ArepoHDF5Reader:
             par = dict(f["Parameters"].attrs) if "Parameters" in f else {}
             self.config = dict(f["Config"].attrs) if "Config" in f else {}
             self.parameters = par
-            self.dataset_attrs = {k: dict(v.attrs) for k, v in f[part_type].items()}
+            self.dataset_attrs = {k: dict(v.attrs) for k, v in f[GAS_GROUP].items()}
         n_gas = int(np.asarray(hdr.get("NumPart_Total", [0]))[0]) + \
             (int(np.asarray(hdr.get("NumPart_Total_HighWord", [0]))[0]) << 32)
         a = _attr(hdr, "Time")
@@ -163,9 +163,8 @@ class ArepoHDF5Reader:
         with h5py.File(self.files[file_index], "r") as f:
             return int(f[self.part_type]["Density"].shape[0]) if self.part_type in f else 0
 
-    def read_rows(self, file_index: int, datasets: Sequence[str], rows=None, start: int = 0,
-                  stop: Optional[int] = None) -> dict:
-        """Read ``datasets`` of one file: all rows in [start, stop), or the sorted ``rows`` (fancy index).
+    def read_rows(self, file_index: int, datasets: Sequence[str], start: int = 0, stop: Optional[int] = None) -> dict:
+        """Read ``datasets`` of one file: all rows in [start, stop).
 
         Returns raw code-unit arrays with their native dtypes.
         """
@@ -177,13 +176,7 @@ class ArepoHDF5Reader:
             for k in datasets:
                 if k not in g:
                     raise KeyError(f"{self.files[file_index].name}: {self.part_type} has no dataset {k!r}")
-                if rows is None:
-                    out[k] = g[k][start:stop]
-                else:
-                    rows = np.asarray(rows)
-                    if rows.size and (np.any(np.diff(rows) <= 0) or rows[0] < 0):
-                        raise ValueError("rows must be strictly increasing and non-negative.")
-                    out[k] = g[k][rows] if rows.size else np.empty((0,) + g[k].shape[1:], g[k].dtype)
+                out[k] = g[k][start:stop]
         return out
 
     def iter_blocks(self, datasets: Sequence[str], max_rows: int = 4_000_000) -> Iterator[tuple[int, int, dict]]:
@@ -215,7 +208,7 @@ class ArepoHDF5Reader:
 
         Fields of the container (all float64 except ``ids``):
         ``rho`` [physical g cm^-3], ``u`` [erg g^-1], ``n_e`` (n_e / n_H), ``x_HI_stored``,
-        ``metals`` (N, 9) mass fractions in ``GFM_METALS_ORDER``, ``sfr`` [Msun/yr],
+        ``metals`` (N, 9) mass fractions in ``gas_physics.GFM_METALS_ORDER``, ``sfr`` [Msun/yr],
         ``velocity`` (N, 3) physical peculiar velocity [km/s] (= Velocities x sqrt(a)).
         """
         from skewerjax.simulations.gas_cells import GasCells

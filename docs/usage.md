@@ -123,8 +123,8 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 - **Lower layers:** `sk.absorbers(ion)` gives the deposited pieces (`core.Absorbers`), `sk.pieces(ion, lines)` the same
   as `core.Pieces` (through `core.cell_pieces`, for `compute_optical_depth`), `core.tau_absorbers(A, lines, v, frame)`
   the τ (options `velocity_period`, `chunk`, `v_chunk`, `dtype`, `devices`, `skewers`), and `sk.tau(...)` the τ cached
-  in an HDF5 file when the object has a `name` and a `cache`. `select_cells_near_paths` also takes cells already in
-  memory (it then calls `core.select_cells`).
+  in an HDF5 file when the object has a `name` and a `cache`. Cells already in memory (a region from `snapshot_cells`,
+  a toy model) are selected with `core.select_cells`, the same rule as the streamed `select_cells_near_paths`.
 - **Figure tools:**
   - `slab_projection(reader, normal_axis, centre, thickness, n_pix)` gives the gas surface density and the
     mass-weighted temperature of a slab;
@@ -208,7 +208,8 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
 - `SKEWERJAX_HEADLESS=1` forces the inline backend (e.g. when executing notebooks with nbconvert).
 
 - Line styles per mode: `MODE_STYLES`; labels with units: `LABELS`; sizes: `FIGSIZES`.
-- `plot_dag(highlight, external=False)`: the dependency graph of the ingredients (`DAG_NODES`, `DAG_EDGES`).
+- `plot_dag(highlight, external=False)`: the dependency graph of the ingredients (`DAG_NODES`, `DAG_EDGES`; every
+  edge is a dependency of the code, listed above `DAG_EDGES`).
 - Path geometry: `geometry_style(name)`, the one style of points, midpoints, dual segments, tangents, line elements,
   piece ends and generators (03).
 - Tutorial figures: `plot_line_table`, `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,

@@ -321,9 +321,12 @@ class CloudyIonTable:
 # ---------------------------------------------------------------------------- per-ion densities
 def ion_properties(cells, ion: Ion, *, mass_unit: str = "amu", T_constants: str = "codata",
                    x_HI_model: str = "stored_sf", cloudy: Optional[CloudyIonTable] = None,
-                   cloudy_density: str = "hydrogen", cloudy_interpolation: str = "linear",
-                   X_mu: float = 0.76, gamma_HI: Optional[float] = None, f_bar: float = 0.17) -> dict:
+                   cloudy_density: str = "hydrogen", cloudy_interpolation: str = "linear") -> dict:
     """Per-cell n_H, T, ion fraction and ion density for ``ion`` (one code path for every ion).
+
+    cells : ``GasCells`` with fields ``rho``, ``u``, ``n_e``, ``metals`` (and ``x_HI_stored``, ``sfr`` for H I).
+    The options are those of ``ExtractionOptions`` (module docstring); the H I photoionisation rate of the
+    ``"stored_sf"`` model is the simulation's (``TREECOOL_fg_dec11`` at the snapshot redshift).
 
     Returns
     -------
@@ -335,9 +338,9 @@ def ion_properties(cells, ion: Ion, *, mass_unit: str = "amu", T_constants: str 
     rho = jnp.asarray(f["rho"])
     metals = jnp.asarray(f["metals"])
     n_H = element_number_density(rho, metals[:, 0], get_mass_amu(["H"])["H"], mass_unit)
-    T = temperature(f["u"], f["n_e"], X=X_mu, constants=T_constants)
+    T = temperature(f["u"], f["n_e"], constants=T_constants)
     if ion.is_HI:
-        frac = neutral_fraction(cells, n_H, T, model=x_HI_model, redshift=redshift, gamma_HI=gamma_HI, f_bar=f_bar)
+        frac = neutral_fraction(cells, n_H, T, model=x_HI_model, redshift=redshift)
     else:
         if cloudy is None:
             cloudy = CloudyIonTable(redshift)

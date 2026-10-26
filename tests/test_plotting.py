@@ -32,6 +32,13 @@ def test_style_and_dag():
     fig.canvas.draw()
     pl.use_style()
     assert pl.FG == "black" and pl.ENTITY_COLORS["total"] == "black" and pl.CMAPS["sequential"] == "tol_iridescent"
+    # every edge starts and ends on the drawn outline of its boxes (the box plus its pad)
+    ew, eh = pl._DAG_W / 2 + pl._DAG_PAD, pl._DAG_H / 2 + pl._DAG_PAD
+    on_outline = lambda p, k: (np.isclose(abs(p[0] - pl.DAG_NODES[k][0]), ew) and abs(p[1] - pl.DAG_NODES[k][1]) <= eh) or \
+        (np.isclose(abs(p[1] - pl.DAG_NODES[k][1]), eh) and abs(p[0] - pl.DAG_NODES[k][0]) <= ew)
+    for a, b, _, _, route in pl.DAG_EDGES:
+        pts = pl._dag_route(a, b, route, pl.DAG_NODES, pl._DAG_LANES.get((a, b), 0.0), pl._DAG_END_DX.get((a, b), 0.0))
+        assert on_outline(pts[0], a) and on_outline(pts[-1], b), (a, b, pts)
 
 
 def test_line_table_and_skewer_figures():

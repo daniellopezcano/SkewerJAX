@@ -8,9 +8,10 @@ Selection radius of a cell c with cube side h_c = V_c^(1/3), for a path sampled 
 *point* is at most ds/2 farther than the nearest point of the polyline):
 
 * ``"tophat"``: d <= h_c + ds/2 (a sphere of radius h_c can touch the path);
-* ``"voronoi"``: d <= max(k h_c, r_min) + ds/2. A point of the path can belong to the Voronoi cell of generator c
-  only if it is within the cell's circumradius, which ``k = 2.5`` bounds for all but pathological cells; the
-  deposition checks this a posteriori.
+* ``"voronoi"``: d <= k h_c + ds/2. A point of the path can belong to the Voronoi cell of generator c only if it is
+  within the cell's circumradius, which ``k = VORONOI_FACTOR = 2.5`` bounds for all but pathological cells; the
+  deposition checks this a posteriori, and ``scripts/validation/check_tng_fields.py`` checks the selection on TNG50-4
+  against a brute-force nearest-generator search over the whole snapshot.
 
 Back ends (``backend``): ``"cpu"`` (default) queries a scipy ``cKDTree``; ``"jztree"`` computes the same
 nearest-path-point distance on a CUDA GPU with JZ-TREE (``jztree.knn.knn`` with ``boxsize``, periodic;
@@ -20,13 +21,15 @@ within a relative ``1e-6`` of their radius, so that the selected set does not de
 optional: CPU-only installations never import it.
 
 ``select_cells`` works on cells in memory (``core.Cells``, or any container with ``positions``, ``size_cMpc``,
-``box`` and ``take``); ``skewerjax.simulations.select_cells_near_paths`` applies the same rule to a snapshot streamed
-from disk.
+``box`` and ``take``), whatever their source; ``skewerjax.simulations.select_cells_near_paths`` applies the same rule
+(``selection_radius`` and the back ends below) to a snapshot streamed from disk.
 """
 from __future__ import annotations
 
 import numpy as np
 from scipy.spatial import cKDTree
+
+VORONOI_FACTOR = 2.5      # k of the "voronoi" selection radius k h_c + ds/2
 
 
 def wrap_positions(x, box: float) -> np.ndarray:
@@ -43,13 +46,14 @@ def max_path_spacing(paths) -> float:
     return float(np.max(np.linalg.norm(np.diff(p, axis=1), axis=-1)))
 
 
-def selection_radius(size, mode: str, ds: float, voronoi_factor: float = 2.5, voronoi_min: float = 0.0):
-    """Per-cell selection radius [cMpc] (see module docstring)."""
+def selection_radius(size, mode: str, ds: float):
+    """Per-cell selection radius [cMpc] of cells of size ``size`` = V^(1/3) for paths sampled every <= ``ds`` (see module
+    docstring)."""
     size = np.asarray(size, dtype=np.float64)
     if mode == "tophat":
         return size + 0.5 * ds
     if mode == "voronoi":
-        return np.maximum(voronoi_factor * size, voronoi_min) + 0.5 * ds
+        return VORONOI_FACTOR * size + 0.5 * ds
     raise ValueError(f"mode must be 'tophat' or 'voronoi', got {mode!r}.")
 
 
@@ -103,13 +107,13 @@ def _nearest_distance_jztree(pts: np.ndarray, pos: np.ndarray, box: float, tree:
     return d
 
 
-def select_cells(cells, paths, *, mode: str = "voronoi", voronoi_factor: float = 2.5, voronoi_min: float = 0.0,
-                 workers: int = -1, backend: str = "cpu"):
+def select_cells(cells, paths, *, mode: str = "voronoi", workers: int = -1, backend: str = "cpu"):
     """The cells of ``cells`` that can reach any of ``paths`` (selection radius of the module docstring).
 
     cells : ``core.Cells`` (or any container with ``positions``, ``size_cMpc``, ``box`` and ``take``).
     paths : (N_sk, N_pts, 3) sampling points [cMpc], e.g. ``SkewerBundle.spatial_points``.
     mode : "voronoi" (default deposition) or "tophat" (spheres of radius V^(1/3)).
+    workers : threads of the k-d tree queries (-1: all cores).
     backend : "cpu" (default), "jztree" or "auto" (``resolve_backend``); every back end selects the same cells.
     Returns ``cells.take(selected)``.
     """
@@ -120,7 +124,7 @@ def select_cells(cells, paths, *, mode: str = "voronoi", voronoi_factor: float =
     tree = cKDTree(pts) if box is None else cKDTree(pts, boxsize=box)
     pos = np.asarray(cells.positions, dtype=np.float64)
     pos = pos if box is None else wrap_positions(pos, box)
-    rad = selection_radius(cells.size_cMpc, mode, ds, voronoi_factor, voronoi_min)
+    rad = selection_radius(cells.size_cMpc, mode, ds)
     backend = resolve_backend(backend)
     d = _nearest_distance_jztree(pts, pos, box, tree, rad) if backend == "jztree" else _nearest_distance_cpu(tree, pos, rad, workers)
     sel = np.nonzero(d <= rad)[0]

@@ -1,21 +1,64 @@
-"""grf_cells: n = n_bar (1 + delta) with no transform on the grid cells (the realisation itself, zero-mean delta,
-positivity check, one realisation shared by several species); the optional terms of PowerLawGRF."""
+"""Toy fields (notebook 04): ``PowerLawGRF`` (the two grid modes and their checks, reproducible zero-mean draws whose
+periodogram averages to P(k), the optional Kaiser / Fingers-of-God / BAO terms), ``grf_cells`` (n = n_bar (1 + delta)
+with no transform on the grid cells: generators at the nodes, exact volumes, one realisation shared by several species,
+per-cell T and v, the positivity warning, the input checks) and ``interpolate_periodic``. The statistics of many draws
+(P(k), xi(r), wedges): ``scripts/validation/check_summary_statistics.py``, notebook 08 §4."""
 import warnings
 
 import jax
 import numpy as np
+import pytest
 
-from skewerjax.simulations import PowerLawGRF, grf_cells
+from skewerjax.simulations import PowerLawGRF, grf_cells, interpolate_periodic
+
+
+def test_grid_modes_and_checks():
+    a = PowerLawGRF(1.0, 1.0, -1.0, L=(20.0, 10.0), N=(16, 8))
+    b = PowerLawGRF(1.0, 1.0, -1.0, k_min=(2 * np.pi / 20.0, 2 * np.pi / 10.0), N_k=(8, 4))        # mode (b)
+    c = PowerLawGRF(1.0, 1.0, -1.0, k_min=2 * np.pi / 20.0, k_max=8 * 2 * np.pi / 20.0)           # scalars broadcast
+    assert a.shape == b.shape == (16, 8) and np.allclose(a.L, b.L, rtol=1e-12) and c.shape == (16,)
+    assert a.dx == (1.25, 1.25) and a.cell_volume == 1.25 ** 2 and a.volume == 200.0 and a.ndim == 2
+    np.testing.assert_allclose(a.k_max, (np.pi / 1.25, np.pi / 1.25), rtol=1e-12)               # Nyquist
+    for kw in (dict(L=10.0), dict(L=10.0, N=8, N_k=4), dict(k_min=1.0, k_max=4.5), dict(k_min=1.0, k_max=4.0, N_k=3),
+               dict(L=(1.0, 2.0, 3.0, 4.0), N=4), dict(L=10.0, N=1)):
+        with pytest.raises(ValueError):
+            PowerLawGRF(1.0, 1.0, -1.0, **kw)
+    with pytest.raises(ValueError):
+        PowerLawGRF(-1.0, 1.0, -1.0, L=10.0, N=8)                                               # A_s < 0
+
+
+def test_draws_reproducible_zero_mean_and_unbiased():
+    g = PowerLawGRF(A_s=2.0, k_0=1.0, n_s=-1.0, L=50.0, N=64)
+    k1, k2 = jax.random.PRNGKey(1), jax.random.PRNGKey(2)
+    d1 = np.asarray(g.sample(k1))
+    assert np.array_equal(d1, np.asarray(g.sample(k1))) and not np.allclose(d1, np.asarray(g.sample(k2)))
+    assert abs(d1.mean()) < 1e-14                                                              # the k = 0 mode is zero
+    d, dk = jax.vmap(lambda k: g.sample(k, return_modes=True))(jax.random.split(k1, 800))
+    np.testing.assert_allclose(np.asarray(dk)[0], g.cell_volume * np.fft.rfft(np.asarray(d)[0]), rtol=1e-10, atol=1e-12)
+    P_hat = (np.abs(np.asarray(dk)) ** 2 / g.volume).mean(0)[1:]                               # <|delta_k|^2> / V = P(k)
+    P = np.asarray(g.power_grid())[1:]
+    assert np.max(np.abs(P_hat / P - 1)) < 0.3 and abs(np.mean(P_hat / P) - 1) < 0.03          # 800 draws: 5 % per mode
+    assert abs(np.asarray(d).var(axis=1).mean() / float(g.variance()) - 1) < 0.1   # dominated by the k_min modes: ~4 %
 
 
 def test_grid_cells_reproduce_n_bar_one_plus_delta():
     grf = PowerLawGRF(A_s=0.02, k_0=2.0, n_s=-1.25, L=(20.0,) * 3, N=(16,) * 3)
     delta = np.asarray(grf.sample(jax.random.PRNGKey(4)))
-    c = grf_cells(delta, grf, {"HI": 3e-12})
+    c = grf_cells(delta, grf, {"HI": 3e-12, "SiIII": 0.5}, temperature=lambda x: 1e4 + x[:, 0], velocity=(1.0, 2.0, 3.0))
+    assert c.grid == grf.shape and len(c) == 16 ** 3 and c.box == 20.0
     n = np.asarray(c.species["HI"]["number_density"]).reshape(grf.shape)
     np.testing.assert_allclose(n, 3e-12 * (1.0 + delta), rtol=1e-12)
     np.testing.assert_allclose(n.mean(), 3e-12, rtol=1e-12)                 # the k = 0 mode of delta is zero
-    np.testing.assert_allclose(np.asarray(c.positions).reshape(grf.shape + (3,))[:, 0, 0, 0], grf.x_grid()[0])   # nodes = generators
+    pos = np.asarray(c.positions).reshape(grf.shape + (3,))
+    np.testing.assert_allclose(pos[:, 0, 0, 0], grf.x_grid()[0])           # generators = nodes, in C order
+    np.testing.assert_allclose(pos[3, 5, 7], [3 * 1.25, 5 * 1.25, 7 * 1.25])
+    np.testing.assert_allclose(c.volumes, 1.25 ** 3, rtol=1e-15)            # the cubes of the grid
+    np.testing.assert_allclose(c.species["SiIII"]["temperature"], 1e4 + np.asarray(c.positions)[:, 0])
+    np.testing.assert_allclose(c.species["SiIII"]["velocity"][7], [1.0, 2.0, 3.0])
+    with pytest.raises(ValueError):
+        grf_cells(delta[:8], grf, {"HI": 1.0})                              # not the grid shape
+    with pytest.raises(ValueError):
+        grf_cells(np.zeros((16, 8, 8)), PowerLawGRF(0.02, 2.0, -1.25, L=(20.0, 10.0, 10.0), N=(16, 8, 8)), {"HI": 1.0})
 
 
 def test_shared_realisation_and_negative_warning():
@@ -27,6 +70,22 @@ def test_shared_realisation_and_negative_warning():
     assert any("min(1 + delta)" in str(x.message) for x in w)
     np.testing.assert_allclose(c.species["SiIII"]["number_density"] - 2.0, 2.0 * (c.species["HI"]["number_density"] - 1.0),
                                rtol=1e-12, atol=1e-12)
+
+
+def test_interpolate_periodic():
+    """Exact at the nodes, linear between them, periodic across the faces, anisotropic boxes."""
+    rng = np.random.default_rng(0)
+    L, N = np.array([8.0, 4.0, 6.0]), (8, 4, 6)
+    f = rng.normal(size=N)
+    idx = np.stack(np.meshgrid(*[np.arange(n) for n in N], indexing="ij"), -1).reshape(-1, 3)
+    nodes = idx * L / N
+    np.testing.assert_allclose(np.asarray(interpolate_periodic(f, nodes, L)), f.reshape(-1), rtol=1e-12)
+    np.testing.assert_allclose(np.asarray(interpolate_periodic(f, nodes + L * [2, -1, 3], L)), f.reshape(-1), rtol=1e-12)
+    half = np.array([[7.5, 0.0, 0.0]])                                      # between the last and the first x node
+    np.testing.assert_allclose(np.asarray(interpolate_periodic(f, half, L)), 0.5 * (f[7, 0, 0] + f[0, 0, 0]), rtol=1e-12)
+    lin = np.add.outer(np.add.outer(np.arange(8.0), 2 * np.arange(4.0)), 3 * np.arange(6.0))   # linear inside the box
+    p = rng.uniform(0, 1, (50, 3)) * (L - L / N)                            # away from the periodic seam
+    np.testing.assert_allclose(np.asarray(interpolate_periodic(lin, p, L)), (p * np.array(N) / L) @ [1.0, 2.0, 3.0], rtol=1e-12)
 
 
 def test_grf_optional_terms():

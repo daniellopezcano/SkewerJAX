@@ -35,6 +35,8 @@ import numpy as np
 from jax import tree_util
 from scipy.spatial import cKDTree
 
+from skewerjax.core.selection import wrap_positions
+
 REQUIRED = ("number_density", "temperature", "velocity")
 OPTIONAL = ("turbulence", "collisional")
 FIELDS = REQUIRED + OPTIONAL
@@ -198,7 +200,7 @@ def cells_from_values(positions, box: Optional[float], number_density: dict, *, 
     """
     pos = np.asarray(positions, dtype=np.float64)
     if box is not None:
-        pos = _wrap(pos, box)
+        pos = wrap_positions(pos, box)
     m = pos.shape[0]
     if volumes is None:
         if box is None:
@@ -249,7 +251,7 @@ def voronoi_volumes(positions, box: float, *, samples_per_cell: int = 32, seed: 
     finite size). Unbiased otherwise; relative scatter 1 / sqrt(samples per cell), so the size V^(1/3) has a third of
     it. (For a grid of cells the volumes are exact: ``cells_on_grid``.)
     """
-    pos = _wrap(np.asarray(positions, dtype=np.float64), box)
+    pos = wrap_positions(positions, box)
     m = pos.shape[0]
     tree = cKDTree(pos, boxsize=box)
     rng = np.random.default_rng(seed)
@@ -258,10 +260,5 @@ def voronoi_volumes(positions, box: float, *, samples_per_cell: int = 32, seed: 
     chunk = 4_000_000
     for i0 in range(0, n_total, chunk):
         u = rng.uniform(0.0, box, (min(chunk, n_total - i0), 3))
-        counts += np.bincount(tree.query(_wrap(u, box), k=1, workers=workers)[1], minlength=m)
+        counts += np.bincount(tree.query(wrap_positions(u, box), k=1, workers=workers)[1], minlength=m)
     return np.maximum(counts, 0.5) / n_total * float(box) ** 3
-
-
-def _wrap(x, box):
-    y = np.mod(np.asarray(x, dtype=np.float64), box)
-    return np.where(y >= box, 0.0, y)

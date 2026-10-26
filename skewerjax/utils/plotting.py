@@ -418,7 +418,7 @@ LABELS = {  # one label (with its unit) per quantity, in every notebook
     "kP": r"$k P_{\rm 1D}/\pi$", "xi": r"$\xi_{\rm 1D}$", "lag": r"$\Delta v\ [\mathrm{km\,s^{-1}}]$", "delta": r"$\delta_F$",
     "sigma": r"$\Sigma_{\rm gas}\ [\mathrm{M_\odot\,ckpc^{-2}}]$",
 }
-FIGSIZES = {"wide": (20, 6), "single": (13, 6), "tall": (13, 9), "triple": (22, 6), "grid": (22, 12), "dag": (24, 6.6)}
+FIGSIZES = {"wide": (20, 6), "single": (13, 6), "tall": (13, 9), "triple": (22, 6), "grid": (22, 12), "dag": (26, 6.6)}
 
 # The dependency graph of the ingredients, derived from the code. Columns are topological levels; the two field sources
 # (toy fields and simulation outputs) are interchangeable inputs of the gas cells, side by side in one column.
@@ -429,15 +429,26 @@ DAG_NODES = {   # key: (column, row, name, detail)
     "samplers": (2, 0.52, "toy fields", "PowerLawGRF → cells"),
     "simulation": (2, -0.52, "simulation outputs", "TNG snapshot → cells"),
     "fields": (3, 0.0, "gas cells", "Voronoi cells: n, T, v"),
-    "profiles": (4, 1.45, "line profiles", r"Voigt $\phi_j(v)$ of the gas"),
     "deposition": (4, 0.0, "deposition", "cells → pieces"),
-    "tau": (5, 0.0, "optical depth", r"$\tau(v)$, $F=e^{-\tau}$"),
-    "overflux": (6, 0.0, "overflux", r"$\delta_F$ per line, total"),
-    "stats": (7, 0.0, "statistics", "P1D, ξ1D, P3D, ξ3D"),
+    "profiles": (5, 0.0, "line profiles", r"Voigt $\phi_j(v)$ per piece"),
+    "tau": (6, 0.0, "optical depth", r"$\tau(v)$, $F=e^{-\tau}$"),
+    "overflux": (7, 0.0, "overflux", r"$\delta_F$ per line, total"),
+    "stats": (8, 0.0, "statistics", "P1D, ξ1D, P3D, ξ3D"),
     "fake_spectra": (3, -0.8, "fake_spectra", "external reference"),
 }
 # (from, to, kind, label, route): kind "solid" required | "optional" optional input or data table | "external";
-# route = waypoints between the two ends: "h" leaves horizontally then turns, "v" leaves vertically then turns.
+# route = waypoints between the two ends (``_dag_route``). Every edge is a dependency of the code:
+#   cosmology -> skewers   ``SkewerBundle`` solves a(x) with ``Cosmology.solve_a_of_x`` (or takes manual_scale_factors);
+#   lines -> simulation    ``gas_physics.Ion.mass_amu`` (``core.lines.get_mass_amu``);
+#   sources -> gas cells   ``grf_cells`` / ``snapshot_cells``, ``SimulationSkewers.to_cells`` return ``core.Cells``;
+#   cells, skewers -> deposition   ``core.cell_pieces(cells, lines, skewer_bundle=...)``: points and a(x) (``bundle_frame``);
+#   deposition -> line profiles    the profiles are evaluated at the pieces' T, v_par and a (``optical_depth_kernel``);
+#   lines -> line profiles         lambda_j, A_21, m (``voigt_widths_GHz``);
+#   deposition, profiles, lines -> tau   tau = C f_j sum_p (n l / a^2)_p phi_jp: f_j in the prefactor, lambda_j in the
+#                                  detuning (``frequency_offset_GHz``), delta_v_j for the reference axis
+#                                  (``line_frame="reference"``, ``wrap_to_ref_line``);
+#   tau -> overflux -> statistics  ``DeltaFieldBuilder(tau)``, ``OverfluxStatistics1D/3D`` (no line data: the lines are
+#                                  already on one axis).
 DAG_EDGES = (
     ("cosmology", "skewers", "optional", "a(x) (or manual)", None),
     ("lines", "simulation", "optional", "ion masses", "v"),
@@ -445,30 +456,41 @@ DAG_EDGES = (
     ("simulation", "fields", "solid", None, None),
     ("fields", "deposition", "solid", None, None),
     ("skewers", "deposition", "solid", "points, a(x)", "h"),
-    ("deposition", "tau", "solid", "pieces", None),
-    ("lines", "profiles", "solid", "atomic data", None),
-    ("profiles", "tau", "solid", None, "h"),
+    ("deposition", "profiles", "solid", r"T, $v_\parallel$, a", None),
+    ("deposition", "tau", "solid", r"$n\,\ell/a^2$ of the pieces", "u"),
+    ("lines", "profiles", "solid", "atomic data: λ, A₂₁, m", "h"),
+    ("lines", "tau", "solid", "f, λ, line offsets Δv", "h"),
+    ("profiles", "tau", "solid", None, None),
     ("tau", "overflux", "solid", None, None),
-    ("lines", "overflux", "optional", "line offsets Δv (frames)", "h"),
     ("overflux", "stats", "solid", None, None),
 )
 DAG_EXTERNAL = (("simulation", "fake_spectra", None), ("fake_spectra", "tau", "compared"))   # same snapshot, compared τ
 DAG_NOTEBOOKS = {"lines": "01", "cosmology": "02", "skewers": "03", "samplers": "04", "fields": "04, 05", "simulation": "05",
                  "profiles": "06", "deposition": "07", "tau": "07", "overflux": "08", "stats": "08", "fake_spectra": "09"}
-_DAG_W, _DAG_H = 0.80, 0.56
+_DAG_W, _DAG_H, _DAG_PAD = 0.80, 0.56, 0.02          # box width and height, and the pad of its rounded outline [data]
+# per edge: the lane of its route (``_dag_route``), and the x offset of its end from the centre of the target box
+_DAG_LANES = {("lines", "profiles"): -0.12, ("lines", "tau"): 0.12, ("lines", "simulation"): 0.12, ("deposition", "tau"): 0.34}
+_DAG_END_DX = {("skewers", "deposition"): -0.2, ("deposition", "tau"): -0.2}
 
 
-def _dag_route(a, b, route, nodes, lane):
-    """Polyline from box a to box b. None: straight between facing sides; "h": out of the right side of a at height
-    ``lane`` above its centre, horizontally, then vertically into b; "v": out of the top / bottom of a, vertically to
-    height ``lane`` above b's centre, then horizontally into the left side of b."""
+def _dag_route(a, b, route, nodes, lane, dx=0.0):
+    """Polyline from box a to box b, starting and ending on the drawn outlines (the box plus its pad).
+
+    None: straight between facing sides; "h": out of the right side of a at height ``lane`` above its centre,
+    horizontally, then vertically into the top or bottom of b (``dx`` from its centre); "v": out of the top / bottom of a, vertically to height
+    ``lane`` above b's centre, then horizontally into the left side of b; "u": out of the bottom of a (its centre), down
+    by ``lane``, horizontally, then up into the bottom of b (``dx`` from its centre), under the boxes in between.
+    """
     (xa, ya), (xb, yb) = nodes[a][:2], nodes[b][:2]
-    w, h = _DAG_W / 2, _DAG_H / 2
+    w, h = _DAG_W / 2 + _DAG_PAD, _DAG_H / 2 + _DAG_PAD
     if route is None:
         return [(xa + w, ya), (xb - w, yb + 0.25 * (ya - yb))]
     if route == "h":
         y0 = ya + lane
-        return [(xa + w, y0), (xb, y0), (xb, yb + (h if y0 > yb else -h))]
+        return [(xa + w, y0), (xb + dx, y0), (xb + dx, yb + (h if y0 > yb else -h))]
+    if route == "u":
+        x0, x1, y0 = xa, xb + dx, min(ya, yb) - h - lane
+        return [(x0, ya - h), (x0, y0), (x1, y0), (x1, yb - h)]
     y1, x0 = yb + lane, xa + 0.18
     return [(x0, ya + (h if y1 > ya else -h)), (x0, y1), (xb - w, y1)]
 
@@ -477,25 +499,25 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
     """The dependency graph (DAG) of SkewerJAX's ingredients; ``highlight`` (keys of ``DAG_NODES``: the ingredients a
     notebook uses) are drawn with one light fill and a coloured edge, and the edges into them in the same colour.
 
-    Arrows point from an ingredient to what needs it. Solid: a required input. Dashed: optional, or data only (the
-    cosmology can be replaced by manual a(x); the simulation reads only ion masses from the line table; the overflux
-    reads only the line offsets Δv to put every line on the reference frame). The two sources of gas are interchangeable:
-    both produce the same container, Voronoi gas cells, which the deposition cuts into pieces along the skewers; the
-    optical depth sums the line profiles of the pieces. ``external`` adds fake_spectra, the external reference code
-    (comparison notebook only).
-    ``notebooks`` writes the notebook of every ingredient under its box. Returns (fig, ax).
+    Arrows point from an ingredient to what needs it, and each is a dependency of the code (``DAG_EDGES``). Solid: a
+    required input. Dashed: optional, or data only (the cosmology can be replaced by manual a(x); the simulation reads
+    only ion masses from the line table). The two sources of gas are interchangeable: both produce the same container,
+    Voronoi gas cells, which the deposition cuts into pieces along the skewers. The line profiles are evaluated at the
+    pieces' temperature, velocity and scale factor with the lines' atomic data; the optical depth sums them, weighted by
+    each piece's n l / a^2, with the oscillator strengths f and wavelengths λ of the lines, and puts every line on the
+    reference axis with the offsets Δv. ``external`` adds fake_spectra, the external reference code (comparison notebook
+    only). ``notebooks`` writes the notebook of every ingredient under its box. Returns (fig, ax).
     """
     from matplotlib.lines import Line2D
     hl = {highlight} if isinstance(highlight, str) else set(highlight)
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize or FIGSIZES["dag"], layout="constrained")
     ax.set_axis_off()
-    ax.set(xlim=(-0.5, 7.5), ylim=(-1.62, 2.1))
+    ax.set(xlim=(-0.5, 8.5), ylim=(-1.62, 1.86))
     fg, on, ext_c = plt.rcParams["text.color"], PALETTE["cyan"], PALETTE["yellow"]
     on_fill = mpl.colors.to_rgba(on, 0.30)                      # the one highlight: a light fill and a coloured edge
-    w, h = _DAG_W, _DAG_H
+    w, h, pad = _DAG_W, _DAG_H, _DAG_PAD
     nodes = {k: v for k, v in DAG_NODES.items() if external or k != "fake_spectra"}
-    lanes = {("lines", "overflux"): 0.44, ("lines", "simulation"): 0.12, ("profiles", "tau"): 0.0}
     # the group of interchangeable field sources
     gx, gy = DAG_NODES["samplers"][0], 0.5 * (DAG_NODES["samplers"][1] + DAG_NODES["simulation"][1])
     gh = DAG_NODES["samplers"][1] - DAG_NODES["simulation"][1] + h + 0.34
@@ -504,17 +526,17 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
     ax.text(gx, gy + gh / 2 + 0.04, "sources of cells (interchangeable)", ha="center", va="bottom", fontsize=FONT_MIN["floor"],
             color=DIM, style="italic")
     edges = [e for e in DAG_EDGES] + ([(a, b, "external", lab, None) for a, b, lab in DAG_EXTERNAL] if external else [])
+    ew, eh = w / 2 + pad, h / 2 + pad                           # the drawn outline of a box, from its centre
     for a, b, kind, label, route in edges:
         if a not in nodes or b not in nodes:
             continue
         if (a, b) == ("fake_spectra", "tau"):
-            pts = [(nodes[a][0] + w / 2, nodes[a][1]), (nodes[b][0] - 0.2, nodes[a][1]), (nodes[b][0] - 0.2, nodes[b][1] - h / 2)]
+            y0 = nodes[a][1] - 0.12                             # below the deposition -> tau route
+            pts = [(nodes[a][0] + ew, y0), (nodes[b][0], y0), (nodes[b][0], nodes[b][1] - eh)]
         elif (a, b) == ("simulation", "fake_spectra"):
-            pts = [(nodes[a][0] + w / 2, nodes[a][1] - 0.15), (nodes[b][0] - w / 2, nodes[a][1] - 0.15)]
-        elif (a, b) == ("skewers", "deposition"):
-            pts = [(nodes[a][0] + w / 2, nodes[a][1]), (nodes[b][0], nodes[a][1]), (nodes[b][0], nodes[b][1] - h / 2)]
+            pts = [(nodes[a][0] + ew, nodes[a][1] - 0.15), (nodes[b][0] - ew, nodes[a][1] - 0.15)]
         else:
-            pts = _dag_route(a, b, route, nodes, lanes.get((a, b), 0.0))
+            pts = _dag_route(a, b, route, nodes, _DAG_LANES.get((a, b), 0.0), _DAG_END_DX.get((a, b), 0.0))
         hot = b in hl                                           # the inputs of a highlighted ingredient light up
         col = on if hot else (ext_c if kind == "external" else DIM)
         dashed = kind in ("optional", "external")
@@ -527,7 +549,7 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
         d = np.hypot(xe1 - xe0, ye1 - ye0)
         stub = (xe1 - 0.06 * (xe1 - xe0) / d, ye1 - 0.06 * (ye1 - ye0) / d)
         ax.annotate("", (xe1, ye1), stub, arrowprops=dict(arrowstyle="-|>", color=col, mutation_scale=18, lw=lw,
-                    ls="-", shrinkA=0, shrinkB=1))
+                    ls="-", shrinkA=0, shrinkB=0), zorder=4)
         if label:                                               # on the longest segment (above the boxes if it is short)
             seg = max(range(len(pts) - 1), key=lambda k: np.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]))
             (x0, y0), (x1, y1) = pts[seg], pts[seg + 1]
@@ -544,7 +566,7 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
         hit = key in hl
         ext = key == "fake_spectra"
         ec = on if hit else (ext_c if ext else DIM)
-        ax.add_patch(mpl.patches.FancyBboxPatch((x - w / 2, y - h / 2), w, h, boxstyle="round,pad=0.02,rounding_size=0.12",
+        ax.add_patch(mpl.patches.FancyBboxPatch((x - w / 2, y - h / 2), w, h, boxstyle=f"round,pad={pad},rounding_size=0.12",
                      facecolor=on_fill if hit else plt.rcParams["axes.facecolor"], edgecolor=ec, lw=2.6 if hit else 1.4,
                      ls=(0, (4.0, 3.0)) if ext else "-", path_effects=[], zorder=3))
         tc = fg if hit else (ext_c if ext else fg)

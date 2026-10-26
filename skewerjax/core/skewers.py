@@ -60,18 +60,15 @@ def plane_points(L_box, fixed_axis: str, fixed_value, n_var1: int, n_var2: int) 
     return jnp.stack(coords, axis=-1)
 
 
-def grid_skewer_points(L_box, N_grid: int, N_ppsk: int, direction: str = "y", half_shift: bool = True) -> jnp.ndarray:
+def grid_skewer_points(L_box, N_grid: int, N_ppsk: int, direction: str = "y") -> jnp.ndarray:
     """(N_grid, N_grid, N_ppsk, 3) float32 points of N_grid^2 parallel skewers along ``direction``.
 
-    Each skewer runs linspace(0, L_box, N_ppsk) along ``direction``; the transverse grid is linspace(0, L_box,
-    N_grid) (``half_shift=False``) or the cell centres (j + 1/2) L_box / N_grid (``half_shift=True``, default).
+    Each skewer runs linspace(0, L_box, N_ppsk) along ``direction``, through the transverse cell centres
+    (j + 1/2) L_box / N_grid.
     """
     d = {"x": 0, "y": 1, "z": 2}[direction]
     t1, t2 = {0: (1, 2), 1: (0, 2), 2: (0, 1)}[d]
-    if half_shift:
-        c = jnp.linspace(0.0, L_box, N_grid, endpoint=False) + 0.5 * (L_box / N_grid)
-    else:
-        c = jnp.linspace(0.0, L_box, N_grid)
+    c = jnp.linspace(0.0, L_box, N_grid, endpoint=False) + 0.5 * (L_box / N_grid)
     g1, g2 = jnp.meshgrid(c, c, indexing="ij")
     xyz = jnp.zeros((N_grid, N_grid, N_ppsk, 3), dtype=jnp.float32)
     xyz = xyz.at[..., d].set(jnp.linspace(0.0, L_box, N_ppsk)[None, None, :])

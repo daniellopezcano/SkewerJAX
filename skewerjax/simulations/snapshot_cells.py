@@ -11,8 +11,6 @@ of ``max_rows``), then the other datasets of the kept rows only; memory is one b
 """
 from __future__ import annotations
 
-from typing import Callable, Optional, Sequence
-
 import numpy as np
 
 from skewerjax.core.cells import Cells
@@ -32,29 +30,24 @@ def _region(lo, hi, margin: float, box: float):
     return lo - margin, width
 
 
-def select_cells_in_region(reader, lo, hi, *, margin: float = 0.0, datasets: Sequence[str] = None, max_rows: int = 4_000_000,
-                           progress: Optional[Callable[[int, int, int], None]] = None) -> GasCells:
+def select_cells_in_region(reader, lo, hi, *, margin: float = 0.0, max_rows: int = 4_000_000) -> GasCells:
     """The cells of a snapshot whose generating points lie in the periodic sub-box [lo - margin, hi + margin) [cMpc].
 
     lo, hi : (3,) or scalars, the corners of the region [cMpc] (it may cross the box faces: positions are taken modulo
         the box, and a cell is kept if (x - lo + margin) mod box < hi - lo + 2 margin on every axis).
     margin : extra width around the region [cMpc], e.g. a few cell sizes, so that the nearest generating point of every
         point of the region is among the kept cells (the cells of the region are then complete).
-    datasets : raw datasets to read for the kept cells (default: the reader's GAS_DATASETS).
     max_rows : cells per streamed block (memory bound).
 
     Returns ``GasCells`` in physical units (``reader.to_gas_cells``), ids = (file_index << 40) | row, as
     ``select_cells_near_paths``.
     """
     from skewerjax.simulations.readers import GAS_DATASETS
-    datasets = tuple(GAS_DATASETS if datasets is None else datasets)
-    if not {"Coordinates", "Masses", "Density"} <= set(datasets):
-        raise ValueError("datasets must include Coordinates, Masses and Density.")
     box = reader.header.box_cMpc
     origin, width = _region(lo, hi, margin, box)
     parts, n_sel = [], 0
-    rest = [k for k in datasets if k != "Coordinates"]
-    for ib, (fi, r0, base) in enumerate(reader.iter_blocks(("Coordinates",), max_rows=max_rows)):
+    rest = [k for k in GAS_DATASETS if k != "Coordinates"]
+    for fi, r0, base in reader.iter_blocks(("Coordinates",), max_rows=max_rows):
         x = reader.positions_cMpc(base["Coordinates"])
         sel = np.nonzero(np.all(np.mod(x - origin, box) < width, axis=1))[0]
         if sel.size:
@@ -63,14 +56,12 @@ def select_cells_in_region(reader, lo, hi, *, margin: float = 0.0, datasets: Seq
             raw = {"Coordinates": base["Coordinates"][sel], **{k: v[r0 + sel - lo_r] for k, v in slab.items()}}
             parts.append(reader.to_gas_cells(raw, ids=(np.int64(fi) << 40) | (r0 + sel).astype(np.int64)))
             n_sel += sel.size
-        if progress is not None:
-            progress(ib, fi, n_sel)
     if n_sel == 0:
         raise RuntimeError("no gas cell in the region.")
     return GasCells.concatenate(parts)
 
 
-def gas_to_cells(gas: GasCells, species, ext: ExtractionOptions = ExtractionOptions(), cloudy: Optional[gp.CloudyIonTable] = None) -> Cells:
+def gas_to_cells(gas: GasCells, species, ext: ExtractionOptions = ExtractionOptions()) -> Cells:
     """``core.Cells`` of raw snapshot cells after the gas physics, per species (as ``SimulationSkewers.to_cells``).
 
     species : a species key (e.g. "HI"), an ``Ion``, or a sequence of them. Per species: ``number_density`` = n_ion a^3
@@ -81,7 +72,7 @@ def gas_to_cells(gas: GasCells, species, ext: ExtractionOptions = ExtractionOpti
     items = [species] if isinstance(species, (str, gp.Ion)) else list(species)
     ions = [x if isinstance(x, gp.Ion) else gp.ion_from_species(x) for x in items]
     a = float(gas.a)
-    per = {}
+    per, cloudy = {}, None
     for ion in ions:
         if not ion.is_HI and cloudy is None:
             cloudy = gp.CloudyIonTable(1.0 / a - 1.0)

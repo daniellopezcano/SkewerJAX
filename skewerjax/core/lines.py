@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from importlib.resources import files
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Dict, List, Optional, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -169,8 +169,8 @@ def _species_to_element(species: str) -> str:
     return m.group(1)
 
 
-def get_mass_amu(elements: Sequence[str], *, return_dict: bool = True) -> Union[Dict[str, float], jnp.ndarray]:
-    """Atomic masses [amu] of plain elements ('H', 'Si', ...; case-insensitive), from the line table."""
+def get_mass_amu(elements: Sequence[str]) -> Dict[str, float]:
+    """Atomic masses [amu] of plain elements ('H', 'Si', ...; case-insensitive), from the line table: {element: mass}."""
     table: Dict[str, float] = {}
     for line in LINES.values():
         try:
@@ -183,5 +183,4 @@ def get_mass_amu(elements: Sequence[str], *, return_dict: bool = True) -> Union[
     missing = [e for e in elems if e not in table]
     if missing:
         raise KeyError(f"Could not find mass_amu for elements: {missing}. Available: {sorted(table)}")
-    out = {e: table[e] for e in elems}
-    return out if return_dict else jnp.array([out[e] for e in elems])
+    return {e: table[e] for e in elems}

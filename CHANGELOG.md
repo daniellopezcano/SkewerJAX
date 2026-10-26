@@ -3,6 +3,37 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — checkpoint up to notebook 05: the DAG matches the code, systematic tests, clean-up (2026-10-25, session 20261025_2105)
+
+### Changed
+- `plot_dag`: line profiles sit between the deposition and the optical depth (deposition → line profiles: T, v∥, a of
+  the pieces; deposition → optical depth: n ℓ / a² of the pieces); new edge lines → optical depth (f and λ in the
+  prefactor and the detuning, the offsets Δv for the reference axis); the edge lines → overflux is removed (the overflux
+  reads no line data: the lines are already on one axis). Every edge starts and ends on the outline of its boxes
+  (`_DAG_PAD`); `DAG_EDGES` lists the code dependency of each edge. Figure size (26, 6.6).
+- Notebooks: the lines "Requires" / "Independent of" removed from every introduction.
+
+### Removed (unused)
+- `core.select_cells(voronoi_factor=, voronoi_min=)`, `selection_radius(voronoi_factor, voronoi_min)` (the factor is
+  the constant `VORONOI_FACTOR = 2.5`); `simulations.select_cells_near_paths(voronoi_factor=, voronoi_min=,
+  datasets=, progress=)` and its in-memory branch (cells in memory: `core.select_cells`), and its re-exports of
+  `select_cells`, `jztree_available`.
+- `select_cells_in_region(datasets=, progress=)`, `gas_to_cells(cloudy=)`; `ArepoHDF5Reader(part_type=)` (the gas
+  group is `GAS_GROUP`), `read_rows(rows=)`, the duplicate `readers.GFM_METALS_ORDER`; `ion_properties(X_mu=,
+  gamma_HI=, f_bar=)`; `GasCells.nbytes`.
+- `grid_skewer_points(half_shift=)` (always the cell centres), `get_mass_amu(return_dict=)`; `core.cells._wrap` (now
+  `core.selection.wrap_positions`).
+
+### Tests
+- New: `test_constants_and_lines.py`, `test_skewers.py` (curved paths across the periodic faces, a(x) against
+  Einstein-de Sitter for every IC convention), `test_selection.py` (replaces `test_selection_backend.py`: radii,
+  completeness on Voronoi and grid cells, periodic images, back ends), `test_gas_physics.py` (synthetic cells: T, n,
+  H I models, CLOUDY, `gas_to_cells`), `test_snapshot.py` (TNG50-4, skipped without the data: reader, the streamed
+  selection = `core.select_cells` on a region, `to_cells` = `gas_to_cells`).
+- `test_toy_fields.py`: the GRF grid modes and checks, unbiased draws, `interpolate_periodic`; the `grf_cells` check of
+  `test_cells.py` merged into it. `test_cells.py`: the builders and the container API. `test_plotting.py`: the DAG
+  edges end on the box outlines.
+
 ## Unreleased — toy cells on the grid only, a 3D figure of the cells along a skewer (2026-10-25, session 20261025_1854)
 
 ### Changed
