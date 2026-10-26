@@ -3,6 +3,19 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — notebook 07: the wrap on a ring, Si III visible (2026-10-26, session 20261026_0040)
+
+### Added
+- `plot_velocity_ring(parts, regions, v, tau_nowrap, tau_wrap, *, period, track=, cut_fraction=, zoom_kms=, tau_clip=)`:
+  the periodic wrap of `velocity_period=True` on its natural geometry, θ = 2πv/P clockwise from 12 o'clock: (a) the
+  no-wrap axis as an Archimedean spiral (one turn per P; below 0 and beyond P shaded), (b) the spiral collapsed onto a
+  ring, with the seam and the cut ray v_c + P/2 of the cell that straddles it, (c) both zoomed on the seam (± 150
+  km/s; arrows: v − P lies on the same ray, one turn in), (d) the whole skewer's τ on the spiral (no wrap) and on an
+  outer ring (wrap). Same labels, colours and default tracked cells as `plot_deposition_steps` (`_ring_cells`).
+  Notebook 07 shows it right after `plot_deposition_steps`, as an alternative to its rows (c)–(e).
+- `plot_frames_axes(..., tau_scale={line id: k})`: display only, that line drawn as exp(−k τ) and labelled
+  "τ × k for visibility". Notebook 07 §2 draws Si III with `SI_BOOST` = 10⁸ (its τ ≤ 9×10⁻⁹ on the box-centre skewer).
+
 ## Unreleased — notebook 07 on a real skewer (2026-10-25/26, sessions 20261025_2300, 20261025_2332 and 20261026_0016)
 
 ### Changed

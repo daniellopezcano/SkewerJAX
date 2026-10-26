@@ -2497,9 +2497,224 @@ def plot_deposition_steps(parts, bundle, regions, v_axes, tau_nowrap, tau_wrap, 
     return fig, {r: tuple(a) for r, a in ax.items()}, info
 
 
+def _ring_cells(parts, regions, species: str):
+    """The labels, colours and line centres of ``plot_deposition_steps``, for ``plot_velocity_ring`` (the same rule:
+    S1, S2, ... for the cells of the first stretch, E1, E2, ... for the second, coloured by log density with the same
+    norm)."""
+    from skewerjax.core.constants import phys
+    ab, use, frame = parts["absorbers"][species], parts["cells"], parts["frame"]
+    live = np.asarray(ab.n[0]) > 0
+    s_all, l_all, c_all, n_all, u_all = (np.asarray(getattr(ab, f))[0] for f in ("s", "length", "cell", "n", "v_los"))
+    s_ok = np.where(live, s_all, 0.0)
+    v_H = phys.c_kms * np.log(frame.a_dagger / frame.scale_factors(0, s_ok))
+    beta = -frame.velocity(0, s_ok, u_all) / phys.c_kms
+    v_c = np.where(live, v_H + 0.5 * phys.c_kms * (np.log1p(-beta) - np.log1p(beta)), np.nan)
+    labels, n_lab, cols = {}, {"S": 0, "E": 0}, []
+    for k, (lo, hi) in enumerate(regions):
+        idx = np.nonzero(live & (s_all >= lo) & (s_all < hi))[0]
+        idx = idx[np.argsort(s_all[idx])]
+        cols.append(idx)
+        for c in c_all[idx]:
+            if int(c) not in labels:
+                key = "SE"[k]
+                n_lab[key] += 1
+                labels[int(c)] = f"{key}{n_lab[key]}"
+    cells_all = np.array(list(labels))
+    cmap = mpl.colors.ListedColormap(mpl.colormaps[CMAPS["sequential"]](np.linspace(0.2, 1.0, 256)))
+    dens = np.asarray(use.species[species]["number_density"], dtype=float)
+    log_n = np.log10(dens[cells_all])
+    norm = mpl.colors.Normalize(log_n.min() - 0.05, log_n.max() + 0.05)
+    colour = lambda c: cmap(norm(np.clip(np.log10(dens[c]), norm.vmin, norm.vmax)))
+    return dict(live=live, s=s_all, l=l_all, cell=c_all, n=n_all, v_c=v_c, cols=cols, labels=labels, colour=colour, cmap=cmap,
+                norm=norm)
+
+
+def plot_velocity_ring(parts, regions, v, tau_nowrap, tau_wrap, *, period: float, species: str = "HI", line_label: str = r"Ly$\alpha$",
+                       track=None, cut_fraction=None, zoom_kms: float = 150.0, tau_clip: float = 6.0, figsize=(22, 27)):
+    """The periodic wrap of ``velocity_period=True`` on its natural geometry: the velocity window is a ring of circumference P.
+
+    parts, regions : as ``plot_deposition_steps`` (the same labels S1.., E1.., X1.. and colours); v : (N_v,) one velocity
+    axis [km/s] that covers [0, P) and some way beyond both ends; tau_nowrap, tau_wrap : (N_p, N_v) every piece's tau on
+    it, without wrap and with ``velocity_period=True`` (``compute_optical_depth(..., per_piece=True)``, in the order of
+    the absorbers); period : P [km/s]; track : labels or cell indices of the cells to follow (default, as
+    ``plot_deposition_steps``: the cell of the stretches whose profile leaves the window most, and the cell of the whole
+    skewer whose profile straddles an edge most); cut_fraction : the part of the column the cut at P/2 removes (printed).
+
+    Angle theta = 2 pi v / P, clockwise from 12 o'clock, so v and v + P lie on the same ray. (a) No wrap: the axis as an
+    Archimedean spiral, the radius growing by one turn spacing per P; every tracked cell's profile is a radial bump on
+    it; the parts below 0 and beyond P (inner and outer partial turns) are shaded: not on the spectrum. (b) With wrap: the
+    spiral collapsed onto one ring, what was at v and v +/- P adds up at the same angle; the seam (0 = P) and, for the
+    cell that straddles it, the ray v_c + P/2 where its profile is cut. (c) Both zoomed on the seam (+/- ``zoom_kms``),
+    with the tracked cells' sum on the ring. (d) The whole skewer: the no-wrap tau on the spiral (grey) and the wrapped
+    tau on an outer ring (black), clipped at ``tau_clip``. Returns (fig, axs {"a", "b", "c_spiral", "c_ring", "d"}, info).
+    """
+    from matplotlib.lines import Line2D
+    R = _ring_cells(parts, regions, species)
+    live, c_all, v_c = R["live"], R["cell"], R["v_c"]
+    P = float(period)
+    v = np.asarray(v, dtype=float)
+    tn, tw = np.asarray(tau_nowrap, dtype=float), np.asarray(tau_wrap, dtype=float)
+    win = (v >= 0.0) & (v < P)
+    dv = float(np.median(np.diff(v)))
+    pieces_of = lambda c: np.nonzero(live & (c_all == c))[0]
+    def in_out(m):
+        t = tn[m].sum(0)
+        return t[win].sum() * dv, t[~win].sum() * dv
+    if track is None:                                                # the default of plot_deposition_steps
+        stretch = np.unique(np.concatenate([c_all[cc] for cc in R["cols"]]))
+        leaves = max((in_out(pieces_of(int(c)))[1], int(c)) for c in stretch)
+        splits = max((min(in_out(pieces_of(int(c)))), int(c)) for c in np.unique(c_all[live]))
+        chosen = list(dict.fromkeys(c for sc, c in (leaves, splits) if sc > 0))
+    else:
+        by_label = {lab: c for c, lab in R["labels"].items()}
+        chosen = [int(by_label[t]) if isinstance(t, str) else int(t) for t in track]
+    labels, n_x = dict(R["labels"]), 0
+    for c in chosen:
+        if c not in labels:
+            n_x += 1
+            labels[c] = f"X{n_x}"
+    theta = lambda x: 2.0 * np.pi * np.asarray(x) / P
+    R0, turn = 1.0, 0.42                                             # ring radius; spiral: + one turn spacing per P
+    r_sp = lambda x: R0 + turn * np.asarray(x) / P
+    prof = {c: (tn[pieces_of(c)].sum(0), tw[pieces_of(c)].sum(0)) for c in chosen}
+    h = max(max(p[0].max() for p in prof.values()), 1e-300)
+    sc = 0.22 / h                                                    # radial scale of the tracked profiles
+    fig = plt.figure(figsize=figsize, layout="constrained")
+    gs = fig.add_gridspec(3, 2, height_ratios=[1.0, 0.75, 1.15])
+    ax = {k: fig.add_subplot(gs[i, j], projection="polar") for k, (i, j) in
+          (("a", (0, 0)), ("b", (0, 1)), ("c_spiral", (1, 0)), ("c_ring", (1, 1)), ("d", (2, slice(None))))}
+    for a_ in ax.values():
+        a_.set_theta_zero_location("N"); a_.set_theta_direction(-1)
+        a_.set_yticks([]); a_.grid(False)
+    ticks = np.array([0.0, 0.25, 0.5, 0.75]) * P
+    tick_lab = [r"$0 \equiv P$", f"$P/4$ = {0.25 * P:.0f}", f"$P/2$ = {0.5 * P:.0f}", f"$3P/4$ = {0.75 * P:.0f} km/s"]
+    shade = dict(color=PALETTE["grey"], alpha=0.25, lw=0)
+
+    def spiral(a_, zoom=False):
+        a_.plot(theta(v), r_sp(v), color=DIM, lw=1.0)
+        for m, txt in ((v < 0.0, "below 0"), (v >= P, "beyond P")):
+            if m.any():
+                a_.fill_between(theta(v[m]), r_sp(v[m]) - 0.05, r_sp(v[m]) + 0.3, **shade)
+        for c in chosen:
+            t_n = prof[c][0]
+            on = t_n > 1e-4 * h
+            a_.fill_between(theta(v), r_sp(v), r_sp(v) + sc * t_n, where=on, color=R["colour"](c), alpha=0.35, lw=0)
+            a_.plot(theta(v[on]), (r_sp(v) + sc * t_n)[on], color=R["colour"](c), lw=2.2)
+            for part, ls in ((win, "-"), (~win, (0, (3.0, 2.0)))):
+                sel = on & part
+                if sel.any():
+                    a_.plot(theta(v[sel]), (r_sp(v) + sc * t_n)[sel], color=R["colour"](c), lw=2.2, ls=ls)
+            i = int(np.argmax(t_n))
+            a_.annotate(labels[c], (theta(v[i]), r_sp(v[i]) + sc * t_n[i]), (theta(v[i]), r_sp(v[i]) + sc * t_n[i] + (0.05 if zoom else 0.12)),
+                        ha="center", va="bottom", fontsize=FONT_MIN["annotation"], color=FG, fontweight="bold",
+                        arrowprops=dict(arrowstyle="-", color=R["colour"](c), lw=1.0))
+
+    def ring(a_, zoom=False):
+        th = np.linspace(0, 2 * np.pi, 721)
+        a_.plot(th, np.full_like(th, R0), color=DIM, lw=1.0)
+        tot = np.zeros(win.sum())
+        for c in chosen:
+            t_w = prof[c][1][win]
+            tot += t_w
+            on = t_w > 1e-4 * h
+            a_.fill_between(theta(v[win]), R0, R0 + sc * t_w, where=on, color=R["colour"](c), alpha=0.35, lw=0)
+            a_.plot(theta(v[win][on]), (R0 + sc * t_w)[on], color=R["colour"](c), lw=2.2)
+            i = int(np.argmax(t_w))
+            a_.annotate(labels[c], (theta(v[win][i]), R0 + sc * t_w[i]), (theta(v[win][i]), R0 + sc * t_w[i] + (0.05 if zoom else 0.12)),
+                        ha="center", va="bottom", fontsize=FONT_MIN["annotation"], color=FG, fontweight="bold",
+                        arrowprops=dict(arrowstyle="-", color=R["colour"](c), lw=1.0))
+        if zoom:
+            a_.plot(theta(v[win]), R0 + sc * tot, color=FG, lw=1.2, ls="--", label="their sum")
+        return tot
+
+    seam = dict(color=FG, lw=1.6, ls=":")
+    # (a) the spiral, (b) the ring
+    spiral(ax["a"]); ring(ax["b"])
+    for a_, rmax in ((ax["a"], R0 + turn * (v[-1] / P) + 0.4), (ax["b"], R0 + 0.45)):
+        a_.set_ylim(0, rmax)
+        a_.plot([0, 0], [0.55 * R0, rmax], **seam)
+        a_.set_xticks(theta(ticks)); a_.set_xticklabels(tick_lab, fontsize=FONT_MIN["tick"])
+    ax["a"].set_title("(a) no wrap: the axis as a spiral, one turn per $P$", pad=18)
+    ax["b"].set_title("(b) velocity_period=True: the spiral collapsed onto a ring", pad=18)
+    ax["a"].text(np.pi, 0.25 * R0, "inner turn: $v < 0$\nouter turn: $v \\geq P$\n(shaded: not on the spectrum)", ha="center",
+                 va="center", fontsize=FONT_MIN["annotation"], color=FG)
+    ax["b"].text(np.pi, 0.3 * R0, "one turn = the window $[0, P)$\nseam: $0 \\equiv P$ (dotted)", ha="center", va="center",
+                 fontsize=FONT_MIN["annotation"], color=FG)
+    straddle = [c for c in chosen if min(in_out(pieces_of(c))) > 0.02 * sum(in_out(pieces_of(c)))]
+    info = dict(tracked=[labels[c] for c in chosen], cells=chosen, straddle=[labels[c] for c in straddle])
+    if straddle:                                                     # where the straddling cell's profile is cut
+        c = straddle[0]
+        m = pieces_of(c)
+        w = R["n"][m] * R["l"][m]
+        vc = float(np.average(v_c[m], weights=w))
+        th_cut = theta(np.mod(vc + 0.5 * P, P))
+        ax["b"].plot([th_cut, th_cut], [0.55 * R0, R0 + 0.4], color=R["colour"](c), lw=1.8, ls="--")
+        cut_txt = f"{labels[c]}'s profile is cut here,\n$v_c + P/2$, half a turn away" + (
+            "" if cut_fraction is None else f"\n(all cuts: {cut_fraction:.0e} of the column)")
+        ax["b"].text(th_cut, R0 + 0.36, cut_txt, ha="center", va="bottom", fontsize=FONT_MIN["annotation"], color=FG)
+        info["v_c_straddle"] = vc
+    # (c) the seam, zoomed: spiral and ring side by side
+    spiral(ax["c_spiral"], zoom=True)
+    ring(ax["c_ring"], zoom=True)
+    for n_c, c in enumerate(chosen):                                 # the collapse: v and v - P on the same ray, one turn apart
+        t_n = prof[c][0]
+        i = int(np.argmax(t_n))
+        if v[i] >= P:
+            ax["c_spiral"].annotate("", (theta(v[i]), r_sp(v[i] - P) + 0.01), (theta(v[i]), r_sp(v[i]) - 0.01),
+                                    arrowprops=dict(arrowstyle="-|>", color=R["colour"](c), lw=2.0, mutation_scale=16))
+            if n_c == len(chosen) - 1:
+                ax["c_spiral"].text(theta(v[i]) + np.deg2rad(1.0), 0.5 * (r_sp(v[i] - P) + r_sp(v[i])),
+                                    "$v - P$: same ray,\none turn in", ha="left", va="center", fontsize=FONT_MIN["annotation"],
+                                    color=FG)
+    zt = 360.0 * zoom_kms / P
+    for a_, rlim in ((ax["c_spiral"], (R0 - turn * zoom_kms / P - 0.08, R0 + turn + 0.32)), (ax["c_ring"], (R0 - 0.05, R0 + 0.32))):
+        a_.set_thetamin(-zt); a_.set_thetamax(zt)
+        a_.set_ylim(*rlim)
+        a_.set_rorigin(rlim[0] - 0.5 * (rlim[1] - rlim[0]))
+        a_.plot([0, 0], list(rlim), **seam)
+        vt = np.array([-100.0, -50.0, 0.0, 50.0, 100.0])
+        vt = vt[np.abs(vt) <= zoom_kms]
+        a_.set_xticks(theta(vt)); a_.set_xticklabels([("0 ≡ P" if x == 0 else (f"{x:+.0f}" if x > 0 else f"P{x:+.0f}")) for x in vt],
+                                                      fontsize=FONT_MIN["tick"])
+    ax["c_spiral"].set_title(f"(c) the seam, ±{zoom_kms:.0f} km/s: no wrap, two turns apart", pad=10)
+    ax["c_ring"].set_title("... and on the ring: one continuous profile across the seam", pad=10)
+    ax["c_ring"].legend(loc="lower center", fontsize=FONT_MIN["legend"], bbox_to_anchor=(0.5, 0.0))
+    # (d) the whole skewer: the no-wrap tau on the spiral, the wrapped tau on an outer ring
+    tot_n, tot_w = tn[live].sum(0), tw[live].sum(0)
+    s_tot = 0.06
+    R_out = R0 + turn * (v[-1] / P) + 0.45
+    a_ = ax["d"]
+    a_.plot(theta(v), r_sp(v), color=DIM, lw=0.8)
+    a_.fill_between(theta(v), r_sp(v), r_sp(v) + s_tot * np.minimum(tot_n, tau_clip), color=PALETTE["grey"], alpha=0.7, lw=0)
+    for m in (v < 0.0, v >= P):
+        if m.any():
+            a_.fill_between(theta(v[m]), r_sp(v[m]) - 0.04, r_sp(v[m]) + s_tot * tau_clip, **shade)
+    th = np.linspace(0, 2 * np.pi, 721)
+    a_.plot(th, np.full_like(th, R_out), color=DIM, lw=0.8)
+    a_.fill_between(theta(v[win]), R_out, R_out + s_tot * np.minimum(tot_w[win], tau_clip), color=FG, alpha=0.85, lw=0)
+    a_.plot([0, 0], [0.55 * R0, R_out + s_tot * tau_clip + 0.05], **seam)
+    a_.set_ylim(0, R_out + s_tot * tau_clip + 0.08)
+    a_.set_xticks(theta(ticks)); a_.set_xticklabels(tick_lab, fontsize=FONT_MIN["tick"])
+    th_bar = np.deg2rad(135.0)                                       # radial scale bars
+    for r0_, txt in ((r_sp(0.375 * P), "τ = 5"), (R_out, "τ = 5")):
+        a_.plot([th_bar, th_bar], [r0_, r0_ + s_tot * 5.0], color=PALETTE["red"], lw=3)
+        a_.text(th_bar + 0.05, r0_ + 2.5 * s_tot, txt, fontsize=FONT_MIN["annotation"], color=PALETTE["red"], ha="left", va="center")
+    a_.set_title(f"(d) the whole skewer ({line_label}, τ clipped at {tau_clip:g}): no wrap on the spiral (grey), "
+                 "velocity_period=True on the outer ring (black)", pad=18)
+    a_.text(0, 0, "inner: spiral, no wrap\nouter: ring, wrap", ha="center", va="center", fontsize=FONT_MIN["annotation"], color=FG)
+    for a_, rr in ((ax["a"], R0 + turn * 0.375), (ax["b"], R0)):    # scale bar for the tracked profiles
+        a_.plot([th_bar, th_bar], [rr, rr + sc * 1.0], color=PALETTE["red"], lw=3)
+        a_.text(th_bar + 0.06, rr + 0.5 * sc, "dτ = 1", fontsize=FONT_MIN["annotation"], color=PALETTE["red"], ha="left", va="center")
+    handles = [Line2D([], [], color=R["colour"](c), lw=2.2, label=f"{labels[c]}: the cell's $d\\tau$ (sum of its pieces)") for c in chosen]
+    handles += [Line2D([], [], color=FG, lw=1.6, ls=":", label=r"seam: $v = 0 \equiv P$"),
+                Line2D([], [], color=FG, lw=2.2, ls=(0, (3.0, 2.0)), label="dashed: outside the window (no wrap)")]
+    fig.legend(handles=handles, loc="outside lower center", ncols=len(handles), fontsize=FONT_MIN["legend"])
+    return fig, ax, info
+
+
 # --------------------------------------------------------------------------- frames and periodicity (notebook 07)
 def plot_frames_axes(v, F_own, line_bundle, *, v_ref=None, F_ref=None, a_dagger: float, a_obs: float = 1.0, centres=None,
-                     figsize=(22, 15)):
+                     tau_scale=None, figsize=(22, 15)):
     """The same flux in each line's own frame, on the global velocity axis and in observed wavelength: three axes.
 
     v : (N_v,) line-centred velocities v_dagger [km/s]; F_own : (N_lines, N_v) every line in its own frame. (a) the
@@ -2508,26 +2723,32 @@ def plot_frames_axes(v, F_own, line_bundle, *, v_ref=None, F_ref=None, a_dagger:
     of axis only: each line keeps exactly its computed range, shown by its two dash-dotted edges); or ``F_ref``
     (N_lines, N_v_ref) on one grid ``v_ref``, e.g. from ``compute_optical_depth(..., line_frame="reference")``, which
     evaluates every line over the whole of that grid; (c) the observed wavelength of every pixel,
-    ``spectral.line_wavelength_grid_A`` (lambda_obs = lambda_j (a_obs / a_dagger) e^{v/c}). Returns (fig, axs).
+    ``spectral.line_wavelength_grid_A`` (lambda_obs = lambda_j (a_obs / a_dagger) e^{v/c}). ``tau_scale`` : {line id:
+    factor k}, display only: that line is drawn as F^k = exp(-k tau) in every panel and labelled "tau x k for
+    visibility" (a weak line next to Lya). Returns (fig, axs).
     """
     from skewerjax.core.spectral import line_wavelength_grid_A
     v = np.asarray(v, dtype=float)
     F_own = np.asarray(F_own, dtype=float)
     lines = line_bundle.lines
+    k_ = [float((tau_scale or {}).get(l.id, 1.0)) for l in lines]
+    sfx = [f" (τ × {k:.0e} for visibility)" if k != 1.0 else "" for k in k_]
+    F_own = np.stack([F_own[j] ** k_[j] for j in range(len(lines))])        # exp(-k tau): display only
+    F_ref = None if F_ref is None else np.stack([np.asarray(F_ref, dtype=float)[j] ** k_[j] for j in range(len(lines))])
     dv_j = np.asarray(line_bundle.delta_v, dtype=float)
     cols = [ENTITY_COLORS.get(l.id, species_color(l.id, j)) for j, l in enumerate(lines)]
     lam = np.asarray(line_wavelength_grid_A(v, line_bundle, a_dagger, a_obs))
     fig, axs = plt.subplots(3, 1, figsize=figsize, gridspec_kw={"height_ratios": [2.0, 1.4, 1.4]}, layout="constrained")
     for j, l in enumerate(lines):
-        axs[0].plot(v, F_own[j], color=cols[j], lw=2.4 if j == 0 else 1.8, ls="-" if j == 0 else "--", label=f"{l.id}, own frame")
+        axs[0].plot(v, F_own[j], color=cols[j], lw=2.4 if j == 0 else 1.8, ls="-" if j == 0 else "--", label=f"{l.id}{sfx[j]}, own frame")
         shift = rf": at $v - \Delta v_j$ = $v$ {-dv_j[j]:+.0f} km/s" if dv_j[j] else ": unchanged (reference)"
         if F_ref is None:                                          # a change of axis: the own-frame flux, relabelled
-            axs[1].plot(v - dv_j[j], F_own[j], color=cols[j], lw=2.0, label=f"{l.id}{shift}")
+            axs[1].plot(v - dv_j[j], F_own[j], color=cols[j], lw=2.0, label=f"{l.id}{sfx[j]}{shift}")
             for edge in (v[0], v[-1]):
                 axs[1].axvline(edge - dv_j[j], color=cols[j], ls="-.", lw=1.2, path_effects=[])
         else:
-            axs[1].plot(v_ref, F_ref[j], color=cols[j], lw=2.0, label=f"{l.id}{shift}")
-        axs[2].plot(lam[j], F_own[j], color=cols[j], lw=2.0, label=f"{l.id}: " + r"$\lambda_j\,(a_{\rm obs}/a_\dagger)\,e^{v_\dagger/c}$")
+            axs[1].plot(v_ref, F_ref[j], color=cols[j], lw=2.0, label=f"{l.id}{sfx[j]}{shift}")
+        axs[2].plot(lam[j], F_own[j], color=cols[j], lw=2.0, label=f"{l.id}{sfx[j]}: " + r"$\lambda_j\,(a_{\rm obs}/a_\dagger)\,e^{v_\dagger/c}$")
         axs[2].axvline(l.lambda0_A * a_obs / a_dagger, color=cols[j], ls="-.", lw=1.2, path_effects=[])
     if centres is not None:
         for c0 in np.atleast_1d(centres):

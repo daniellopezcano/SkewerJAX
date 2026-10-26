@@ -222,8 +222,10 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   `plot_deposition_steps(parts, bundle, regions, v_axes, tau_nowrap, tau_wrap, period=)` (one simulation skewer from
   the parts of `cell_pieces`, its two ends side by side: the cells in 3D, the pieces, every piece's dτ, one profile on
   the circle of `velocity_period` (split at an edge; `track=`, `cut_fraction=`), and τ with and without wrap with Δτ
-  split into its sources; 07), `plot_voigt_limits`, `plot_frames_axes` (panel (b): each line's
-  own window relabelled at v − Δv_j), `plot_periodic_pieces`,
+  split into its sources; 07), `plot_velocity_ring(parts, regions, v, tau_nowrap, tau_wrap, period=)` (the same wrap on
+  a ring of circumference P: the no-wrap axis as a spiral, the wrapped one as a ring, both zoomed on the seam, and
+  the whole skewer; 07), `plot_voigt_limits`, `plot_frames_axes` (panel (b): each line's own window relabelled at
+  v − Δv_j; `tau_scale={line: k}` draws a weak line as exp(−k τ), display only), `plot_periodic_pieces`,
   `plot_effect_fluxes`, `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
   `plot_line_frames`, `plot_flux_vs_analytic`, `plot_terms_by_order`,
   `plot_p1d_input_vs_measured` (+ `grf_p1d_along_axis`), `plot_cylinder(..., progress=p)` (one frame per call),

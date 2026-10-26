@@ -187,11 +187,17 @@ def test_deposition_steps_on_voronoi_cells():
     fig.canvas.draw()
     assert all(n > 1 for n in info["n_cells"]) and info["tracked"] and all(side == "end" for side, _ in info["tracked"])
     assert info["dtau"]["start"]["i"] > 0 and info["dtau"]["end"]["max"] < 1e-2 * info["dtau"]["start"]["max"]   # it all comes back at 0
+    v_ring = np.arange(-100.0, P + 100.0, 2.0)                                # the same wrap on a ring
+    fig, axs, ring = pl.plot_velocity_ring(parts, ((0.0, 0.6), (box - 0.6, box)), v_ring, per(v_ring, False), per(v_ring, True), period=P)
+    fig.canvas.draw()
+    assert ring["tracked"] and set(axs) == {"a", "b", "c_spiral", "c_ring", "d"}
     two = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
     v = np.arange(0.5, P, 1.0)
     F = np.exp(-np.stack([np.exp(-((v - 50) / 5) ** 2), 0.1 * np.exp(-((v - 50) / 3) ** 2)]))
-    fig, axs = pl.plot_frames_axes(v, F, two, a_dagger=0.25)
+    fig, axs = pl.plot_frames_axes(v, F, two, a_dagger=0.25, tau_scale={"SiIII-1206": 10.0})
     fig.canvas.draw()
+    np.testing.assert_allclose(axs[0].get_lines()[1].get_ydata(), F[1] ** 10, rtol=1e-12)        # display only: exp(-10 tau)
+    assert "for visibility" in axs[0].get_lines()[1].get_label()
     lya_line = axs[1].get_lines()[0].get_xdata()
     assert lya_line.min() >= 0.0 and lya_line.max() < P                    # the reference line keeps its own window
     assert np.isclose(axs[1].get_lines()[3].get_xdata()[0], v[0] - float(two.delta_v[1]))   # Si III moved by -delta_v
