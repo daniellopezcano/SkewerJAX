@@ -3,6 +3,63 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — the fake_spectra comparison in two notebooks, and a new benchmark harness (2026-10-26)
+
+### Changed
+- Notebook `09_fake_spectra_comparison` split in two: `09_comparison_fake_spectra_results` (what the two codes compute:
+  its former Part 1, the same cells with identical outputs and pixel-identical figures; summary numbers from the new
+  benchmark; markdown math fixed) and `10_comparison_fake_spectra_performance` (speed and memory: time against N and
+  the snapshot size, stages, speed-up, memory, threads, agreement while timed, every record with its preset).
+- `comparison.benchmark` rewritten: one process per configuration (pinned CPU set, fixed threads), the first run kept
+  apart (compilation, cold read), exclusive stages (`StageTimer`: setup, I/O, selection, physics, pieces, τ), matched
+  and default modes in one process on one selection, host RSS per mode (`RssSampler`) and GPU peak, the agreement with
+  fake_spectra on up to 64 stored skewers (max and rms |ΔF|), launcher-side memory and time caps, skip prediction
+  along a series, `collect`, `result_rows`, `value`, `print_setup`, `print_rows`.
+- **Presets** (`PRESETS`, launcher `--preset quick|full`, `--budget`): `quick` (the default) is a reduced study in
+  ≤ 30 min of new runs (TNG50-3 at N = 1, 4, 16, TNG50-2 at N = 1, 1–16 threads at N = 1; one or two timed runs; a cap
+  and an estimate per point, `QUICK_SCALING`, `QUICK_THREADS`); `full` is the whole study (N up to 1024 on TNG50-4,
+  -3, -2; threads at N = 16). `run_suite(total_budget_s=)` starts no point beyond the budget (not written, so the next
+  launch measures it); the full preset re-measures quick points with fewer timed runs (`_remeasure`). Every record
+  keeps `config["preset"]`; the results file adds `runtime_by_preset_s` and `launches`.
+- `snapshot_info` reads only `snap_NNN.*.hdf5` (another HDF5 file in the snapshot folder broke it).
+- `utils.plotting`: the benchmark figures `plot_bench_vs`, `plot_bench_speedup`, `plot_bench_stages`,
+  `plot_bench_accuracy` (max and rms |ΔF|), `bench_style`, `bench_value`, `bench_slope`; the DAG lists the comparison
+  notebooks as 09, 10.
+
+### Removed
+- `scripts/benchmarks/benchmark_vs_fake_spectra.py`, `single_cpu_modes.py` (replaced by `benchmark_fake_spectra.py`),
+  the old `plot_bench_*` functions, and notebook `09_fake_spectra_comparison`.
+
+### Results (merged: a partial full run, 3.3 h, stopped; and the quick run, 26.5 min)
+- TNG50-4: fake_spectra 1.7 s (N = 1) to 16 s (N = 1024); SkewerJAX CPU default 3.0 s to 451 s (N = 256), ≈ 1.8 s per
+  skewer; float32 ≈ 2× faster; the GPU slower than the CPU. TNG50-3: SkewerJAX faster than fake_spectra at N = 1
+  (15 s vs 32 s), slower from N ≈ 4. TNG50-2: fake_spectra 151 s at N = 1; SkewerJAX over the quick cap (> 600 s for
+  the first and one timed run), left for the full preset.
+- Matched mode while timed: rms ΔF ≤ 5×10⁻⁶ (Lyα, Si III); max |ΔF| ≤ 6×10⁻⁵ up to N = 4, ~2–3.5×10⁻⁴ at N ≥ 16 from
+  one pixel of one skewer per line.
+
+## Unreleased — notebook 07: the seam on rings, Lyα + Si III, `wrap_to_ref_line` panel (2026-10-26, session 20261026_1244)
+
+### Changed
+- `plot_deposition_steps(parts, bundle, regions, v, tau_pieces, *, period, ...)` (new signature): the end of the path
+  (left) and its start (right) around the seam, 2 cMpc each (a piece straddles the velocity seam). (a) the cells in 3D
+  with the box faces (green planes), the skewer (red), unit tangents and peculiar velocities; (b) the pieces, labelled
+  by cell and a letter in path order (E3a, E3b, ...), with their v∥ = **v**·t̂ arrows and the box faces; (c) the
+  pieces on the ring of s (period L), (d) on the ring of v† at their line centres (period P; the P/2 cut of the seam
+  piece in the inset), (e) every piece's dτ_p with `velocity_period=True` and the total τ, on the same ring. The rings
+  are drawn on equal-aspect Cartesian axes (`_RingSector`), labels placed by `_spread`, a whole ring per row
+  (`_full_ring`).
+- `plot_frames_axes(..., wrapped=dict(v, tau, tau_ref, period))`: panel (d), what `wrap_to_ref_line` does to a
+  periodic spectrum (each line shifted by −Δv_j modulo P); `figsize` default `None` (by the number of panels).
+- `_draw_cells_3d(..., path_color=, arrow_color=)` (default the foreground colour: `plot_gas_cells` unchanged).
+- Notebook 07: only Lyα and Si III (`LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")`); §1 figure and its
+  markdown rewritten (s-ring → v-ring → dτ and τ); §2 adds panel (d) and checks `wrap_to_ref_line` against
+  `line_frame="reference"`.
+
+### Removed
+- `plot_velocity_ring` and `_label_tracked` (the ring rows of `plot_deposition_steps` replace them), and the
+  notebook's separate ring section.
+
 ## Unreleased — cleanup, optimisation and reorganisation checkpoint (2026-10-26)
 
 No result changes: every notebook's printed numbers and arrays are identical to the run before the checkpoint, every

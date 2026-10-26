@@ -104,14 +104,14 @@ environment variable:
 
 ```bash
 export SKEWERJAX_DATA=/path/to/folder/with/TNG50-4   # DATA_DIR: holds TNG50-4/ (and TNG50-3/, TNG50-2/ for the benchmark)
-export SKEWERJAX_BENCHMARK_RAW=/path/to/raw          # BENCHMARK_RAW_DIR: raw benchmark outputs (~15 MB)
-export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the records notebook 09 reads
+export SKEWERJAX_BENCHMARK_RAW=/path/to/raw          # BENCHMARK_RAW_DIR: per-configuration benchmark records
+export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the results file notebook 10 reads
 ```
 
 `DATA_DIR` defaults to `/home/STORAGE` (read only). The two benchmark folders default to `benchmark_results/raw` and
 `notebooks/benchmark_records` in the repository; both are git-ignored and rebuilt by
-`scripts/benchmarks/benchmark_vs_fake_spectra.py` (raw files) and `scripts/benchmarks/single_cpu_modes.py`; notebook 09
-reads copies of their `.json` records in `notebooks/benchmark_records/suite` and `notebooks/benchmark_records/single_cpu`.
+`scripts/benchmarks/benchmark_fake_spectra.py`: one record per configuration in `benchmark_results/raw/fake_spectra`,
+and all of them in `notebooks/benchmark_records/fake_spectra_benchmark.json`, the file notebook 10 reads.
 
 ## 5. Verify the installation
 

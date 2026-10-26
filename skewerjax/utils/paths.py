@@ -3,10 +3,12 @@ environment variable.
 
 * ``DATA_DIR``: the folder that holds the simulation snapshots (``TNG50-4/``, and ``TNG50-3/``, ``TNG50-2/`` for the
   benchmarks), each with its ``snapdir_XXX``; ``$SKEWERJAX_DATA``, default ``/home/STORAGE``. Read only.
-* ``BENCHMARK_RAW_DIR``: the raw outputs of ``scripts/benchmarks/benchmark_vs_fake_spectra.py`` (large, rebuilt by
-  that script, git-ignored); ``$SKEWERJAX_BENCHMARK_RAW``, default ``benchmark_results/raw`` in the repository.
-* ``BENCHMARK_RECORDS_DIR``: the benchmark records read by notebook 09 (small, written by the same script,
-  git-ignored); ``$SKEWERJAX_BENCHMARK_RESULTS``, default ``notebooks/benchmark_records`` in the repository.
+* ``BENCHMARK_RAW_DIR``: the per-configuration records of ``scripts/benchmarks/benchmark_fake_spectra.py`` (in
+  ``fake_spectra/``; rebuilt by that script, git-ignored); ``$SKEWERJAX_BENCHMARK_RAW``, default
+  ``benchmark_results/raw`` in the repository.
+* ``BENCHMARK_RECORDS_DIR``: the benchmark results file read by notebook 10 (``fake_spectra_benchmark.json``, written by
+  the same script, git-ignored); ``$SKEWERJAX_BENCHMARK_RESULTS``, default ``notebooks/benchmark_records`` in the
+  repository.
 """
 from __future__ import annotations
 

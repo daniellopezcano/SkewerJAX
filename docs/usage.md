@@ -1,7 +1,7 @@
 # Usage guide
 
 This guide is the reference companion of the notebooks. It lists the entry points of each subpackage, the conventions they
-share and the options that control speed and memory. The notebooks (`notebooks/00_quickstart`, `00_quickstart_step_by_step`, `01`–`09`) show
+share and the options that control speed and memory. The notebooks (`notebooks/00_quickstart`, `00_quickstart_step_by_step`, `01`–`10`) show
 the same tools at work, step by step.
 
 ```mermaid
@@ -142,7 +142,8 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 - **fake_spectra itself:** `FakeSpectraSource(cache=DIR, snap_base=..., snapnum=...)` runs it live, in its own process
   (`python -m skewerjax.comparison.driver full ...`). `FakeSpectraSource(reference=FILE)` reads a file exported earlier
   with `FS.export(FILE)`.
-- **Benchmark:** `comparison.benchmark` (`make_config`, `run_suite`, `load_results`, `summary`); see "Benchmarks" below.
+- **Benchmark:** `comparison.benchmark` (`PRESETS`, `benchmark_sets(name, data_dir, preset=)`, `make_config`,
+  `run_suite(total_budget_s=)`, `collect`, `result_rows`, `print_rows`); see "Validation, tests and benchmarks" below.
 
 ## Speed and memory
 
@@ -177,13 +178,23 @@ pytest                                                                  # tests/
 python scripts/dev/run_tests.py [test_module ...]                       # the same, without pytest
 python scripts/dev/check_markdown_math.py notebooks/*.ipynb             # the notebooks' markdown math (MathJax)
 SKEWERJAX_SLOW=1 pytest                                                 # also the TNG50-4 / fake_spectra checks
-python scripts/benchmarks/benchmark_vs_fake_spectra.py --sets quick                   # raw results: benchmark_results/raw
-python scripts/benchmarks/single_cpu_modes.py --results benchmark_results/single_cpu    # one core, every integration mode
+python scripts/benchmarks/benchmark_fake_spectra.py [--preset quick|full] [--sets scaling,threads]   # SkewerJAX vs fake_spectra (quick <= 30 min, full ~10 h; --sets smoke ~4 min)
 ```
 
-The benchmark runs every configuration in its own process with its own CPU set and thread count. It skips the
-configurations whose result already exists, and it caps each one at `--cap` seconds. The notebook
-`09_fake_spectra_comparison` (Part 2) only reads the results (`RESULTS_DIR`).
+The benchmark (`comparison.benchmark`, launched by `scripts/benchmarks/benchmark_fake_spectra.py`) runs every
+configuration (code, snapshot, number of skewers, device, threads) in its own process, pinned to a fixed CPU set with
+fixed OpenMP / BLAS / XLA threads and `XLA_PYTHON_CLIENT_PREALLOCATE=false`. Each process runs once (the first run: JIT
+compilation, cold page cache) and then up to three timed runs; the stages (I/O, cell selection, gas physics, pieces, τ)
+are exclusive wall times, and SkewerJAX's matched and default modes share one selection. The launcher stops a worker at
+`--cap` seconds or when its memory passes `--mem-cap` / the machine's free memory falls below `--mem-floor`, skips the
+larger skewer counts of a series that hit (or is predicted to hit) a limit, and keeps the records that exist, so an
+interrupted run resumes. Two presets (`benchmark.PRESETS`): `quick` (the default; TNG50-3 and TNG50-2 at small N and
+the threads at N = 1, one or two timed runs, a cap and an estimate per point, and no point started once the time spent
+plus its estimate would exceed `--budget`, 1800 s) and `full` (N up to 1024 on the three snapshots, the threads at
+N = 16; it re-measures the quick points that hold fewer timed runs). Every record keeps its preset. All records go to one
+results file, `notebooks/benchmark_records/fake_spectra_benchmark.json` (with the runtime per preset and the list of
+launches), which `10_comparison_fake_spectra_performance` plots (`RUN_BENCHMARKS = True` re-runs the missing
+configurations of its `PRESET`).
 
 ## Figures: `skewerjax.utils.plotting`
 
@@ -225,13 +236,13 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   view of a `core.Cells` along one skewer, `plot_gas_cells(cells, select_cells(cells, bundle.spatial_points), bundle)`:
   the cells it crosses in 3D (cubes, or Voronoi polyhedra), one row per species: density, temperature, peculiar
   velocity with one arrow per cell; 04 and 05),
-  `plot_deposition_steps(parts, bundle, regions, v_axes, tau_nowrap, tau_wrap, period=)` (one simulation skewer from
-  the parts of `cell_pieces`, its two ends side by side: the cells in 3D, the pieces, every piece's dτ, one profile on
-  the circle of `velocity_period` (split at an edge; `track=`, `cut_fraction=`), and τ with and without wrap with Δτ
-  split into its sources; 07), `plot_velocity_ring(parts, regions, v, tau_nowrap, tau_wrap, period=)` (the same wrap on
-  a ring of circumference P: the no-wrap axis as a spiral, the wrapped one as a ring, both zoomed on the seam, and
-  the whole skewer; 07), `plot_voigt_limits`, `plot_frames_axes` (panel (b): each line's own window relabelled at
-  v − Δv_j; `tau_scale={line: k}` draws a weak line as exp(−k τ), display only),
+  `plot_deposition_steps(parts, bundle, regions, v, tau_pieces, period=)` (one simulation skewer from the parts of
+  `cell_pieces`, its end and its start side by side around the seam: the cells in 3D with the box faces and the
+  tangents, the pieces with their v∥ = v·t̂, then the same pieces on the ring of s (period L), on the ring of v†
+  (period P, at their line centres), and their dτ_p with `velocity_period=True` and the total τ; 07),
+  `plot_voigt_limits`, `plot_frames_axes` (panel (b): each line's own window relabelled at v − Δv_j;
+  `tau_scale={line: k}` draws a weak line as exp(−k τ), display only; `wrapped=` adds panel (d), what
+  `wrap_to_ref_line` does to a periodic spectrum),
   `plot_effect_fluxes`, `plot_skewer_anatomy`, `plot_terms_by_order`,
   `plot_p1d_input_vs_measured` (+ `grf_p1d_along_axis`), `plot_cylinder(..., progress=p)` (one frame per call),
   `plot_slab`, `plot_tau_buildup`, `plot_orders_superimposed`, `plot_pk_recovery`, the benchmark figures `plot_bench_*`.

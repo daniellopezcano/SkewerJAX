@@ -149,9 +149,10 @@ def test_gas_cells_along_a_skewer():
 
 def test_deposition_steps_on_voronoi_cells():
     """plot_deposition_steps from the parts of cell_pieces: the two ends of a periodic skewer through random Voronoi cells,
-    every piece's tau around v = 0 and v = P with and without velocity_period; plot_frames_axes relabels each line's own
-    window on the global axis (the reference line stays within it)."""
-    from skewerjax.core import cell_pieces, cells_from_values, compute_optical_depth, voronoi_volumes
+    every piece's tau on one period with velocity_period; pieces labelled by cell, one piece on the velocity seam, the
+    label spreading keeps its spacing; plot_frames_axes relabels each line's own window on the global axis (the reference
+    line stays within it) and, with ``wrapped``, draws wrap_to_ref_line's result."""
+    from skewerjax.core import cell_pieces, cells_from_values, compute_optical_depth, voronoi_volumes, wrap_to_ref_line
     box = 4.0
     rng = np.random.default_rng(1)
     gen = rng.uniform(0, box, (800, 3))
@@ -165,18 +166,17 @@ def test_deposition_steps_on_voronoi_cells():
     lya = LineBundle(["HI-LyA"])
     pieces, parts = cell_pieces(cells, lya, skewer_bundle=sb, return_parts=True)
     P = float(pieces.velocity_span_kms[0])
-    v_axes = (np.arange(-100.0, 300.0, 1.0), np.arange(P - 150.0, P + 250.0, 1.0))
-    per = lambda vv, wrap: np.asarray(compute_optical_depth(pieces, vv, lya, per_piece=True, velocity_period=wrap,
-                                                            resolution_tolerance=None))[0, 0]
-    fig, axs, info = pl.plot_deposition_steps(parts, sb, ((0.0, 0.6), (box - 0.6, box)), v_axes, [per(vv, False) for vv in v_axes],
-                                              [per(vv, True) for vv in v_axes], period=P)
+    v_ring = (np.arange(400) + 0.5) * P / 400
+    dtau = np.asarray(compute_optical_depth(pieces, v_ring, lya, per_piece=True, velocity_period=True, resolution_tolerance=None))[0, 0]
+    fig, axs, info = pl.plot_deposition_steps(parts, sb, ((0.0, 0.6), (box - 0.6, box)), v_ring, dtau, period=P)
     fig.canvas.draw()
-    assert all(n > 1 for n in info["n_cells"]) and info["tracked"] and all(side == "end" for side, _ in info["tracked"])
-    assert info["dtau"]["start"]["i"] > 0 and info["dtau"]["end"]["max"] < 1e-2 * info["dtau"]["start"]["max"]   # it all comes back at 0
-    v_ring = np.arange(-100.0, P + 100.0, 2.0)                                # the same wrap on a ring
-    fig, axs, ring = pl.plot_velocity_ring(parts, ((0.0, 0.6), (box - 0.6, box)), v_ring, per(v_ring, False), per(v_ring, True), period=P)
-    fig.canvas.draw()
-    assert ring["tracked"] and set(axs) == {"a", "b", "c_spiral", "c_ring", "d"}
+    assert set(axs) == {"a", "b", "c", "d", "e"} and all(n > 1 for n in info["n_cells"].values())
+    assert len(info["piece_labels"]) == sum(info["n_pieces"].values())
+    assert all(lab.rstrip("abcdefghijklmnopqrstuvwxyz") in info["labels"]["start"] + info["labels"]["end"] for lab in info["piece_labels"])
+    assert info["seam_piece"] in info["piece_labels"] and abs(info["seam_v_c"]) < 0.5 * P
+    t = np.array([0.0, 0.01, 0.02, 0.5, 0.9])
+    q = pl._spread(t, 0.1, 0.0, 1.0)                                          # labels at least 0.1 apart, in [0, 1], in order
+    assert np.all(np.diff(q) >= 0.1 - 1e-12) and q.min() >= 0.0 and q.max() <= 1.0
     two = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
     v = np.arange(0.5, P, 1.0)
     F = np.exp(-np.stack([np.exp(-((v - 50) / 5) ** 2), 0.1 * np.exp(-((v - 50) / 3) ** 2)]))
@@ -187,6 +187,14 @@ def test_deposition_steps_on_voronoi_cells():
     lya_line = axs[1].get_lines()[0].get_xdata()
     assert lya_line.min() >= 0.0 and lya_line.max() < P                    # the reference line keeps its own window
     assert np.isclose(axs[1].get_lines()[3].get_xdata()[0], v[0] - float(two.delta_v[1]))   # Si III moved by -delta_v
+    v1 = (np.arange(200) + 0.5) * P / 200                                     # (d): wrap_to_ref_line on one period
+    tau1 = np.stack([np.exp(-((v1 - 50) / 5) ** 2), 0.1 * np.exp(-((v1 - 50) / 3) ** 2)])[:, None]
+    tau1_ref = np.asarray(wrap_to_ref_line(tau1, v1, two, velocity_period=P))
+    fig, axs = pl.plot_frames_axes(v, F, two, a_dagger=0.25, tau_scale={"SiIII-1206": 10.0},
+                                   wrapped=dict(v=v1, tau=tau1[:, 0], tau_ref=tau1_ref[:, 0], period=P))
+    fig.canvas.draw()
+    assert len(axs) == 4
+    np.testing.assert_allclose(axs[3].get_lines()[2].get_ydata(), np.exp(-10.0 * tau1_ref[1, 0]), rtol=1e-12)
 
 
 def test_quickstart_and_tutorial_figures():
@@ -248,3 +256,28 @@ def test_quickstart_and_tutorial_figures():
         pl.shade_outside_window(ax2[k_], np.linspace(-50.0, 150.0, 11) + 100.0 * k_, 100.0, end)
     pl.add_panel_letters(ax2, labels=["a1", "a2"], box=False)
     assert ax2[1].get_xlim() == (50.0, 250.0) and [t.get_text() for a in ax2 for t in a.texts] == ["(a1)", "(a2)"]
+
+
+def test_benchmark_figures():
+    """The benchmark figures on synthetic rows (``comparison.benchmark.result_rows``): every series and stage drawn."""
+    from skewerjax.comparison import benchmark as B
+    rows = []
+    for sim, cells in (("TNG50-4", 1e7), ("TNG50-2", 1e9)):
+        for n in (1, 4, 16):
+            for code, plat, mode in (("fake_spectra", "cpu", None), ("skewerjax", "cpu", "default"), ("skewerjax", "gpu", "matched")):
+                st = {s: (0.1 * n, 0.09 * n, 0.11 * n) for s in B.STAGES}
+                rows.append(dict(code=code, platform=plat, mode=mode, sim=sim, n_skewers=n, threads=32, status="ok", n_gas=cells,
+                                 total=(0.6 * n, 0.5 * n, 0.7 * n), stages=st, peak_rss_GB=1.0 + n, compile_s=None if mode is None else 2.0,
+                                 gpu_peak_GB=0.5 if plat == "gpu" else None,
+                                 agreement={"HI-LyA": dict(max_dF=2e-5, rms_dF=3e-6, meanF_default=0.5, meanF_fake_spectra=0.52)}))
+    fig, axs = plt.subplots(2, 3)
+    s = pl.plot_bench_vs(axs[0, 0], rows, sim="TNG50-4", fit_from=1)
+    assert np.isclose(s[("skewerjax", "cpu", "default")], 1.0)                 # t ∝ N
+    pl.plot_bench_vs(axs[0, 1], rows, x="n_gas", what="io+selection", n_skewers=16)
+    pl.plot_bench_vs(axs[0, 2], rows, sim="TNG50-4", what="gpu")
+    pl.plot_bench_speedup(axs[1, 0], rows, sim="TNG50-4")
+    pl.plot_bench_stages(axs[1, 1], rows, sim="TNG50-2", n_skewers=4)
+    pl.plot_bench_accuracy(axs[1, 2], [dict(r, mode="matched") for r in rows if r["code"] == "skewerjax" and r["platform"] == "cpu"])
+    fig.canvas.draw()
+    assert len(axs[1, 1].patches) == 3 * len(B.STAGES) and np.isclose(pl.bench_value(rows[0], "throughput")[0], 1 / 0.6)
+    assert [l.get_ydata()[0] for l in axs[1, 2].get_lines()[:2]] == [2e-5, 3e-6]   # max and rms |dF| of the matched mode
