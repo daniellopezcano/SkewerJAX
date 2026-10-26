@@ -219,8 +219,11 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   view of a `core.Cells` along one skewer, `plot_gas_cells(cells, select_cells(cells, bundle.spatial_points), bundle)`:
   the cells it crosses in 3D (cubes, or Voronoi polyhedra), one row per species: density, temperature, peculiar
   velocity with one arrow per cell; 04 and 05),
-  `plot_deposition_steps`
-  (+ `cell_colors`, `voronoi_polygons_2d`), `plot_voigt_limits`, `plot_frames_axes`, `plot_periodic_pieces`,
+  `plot_deposition_steps(parts, bundle, regions, v_axes, tau_nowrap, tau_wrap, period=)` (one simulation skewer from
+  the parts of `cell_pieces`, its two ends side by side: the cells in 3D, the pieces, every piece's dτ, one profile on
+  the circle of `velocity_period` (split at an edge; `track=`, `cut_fraction=`), and τ with and without wrap with Δτ
+  split into its sources; 07), `plot_voigt_limits`, `plot_frames_axes` (panel (b): each line's
+  own window relabelled at v − Δv_j), `plot_periodic_pieces`,
   `plot_effect_fluxes`, `plot_paths_3d`, `plot_skewer_anatomy`, `plot_voronoi_discretisations`,
   `plot_line_frames`, `plot_flux_vs_analytic`, `plot_terms_by_order`,
   `plot_p1d_input_vs_measured` (+ `grf_p1d_along_axis`), `plot_cylinder(..., progress=p)` (one frame per call),

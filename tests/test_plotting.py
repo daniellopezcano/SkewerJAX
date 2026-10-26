@@ -159,3 +159,39 @@ def test_gas_cells_along_a_skewer():
         fig.canvas.draw()
         assert axs.shape == (n_sp, 3) and 0 < info["n_crossed"] <= info["n_selected"] == len(near)
         assert np.isclose(info["path_length"], 2.5)
+
+
+def test_deposition_steps_on_voronoi_cells():
+    """plot_deposition_steps from the parts of cell_pieces: the two ends of a periodic skewer through random Voronoi cells,
+    every piece's tau around v = 0 and v = P with and without velocity_period; plot_frames_axes relabels each line's own
+    window on the global axis (the reference line stays within it)."""
+    from skewerjax.core import cell_pieces, cells_from_values, compute_optical_depth, voronoi_volumes
+    box = 4.0
+    rng = np.random.default_rng(1)
+    gen = rng.uniform(0, box, (800, 3))
+    vel = rng.normal(0, 30, (800, 3)); vel[:, 0] = 150.0                       # everything moves away: the end wraps
+    cells = cells_from_values(gen, box, {"HI": 10 ** rng.uniform(-12, -10, 800)}, temperature=10 ** rng.uniform(4, 4.5, 800),
+                              velocity=vel, volumes=voronoi_volumes(gen, box))
+    x = np.linspace(0.0, box, 41)
+    cosmo = Cosmology(H0=phys.H0, Omega_r_0=0.0, Omega_m_0=0.31, Omega_k_0=0.0, Omega_lambda_0=0.69)
+    sb = SkewerBundle(spatial_points=jnp.asarray(np.stack([x, np.full_like(x, 2.0), np.full_like(x, 2.0)], -1)[None]), a0=0.25,
+                      ICs_defined_at_index=0, cosmologies=cosmo)
+    lya = LineBundle(["HI-LyA"])
+    pieces, parts = cell_pieces(cells, lya, skewer_bundle=sb, return_parts=True)
+    P = float(pieces.velocity_span_kms[0])
+    v_axes = (np.arange(-100.0, 300.0, 1.0), np.arange(P - 150.0, P + 250.0, 1.0))
+    per = lambda vv, wrap: np.asarray(compute_optical_depth(pieces, vv, lya, per_piece=True, velocity_period=wrap,
+                                                            resolution_tolerance=None))[0, 0]
+    fig, axs, info = pl.plot_deposition_steps(parts, sb, ((0.0, 0.6), (box - 0.6, box)), v_axes, [per(vv, False) for vv in v_axes],
+                                              [per(vv, True) for vv in v_axes], period=P)
+    fig.canvas.draw()
+    assert all(n > 1 for n in info["n_cells"]) and info["tracked"] and all(side == "end" for side, _ in info["tracked"])
+    assert info["dtau"]["start"]["i"] > 0 and info["dtau"]["end"]["max"] < 1e-2 * info["dtau"]["start"]["max"]   # it all comes back at 0
+    two = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
+    v = np.arange(0.5, P, 1.0)
+    F = np.exp(-np.stack([np.exp(-((v - 50) / 5) ** 2), 0.1 * np.exp(-((v - 50) / 3) ** 2)]))
+    fig, axs = pl.plot_frames_axes(v, F, two, a_dagger=0.25)
+    fig.canvas.draw()
+    lya_line = axs[1].get_lines()[0].get_xdata()
+    assert lya_line.min() >= 0.0 and lya_line.max() < P                    # the reference line keeps its own window
+    assert np.isclose(axs[1].get_lines()[3].get_xdata()[0], v[0] - float(two.delta_v[1]))   # Si III moved by -delta_v

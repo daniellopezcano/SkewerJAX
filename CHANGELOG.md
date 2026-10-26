@@ -3,6 +3,48 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — notebook 07 on a real skewer (2026-10-25/26, sessions 20261025_2300, 20261025_2332 and 20261026_0016)
+
+### Changed
+- Notebook 07: the derivation of the sum over pieces is the opening theory (unnumbered); §1 runs the deposition step
+  by step on one TNG50-4 skewer along x through the box centre, from face to face (one point per 8 km/s, coarse on
+  purpose for the figure: the resolution check warns, and the same line sampled every km/s is used in §2; the cells of
+  a slab from `snapshot_cells`, `select_cells`, `voronoi_segments`, `absorbers_from_components`, `absorber_pieces`,
+  `cell_pieces`, `compute_optical_depth`), and describes how the code wraps (one operation: the nearest periodic image
+  of every piece's detuning, `spectral.frequency_offset_GHz`, so a profile near an edge is split; the cut at P/2;
+  conservation: the window holds 0.9616 of the column without wrap, 0.999999 with it, and the balance is printed); §2 (frames, global axis, observed wavelength) shows the flux F
+  of Lyα and Si III on the same line, each line computed on its own window [0, P) (periodic) and relabelled on the
+  global axis. The closed-form section (its checks are `scripts/validation/check_optical_depth_analytic.py`, case
+  (ii)) and the application to simulation outputs are removed. Cross-references in 00, 00b, 05, 08 renumbered.
+- `plot_deposition_steps(parts, bundle, regions, v_axes, tau_nowrap, tau_wrap, *, period, ...)`: rebuilt for a
+  simulation skewer from the parts of `cell_pieces(..., return_parts=True)`, two columns (the start and the end of the
+  path) and one step per row, every cell with one colour (its density) and one label: (a) the cells in 3D with
+  velocity arrows, (b) the pieces (cell crossings and dual-segment ends), (c) every piece's dτ with its v_H → v_c
+  arrow, (d) one profile on the circle of `velocity_period=True`: tracked cells (`track=`; by default the stretch
+  cell that leaves the window most and the cell of the whole skewer whose profile straddles an edge most, labelled
+  X1) split at the edge, the part beyond it (faded) evaluated P away in the other column (solid, arrows), the whole
+  nearest-image curve as a thin line, each stretch's own τ in grey, the cut at P/2 annotated (`cut_fraction=`); (e) τ
+  of the whole skewer without wrap ("not on the spectrum" outside the window), with wrap (dotted outside: the periodic
+  repetition), the no-wrap τ beyond the other end moved by ∓P, and Δτ split into (i) line centres outside the window
+  and (ii) tails of centre-inside pieces across an edge.
+- `plot_frames_axes`: panel (b) by default relabels every line's own-frame flux at v − Δv_j (each line keeps the
+  window it was computed on); `F_ref` on one `v_ref` grid is still accepted.
+- `_draw_cells_3d`: the 3D cell drawing of `plot_gas_cells`, shared with `plot_deposition_steps` (no change to
+  `plot_gas_cells`).
+
+### Fixed
+- Notebook 07, §2: Lyα absorbed below v = 0 on the global axis, because both lines were evaluated with
+  `line_frame="reference"` on one grid holding both lines, which evaluates Lyα beyond its window (the far wings of the
+  absorbers near the start). Each line is now computed on its own window and relabelled (no package change:
+  `line_frame="reference"` evaluates on the grid it is given).
+
+### Removed
+- `cell_colors`, `voronoi_polygons_2d` and the toy-plane version of `plot_deposition_steps` (no other user).
+
+### Tests
+- `test_plotting::test_deposition_steps_on_voronoi_cells`: the new figure on random Voronoi cells (the end wraps to the
+  start), and `plot_frames_axes` keeping the reference line within its window and moving Si III by −Δv.
+
 ## Unreleased — notebook 06: two figures simplified (2026-10-25, session 20261025_2155)
 
 ### Changed

@@ -1620,6 +1620,30 @@ def _voronoi_faces(cells, centres, sizes):
     return [faces[int(i)] for i in own]
 
 
+def _draw_cells_3d(ax, faces, rgba, g, path, lo, hi, *, arrows=None, alpha: float = 0.55, view=(24.0, -62.0),
+                   zoom: float = 1.1):
+    """Cells as 3D volumes on ``ax``: ``faces`` (one list of (n_v, 3) faces per cell) filled with ``rgba`` (one colour per
+    cell, opacity ``alpha``), edges in the foreground colour, the generating points ``g`` (dots), the skewer ``path``
+    (N, 3) as a line and, optionally, ``arrows`` (K, 3) from the generating points [cMpc]; limits ``lo``, ``hi`` (3,),
+    aspect 1:1:1, ``view`` = (elevation, azimuth). The drawing of ``plot_gas_cells`` and ``plot_deposition_steps``."""
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+    poly = [q for fc in faces for q in fc]
+    fcol = np.repeat(np.asarray(rgba, dtype=float), [len(fc) for fc in faces], axis=0)
+    fcol[:, 3] = alpha
+    ax.add_collection3d(Poly3DCollection(poly, facecolors=fcol, edgecolors=FG, linewidths=0.7))
+    ax.plot(*np.asarray(path).T, color=FG, lw=2.6, label="skewer")
+    ax.scatter(*np.asarray(g).T, s=22, color=FG, depthshade=False, label="generating points")
+    if arrows is not None:
+        ax.quiver(*np.asarray(g).T, *np.asarray(arrows).T, color=FG, lw=2.0, arrow_length_ratio=0.3, normalize=False)
+    ax.set(xlim=(lo[0], hi[0]), ylim=(lo[1], hi[1]), zlim=(lo[2], hi[2]))
+    ax.set_box_aspect(np.asarray(hi) - np.asarray(lo), zoom=zoom)
+    ax.view_init(*view)
+    for a_, lab in zip((ax.xaxis, ax.yaxis, ax.zaxis), "xyz"):
+        a_.set_major_locator(mpl.ticker.MaxNLocator(3))
+        a_.set_label_text(f"{lab} [cMpc]")
+        a_.labelpad = 10 if lab == "z" else 12
+
+
 def plot_gas_cells(cells, selected, path, species=None, *, skewer: int = 0, view=(24.0, -62.0), zoom: float = 1.1,
                    decades: float = 12.0, alpha: float = 0.55, figsize=None):
     """What a ``core.Cells`` holds for the optical depth, along one skewer: the same 3D view for any source (04, 05).
@@ -1645,7 +1669,6 @@ def plot_gas_cells(cells, selected, path, species=None, *, skewer: int = 0, view
     "path_length": [cMpc], "arrow_kms": the speed of an arrow one median cell size long [km/s]}).
     """
     import re
-    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
     sp_list = list(cells.species_keys) if species is None else ([species] if isinstance(species, str) else list(species))
     pts = np.asarray(path.spatial_points[skewer] if hasattr(path, "spatial_points") else path, dtype=float)
     box = cells.box
@@ -1688,24 +1711,8 @@ def plot_gas_cells(cells, selected, path, species=None, *, skewer: int = 0, view
                   r"$v_\parallel$ along the skewer [km s$^{-1}$] (shared)")
         for c, (cmap, norm, val) in enumerate(cols):
             ax = axs[r, c]
-            rgba = mpl.colormaps[cmap](norm(val))
-            poly = [q for fc in faces for q in fc]
-            fcol = np.repeat(rgba, [len(fc) for fc in faces], axis=0)
-            fcol[:, 3] = alpha
-            ax.add_collection3d(Poly3DCollection(poly, facecolors=fcol, edgecolors=FG, linewidths=0.7))
-            ax.plot(*pts.T, color=FG, lw=2.6, label="skewer")
-            ax.scatter(*g.T, s=22, color=FG, depthshade=False, label="generating points")
-            if c == 2:
-                vv = f["velocity"] / arrow_kms * h_med
-                ax.quiver(*g.T, *vv.T, color=FG, lw=2.0, arrow_length_ratio=0.3,
-                          normalize=False)
-            ax.set(xlim=(lo[0], hi[0]), ylim=(lo[1], hi[1]), zlim=(lo[2], hi[2]))
-            ax.set_box_aspect(hi - lo, zoom=zoom)
-            ax.view_init(*view)
-            for a_, lab in zip((ax.xaxis, ax.yaxis, ax.zaxis), "xyz"):
-                a_.set_major_locator(mpl.ticker.MaxNLocator(3))
-                a_.set_label_text(f"{lab} [cMpc]")
-                a_.labelpad = 10 if lab == "z" else 12
+            _draw_cells_3d(ax, faces, mpl.colormaps[cmap](norm(val)), g, pts, lo, hi, alpha=alpha, view=view, zoom=zoom,
+                           arrows=f["velocity"] / arrow_kms * h_med if c == 2 else None)
             ax.set_title(titles[c], pad=0)
             if c == 2:
                 ax.text2D(0.99, 0.93, f"arrows: {arrow_kms:.0f} km/s per {h_med:.2g} cMpc", transform=ax.transAxes, ha="right",
@@ -2196,162 +2203,298 @@ def plot_pk_mu_wedges(cases: dict, *, mu_edges=MU_WEDGES, n_bins: int = 14, figs
 
 
 # --------------------------------------------------------------------------- selection -> deposition -> tau (notebook 07)
-def cell_colors(cells) -> dict:
-    """{cell index: colour} for the crossed cells, in the order given: Tol's bright palette without its grey, cycled
-    (colour-blind safe, qualitative; neighbours along a path never share a colour unless more than six are crossed)."""
-    cyc = [PALETTE[k] for k in ("blue", "red", "green", "yellow", "cyan", "purple")]
-    out = {}
-    for c in cells:
-        c = int(c)
-        if c not in out:
-            out[c] = cyc[len(out) % len(cyc)]
-    return out
+def _path_at(points, s_pts, s):
+    """Positions (K, 3) at path lengths ``s`` (K,) along a polyline ``points`` (N, 3) with path lengths ``s_pts``."""
+    return np.stack([np.interp(s, s_pts, points[:, k]) for k in range(3)], -1)
 
 
-def voronoi_polygons_2d(generators, box: float) -> list:
-    """The periodic Voronoi cell (a polygon (n_v, 2)) of every 2D generator in [0, box)^2 (scipy on 3 x 3 copies)."""
-    from scipy.spatial import Voronoi
-    g = np.asarray(generators, dtype=float)
-    shifts = np.array([(i, j) for i in (-1, 0, 1) for j in (-1, 0, 1)], dtype=float) * box
-    tiled = np.concatenate([g + s for s in shifts])
-    vor = Voronoi(tiled)
-    n0 = 4 * len(g)                                              # the copy with shift (0, 0)
-    return [vor.vertices[vor.regions[vor.point_region[n0 + i]]] for i in range(len(g))]
+def plot_deposition_steps(parts, bundle, regions, v_axes, tau_nowrap, tau_wrap, *, period: float, species: str = "HI",
+                          line_label: str = r"Ly$\alpha$", track=None, cut_fraction=None, view=(18.0, -72.0),
+                          zoom: float = 1.25, figsize=(22, 28)):
+    """The deposition of one simulation skewer at its two ends, from the objects of the package's own route (notebook 07).
 
+    parts : the parts of ``core.cell_pieces(cells, lines, skewer_bundle=bundle, return_parts=True)`` (the selected
+        cells, the Voronoi segments, the ``Absorbers`` per species, the frame); bundle : the ``SkewerBundle`` (one skewer);
+    regions : ((s0, s1), (s2, s3)) [cMpc] two stretches of the path, at its start and at its end (the pieces whose
+        centroids lie in them); v_axes : (v_start, v_end) two velocity axes [km/s], around v = 0 and v = P, reaching
+        beyond the window [0, P); tau_nowrap, tau_wrap : (start, end) the tau of every piece of the skewer on each axis
+        (N_p, N_v), without wrap and with ``velocity_period=True`` (``compute_optical_depth(pieces, v, line,
+        per_piece=True, ...)``, in the order of the absorbers); period : P [km/s].
 
-def plot_deposition_steps(cells, selected, bundle, seg, ab, frame, v, tau_pieces, *, tau_pieces_periodic=None,
-                          period: float = None, plane_axes=(0, 1), figsize=None):
-    """Selection -> deposition -> tau on toy cells, drawn from the objects of each step (notebook 07).
-
-    cells : every ``core.Cells`` of the toy box (generators in one plane: the cells are its 2D Voronoi cells), with
-    ``ids`` = their indices (the velocities are those of the species of ``ab``); selected : the cells kept by the
-    selection (``seg`` and ``ab`` index them); bundle : the
-    ``SkewerBundle`` (one skewer in that plane, along ``plane_axes[0]``); seg : the ``SegmentComponents`` of the Voronoi
-    deposition; ab : its ``Absorbers``; frame : the ``ExactFrame``; v : (N_v,) [km/s]; tau_pieces : (N_p, N_v) the
-    contribution of every piece (``compute_optical_depth(..., per_piece=True)``), in the order of ``ab``.
-    tau_pieces_periodic : optional (N_p, N_v), the same with ``velocity_period`` (period ``period`` [km/s]): adds (d).
-
-    (a) the plane: every cell outlined, the crossed ones filled in their own colour (``cell_colors``), their generators
-    and peculiar velocities (arrows, in-plane); the skewer with the styles of 03 (points, midpoints, dual segments) and
-    the ends of the pieces. (b) along the same axis: n of every piece (bars in its cell's colour) and the dual segments.
-    (c) tau: every piece's profile in its cell's colour and their sum; per crossed cell, a marker at the Hubble
-    velocity of its centroid and an arrow to its line centre, shifted by the line-of-sight projection of its peculiar
-    velocity. (d) the periodic spectrum on the axis of (c): the period [0, P) and, shaded, its copies; every piece's
-    wrapped profile in its cell's colour and their sum, on the sum of (c) (thick, light); per cell whose line centre
-    is outside the period, an arrow from it to its image inside (effect (i)); the wings that cross an end re-enter at
-    the other (effect (ii)). Returns (fig, axs, colours).
+    One column per end, one row per step; every cell has one colour (its density of ``species``, log,
+    ``CMAPS["sequential"]`` without its palest end) and one label (S1, S2, ... at the start; E1, E2, ... at the end) in
+    every row. (a) the cells of the stretch in 3D (as ``plot_gas_cells``) with their peculiar velocities (arrows) and
+    the skewer; (b) its pieces along the path (bars of height n, width l_p), the cell crossings (solid) and the ends of
+    the dual segments (dotted); (c) every piece's tau without wrap, and per piece the Hubble velocity of its centroid
+    (circle) and an arrow to its line centre (+ v_par); (d) one profile on the circle: ``velocity_period=True`` replaces
+    the detuning v - v_c of every (piece, pixel) by its nearest image in [-P/2, P/2), so the whole profile of a cell
+    (the sum of its pieces, which share its velocity) is laid on a circle of circumference P and split at an edge of the
+    window. For the tracked cells (``track``: labels such as "E4", or indices of cells anywhere on the skewer, labelled
+    X1, X2, ...; default: the cell of the stretches whose profile leaves the window most, and the cell of the whole
+    skewer whose profile straddles an edge most), the no-wrap profile (solid in the window, shaded and dashed beyond it), the
+    part beyond the edge drawn solid where it is evaluated, P away in the other column (arrows), and the whole
+    nearest-image curve as a thin line on both axes; each stretch's own tau in light grey; ``cut_fraction``: the part
+    of the column the cut at P/2 removes (printed in the annotation). (e) the tau of the whole skewer: without wrap
+    (grey, "not on the spectrum" outside the window), with wrap (black in the window, dotted outside: the periodic
+    repetition), the no-wrap tau outside the other end translated by -/+P (dashed); below, the difference split into
+    its sources: (i) pieces whose line centre is outside the window, (ii) tails of centre-inside pieces that cross an
+    edge. Returns (fig, axs {row: (start, end)} for "a"-"e" and "diff", info).
     """
-    from matplotlib.collections import PolyCollection
+    import re
+    from matplotlib.patches import ConnectionPatch
     from skewerjax.core.constants import phys
     from skewerjax.core.skewers import path_geometry
-    periodic = tau_pieces_periodic is not None
-    if periodic and period is None:
-        raise ValueError("tau_pieces_periodic needs its period [km/s].")
-    figsize = figsize or ((22, 27) if periodic else (22, 21))
-    i0, i1 = plane_axes
-    box = cells.box
-    ids = np.asarray(selected.ids)                                # selected index -> index in ``cells``
-    gen = np.asarray(cells.positions)[:, [i0, i1]]
-    vel = np.asarray(cells.species[ab.species]["velocity"] if hasattr(cells, "species") else cells.fields["velocity"])[:, [i0, i1]]
-    pts3 = np.asarray(bundle.spatial_points[0], dtype=float)
-    pts = pts3[:, [i0, i1]]
-    g = {k: np.asarray(x) for k, x in path_geometry(pts3).items()}
-    live = ab.n[0] > 0
-    order = np.argsort(ab.s[0][live])
-    s_p, l_p, c_p, n_p, u_p = (np.asarray(getattr(ab, f))[0][live][order] for f in ("s", "length", "cell", "n", "v_los"))
-    c_p = ids[c_p]
-    tau_p = np.asarray(tau_pieces)[live][order]
-    colors = cell_colors(c_p)
-    x0 = pts[0, 0]
-    ratios = [2.0, 1.0, 1.7] + ([1.7] if periodic else [])
-    fig, axs = plt.subplots(len(ratios), 1, figsize=figsize, gridspec_kw={"height_ratios": ratios}, layout="constrained")
-    axs[1].sharex(axs[0])                                         # (a) and (b): the same x axis [cMpc]
-    polys = voronoi_polygons_2d(gen, box)
-    axs[0].add_collection(PolyCollection(polys, facecolors="none", edgecolors=DIM, linewidths=0.8))
-    for c, col in colors.items():
-        axs[0].add_collection(PolyCollection([polys[c]], facecolors=col, alpha=0.35, edgecolors=col, linewidths=1.5))
-    axs[0].scatter(*gen.T, **geometry_style("generator"), label="mesh-generating points (one cell each)")
-    crossed = np.array(list(colors))
-    sc = 0.15 * box / max(np.abs(vel[crossed]).max(), 1e-30)
-    axs[0].quiver(*gen[crossed].T, *(sc * vel[crossed]).T, color=[colors[c] for c in crossed], angles="xy", scale_units="xy",
-                  scale=1.0, width=0.004, zorder=7)
-    axs[0].plot([], [], color=FG, lw=2, label="peculiar velocity of a crossed cell (at its generator)")
-    ds = geometry_style("dual_segment")
-    for i, (lo, x, hi) in enumerate(zip(g["mid_lo"], pts3, g["mid_hi"])):
-        q = np.stack([lo, x, hi])[:, [i0, i1]]
-        axs[0].plot(*q.T, color=ds["colors"][i % 2], lw=ds["lw"], alpha=ds["alpha"], solid_capstyle="butt", path_effects=[],
-                    zorder=4, label="dual segments" if i == 0 else None)
-    tan = g["tangents"][0][[i0, i1]]
-    ends = np.unique(np.concatenate([s_p - 0.5 * l_p, s_p + 0.5 * l_p]))
-    axs[0].scatter(*(pts[0][:, None] + tan[:, None] * ends[None]), **geometry_style("piece_end"), label="ends of the pieces")
-    axs[0].scatter(*pts.T, **geometry_style("point"), label=r"sampling points $x_i$")
-    axs[0].scatter(*(0.5 * (pts[1:] + pts[:-1])).T, **geometry_style("midpoint"), label=r"midpoints $m_{i\pm1/2}$")
-    pad = 0.08 * box
-    axs[0].set(xlim=(x0 - pad, pts[-1, 0] + pad), ylim=(pts[:, 1].mean() - 0.25 * box, pts[:, 1].mean() + 0.25 * box),
-               xlabel="x [cMpc]", ylabel="y [cMpc]")
-    axs[0].set_aspect("equal", adjustable="datalim")             # equal scales, the x range of (b)
-    axs[0].legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncols=3, fontsize=FONT_MIN["legend"])
-    xs = x0 + s_p * tan[0]
-    for x, l, c, nn in zip(xs, l_p, c_p, n_p):
-        axs[1].bar(x, nn, width=l * tan[0], color=colors[int(c)], alpha=0.75, edgecolor=FG, linewidth=0.6)
-    for i, (lo, hi) in enumerate(zip(g["mid_lo"][:, i0], g["mid_hi"][:, i0])):
-        axs[1].plot([lo, hi], [0, 0], color=ds["colors"][i % 2], lw=ds["lw"], alpha=ds["alpha"], solid_capstyle="butt",
-                    path_effects=[], clip_on=False)
-    axs[1].scatter(pts[:, 0], np.zeros(len(pts)), **geometry_style("point"))
-    axs[1].scatter(0.5 * (pts[1:, 0] + pts[:-1, 0]), np.zeros(len(pts) - 1), **geometry_style("midpoint"))
-    axs[1].set(xlabel="x [cMpc] (along the skewer)", ylabel=r"$n$ of each piece [cm$^{-3}$]")
-    axs[1].set_ylim(bottom=0)
-    a_d = frame.a_dagger
-    v_H = phys.c_kms * np.log(a_d / frame.scale_factors(0, s_p))
-    beta = -frame.velocity(0, s_p, u_p) / phys.c_kms
-    v_c = v_H + 0.5 * phys.c_kms * (np.log1p(-beta) - np.log1p(beta))
-    tot = tau_p.sum(0)
-    axs[2].plot(v, tot, color=FG, lw=2.6, label=r"$\tau$: the sum over the pieces")
-    for t, c in zip(tau_p, c_p):
-        axs[2].plot(v, t, color=colors[int(c)], lw=1.6, alpha=0.9)
-    rows = {}
-    for r, c in enumerate(colors):                                # one row per cell, in the order of the path
-        y = tot.max() * (1.1 + 0.09 * (r % 4))
-        k = np.nonzero(c_p == c)[0]
-        w = l_p[k] * n_p[k]
-        vh, vc = np.average(v_H[k], weights=w), np.average(v_c[k], weights=w)
-        rows[c] = (y, vc)
-        axs[2].scatter([vh], [y], marker="o", s=70, facecolors="none", edgecolors=colors[c], linewidths=2, zorder=8)
-        axs[2].annotate("", (vc, y), (vh, y), arrowprops=dict(arrowstyle="-|>", color=colors[c], lw=2.0, shrinkA=4, shrinkB=0))
-    axs[2].scatter([], [], marker="o", s=70, facecolors="none", edgecolors=FG, linewidths=2,
-                   label=r"Hubble velocity of the cell's pieces, $v_H = c\ln(a_\dagger/a)$; arrow: $+\,v_\parallel$")
-    axs[2].set(xlabel=LABELS["v_dagger"], ylabel=r"$\tau$ ($\mathrm{Ly}\alpha$)", ylim=(0, 1.75 * tot.max()))
-    axs[2].legend(loc="upper right", fontsize=FONT_MIN["legend"], ncols=2)
-    if periodic:
-        axd = axs[3]
-        axd.sharex(axs[2])
-        P = float(period)
-        tau_w = np.asarray(tau_pieces_periodic)[live][order]
-        tot_w = tau_w.sum(0)
-        for lo, hi in ((min(v[0], 0.0), 0.0), (P, max(v[-1], P))):
-            axd.axvspan(lo, hi, color=PALETTE["grey"], alpha=0.22, lw=0)
-        for vb in (0.0, P):
-            axd.axvline(vb, color=DIM, ls=":", lw=1.8)
-        axd.plot(v, tot, color=FG, **MODE_STYLES["reference"], label=r"$\tau$ without wrap, as in (c)")
-        axd.plot(v, tot_w, color=FG, lw=2.6, label=r"$\tau$ with velocity_period=True: periodic, period $P$")
-        for t, c in zip(tau_w, c_p):
-            axd.plot(v, t, color=colors[int(c)], lw=1.6, alpha=0.9)
-        top_w = max(tot_w.max(), tot.max())
-        out = [c for c, (_, vc) in rows.items() if vc < 0.0 or vc >= P]
-        for r, c in enumerate(out):                               # effect (i): the line centre's image in [0, P), above the curves
-            vc = rows[c][1]
-            y = top_w * (1.1 + 0.08 * r)
-            img = vc - P * np.floor(vc / P)
-            axd.scatter([vc], [y], marker="o", s=70, facecolors="none", edgecolors=colors[c], linewidths=2, zorder=8)
-            axd.annotate("", (img, y), (vc, y), arrowprops=dict(arrowstyle="-|>", color=colors[c], lw=2.0, ls="--", shrinkA=4, shrinkB=0))
-        if out:
-            axd.plot([], [], color=FG, lw=2.0, ls="--", label=r"(i) line centre $v_c$ outside the period $\to$ $v_c \mp P$")
-        ytop = top_w * (1.3 + 0.08 * len(out))
-        for xt, txt in ((0.5 * (v[0] + 0.0), "copy"), (0.5 * P, r"one period $[0, P)$"), (0.5 * (P + v[-1]), "copy")):
-            axd.text(xt, 0.97 * ytop, txt, ha="center", va="top", fontsize=FONT_MIN["annotation"], color=FG)
-        axd.set(xlabel=LABELS["v_dagger"], ylabel=r"$\tau$ ($\mathrm{Ly}\alpha$), periodic", ylim=(0, ytop))
-        axd.legend(loc="upper center", bbox_to_anchor=(0.5, -0.17), ncols=3, fontsize=FONT_MIN["legend"])
-    return fig, axs, colors
+    ab, use, frame = parts["absorbers"][species], parts["cells"], parts["frame"]
+    box = use.box
+    P = float(period)
+    pts = np.asarray(bundle.spatial_points[0], dtype=float)
+    s_pts = np.asarray(path_geometry(pts)["s"])
+    live = np.asarray(ab.n[0]) > 0
+    s_all, l_all, c_all, n_all, u_all = (np.asarray(getattr(ab, f))[0] for f in ("s", "length", "cell", "n", "v_los"))
+    v_H_all = np.where(live, phys.c_kms * np.log(frame.a_dagger / frame.scale_factors(0, np.where(live, s_all, 0.0))), np.nan)
+    beta = -frame.velocity(0, np.where(live, s_all, 0.0), u_all) / phys.c_kms
+    v_c_all = v_H_all + 0.5 * phys.c_kms * (np.log1p(-beta) - np.log1p(beta))
+    cols = []
+    for (lo, hi) in regions:                                        # the pieces of each stretch, in path order
+        idx = np.nonzero(live & (s_all >= lo) & (s_all < hi))[0]
+        cols.append(idx[np.argsort(s_all[idx])])
+    labels, n_lab = {}, {"S": 0, "E": 0}
+    for k, idx in enumerate(cols):                                  # one label per cell (a cell met at both ends keeps its first)
+        for c in c_all[idx]:
+            if int(c) not in labels:
+                key = "SE"[k]
+                n_lab[key] += 1
+                labels[int(c)] = f"{key}{n_lab[key]}"
+    cells_all = np.array(list(labels))
+    cmap = mpl.colors.ListedColormap(mpl.colormaps[CMAPS["sequential"]](np.linspace(0.2, 1.0, 256)))
+    log_n = np.log10(np.asarray(use.species[species]["number_density"], dtype=float)[cells_all])
+    norm = mpl.colors.Normalize(log_n.min() - 0.05, log_n.max() + 0.05)
+    col = {int(c): cmap(norm(x)) for c, x in zip(cells_all, log_n)}
+    name = re.sub(r"^([A-Z][a-z]?)([IVX]+)$", r"\1 \2", species)
+    fig = plt.figure(figsize=figsize, layout="constrained")
+    gs = fig.add_gridspec(6, 2, height_ratios=[3.3, 1.7, 2.3, 2.3, 1.6, 0.8])
+    ax = {r: [fig.add_subplot(gs[i, k], **({"projection": "3d", "computed_zorder": False} if r == "a" else {})) for k in range(2)]
+          for i, r in enumerate("abcde")}
+    ax["diff"] = [fig.add_subplot(gs[5, k], sharex=ax["e"][k]) for k in range(2)]
+    for r in ("c", "d", "e", "diff"):
+        ax[r][1].sharey(ax[r][0])
+    info = dict(P=P, labels={}, n_pieces=[], n_cells=[])
+    tops = max(float(np.asarray(tau_nowrap[k])[cc].sum(0).max()) for k, cc in enumerate(cols))   # the tau of the taller stretch
+    shade = dict(color=PALETTE["grey"], alpha=0.22, lw=0)
+    for k, idx in enumerate(cols):
+        side = ("start", "end")[k]
+        s_p, l_p, c_p, n_p = s_all[idx], l_all[idx], c_all[idx], n_all[idx]
+        cells, first = np.unique(c_p, return_index=True)
+        cells, first = cells[np.argsort(first)], np.sort(first)
+        info["n_pieces"].append(int(idx.size)); info["n_cells"].append(int(cells.size))
+        # (a) the cells in 3D, labelled
+        pos = np.asarray(use.positions, dtype=float)[cells]
+        near = _path_at(pts, s_pts, s_p[first])
+        g = pos + box * np.round((near - pos) / box) if box is not None else pos
+        size = np.asarray(use.size_cMpc, dtype=float)[cells]
+        faces = _voronoi_faces(use, g, size)
+        vel = np.asarray(use.species[species]["velocity"], dtype=float)[cells]
+        arrow_kms = 250.0                                           # the same arrow scale in both columns
+        h_med = float(np.median(np.asarray(use.size_cMpc)[c_all[np.concatenate(cols)]]))
+        seg_pts = _path_at(pts, s_pts, np.linspace(s_p[0] - 0.5 * l_p[0], s_p[-1] + 0.5 * l_p[-1], 40))
+        allv = np.concatenate([np.concatenate(f) for f in faces] + [seg_pts])
+        _draw_cells_3d(ax["a"][k], faces, [col[int(c)] for c in cells], g, seg_pts, allv.min(0), allv.max(0),
+                       arrows=vel / arrow_kms * h_med, view=view, zoom=zoom)
+        for c, gg in zip(cells, g):
+            ax["a"][k].text(*(gg + np.array([0.0, 0.0, 0.25 * h_med])), labels[int(c)], fontsize=FONT_MIN["annotation"], color=FG,
+                            fontweight="bold", zorder=20)
+        ax["a"][k].set_title(f"the {side} of the box: s = {regions[k][0]:.2f}–{regions[k][1]:.2f} cMpc, {cells.size} cells", pad=0)
+        ax["a"][k].text2D(0.99, 0.9, f"arrows: {arrow_kms:.0f} km/s per {h_med:.2g} cMpc", transform=ax["a"][k].transAxes,
+                          ha="right", va="top", fontsize=FONT_MIN["annotation"], color=FG)
+        # (b) the pieces along the path
+        b = ax["b"][k]
+        floor = 10 ** (np.log10(n_all[live].min()) - 0.3)
+        b.bar(s_p - 0.5 * l_p, n_p - floor, bottom=floor, width=l_p, align="edge", color=[col[int(c)] for c in c_p], edgecolor=FG,
+              linewidth=0.8, label=r"a piece $p$: a cell $\cap$ a dual segment ($n_p$, $\ell_p$)")
+        x_lo, x_hi = s_p[0] - 0.5 * l_p[0], s_p[-1] + 0.5 * l_p[-1]
+        top = 10 ** (np.log10(n_all[np.concatenate(cols)].max()) + 0.9)
+        mids = 0.5 * (s_pts[1:] + s_pts[:-1])
+        b.vlines(mids[(mids > x_lo) & (mids < x_hi)], floor, top, color=DIM, lw=1.2, ls=(0, (3.0, 2.5)),
+                 label="end of a dual segment (midpoint of two points)")
+        brk = np.nonzero(np.diff(c_p))[0]
+        b.vlines(s_p[brk] + 0.5 * l_p[brk], floor, top, color=FG, lw=2.2, label="cell crossing")
+        for c in cells:
+            m = c_p == c
+            b.text(np.average(s_p[m], weights=l_p[m]), n_p[m].max() * 1.6, labels[int(c)], ha="center", va="bottom",
+                   fontsize=FONT_MIN["annotation"], color=FG, fontweight="bold")
+        b.set(xlim=(x_lo, x_hi), ylim=(floor, top * 6), yscale="log", xlabel="path length s [cMpc]")
+        # (c) every piece's own contribution, without wrap, and its shift by the peculiar velocity
+        v, tn, tw = np.asarray(v_axes[k], dtype=float), np.asarray(tau_nowrap[k], dtype=float), np.asarray(tau_wrap[k], dtype=float)
+        c_ = ax["c"][k]
+        for i in idx:
+            c_.plot(v, tn[i], color=col[int(c_all[i])], lw=2.0)
+        c_.plot(v, tn[idx].sum(0), color=FG, lw=1.2, ls="--", label=r"their sum: $\tau$ of the stretch")
+        for r, i in enumerate(idx):
+            y = tops * (1.15 + 1.5 * r / max(max(len(cc) for cc in cols) - 1, 1))
+            cc = col[int(c_all[i])]
+            c_.scatter([v_H_all[i]], [y], marker="o", s=60, facecolors="none", edgecolors=cc, linewidths=2.2, zorder=8)
+            c_.annotate("", (v_c_all[i], y), (v_H_all[i], y), arrowprops=dict(arrowstyle="-|>", color=cc, lw=2.0, shrinkA=4, shrinkB=0))
+            c_.text(v_H_all[i], y, labels[int(c_all[i])] + "  ", ha="right", va="center", fontsize=FONT_MIN["floor"], color=FG)
+        c_.scatter([], [], marker="o", s=60, facecolors="none", edgecolors=FG, linewidths=2,
+                   label=r"a piece's $v_H$; arrow to $v_c = v_H + v_\parallel$")
+        info["labels"][side] = [labels[int(c)] for c in cells]
+        info.setdefault("cells", []).append(cells)
+    for k in range(2):                                               # window and its outside, in (c), (d), (e)
+        v = np.asarray(v_axes[k], dtype=float)
+        for r in ("c", "d", "e", "diff"):
+            a_ = ax[r][k]
+            if k == 0:
+                a_.axvspan(v[0], 0.0, **shade); a_.axvline(0.0, color=DIM, ls=":", lw=1.8)
+            else:
+                a_.axvspan(P, v[-1], **shade); a_.axvline(P, color=DIM, ls=":", lw=1.8)
+            a_.set_xlim(v[0], v[-1])
+    # (d) one profile on the circle: the tracked cells, split at an edge of the window
+    vax = [np.asarray(x, dtype=float) for x in v_axes]
+    tnx = [np.asarray(x, dtype=float) for x in tau_nowrap]
+    twx = [np.asarray(x, dtype=float) for x in tau_wrap]
+    win_ = [(x >= 0.0) & (x < P) for x in vax]
+    stepv = [float(np.median(np.diff(x))) for x in vax]
+    def cell_pieces_of(k, c):
+        return cols[k][c_all[cols[k]] == c]
+    def in_out(k, m):                                                # a cell's no-wrap tau inside / outside the window of column k
+        t = tnx[k][m].sum(0)
+        return t[win_[k]].sum() * stepv[k], t[~win_[k]].sum() * stepv[k]
+    if track is None:
+        leaves = max((in_out(k, cell_pieces_of(k, int(c)))[1], k, int(c)) for k in (0, 1) for c in info["cells"][k])
+        splits = max((min(in_out(k, np.nonzero(live & (c_all == c))[0])), k, int(c)) for k in (0, 1) for c in np.unique(c_all[live]))
+        chosen = [x[1:] for x in (leaves, splits) if x[0] > 0]
+        chosen = list(dict.fromkeys(chosen))
+    else:
+        by_label = {lab: c for c, lab in labels.items()}
+        chosen = []
+        for t in track:
+            if isinstance(t, str):
+                chosen.append((1 if t.startswith("E") else 0, int(by_label[t])))
+            else:
+                m = live & (c_all == int(t))
+                chosen.append((1 if np.average(v_c_all[m], weights=n_all[m] * l_all[m]) > 0.5 * P else 0, int(t)))
+    n_x = 0
+    for k, c in chosen:                                              # cells outside the stretches: X1, X2, ...
+        if c not in labels:
+            n_x += 1
+            labels[c] = f"X{n_x}"
+            ln = np.log10(float(np.asarray(use.species[species]["number_density"])[c]))
+            col[c] = cmap(norm(np.clip(ln, norm.vmin, norm.vmax)))
+            m = live & (c_all == c)
+            info.setdefault("outside", {})[labels[c]] = (float(s_all[m].min() - 0.5 * l_all[m][np.argmin(s_all[m])]),
+                                                         float(s_all[m].max() + 0.5 * l_all[m][np.argmax(s_all[m])]))
+    for k in range(2):                                               # each stretch's own tau, for context
+        ax["d"][k].fill_between(vax[k], 0, tnx[k][cols[k]].sum(0), color=PALETTE["grey"], alpha=0.35, lw=0,
+                                label="this stretch's own $\\tau$ (row c), no wrap" if k == 0 else None)
+    for n_t, (k, c) in enumerate(chosen):
+        j = 1 - k
+        m = np.nonzero(live & (c_all == c))[0]                       # every piece of the cell
+        cc, lab = col[c], labels[c]
+        own_v, own_n, own_w = vax[k], tnx[k][m].sum(0), twx[k][m].sum(0)
+        oth_v, oth_w = vax[j], twx[j][m].sum(0)
+        out = ~win_[k]
+        d_own, d_oth = ax["d"][k], ax["d"][j]
+        d_own.plot(own_v[win_[k]], own_n[win_[k]], color=cc, lw=2.4)                       # stays where it is
+        d_own.fill_between(own_v[out], 0, own_n[out], color=cc, alpha=0.3, lw=0)             # beyond the edge, no wrap
+        d_own.plot(own_v[out], own_n[out], color=cc, lw=1.8, ls=(0, (3.0, 2.0)))
+        re_in = oth_w * win_[j]
+        d_oth.fill_between(oth_v, 0, re_in, where=win_[j], color=cc, alpha=0.3, lw=0)        # ... evaluated P away
+        d_oth.plot(oth_v[win_[j]], oth_w[win_[j]], color=cc, lw=2.4)
+        for a_, vv, ww in ((d_own, own_v, own_w), (d_oth, oth_v, oth_w)):                 # the whole nearest-image curve
+            a_.plot(vv, ww, color=cc, lw=1.0, alpha=0.75, ls="-", zorder=1)
+        sign = "-" if k == 1 else "+"
+        if own_n[out].sum() > 0 and re_in.sum() > 0:
+            v_o, h_o = float(np.average(own_v[out], weights=own_n[out])), float(own_n[out].max())
+            v_i, h_i = float(np.average(oth_v, weights=re_in)), float(re_in.max())
+            d_own.annotate(f"{lab}: beyond the edge, evaluated at $v {sign} P$", (v_o, 0.7 * h_o), (0.56, 0.62 - 0.15 * n_t),
+                           textcoords="axes fraction", ha="left", va="bottom", fontsize=FONT_MIN["annotation"], color=FG,
+                           arrowprops=dict(arrowstyle="-", color=cc, lw=1.2),
+                           bbox=dict(boxstyle="round,pad=0.15", facecolor=plt.rcParams["axes.facecolor"], edgecolor=cc, alpha=0.9))
+            d_oth.annotate(f"{lab}: re-enters here", (v_i, 0.7 * h_i), (0.55, 0.62 - 0.15 * n_t), textcoords="axes fraction", ha="left",
+                           va="bottom", fontsize=FONT_MIN["annotation"], color=FG, arrowprops=dict(arrowstyle="-", color=cc, lw=1.2),
+                           bbox=dict(boxstyle="round,pad=0.15", facecolor=plt.rcParams["axes.facecolor"], edgecolor=cc, alpha=0.9))
+            fig.add_artist(ConnectionPatch((v_o, 0.45 * h_o), (v_i, 0.45 * h_i), coordsA="data", coordsB="data", axesA=d_own,
+                                           axesB=d_oth, arrowstyle="-|>", mutation_scale=20, lw=2.0, color=cc,
+                                           connectionstyle="arc3,rad=0.1"))
+        near = own_n[win_[k]].sum() * stepv[k]
+        if near > 1e-3 * own_n.sum() * stepv[k]:
+            v_n = own_v[win_[k]][np.argmax(own_n[win_[k]] * (np.abs(own_v[win_[k]] - (P if k == 1 else 0.0)) < 60))]
+            where = (f" (s = {info['outside'][lab][0]:.2f}–{info['outside'][lab][1]:.2f} cMpc, not in rows a–c)"
+                     if lab in info.get("outside", {}) else "")
+            d_own.annotate(f"{lab}{where}:\nstays (inside the window)", (v_n, float(np.interp(v_n, own_v, own_n))), (0.02, 0.6),
+                           textcoords="axes fraction", ha="left", va="bottom", fontsize=FONT_MIN["annotation"], color=FG,
+                           arrowprops=dict(arrowstyle="-", color=cc, lw=1.2),
+                           bbox=dict(boxstyle="round,pad=0.15", facecolor=plt.rcParams["axes.facecolor"], edgecolor=cc, alpha=0.9))
+    ax["d"][0].plot([], [], color=FG, lw=1.0, alpha=0.75, label="thin: the nearest-image profile on the whole axis")
+    h_tr = max([float(tnx[k][np.nonzero(live & (c_all == c))[0]].sum(0).max()) for k, c in chosen] + [1e-300])
+    for k in range(2):                                               # the scale of the tracked profiles (the grey context is clipped)
+        ax["d"][k].set_ylim(0, 1.9 * h_tr)
+    cut_txt = (r"each profile is cut at $v_c \pm P/2$, " f"{0.5 * P:.0f} km/s from its centre (off this axis); images are not summed"
+               + ("" if cut_fraction is None else f": the cut removes {cut_fraction:.0e} of the column here"))
+    ax["d"][1].text(0.065, 0.95, cut_txt.replace("; images", ";\nimages"), transform=ax["d"][1].transAxes, ha="left", va="top",
+                    fontsize=FONT_MIN["annotation"], color=FG)
+    info["tracked"] = [(("start", "end")[k], labels[c]) for k, c in chosen]
+    # (e) the whole skewer: no wrap, wrap, the translated no-wrap tau outside the other end, and the difference by source
+    centre_out = live & ((v_c_all < 0.0) | (v_c_all >= P))
+    src = {0: ("beyond", vax[1] >= P, -P, PALETTE["red"]), 1: ("below", vax[0] < 0.0, +P, PALETTE["blue"])}
+    info["dtau"] = {}
+    for k in range(2):
+        v, win = vax[k], win_[k]
+        tn_all, tw_all = tnx[k][live].sum(0), twx[k][live].sum(0)
+        e_, dd = ax["e"][k], ax["diff"][k]
+        e_.plot(v, tn_all, color=FG, **MODE_STYLES["reference"], label="no wrap (the default)")
+        e_.plot(v[win], tw_all[win], color=FG, lw=2.0, label=r"velocity_period=True")
+        e_.plot(v[~win], tw_all[~win], color=FG, lw=1.2, ls=":", label="periodic repetition, not new absorption")
+        key, sel_, shift, c_src = src[k]
+        j = 1 - k
+        t_src = tnx[j][live].sum(0)[sel_]
+        moved = t_src.max() > 1e-3 * max(tn_all.max(), 1e-300)
+        if moved:
+            e_.plot(vax[j][sel_] + shift, t_src, color=c_src, lw=1.8, ls="--",
+                    label=f"no-wrap $\\tau$ {'beyond $P$' if k == 0 else 'below 0'}, moved by {'$-P$' if k == 0 else '$+P$'}")
+        x_out = 0.5 * (v[0] + 0.0) if k == 0 else 0.5 * (P + v[-1])
+        e_.text(x_out, 0.8, "outside the window:\nnot on the spectrum", transform=e_.get_xaxis_transform(), ha="center", va="top",
+                fontsize=FONT_MIN["annotation"], color=FG)
+        d_i = (twx[k] - tnx[k])[centre_out].sum(0) * win
+        d_ii = (twx[k] - tnx[k])[live & ~centre_out].sum(0) * win
+        dd.fill_between(v, 0, d_i, where=win, color=PALETTE["red"], alpha=0.45, lw=0, label="(i) line centres outside the window")
+        dd.fill_between(v, d_i, d_i + d_ii, where=win, color=PALETTE["cyan"], alpha=0.6, lw=0,
+                        label="(ii) tails of centre-inside pieces across an edge")
+        if moved:
+            dd.plot(vax[j][sel_] + shift, t_src, color=c_src, lw=1.6, ls="--")
+        dd.axhline(0.0, color=FG, lw=1.0)
+        dd.set(xlabel=LABELS["v_dagger"])
+        plt.setp(e_.get_xticklabels(), visible=False)
+        info["dtau"][("start", "end")[k]] = dict(i=float(d_i.sum() * stepv[k]), ii=float(d_ii.sum() * stepv[k]),
+                                                 max=float((d_i + d_ii).max()))
+    if info["dtau"]["end"]["max"] < 1e-2 * max(info["dtau"]["start"]["max"], 1e-300):
+        ax["diff"][1].text(0.02, 0.92, r"$\Delta\tau \approx 0$ here: the near tails beyond $P$ stay; nothing falls below 0",
+                           transform=ax["diff"][1].transAxes, ha="left", va="top",
+                           fontsize=FONT_MIN["annotation"], color=FG)
+    ytop_c = max(a_.get_ylim()[1] for a_ in ax["c"])
+    for k in range(2):
+        ax["c"][k].set_ylim(0, ytop_c)
+    ax["b"][0].set_ylabel(rf"$n_{{\rm com}}$ of each piece [cm$^{{-3}}$]")
+    ax["c"][0].set_ylabel(rf"$d\tau_p$ ({line_label}), no wrap")
+    ax["d"][0].set_ylabel(rf"$d\tau$ of a cell ({line_label})")
+    ax["e"][0].set_ylabel(r"$\tau$, whole skewer")
+    ax["diff"][0].set_ylabel(r"$\Delta\tau$")
+    for r in ("c", "d"):
+        for k in range(2):
+            ax[r][k].set_xlabel(LABELS["v_dagger"])
+    ax["d"][0].set_ylim(bottom=0)
+    ax["b"][0].legend(loc="upper right", fontsize=FONT_MIN["legend"])
+    ax["c"][0].legend(loc="lower right", fontsize=FONT_MIN["legend"])
+    ax["e"][0].legend(loc="upper right", fontsize=FONT_MIN["legend"])
+    ax["d"][0].legend(loc="upper right", fontsize=FONT_MIN["legend"])
+    ax["diff"][1].legend(*ax["diff"][0].get_legend_handles_labels(), loc="lower right", fontsize=FONT_MIN["legend"])
+    fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), ax=list(ax["a"]), location="bottom", shrink=0.4, aspect=35, pad=0.04,
+                 label=rf"$\log_{{10}} n_{{\rm com}}$ [cm$^{{-3}}$] of {name}: the colour of a cell in every row")
+    for r in "abcde":                                                # panel letters: row and column, (a1) (a2), ...
+        for k, a_ in enumerate(ax[r]):
+            (a_.text2D if hasattr(a_, "text2D") else a_.text)(0.012, 0.975, f"({r}{k + 1})", transform=a_.transAxes, ha="left",
+                                                             va="top", fontsize=18, fontweight="bold", zorder=30)
+    return fig, {r: tuple(a) for r, a in ax.items()}, info
 
 
 # --------------------------------------------------------------------------- frames and periodicity (notebook 07)
@@ -2361,8 +2504,10 @@ def plot_frames_axes(v, F_own, line_bundle, *, v_ref=None, F_ref=None, a_dagger:
 
     v : (N_v,) line-centred velocities v_dagger [km/s]; F_own : (N_lines, N_v) every line in its own frame. (a) the
     line-centred frames: the same gas absorbs at the same v_dagger in every line (dotted: ``centres``); (b) the global
-    velocity axis of the reference line: ``F_ref`` (N_lines, N_v_ref) on ``v_ref``, e.g. from
-    ``compute_optical_depth(..., line_frame="reference")``; (c) the observed wavelength of every pixel,
+    velocity axis of the reference line: by default every line's own-frame flux relabelled, at v - delta_v_j (a change
+    of axis only: each line keeps exactly its computed range, shown by its two dash-dotted edges); or ``F_ref``
+    (N_lines, N_v_ref) on one grid ``v_ref``, e.g. from ``compute_optical_depth(..., line_frame="reference")``, which
+    evaluates every line over the whole of that grid; (c) the observed wavelength of every pixel,
     ``spectral.line_wavelength_grid_A`` (lambda_obs = lambda_j (a_obs / a_dagger) e^{v/c}). Returns (fig, axs).
     """
     from skewerjax.core.spectral import line_wavelength_grid_A
@@ -2375,18 +2520,22 @@ def plot_frames_axes(v, F_own, line_bundle, *, v_ref=None, F_ref=None, a_dagger:
     fig, axs = plt.subplots(3, 1, figsize=figsize, gridspec_kw={"height_ratios": [2.0, 1.4, 1.4]}, layout="constrained")
     for j, l in enumerate(lines):
         axs[0].plot(v, F_own[j], color=cols[j], lw=2.4 if j == 0 else 1.8, ls="-" if j == 0 else "--", label=f"{l.id}, own frame")
-        if F_ref is not None:
-            axs[1].plot(v_ref, F_ref[j], color=cols[j], lw=2.0,
-                        label=f"{l.id}" + (rf": at $v + \Delta v_j$ = $v$ {dv_j[j]:+.0f} km/s" if dv_j[j] else ""))
+        shift = rf": at $v - \Delta v_j$ = $v$ {-dv_j[j]:+.0f} km/s" if dv_j[j] else ": unchanged (reference)"
+        if F_ref is None:                                          # a change of axis: the own-frame flux, relabelled
+            axs[1].plot(v - dv_j[j], F_own[j], color=cols[j], lw=2.0, label=f"{l.id}{shift}")
+            for edge in (v[0], v[-1]):
+                axs[1].axvline(edge - dv_j[j], color=cols[j], ls="-.", lw=1.2, path_effects=[])
+        else:
+            axs[1].plot(v_ref, F_ref[j], color=cols[j], lw=2.0, label=f"{l.id}{shift}")
         axs[2].plot(lam[j], F_own[j], color=cols[j], lw=2.0, label=f"{l.id}: " + r"$\lambda_j\,(a_{\rm obs}/a_\dagger)\,e^{v_\dagger/c}$")
         axs[2].axvline(l.lambda0_A * a_obs / a_dagger, color=cols[j], ls="-.", lw=1.2, path_effects=[])
     if centres is not None:
         for c0 in np.atleast_1d(centres):
             axs[0].axvline(c0, color=FG, ls=":", lw=1.2, path_effects=[])
     for j in range(1, len(lines)):
-        _textbox(axs[0], 0.02, 0.12 + 0.1 * j, rf"{lines[j].id} sits $\Delta v_j = c\ln(\lambda_{{\rm ref}}/\lambda_j)$ = "
-                 f"{dv_j[j]:+.1f} km/s from {lines[0].id} on the global axis; in its own frame it absorbs at the same "
-                 rf"$v_\dagger$ as {lines[0].id}", color=cols[j], transform=axs[0].transAxes)
+        _textbox(axs[1], 0.02, 0.62 - 0.22 * (j - 1), rf"{lines[j].id}: $\Delta v_j = c\ln(\lambda_{{\rm ref}}/\lambda_j)$ = "
+                 f"{dv_j[j]:+.1f} km/s;" "\n" rf"in its own frame it absorbs at the same $v_\dagger$ as {lines[0].id}",
+                 color=cols[j], transform=axs[1].transAxes)
     axs[0].set(xlabel=r"line-centred velocity $v_\dagger$ [km/s] (each line in its own frame)", ylabel=LABELS["F"], xlim=(v[0], v[-1]))
     axs[1].set(xlabel=f"global velocity axis: v on the {lines[0].id} frame [km/s]", ylabel=LABELS["F"])
     axs[2].set(xlabel=r"observed wavelength $\lambda_{\rm obs}$ [Å]", ylabel=LABELS["F"])
