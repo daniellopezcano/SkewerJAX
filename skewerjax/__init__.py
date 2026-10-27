@@ -19,12 +19,12 @@ the first computation (``jax.config.update("jax_enable_x64", True)``, as the not
 otherwise). ``simulations.PowerLawGRF`` warns when x64 is off; ``voigt_convolution`` works in float64 when x64 is on; the
 simulation and comparison blocks hold host arrays in float64 NumPy.
 """
-__version__ = "0.0.1"
 
 import logging as _logging
 
-_logging.getLogger("skewerjax").addHandler(_logging.NullHandler())     # silent unless configured (core.enable_logging)
+from skewerjax import comparison, core, simulations, utils
 
-from skewerjax import core, simulations, comparison, utils
+__version__ = "0.0.1"
+_logging.getLogger("skewerjax").addHandler(_logging.NullHandler())  # silent unless configured (core.enable_logging)
 
 __all__ = ["__version__", "core", "simulations", "comparison", "utils"]

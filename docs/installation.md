@@ -63,22 +63,27 @@ JAX 0.6.2 and CUDA 12.
 
 ## 3. Install SkewerJAX (editable)
 
-From the repository root:
+Clone with the submodule of the CLOUDY tables (`git clone --recurse-submodules ...`, or `git submodule update --init`
+in an existing clone), then, from the repository root:
 
 ```bash
-pip install -e .                    # core dependencies (JAX for the CPU included)
-pip install -e ".[gpu]"             # the same, plus jax[cuda12]
-pip install -e ".[notebooks]"       # Jupyter, ipympl and ipywidgets for the notebooks
-pip install -e ".[comparison]"      # fake-spectra (PyPI) and psutil for the comparison with fake_spectra and the benchmark
-pip install -e ".[dev]"             # pytest, nbformat/nbconvert (headless notebook runs), psutil
+pip install -e .                    # the core (JAX for the CPU included): toy fields, tau, statistics, figures
+pip install -e ".[simulations]"     # + h5py: the snapshot readers and the result cache
+pip install -e ".[plots]"           # + tol-colors, ipympl (optional figure extras)
+pip install -e ".[notebooks]"       # + Jupyter, ipympl, ipywidgets, nbconvert for the notebooks
+pip install -e ".[comparison]"      # + h5py, fake-spectra (PyPI), psutil: the comparison with fake_spectra and the benchmark
+pip install -e ".[dev]"             # + pytest, pytest-cov, ruff, pre-commit, nbstripout, nbconvert, psutil
+pip install -e ".[gpu]"             # + jax[cuda12]
 ```
 
-Extras can be combined, e.g. `pip install -e ".[gpu,notebooks,comparison,dev]"`.
+Extras can be combined, e.g. `pip install -e ".[simulations,notebooks,dev]"`. `import skewerjax` needs only the core
+dependencies; the snapshot readers raise an `ImportError` for h5py without the `simulations` extra. After a
+development install, run `pre-commit install` once (ruff, nbstripout and the file checks on every commit).
 
 ### Optional dependencies
 
-- **fake_spectra** is needed only by `skewerjax.comparison`: its live mode, `scripts/validation/check_fake_spectra.py`
-  and the benchmark. It is published on PyPI as `fake-spectra` (2.3.1 at the time of writing; the development
+- **fake_spectra** is needed only by `skewerjax.comparison`: its live mode, the tests with the `fake_spectra` marker
+  (`tests/comparison/test_fake_spectra.py`) and the benchmark. It is published on PyPI as `fake-spectra` (2.3.1 at the time of writing; the development
   environment uses an editable 2.2.4 clone).
   - Without it, the comparison subpackage still works from a reference HDF5 file (`FakeSpectraSource(reference=...)`).
   - The rest of the package never imports it.
@@ -92,45 +97,45 @@ Extras can be combined, e.g. `pip install -e ".[gpu,notebooks,comparison,dev]"`.
 - **ipympl** gives interactive figures in a live notebook (`plotting.use_backend()`); without it, figures are inline.
 - **CLOUDY ionisation tables** for metal ions:
   - the tables are expected in `skewerjax/simulations/cloudy_tables/ion_out_photo_atten`;
-  - `cloudy_tables` is a git submodule (`git submodule update --init`);
-  - the large table files are not tracked by git.
+  - `cloudy_tables` is a git submodule (sbird/cloudy_tables, the same tables as fake_spectra's): clone with
+    `--recurse-submodules` or run `git submodule update --init`; the package data of `pyproject.toml` includes them.
 
 ## 4. Simulation data
 
 SkewerJAX reads Arepo/TNG HDF5 snapshots with `ArepoHDF5Reader(base, snapnum)`, where `base` is the directory that
-contains `snapdir_XXX/`. Paths are always passed explicitly in code. The notebooks, validation scripts, tests and
-benchmarks take every path outside the repository from one module, `skewerjax.utils.paths`, each overridable by an
+contains `snapdir_XXX/`. Paths are always passed explicitly in code. The notebooks, tests and benchmarks take every path
+outside the package from one module, `skewerjax.utils.paths`, each overridable by an
 environment variable:
 
 ```bash
 export SKEWERJAX_DATA=/path/to/folder/with/TNG50-4   # DATA_DIR: holds TNG50-4/ (and TNG50-3/, TNG50-2/ for the benchmark)
 export SKEWERJAX_BENCHMARK_RAW=/path/to/raw          # BENCHMARK_RAW_DIR: per-configuration benchmark records
-export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the results file notebook 10 reads
+export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the summary notebook 10 reads
 ```
 
-`DATA_DIR` defaults to `/home/STORAGE` (read only). The two benchmark folders default to `benchmark_results/raw` and
-`notebooks/benchmark_records` in the repository; both are git-ignored and rebuilt by
-`scripts/benchmarks/benchmark_fake_spectra.py`: one record per configuration in `benchmark_results/raw/fake_spectra`,
-and all of them in `notebooks/benchmark_records/fake_spectra_benchmark.json`, the file notebook 10 reads.
+`DATA_DIR` defaults to `/home/STORAGE` (read only). The benchmark folders default to `benchmarks/raw` (one record per
+configuration in `benchmarks/raw/fake_spectra`, git-ignored) and `benchmarks/results`
+(`fake_spectra_benchmark.json`, the summary of every record that notebook 10 reads, committed); both are written by
+`scripts/benchmarks/benchmark_fake_spectra.py`.
 
 ## 5. Verify the installation
 
 ```bash
 python scripts/verify_install.py                                  # environment, devices, a tiny optical depth
-python scripts/validation/run_all.py --quick --skip tng,fake      # the toy-input validation scripts (~2 min)
-pytest                                                            # tests/ (needs the dev extra)
+pytest                                                            # the fast test suite (needs the dev extra)
+pytest -m "slow or not slow"                                      # every test, incl. the slow physics checks
 ```
 
-With TNG50-4 available, `python scripts/validation/run_all.py` runs every check, including the live comparison with
-fake_spectra.
+The tests that need the TNG50-4 snapshots (`tng`), a GPU (`gpu`) or fake_spectra (`fake_spectra`) skip themselves
+when those are missing (`tests/README.md`).
 
 ## Troubleshooting
 
 - **Precision.** SkewerJAX follows JAX's precision flag and never sets it itself. The validated tolerances are float64
   ones, so call `jax.config.update("jax_enable_x64", True)` before computing. Without it JAX computes in float32. The
   τ kernel can also be asked for float32 on its own with `dtype="float32"` (see `docs/usage.md`).
-- **Forcing the CPU.** Set `JAX_PLATFORMS=cpu` before Python starts (or before `import jax`). The validation scripts and
-  tests do this themselves.
+- **Forcing the CPU.** Set `JAX_PLATFORMS=cpu` before Python starts (or before `import jax`). The tests do this
+  themselves (`JAX_PLATFORMS=cuda,cpu pytest -m gpu` for the GPU tests).
 - **GPU memory.** By default JAX preallocates 75 % of the GPU memory on first use. Set
   `XLA_PYTHON_CLIENT_PREALLOCATE=false` to allocate on demand (the benchmark does), or
   `XLA_PYTHON_CLIENT_MEM_FRACTION=.50` to change the fraction
@@ -148,4 +153,4 @@ fake_spectra.
   activation.
 - **Several CPU devices for testing the sharding.** Set
   `XLA_FLAGS=--xla_force_host_platform_device_count=4` before JAX starts. It splits the host into 4 devices; it does
-  not add compute. `tests/test_precision_and_sharding.py` does this in a subprocess.
+  not add compute. `tests/core/test_optical_depth.py` does this in a subprocess.

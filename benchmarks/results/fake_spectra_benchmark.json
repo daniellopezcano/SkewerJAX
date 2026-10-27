@@ -1,0 +1,7235 @@
+{
+ "created": "2026-10-26 13:37",
+ "sets": [
+  "scaling",
+  "threads"
+ ],
+ "machine": {
+  "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+  "physical_cores": 24,
+  "logical_cpus": 32,
+  "cpu_set": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31
+  ],
+  "ram_GB": 131.708372,
+  "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+  "python": "3.11.14",
+  "versions": {
+   "jax": "0.6.2",
+   "jaxlib": "0.6.2",
+   "jax-cuda12-plugin": "0.6.2",
+   "numpy": "1.26.4",
+   "scipy": "1.16.3",
+   "h5py": "3.15.1",
+   "fake_spectra": "2.2.4",
+   "exojax": "2.2.2"
+  },
+  "host": "kosmivara3110",
+  "env": {
+   "OMP_NUM_THREADS": "32",
+   "OPENBLAS_NUM_THREADS": "32",
+   "MKL_NUM_THREADS": "32",
+   "XLA_FLAGS": null,
+   "JAX_PLATFORMS": "cpu",
+   "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+  }
+ },
+ "snapshots": [
+  {
+   "sim": "TNG50-4",
+   "snapnum": 25,
+   "n_gas": 19250411,
+   "box_ckpc_h": 35000.0,
+   "redshift": 3.008131071630377,
+   "n_files": 11,
+   "size_GB": 5.59971028
+  },
+  {
+   "sim": "TNG50-3",
+   "snapnum": 25,
+   "n_gas": 152305397,
+   "box_ckpc_h": 35000.0,
+   "redshift": 3.008131071630377,
+   "n_files": 11,
+   "size_GB": 47.002433868
+  },
+  {
+   "sim": "TNG50-2",
+   "snapnum": 25,
+   "n_gas": 1205098922,
+   "box_ckpc_h": 35000.0,
+   "redshift": 3.008131071630377,
+   "n_files": 128,
+   "size_GB": 373.855243196
+  }
+ ],
+ "runtime_s": 13498.401777324849,
+ "runtime_by_preset_s": {
+  "quick": 1582.6721035809023,
+  "full": 11915.729673743946
+ },
+ "launcher_wall_s": 1589.0,
+ "launches": [
+  {
+   "preset": "quick",
+   "sets": [
+    "scaling",
+    "threads"
+   ],
+   "wall_s": 1589.4572349030059,
+   "date": "2026-10-26 13:37"
+  }
+ ],
+ "records": [
+  {
+   "id": "fake_spectra_TNG50-2_s25_n1_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-2",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 1,
+    "budget_s": 900.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 900.0,
+    "est_s": 420.0
+   },
+   "status": "ok",
+   "wall_s": 379.68938034097664,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-2",
+    "snapnum": 25,
+    "n_gas": 1205098922,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 128,
+    "size_GB": 373.855243196
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.05503148399293423,
+      "io": 168.45776775025297,
+      "selection": 2.1887889911886305,
+      "physics": 56.54888145881705,
+      "pieces": 0.0,
+      "tau": 1.3584352487232536
+     },
+     "wall": 228.60895741300192
+    },
+    {
+     "stages": {
+      "setup": 0.011237637023441494,
+      "io": 89.55518296232913,
+      "selection": 2.4611028131330386,
+      "physics": 57.649021192337386,
+      "pieces": 0.0,
+      "tau": 1.2429465651512146
+     },
+     "wall": 150.91959382407367
+    }
+   ],
+   "peak_rss_GB": 0.921692,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.921358336
+  },
+  {
+   "id": "fake_spectra_TNG50-3_s25_n16_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 16,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 100.63113555603195,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.028207668918184936,
+      "io": 11.886727110482752,
+      "selection": 0.6061971132876351,
+      "physics": 8.106204051407985,
+      "pieces": 0.0,
+      "tau": 3.0806611519074067
+     },
+     "wall": 23.708049239008687
+    },
+    {
+     "stages": {
+      "setup": 0.02611929306294769,
+      "io": 12.67630700673908,
+      "selection": 0.6431856259005144,
+      "physics": 8.477899765362963,
+      "pieces": 0.0,
+      "tau": 3.2948899910552427
+     },
+     "wall": 25.11844986595679
+    },
+    {
+     "stages": {
+      "setup": 0.022630599909462035,
+      "io": 12.532023728825152,
+      "selection": 0.5963433018187061,
+      "physics": 8.335107479128055,
+      "pieces": 0.0,
+      "tau": 3.1213560801697895
+     },
+     "wall": 24.607521097990684
+    },
+    {
+     "stages": {
+      "setup": 0.025049590039998293,
+      "io": 13.759072523680516,
+      "selection": 0.6062665962381288,
+      "physics": 9.507673061569221,
+      "pieces": 0.0,
+      "tau": 3.146965050487779
+     },
+     "wall": 27.04507180908695
+    }
+   ],
+   "peak_rss_GB": 1.26112,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 1.28608256
+  },
+  {
+   "id": "fake_spectra_TNG50-3_s25_n1_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 2,
+    "budget_s": 240.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 240.0,
+    "est_s": 90.0
+   },
+   "status": "ok",
+   "wall_s": 179.4303169019986,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.0934689330169931,
+      "io": 85.89950772572774,
+      "selection": 0.7337908538756892,
+      "physics": 27.854461447219364,
+      "pieces": 0.0,
+      "tau": 0.44307470112107694
+     },
+     "wall": 115.02439704700373
+    },
+    {
+     "stages": {
+      "setup": 0.06472792604472488,
+      "io": 27.335535915917717,
+      "selection": 0.5157545161200687,
+      "physics": 15.747822142089717,
+      "pieces": 0.0,
+      "tau": 0.6790888448012993
+     },
+     "wall": 44.34301058005076
+    },
+    {
+     "stages": {
+      "setup": 0.024702670983970165,
+      "io": 11.18468257097993,
+      "selection": 0.2856366428313777,
+      "physics": 7.7081373562105,
+      "pieces": 0.0,
+      "tau": 0.696757142082788
+     },
+     "wall": 19.899963160976768
+    }
+   ],
+   "peak_rss_GB": 1.25664,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 1.245560832
+  },
+  {
+   "id": "fake_spectra_TNG50-3_s25_n4_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 4,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 107.2037077199202,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.031023533083498478,
+      "io": 14.526907526655123,
+      "selection": 0.4603136497316882,
+      "physics": 8.27626758639235,
+      "pieces": 0.0,
+      "tau": 1.551764946198091
+     },
+     "wall": 24.84632677701302
+    },
+    {
+     "stages": {
+      "setup": 0.025024340022355318,
+      "io": 12.414255190989934,
+      "selection": 0.46947670448571444,
+      "physics": 8.533732970478013,
+      "pieces": 0.0,
+      "tau": 1.4292567590018734
+     },
+     "wall": 22.871797919040546
+    },
+    {
+     "stages": {
+      "setup": 0.024852792965248227,
+      "io": 19.14337700919714,
+      "selection": 0.5119568711379543,
+      "physics": 13.142276703612879,
+      "pieces": 0.0,
+      "tau": 1.784979282063432
+     },
+     "wall": 34.607488960027695
+    },
+    {
+     "stages": {
+      "setup": 0.02460438502021134,
+      "io": 13.397198926308192,
+      "selection": 0.4502687102649361,
+      "physics": 9.237317463266663,
+      "pieces": 0.0,
+      "tau": 1.6346699672285467
+     },
+     "wall": 24.744101680000313
+    }
+   ],
+   "peak_rss_GB": 1.260124,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 1.241931776
+  },
+  {
+   "id": "fake_spectra_TNG50-3_s25_n64_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 64,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 122.64522785798181,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.02860289695672691,
+      "io": 14.471692912629806,
+      "selection": 0.8145612990483642,
+      "physics": 10.032333038630895,
+      "pieces": 0.0,
+      "tau": 5.563020890695043
+     },
+     "wall": 30.91027833498083
+    },
+    {
+     "stages": {
+      "setup": 0.02339196507818997,
+      "io": 14.251562528428622,
+      "selection": 0.7988452800782397,
+      "physics": 10.057560138520785,
+      "pieces": 0.0,
+      "tau": 5.962927744956687
+     },
+     "wall": 31.094339531031437
+    },
+    {
+     "stages": {
+      "setup": 0.023287312942557037,
+      "io": 14.369624380255118,
+      "selection": 0.8115082202712074,
+      "physics": 10.082517207483761,
+      "pieces": 0.0,
+      "tau": 5.692222578916699
+     },
+     "wall": 30.979212681995705
+    },
+    {
+     "stages": {
+      "setup": 0.02450238703750074,
+      "io": 13.707532480009831,
+      "selection": 0.7779708112357184,
+      "physics": 9.819455976597965,
+      "pieces": 0.0,
+      "tau": 5.190369105082937
+     },
+     "wall": 29.51988354907371
+    }
+   ],
+   "peak_rss_GB": 1.267916,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 1.287860224
+  },
+  {
+   "id": "fake_spectra_TNG50-4_s25_n1024_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1024,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 64.44941383996047,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.004558254033327103,
+      "io": 1.185960256610997,
+      "selection": 0.6664708197349682,
+      "physics": 0.8453856676351279,
+      "pieces": 0.0,
+      "tau": 13.448284819023684
+     },
+     "wall": 16.15070822101552
+    },
+    {
+     "stages": {
+      "setup": 0.002605610992759466,
+      "io": 1.0981837005820125,
+      "selection": 0.6395390767138451,
+      "physics": 0.7988171894103289,
+      "pieces": 0.0,
+      "tau": 13.778358496259898
+     },
+     "wall": 16.317546174977906
+    },
+    {
+     "stages": {
+      "setup": 0.0024594279238954186,
+      "io": 1.0976354230660945,
+      "selection": 0.6535405910108238,
+      "physics": 0.7875679049175233,
+      "pieces": 0.0,
+      "tau": 13.312629182008095
+     },
+     "wall": 15.853869216982275
+    },
+    {
+     "stages": {
+      "setup": 0.0024203029461205006,
+      "io": 1.0661432555643842,
+      "selection": 0.6509558400139213,
+      "physics": 0.7341344258747995,
+      "pieces": 0.0,
+      "tau": 13.5379242755007
+     },
+     "wall": 15.991616122075357
+    }
+   ],
+   "peak_rss_GB": 0.45544,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.403079168
+  },
+  {
+   "id": "fake_spectra_TNG50-4_s25_n16_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 16,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 11.769510429003276,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.004346742061898112,
+      "io": 1.104637193144299,
+      "selection": 0.04433348204474896,
+      "physics": 0.6170787477167323,
+      "pieces": 0.0,
+      "tau": 0.9912107919808477
+     },
+     "wall": 2.76163671805989
+    },
+    {
+     "stages": {
+      "setup": 0.0027067509945482016,
+      "io": 1.1003456526668742,
+      "selection": 0.04256564029492438,
+      "physics": 0.6110929681453854,
+      "pieces": 0.0,
+      "tau": 1.044949831906706
+     },
+     "wall": 2.801720306975767
+    },
+    {
+     "stages": {
+      "setup": 0.0028329869965091348,
+      "io": 1.2431508495938033,
+      "selection": 0.049121466698125005,
+      "physics": 0.6981264639180154,
+      "pieces": 0.0,
+      "tau": 1.0195559478597715
+     },
+     "wall": 3.012838530004956
+    },
+    {
+     "stages": {
+      "setup": 0.007479891064576805,
+      "io": 1.2960642017424107,
+      "selection": 0.05309567193035036,
+      "physics": 0.6962550752796233,
+      "pieces": 0.0,
+      "tau": 1.0419067790498957
+     },
+     "wall": 3.0950031289830804
+    }
+   ],
+   "peak_rss_GB": 0.355752,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.35790848
+  },
+  {
+   "id": "fake_spectra_TNG50-4_s25_n1_t1",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 1,
+    "modes": null,
+    "repeats": 2,
+    "budget_s": 120.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 120.0,
+    "est_s": 15.0
+   },
+   "status": "ok",
+   "wall_s": 9.25105171604082,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "1",
+     "OPENBLAS_NUM_THREADS": "1",
+     "MKL_NUM_THREADS": "1",
+     "XLA_FLAGS": "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1",
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.01983700890559703,
+      "io": 3.047112332074903,
+      "selection": 0.19413890992291272,
+      "physics": 0.8062692378880456,
+      "pieces": 0.0,
+      "tau": 0.25501247111242265
+     },
+     "wall": 4.322410540073179
+    },
+    {
+     "stages": {
+      "setup": 0.0034013129770755768,
+      "io": 1.237368768081069,
+      "selection": 0.1967311177868396,
+      "physics": 0.7270236387848854,
+      "pieces": 0.0,
+      "tau": 0.25954431435093284
+     },
+     "wall": 2.424108139006421
+    },
+    {
+     "stages": {
+      "setup": 0.0032008729176595807,
+      "io": 1.2029850244289264,
+      "selection": 0.19203301973175257,
+      "physics": 0.734339797636494,
+      "pieces": 0.0,
+      "tau": 0.2562777012353763
+     },
+     "wall": 2.3888720240211114
+    }
+   ],
+   "peak_rss_GB": 0.353636,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.26943488
+  },
+  {
+   "id": "fake_spectra_TNG50-4_s25_n1_t16",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 16,
+    "modes": null,
+    "repeats": 2,
+    "budget_s": 120.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 120.0,
+    "est_s": 15.0
+   },
+   "status": "ok",
+   "wall_s": 7.954022194026038,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "16",
+     "OPENBLAS_NUM_THREADS": "16",
+     "MKL_NUM_THREADS": "16",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.008817730937153101,
+      "io": 1.2877315984806046,
+      "selection": 0.0698163469787687,
+      "physics": 0.934908285504207,
+      "pieces": 0.0,
+      "tau": 0.38707948999945074
+     },
+     "wall": 2.688400124083273
+    },
+    {
+     "stages": {
+      "setup": 0.0038170969346538186,
+      "io": 1.2075716786785051,
+      "selection": 0.08012029645033181,
+      "physics": 0.8656598428497091,
+      "pieces": 0.0,
+      "tau": 0.3904642689740285
+     },
+     "wall": 2.547672680928372
+    },
+    {
+     "stages": {
+      "setup": 0.0037887400249019265,
+      "io": 1.215173817006871,
+      "selection": 0.100099973147735,
+      "physics": 0.8612877659033984,
+      "pieces": 0.0,
+      "tau": 0.3923581949202344
+     },
+     "wall": 2.572742218966596
+    }
+   ],
+   "peak_rss_GB": 0.355384,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.344522752
+  },
+  {
+   "id": "fake_spectra_TNG50-4_s25_n1_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 6.909433759050444,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.005030033062212169,
+      "io": 0.8962498566834256,
+      "selection": 0.022227907204069197,
+      "physics": 0.5349621697096154,
+      "pieces": 0.0,
+      "tau": 0.24556007329374552
+     },
+     "wall": 1.7040611759293824
+    },
+    {
+     "stages": {
+      "setup": 0.0025564810493960977,
+      "io": 0.9056108189979568,
+      "selection": 0.02172558382153511,
+      "physics": 0.5350723783485591,
+      "pieces": 0.0,
+      "tau": 0.24392442789394408
+     },
+     "wall": 1.7089178310707211
+    },
+    {
+     "stages": {
+      "setup": 0.0024958589347079396,
+      "io": 0.8972117552766576,
+      "selection": 0.021569198230281472,
+      "physics": 0.5335740246810019,
+      "pieces": 0.0,
+      "tau": 0.249784872867167
+     },
+     "wall": 1.704663729062304
+    },
+    {
+     "stages": {
+      "setup": 0.002508539939299226,
+      "io": 0.8953881612978876,
+      "selection": 0.020699035958386958,
+      "physics": 0.5301058443728834,
+      "pieces": 0.0,
+      "tau": 0.24508821731433272
+     },
+     "wall": 1.693814238999039
+    }
+   ],
+   "peak_rss_GB": 0.355808,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.334819328
+  },
+  {
+   "id": "fake_spectra_TNG50-4_s25_n1_t4",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 4,
+    "modes": null,
+    "repeats": 2,
+    "budget_s": 120.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 120.0,
+    "est_s": 15.0
+   },
+   "status": "ok",
+   "wall_s": 7.298524808953516,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     2,
+     4,
+     6
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "4",
+     "OPENBLAS_NUM_THREADS": "4",
+     "MKL_NUM_THREADS": "4",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.005873586051166058,
+      "io": 1.2161452749278396,
+      "selection": 0.1545523030217737,
+      "physics": 0.7383333558682352,
+      "pieces": 0.0,
+      "tau": 0.3291570642031729
+     },
+     "wall": 2.4441093840869144
+    },
+    {
+     "stages": {
+      "setup": 0.003345005097799003,
+      "io": 1.1895525112049654,
+      "selection": 0.15454129863064736,
+      "physics": 0.7258964123902842,
+      "pieces": 0.0,
+      "tau": 0.3096430506557226
+     },
+     "wall": 2.383015525061637
+    },
+    {
+     "stages": {
+      "setup": 0.003201022045686841,
+      "io": 1.1761905954917893,
+      "selection": 0.15489016182255,
+      "physics": 0.7174166804179549,
+      "pieces": 0.0,
+      "tau": 0.3145316092995927
+     },
+     "wall": 2.3662733510136604
+    }
+   ],
+   "peak_rss_GB": 0.34922,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.262365184
+  },
+  {
+   "id": "fake_spectra_TNG50-4_s25_n1_t8",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 8,
+    "modes": null,
+    "repeats": 2,
+    "budget_s": 120.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 120.0,
+    "est_s": 15.0
+   },
+   "status": "ok",
+   "wall_s": 7.275400007958524,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     2,
+     4,
+     6,
+     8,
+     10,
+     12,
+     14
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "8",
+     "OPENBLAS_NUM_THREADS": "8",
+     "MKL_NUM_THREADS": "8",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.006314522004686296,
+      "io": 1.1804192890413105,
+      "selection": 0.1550656126346439,
+      "physics": 0.7262556659989059,
+      "pieces": 0.0,
+      "tau": 0.3007494843332097
+     },
+     "wall": 2.3688440379919484
+    },
+    {
+     "stages": {
+      "setup": 0.0034120690543204546,
+      "io": 1.1593384438892826,
+      "selection": 0.16907600488048047,
+      "physics": 0.7143795762676746,
+      "pieces": 0.0,
+      "tau": 0.3288610759191215
+     },
+     "wall": 2.3751055320026353
+    },
+    {
+     "stages": {
+      "setup": 0.003329348983243108,
+      "io": 1.185030646622181,
+      "selection": 0.15999263222329319,
+      "physics": 0.7268570330925286,
+      "pieces": 0.0,
+      "tau": 0.331811735057272
+     },
+     "wall": 2.407064061029814
+    }
+   ],
+   "peak_rss_GB": 0.353776,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.35371008
+  },
+  {
+   "id": "fake_spectra_TNG50-4_s25_n256_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 256,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 26.90162235905882,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.004361581057310104,
+      "io": 1.1033044025534764,
+      "selection": 0.1861562307458371,
+      "physics": 0.6649976074695587,
+      "pieces": 0.0,
+      "tau": 4.341943255160004
+     },
+     "wall": 6.300797963980585
+    },
+    {
+     "stages": {
+      "setup": 0.0026174139929935336,
+      "io": 1.1253230520524085,
+      "selection": 0.19223623967263848,
+      "physics": 0.666443103691563,
+      "pieces": 0.0,
+      "tau": 4.560677206492983
+     },
+     "wall": 6.547330574016087
+    },
+    {
+     "stages": {
+      "setup": 0.0025872240075841546,
+      "io": 1.1978652161778882,
+      "selection": 0.201377228833735,
+      "physics": 0.7220149579225108,
+      "pieces": 0.0,
+      "tau": 4.93075398914516
+     },
+     "wall": 7.054642678936943
+    },
+    {
+     "stages": {
+      "setup": 0.004016989027149975,
+      "io": 1.237736334092915,
+      "selection": 0.20480372197926044,
+      "physics": 0.7414867564802989,
+      "pieces": 0.0,
+      "tau": 4.702158424421214
+     },
+     "wall": 6.89023495092988
+    }
+   ],
+   "peak_rss_GB": 0.371476,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.360525824
+  },
+  {
+   "id": "fake_spectra_TNG50-4_s25_n4_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 4,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 8.306915721972473,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.0047808680683374405,
+      "io": 0.9776934074470773,
+      "selection": 0.030846557463519275,
+      "physics": 0.5585121987387538,
+      "pieces": 0.0,
+      "tau": 0.4491481443401426
+     },
+     "wall": 2.021017138962634
+    },
+    {
+     "stages": {
+      "setup": 0.002522421069443226,
+      "io": 1.0317380707710981,
+      "selection": 0.04303242778405547,
+      "physics": 0.5920818822924048,
+      "pieces": 0.0,
+      "tau": 0.4833368700928986
+     },
+     "wall": 2.1527374690631405
+    },
+    {
+     "stages": {
+      "setup": 0.0024777010548859835,
+      "io": 0.9701821383787319,
+      "selection": 0.031160451006144285,
+      "physics": 0.552855076501146,
+      "pieces": 0.0,
+      "tau": 0.4609712810488418
+     },
+     "wall": 2.017671649926342
+    },
+    {
+     "stages": {
+      "setup": 0.0025249479804188013,
+      "io": 0.9607133034151047,
+      "selection": 0.030238050501793623,
+      "physics": 0.5549097191542387,
+      "pieces": 0.0,
+      "tau": 0.4707797940354794
+     },
+     "wall": 2.0191919519566
+    }
+   ],
+   "peak_rss_GB": 0.3554,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.26279936
+  },
+  {
+   "id": "fake_spectra_TNG50-4_s25_n64_t32",
+   "config": {
+    "code": "fake_spectra",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 64,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": null,
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 13.885583815048449,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "stages": {
+      "setup": 0.004290886921808124,
+      "io": 1.0787019690033048,
+      "selection": 0.07617828110232949,
+      "physics": 0.6131832746323198,
+      "pieces": 0.0,
+      "tau": 1.6710360003635287
+     },
+     "wall": 3.443428995087743
+    },
+    {
+     "stages": {
+      "setup": 0.004484385019168258,
+      "io": 1.0846703624119982,
+      "selection": 0.07320147613063455,
+      "physics": 0.6102459941757843,
+      "pieces": 0.0,
+      "tau": 1.6504541073227301
+     },
+     "wall": 3.423092896002345
+    },
+    {
+     "stages": {
+      "setup": 0.004367753048427403,
+      "io": 1.1038627612870187,
+      "selection": 0.07735005265567452,
+      "physics": 0.6164957798318937,
+      "pieces": 0.0,
+      "tau": 1.7055939892306924
+     },
+     "wall": 3.5077053990680724
+    },
+    {
+     "stages": {
+      "setup": 0.0027478329138830304,
+      "io": 1.0770816756412387,
+      "selection": 0.07468237506691366,
+      "physics": 0.6104265081230551,
+      "pieces": 0.0,
+      "tau": 1.6455627362011
+     },
+     "wall": 3.4105249050771818
+    }
+   ],
+   "peak_rss_GB": 0.357792,
+   "n_v": 3961,
+   "dv_kms": 1.000137852803097,
+   "sampled_peak_rss_GB": 0.35063808
+  },
+  {
+   "id": "skewerjax_TNG50-2_s25_n1_t32_cpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-2",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 1,
+    "budget_s": 600.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 600.0,
+    "est_s": 270.0
+   },
+   "status": "timeout",
+   "wall_s": 600.3369636710268,
+   "sampled_peak_rss_GB": 2.0528128,
+   "available_GB": 118.77332992
+  },
+  {
+   "id": "skewerjax_TNG50-2_s25_n1_t32_gpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-2",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "gpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 1,
+    "budget_s": 600.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 600.0,
+    "est_s": 270.0
+   },
+   "status": "skipped",
+   "wall_s": 24.991855886997655,
+   "reason": "left for later: the CPU point of the same configuration reached the quick cap (600 s for the first + one timed run); stopped by hand after 24 s to keep the budget"
+  },
+  {
+   "id": "skewerjax_TNG50-3_s25_n16_t32_cpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 16,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 853.1174734439701,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.01969247602391988,
+      "io": 3.0650486443191767,
+      "selection": 23.59361345868092
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.39842697395943105,
+        "pieces": 2.125465507968329,
+        "tau": 125.96691917011049
+       },
+       "wall": 128.51144049002323
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.1491705549415201,
+        "pieces": 23.299092506524175,
+        "tau": 53.0478604946984
+       },
+       "wall": 76.50962253892794
+      }
+     },
+     "wall": 231.6996948310407,
+     "n_cells": 145460
+    },
+    {
+     "shared": {
+      "setup": 0.019760334980674088,
+      "io": 2.946819619159214,
+      "selection": 24.51236743479967
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06250742706470191,
+        "pieces": 1.0254294306505471,
+        "tau": 124.2590777373407
+       },
+       "wall": 125.35557607200462
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.05174131796229631,
+        "pieces": 1.6425785560859367,
+        "tau": 54.088695049867965
+       },
+       "wall": 55.79456793202553
+      }
+     },
+     "wall": 208.62932884099428,
+     "n_cells": 145460
+    },
+    {
+     "shared": {
+      "setup": 0.019156786031089723,
+      "io": 2.9730753684416413,
+      "selection": 23.0547495004721
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.05986415199004114,
+        "pieces": 0.878717994200997,
+        "tau": 121.29906091885641
+       },
+       "wall": 122.24486666801386
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.060109373880550265,
+        "pieces": 1.7387916494626552,
+        "tau": 54.60806367662735
+       },
+       "wall": 56.4180293220561
+      }
+     },
+     "wall": 204.71010921197012,
+     "n_cells": 145460
+    },
+    {
+     "shared": {
+      "setup": 0.01893244299571961,
+      "io": 3.2853278315160424,
+      "selection": 28.121930259512737
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0798990709008649,
+        "pieces": 0.9124839892610908,
+        "tau": 122.12137721572071
+       },
+       "wall": 123.1214939589845
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.044048040988855064,
+        "pieces": 1.3806714911479503,
+        "tau": 51.307432629633695
+       },
+       "wall": 52.74330023000948
+      }
+     },
+     "wall": 207.2911947160028,
+     "n_cells": 145460
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 2.46603776,
+     "gpu_peak_GB": null,
+     "compile_s": 5.389946531038731
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 263947,
+      "SiIII-1206": 263947
+     },
+     "peak_rss_GB": 2.760167424,
+     "gpu_peak_GB": null,
+     "compile_s": 20.715054606902413
+    }
+   },
+   "peak_rss_GB": 2.695476,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.5549799485480593,
+     "meanF_matched": 0.5549801460448656,
+     "meanF_default": 0.5236572015486685,
+     "n_skewers": 16,
+     "max_dF": 0.00018625134813604616,
+     "rms_dF": 4.813034770878946e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9979645972787072,
+     "meanF_matched": 0.997964603428612,
+     "meanF_default": 0.9985553760317571,
+     "n_skewers": 16,
+     "max_dF": 0.00011268792774798975,
+     "rms_dF": 1.2761572630225093e-06
+    }
+   },
+   "sampled_peak_rss_GB": 2.719277056
+  },
+  {
+   "id": "skewerjax_TNG50-3_s25_n16_t32_gpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 16,
+    "platform": "gpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 929.037502259016,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cuda",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.019998189993202686,
+      "io": 3.1163454585475847,
+      "selection": 26.890793716418557
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.6743961710017174,
+        "pieces": 4.149961665389128,
+        "tau": 143.6622013496235
+       },
+       "wall": 148.4945465560304
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.3358124401420355,
+        "pieces": 16.616348769748583,
+        "tau": 53.24779448704794
+       },
+       "wall": 70.211629619007
+      }
+     },
+     "wall": 248.73391611198895,
+     "n_cells": 145460
+    },
+    {
+     "shared": {
+      "setup": 0.019231021055020392,
+      "io": 3.0711366864852607,
+      "selection": 24.576800127513707
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.08125271508470178,
+        "pieces": 1.7719216191908345,
+        "tau": 135.00245913187973
+       },
+       "wall": 136.86224718100857
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.07394500495865941,
+        "pieces": 6.988167603034526,
+        "tau": 52.065970693016425
+       },
+       "wall": 59.138981082011014
+      }
+     },
+     "wall": 223.66866058995947,
+     "n_cells": 145460
+    },
+    {
+     "shared": {
+      "setup": 0.01926492399070412,
+      "io": 3.0464035775512457,
+      "selection": 23.142527875490487
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.08646411506924778,
+        "pieces": 1.8127550800563768,
+        "tau": 136.19299979088828
+       },
+       "wall": 138.10037616291083
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.07062321901321411,
+        "pieces": 7.038114441209473,
+        "tau": 52.10055955371354
+       },
+       "wall": 59.22044758696575
+      }
+     },
+     "wall": 223.52927269798238,
+     "n_cells": 145460
+    },
+    {
+     "shared": {
+      "setup": 0.020182884065434337,
+      "io": 3.0676953534130007,
+      "selection": 24.02447436854709
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.09402780991513282,
+        "pieces": 1.7900445857085288,
+        "tau": 142.18385406734888
+       },
+       "wall": 144.07486032601446
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.07004976994358003,
+        "pieces": 7.763335209689103,
+        "tau": 53.010933329351246
+       },
+       "wall": 60.856316112098284
+      }
+     },
+     "wall": 232.04383061698172,
+     "n_cells": 145460
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 2.179432448,
+     "gpu_peak_GB": 0.524489216,
+     "compile_s": 10.394170393119566
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 263947,
+      "SiIII-1206": 263947
+     },
+     "peak_rss_GB": 2.884263936,
+     "gpu_peak_GB": 0.524489216,
+     "compile_s": 10.991182032041252
+    }
+   },
+   "peak_rss_GB": 2.816664,
+   "devices": [
+    "cuda:0"
+   ],
+   "device_memory": {
+    "bytes_in_use": 6144,
+    "peak_bytes_in_use": 524509184,
+    "bytes_limit": 9363898368
+   },
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.5549799485480593,
+     "meanF_matched": 0.5549801460448656,
+     "meanF_default": 0.5236572015486685,
+     "n_skewers": 16,
+     "max_dF": 0.00018625134813615718,
+     "rms_dF": 4.8130347708799826e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9979645972787072,
+     "meanF_matched": 0.997964603428612,
+     "meanF_default": 0.9985553760317571,
+     "n_skewers": 16,
+     "max_dF": 0.00011268792774798975,
+     "rms_dF": 1.2761572630228947e-06
+    }
+   },
+   "sampled_peak_rss_GB": 2.786492416
+  },
+  {
+   "id": "skewerjax_TNG50-3_s25_n1_t32_cpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 2,
+    "budget_s": 300.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 300.0,
+    "est_s": 100.0
+   },
+   "status": "ok",
+   "wall_s": 99.7593680259306,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.022196977981366217,
+      "io": 1.9478338498156518,
+      "selection": 12.925678854226135
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.4211447590496391,
+        "pieces": 0.21289913426153362,
+        "tau": 9.161169805796817
+       },
+       "wall": 9.797501542954706
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.1582133499905467,
+        "pieces": 22.48886709602084,
+        "tau": 3.7308919850038365
+       },
+       "wall": 26.38037018990144
+      }
+     },
+     "wall": 51.073834719951265,
+     "n_cells": 10907
+    },
+    {
+     "shared": {
+      "setup": 0.01975772005971521,
+      "io": 1.5957757832948118,
+      "selection": 9.985011732787825
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.05638402292970568,
+        "pieces": 0.0684035379672423,
+        "tau": 9.019408534979448
+       },
+       "wall": 9.145970861893147
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04969333403278142,
+        "pieces": 0.09512206597719342,
+        "tau": 3.259167470037937
+       },
+       "wall": 3.4063634319463745
+      }
+     },
+     "wall": 24.153179625980556,
+     "n_cells": 10907
+    },
+    {
+     "shared": {
+      "setup": 0.008339454070664942,
+      "io": 1.5714195050531998,
+      "selection": 10.235364965978079
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0527380300918594,
+        "pieces": 0.05778226593974978,
+        "tau": 8.416511622141115
+       },
+       "wall": 8.528520116000436
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.05559309397358447,
+        "pieces": 0.10635649610776454,
+        "tau": 3.2221087210346013
+       },
+       "wall": 3.38669578905683
+      }
+     },
+     "wall": 23.730620682006702,
+     "n_cells": 10907
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 1.940201472,
+     "gpu_peak_GB": null,
+     "compile_s": 0.9602560540079139
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 16643,
+      "SiIII-1206": 16643
+     },
+     "peak_rss_GB": 1.587920896,
+     "gpu_peak_GB": null,
+     "compile_s": 22.98384057939984
+    }
+   },
+   "peak_rss_GB": 2.110632,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.37709758734218796,
+     "meanF_matched": 0.37709771452571117,
+     "meanF_default": 0.3524926138980372,
+     "n_skewers": 1,
+     "max_dF": 2.099490429979811e-05,
+     "rms_dF": 2.9999991854626634e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9946200811556332,
+     "meanF_matched": 0.9946203237559966,
+     "meanF_default": 0.9961833361071918,
+     "n_skewers": 1,
+     "max_dF": 6.24891907530234e-05,
+     "rms_dF": 3.4886913383069595e-06
+    }
+   },
+   "sampled_peak_rss_GB": 2.030022656
+  },
+  {
+   "id": "skewerjax_TNG50-3_s25_n1_t32_gpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "gpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 116.75569518504199,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cuda",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.019307746086269617,
+      "io": 1.3829084380995482,
+      "selection": 10.341216634958982
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.5859837649622932,
+        "pieces": 0.36182130314409733,
+        "tau": 11.189646223792806
+       },
+       "wall": 12.14151742705144
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.20475178700871766,
+        "pieces": 8.52088949806057,
+        "tau": 4.256172560038976
+       },
+       "wall": 12.986587462946773
+      }
+     },
+     "wall": 36.872055441956036,
+     "n_cells": 10907
+    },
+    {
+     "shared": {
+      "setup": 0.01986982300877571,
+      "io": 1.2921300724847242,
+      "selection": 9.396683492464945
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.05434577201958746,
+        "pieces": 0.11022354080341756,
+        "tau": 8.742451078258455
+       },
+       "wall": 8.909095669980161
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.05817651003599167,
+        "pieces": 0.4478184499312192,
+        "tau": 3.236241818172857
+       },
+       "wall": 3.746329301968217
+      }
+     },
+     "wall": 23.364387008943595,
+     "n_cells": 10907
+    },
+    {
+     "shared": {
+      "setup": 0.01935984392184764,
+      "io": 1.3733812918653712,
+      "selection": 9.921657422091812
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06570275197736919,
+        "pieces": 0.11546136054676026,
+        "tau": 8.958459786488675
+       },
+       "wall": 9.141995338955894
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06696560105774552,
+        "pieces": 0.4309013709425926,
+        "tau": 3.2226295650471
+       },
+       "wall": 3.726672168006189
+      }
+     },
+     "wall": 24.18336648994591,
+     "n_cells": 10907
+    },
+    {
+     "shared": {
+      "setup": 0.014943871996365488,
+      "io": 2.5082406805595383,
+      "selection": 16.000915545388125
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06565849587786943,
+        "pieces": 0.11517196102067828,
+        "tau": 8.81636560196057
+       },
+       "wall": 9.001023920951411
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06491420394740999,
+        "pieces": 0.4732106269802898,
+        "tau": 3.1984145421301946
+       },
+       "wall": 3.742372340988368
+      }
+     },
+     "wall": 31.26777126500383,
+     "n_cells": 10907
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 1.466155008,
+     "gpu_peak_GB": 0.537174528,
+     "compile_s": 3.1404935061000288
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 16643,
+      "SiIII-1206": 16643
+     },
+     "peak_rss_GB": 1.399734272,
+     "gpu_peak_GB": 0.537174528,
+     "compile_s": 9.244215121958405
+    }
+   },
+   "peak_rss_GB": 1.93674,
+   "devices": [
+    "cuda:0"
+   ],
+   "device_memory": {
+    "bytes_in_use": 6144,
+    "peak_bytes_in_use": 537178880,
+    "bytes_limit": 9363898368
+   },
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.37709758734218796,
+     "meanF_matched": 0.37709771452571117,
+     "meanF_default": 0.3524926138980372,
+     "n_skewers": 1,
+     "max_dF": 2.09949042997426e-05,
+     "rms_dF": 2.9999991854562598e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9946200811556332,
+     "meanF_matched": 0.9946203237559966,
+     "meanF_default": 0.9961833361071918,
+     "n_skewers": 1,
+     "max_dF": 6.24891907530234e-05,
+     "rms_dF": 3.488691338308595e-06
+    }
+   },
+   "sampled_peak_rss_GB": 1.887854592
+  },
+  {
+   "id": "skewerjax_TNG50-3_s25_n4_t32_cpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 4,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 263.6444078630302,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.007954564993269742,
+      "io": 1.9292312726611272,
+      "selection": 14.188605952309445
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.36201255209743977,
+        "pieces": 0.6254464817466214,
+        "tau": 33.10565036628395
+       },
+       "wall": 34.09897414792795
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.15530260605737567,
+        "pieces": 19.81960051727947,
+        "tau": 12.994940523873083
+       },
+       "wall": 32.973750052042305
+      }
+     },
+     "wall": 83.19878804893233,
+     "n_cells": 38801
+    },
+    {
+     "shared": {
+      "setup": 0.0183022019919008,
+      "io": 1.8681424173992127,
+      "selection": 15.384979382622987
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04070128093007952,
+        "pieces": 0.19034187973011285,
+        "tau": 30.493583313189447
+       },
+       "wall": 30.72732053499203
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.05276146286632866,
+        "pieces": 0.3434014420490712,
+        "tau": 12.940963127068244
+       },
+       "wall": 13.340314751956612
+      }
+     },
+     "wall": 61.339315708959475,
+     "n_cells": 38801
+    },
+    {
+     "shared": {
+      "setup": 0.018756233039312065,
+      "io": 1.793644115445204,
+      "selection": 13.688922585570253
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04922047501895577,
+        "pieces": 0.19922455924097449,
+        "tau": 30.604086904670112
+       },
+       "wall": 30.857222311897203
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04636878299061209,
+        "pieces": 0.31052355479914695,
+        "tau": 12.684407093096524
+       },
+       "wall": 13.04509174299892
+      }
+     },
+     "wall": 59.40402829099912,
+     "n_cells": 38801
+    },
+    {
+     "shared": {
+      "setup": 0.007575560011900961,
+      "io": 1.7114703523693606,
+      "selection": 13.2353613745654
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04059617395978421,
+        "pieces": 0.193840338033624,
+        "tau": 30.565283015021123
+       },
+       "wall": 30.80189639888704
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04047385405283421,
+        "pieces": 0.30937946401536465,
+        "tau": 12.8207288129488
+       },
+       "wall": 13.174683889956214
+      }
+     },
+     "wall": 58.93122671393212,
+     "n_cells": 38801
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 2.191282176,
+     "gpu_peak_GB": null,
+     "compile_s": 3.297077749040909
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 66180,
+      "SiIII-1206": 66180
+     },
+     "peak_rss_GB": 1.742307328,
+     "gpu_peak_GB": null,
+     "compile_s": 19.799066162086092
+    }
+   },
+   "peak_rss_GB": 2.255404,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.4859866129305246,
+     "meanF_matched": 0.48598669806223815,
+     "meanF_default": 0.4527986136926394,
+     "n_skewers": 4,
+     "max_dF": 2.8151739851323132e-05,
+     "rms_dF": 2.378080327043555e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9986522863900481,
+     "meanF_matched": 0.9986523461795161,
+     "meanF_default": 0.9990422133788885,
+     "n_skewers": 4,
+     "max_dF": 6.24891907530234e-05,
+     "rms_dF": 1.744610145751501e-06
+    }
+   },
+   "sampled_peak_rss_GB": 2.205196288
+  },
+  {
+   "id": "skewerjax_TNG50-3_s25_n4_t32_gpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 4,
+    "platform": "gpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 276.0578336439794,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cuda",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.007656230009160936,
+      "io": 1.791783551336266,
+      "selection": 15.334913760656491
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.6036634859628975,
+        "pieces": 1.1383786413352937,
+        "tau": 37.34639270766638
+       },
+       "wall": 39.0949118679855
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.27234474709257483,
+        "pieces": 9.821295886998996,
+        "tau": 14.04209220292978
+       },
+       "wall": 24.14233366306871
+      }
+     },
+     "wall": 80.37184711603913,
+     "n_cells": 38801
+    },
+    {
+     "shared": {
+      "setup": 0.018239486031234264,
+      "io": 1.6763184998417273,
+      "selection": 13.316884112078696
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06473081395961344,
+        "pieces": 0.43236302526202053,
+        "tau": 34.41002246469725
+       },
+       "wall": 34.91176236001775
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06501759099774063,
+        "pieces": 1.5785274368245155,
+        "tau": 13.044750820146874
+       },
+       "wall": 14.695469134952873
+      }
+     },
+     "wall": 64.61897118994966,
+     "n_cells": 38801
+    },
+    {
+     "shared": {
+      "setup": 0.0206724819727242,
+      "io": 1.726972671924159,
+      "selection": 13.369722849107347
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.07421771192457527,
+        "pieces": 0.4484140956774354,
+        "tau": 34.81455424637534
+       },
+       "wall": 35.340092796017416
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.07220093498472124,
+        "pieces": 1.7771970550529659,
+        "tau": 13.10478557110764
+       },
+       "wall": 14.961060382076539
+      }
+     },
+     "wall": 65.41877796396147,
+     "n_cells": 38801
+    },
+    {
+     "shared": {
+      "setup": 0.01982948195654899,
+      "io": 1.7372726579196751,
+      "selection": 13.477267836104147
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.07178429199848324,
+        "pieces": 0.443371603731066,
+        "tau": 34.2368411651114
+       },
+       "wall": 34.75845645100344
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.060422363923862576,
+        "pieces": 1.8061414029216394,
+        "tau": 12.890779609093443
+       },
+       "wall": 14.763260348001495
+      }
+     },
+     "wall": 64.75644644303247,
+     "n_cells": 38801
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 1.633800192,
+     "gpu_peak_GB": 0.537169664,
+     "compile_s": 4.183149507967755
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 66180,
+      "SiIII-1206": 66180
+     },
+     "peak_rss_GB": 1.576833024,
+     "gpu_peak_GB": 0.537169664,
+     "compile_s": 9.379073315067217
+    }
+   },
+   "peak_rss_GB": 2.103992,
+   "devices": [
+    "cuda:0"
+   ],
+   "device_memory": {
+    "bytes_in_use": 6144,
+    "peak_bytes_in_use": 537184512,
+    "bytes_limit": 9363898368
+   },
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.4859866129305246,
+     "meanF_matched": 0.48598669806223815,
+     "meanF_default": 0.4527986136926393,
+     "n_skewers": 4,
+     "max_dF": 2.8151739851323132e-05,
+     "rms_dF": 2.378080327043772e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9986522863900481,
+     "meanF_matched": 0.9986523461795161,
+     "meanF_default": 0.9990422133788885,
+     "n_skewers": 4,
+     "max_dF": 6.24891907530234e-05,
+     "rms_dF": 1.7446101457523184e-06
+    }
+   },
+   "sampled_peak_rss_GB": 2.0411392
+  },
+  {
+   "id": "skewerjax_TNG50-3_s25_n64_t32_cpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-3",
+    "snapnum": 25,
+    "n_skewers": 64,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 2153.470795923029,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-3",
+    "snapnum": 25,
+    "n_gas": 152305397,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 47.002433868
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.007821416016668081,
+      "io": 4.09919805766549,
+      "selection": 45.59944298141636
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.538639297010377,
+        "pieces": 14.969779859646223,
+        "tau": 502.8339295483893
+       },
+       "wall": 518.3968218510272
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.14688777807168663,
+        "pieces": 22.960354092065245,
+        "tau": 136.27246326580644
+       },
+       "wall": 159.4262321679853
+      }
+     },
+     "wall": 727.529734136071,
+     "n_cells": 566265
+    },
+    {
+     "shared": {
+      "setup": 0.007190242991782725,
+      "io": 2.657755689928308,
+      "selection": 29.013681903132237
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.10789305111393332,
+        "pieces": 6.399583212682046,
+        "tau": 337.1908913522493
+       },
+       "wall": 343.74537475802936
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.09913717303425074,
+        "pieces": 5.469551291433163,
+        "tau": 153.92165952455252
+       },
+       "wall": 159.5356083610095
+      }
+     },
+     "wall": 534.9598867830355,
+     "n_cells": 566265
+    },
+    {
+     "shared": {
+      "setup": 0.008608171017840505,
+      "io": 8.295596062438563,
+      "selection": 60.37927585153375
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.20733977505005896,
+        "pieces": 18.305900124716572,
+        "tau": 591.2405664433027
+       },
+       "wall": 609.8999969679862
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.18217128003016114,
+        "pieces": 12.672070511616766,
+        "tau": 198.56954062124714
+       },
+       "wall": 211.54203070595395
+      }
+     },
+     "wall": 890.1271337290527,
+     "n_cells": 566265
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 3.962015744,
+     "gpu_peak_GB": null,
+     "compile_s": 41.57413598801941
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 1054882,
+      "SiIII-1206": 1054882
+     },
+     "peak_rss_GB": 7.241232384,
+     "gpu_peak_GB": null,
+     "compile_s": -26.112587365496438
+    }
+   },
+   "peak_rss_GB": 7.079812,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.5702066737129698,
+     "meanF_matched": 0.5702068646035675,
+     "meanF_default": 0.5409102112292024,
+     "n_skewers": 64,
+     "max_dF": 0.00018625134813604616,
+     "rms_dF": 3.759050131451282e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9992627893908492,
+     "meanF_matched": 0.9992627991222942,
+     "meanF_default": 0.9994136275151746,
+     "n_skewers": 64,
+     "max_dF": 0.00034525388049344574,
+     "rms_dF": 1.655022303386411e-06
+    }
+   },
+   "sampled_peak_rss_GB": 6.86977024
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n1024_t32_cpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1024,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "skipped",
+   "wall_s": 0.0,
+   "reason": "predicted 10694 s for the first + one timed run > cap 3600 s",
+   "predicted_s": 10693.658160525956,
+   "predicted_rss_GB": 72.81857600000001
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n1024_t32_gpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1024,
+    "platform": "gpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "skipped",
+   "wall_s": 0.0,
+   "reason": "N = 256 stopped (skipped)",
+   "predicted_s": 21754.69208684913,
+   "predicted_rss_GB": 93.56428000000001
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n16_t32_cpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 16,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 388.8982667309465,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.007310066022910178,
+      "io": 0.31700383219867945,
+      "selection": 6.336942746886052
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.3116593980230391,
+        "pieces": 1.4665611303644255,
+        "tau": 48.90345376369078
+       },
+       "wall": 50.687696833047085
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.10493238701019436,
+        "pieces": 20.209862344083376,
+        "tau": 26.643946052063257
+       },
+       "wall": 46.96978721697815
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06644031207542866,
+        "pieces": 1.1594500567298383,
+        "tau": 16.669530308106914
+       },
+       "wall": 17.90592436096631
+      }
+     },
+     "wall": 122.22496559796855,
+     "n_cells": 74929
+    },
+    {
+     "shared": {
+      "setup": 0.007120552938431501,
+      "io": 0.39719096734188497,
+      "selection": 8.02893756062258
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.07350701803807169,
+        "pieces": 0.470780867151916,
+        "tau": 50.705918196821585
+       },
+       "wall": 51.25846112403087
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03690305806230754,
+        "pieces": 0.950019633048214,
+        "tau": 26.09541012090631
+       },
+       "wall": 27.092454792931676
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03685317898634821,
+        "pieces": 0.9754738513147458,
+        "tau": 10.368811588850804
+       },
+       "wall": 11.391135226003826
+      }
+     },
+     "wall": 98.17553670902271,
+     "n_cells": 74929
+    },
+    {
+     "shared": {
+      "setup": 0.006676967954263091,
+      "io": 0.3486790970200673,
+      "selection": 5.976691183983348
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03885572904255241,
+        "pieces": 0.3755459558451548,
+        "tau": 39.12296322907787
+       },
+       "wall": 39.5447848100448
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.035843550926074386,
+        "pieces": 0.9556015700800344,
+        "tau": 25.84986195305828
+       },
+       "wall": 26.850277554010972
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04482286598067731,
+        "pieces": 0.9453107102308422,
+        "tau": 10.421225377707742
+       },
+       "wall": 11.419701274950057
+      }
+     },
+     "wall": 84.14708302100189,
+     "n_cells": 74929
+    },
+    {
+     "shared": {
+      "setup": 0.00667780009098351,
+      "io": 0.33234001451637596,
+      "selection": 5.8478093994781375
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04008770186919719,
+        "pieces": 0.3753612885484472,
+        "tau": 39.18044706748333
+       },
+       "wall": 39.60315693099983
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03609022486489266,
+        "pieces": 0.9293956621550024,
+        "tau": 25.84723115293309
+       },
+       "wall": 26.822392830974422
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03623269300442189,
+        "pieces": 0.9245595164829865,
+        "tau": 10.250356561504304
+       },
+       "wall": 11.22158253903035
+      }
+     },
+     "wall": 83.83426678099204,
+     "n_cells": 74929
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 2.830573568,
+     "gpu_peak_GB": null,
+     "compile_s": 11.084539902047254
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 258967,
+      "SiIII-1206": 258967
+     },
+     "peak_rss_GB": 2.818658304,
+     "gpu_peak_GB": null,
+     "compile_s": 20.119509662967175
+    },
+    "float32": {
+     "n_absorbers": {
+      "HI-LyA": 258967,
+      "SiIII-1206": 258967
+     },
+     "peak_rss_GB": 2.838818816,
+     "gpu_peak_GB": null,
+     "compile_s": 6.514789134962484
+    }
+   },
+   "peak_rss_GB": 2.772284,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.5328812789193917,
+     "meanF_matched": 0.5328813377891217,
+     "meanF_default": 0.49960355962269226,
+     "meanF_float32": 0.4996036500036595,
+     "n_skewers": 16,
+     "max_dF": 0.00022395785228393472,
+     "rms_dF": 4.644319522916565e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9989402313003579,
+     "meanF_matched": 0.9989402550636428,
+     "meanF_default": 0.9984001429970024,
+     "meanF_float32": 0.9983999969310855,
+     "n_skewers": 16,
+     "max_dF": 0.00021228640168419188,
+     "rms_dF": 1.6630007421991058e-06
+    }
+   },
+   "sampled_peak_rss_GB": 2.818658304
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n16_t32_gpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 16,
+    "platform": "gpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 684.1060248559806,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cuda",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.0068584439577534795,
+      "io": 0.3167260311311111,
+      "selection": 6.608391017769463
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.4790154879447073,
+        "pieces": 2.14387799159158,
+        "tau": 67.24451098346617
+       },
+       "wall": 69.87319969409145
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.169621677021496,
+        "pieces": 12.517559513333254,
+        "tau": 46.94348140177317
+       },
+       "wall": 59.636419103015214
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03637942997738719,
+        "pieces": 6.701676244614646,
+        "tau": 39.7571799113648
+       },
+       "wall": 46.50173244299367
+      }
+     },
+     "wall": 182.9435762789799,
+     "n_cells": 74929
+    },
+    {
+     "shared": {
+      "setup": 0.0065407350193709135,
+      "io": 0.3316061230143532,
+      "selection": 5.823546537081711
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04008569801226258,
+        "pieces": 0.5806491654366255,
+        "tau": 62.07455716445111
+       },
+       "wall": 62.70009760197718
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0360153439687565,
+        "pieces": 6.635331291006878,
+        "tau": 45.85504818602931
+       },
+       "wall": 52.53257055499125
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.037399832042865455,
+        "pieces": 6.6615237321238965,
+        "tau": 38.95405349798966
+       },
+       "wall": 45.6592487890739
+      }
+     },
+     "wall": 167.0537719829008,
+     "n_cells": 74929
+    },
+    {
+     "shared": {
+      "setup": 0.006428611930459738,
+      "io": 0.3293247347464785,
+      "selection": 5.761319283163175
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.039626401965506375,
+        "pieces": 0.5790835779625922,
+        "tau": 61.75393137708306
+       },
+       "wall": 62.37748340400867
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0356575979385525,
+        "pieces": 6.613706592004746,
+        "tau": 45.85566533298697
+       },
+       "wall": 52.51163890399039
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0351911491015926,
+        "pieces": 6.709519300260581,
+        "tau": 38.96214334492106
+       },
+       "wall": 45.71350192592945
+      }
+     },
+     "wall": 166.6998653669143,
+     "n_cells": 74929
+    },
+    {
+     "shared": {
+      "setup": 0.006299814907833934,
+      "io": 0.3281662721419707,
+      "selection": 5.738039085757919
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.040477753966115415,
+        "pieces": 0.569644320057705,
+        "tau": 61.82596024288796
+       },
+       "wall": 62.44025571097154
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03585895511787385,
+        "pieces": 6.641265730024315,
+        "tau": 45.85741659789346
+       },
+       "wall": 52.541051741922274
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.036184421041980386,
+        "pieces": 6.623345701489598,
+        "tau": 38.95894591440447
+       },
+       "wall": 45.62582963996101
+      }
+     },
+     "wall": 166.6798186909873,
+     "n_cells": 74929
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 2.360930304,
+     "gpu_peak_GB": 0.524489216,
+     "compile_s": 7.4329439831199124
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 258967,
+      "SiIII-1206": 258967
+     },
+     "peak_rss_GB": 2.86609408,
+     "gpu_peak_GB": 0.524489216,
+     "compile_s": 7.1038485480239615
+    },
+    "float32": {
+     "n_absorbers": {
+      "HI-LyA": 258967,
+      "SiIII-1206": 258967
+     },
+     "peak_rss_GB": 2.866049024,
+     "gpu_peak_GB": 0.524489216,
+     "compile_s": 0.8424836539197713
+    }
+   },
+   "peak_rss_GB": 2.79892,
+   "devices": [
+    "cuda:0"
+   ],
+   "device_memory": {
+    "bytes_in_use": 6144,
+    "peak_bytes_in_use": 524504064,
+    "bytes_limit": 9363898368
+   },
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.5328812789193917,
+     "meanF_matched": 0.5328813377891217,
+     "meanF_default": 0.4996035596226921,
+     "meanF_float32": 0.49960427896325066,
+     "n_skewers": 16,
+     "max_dF": 0.00022395785228399023,
+     "rms_dF": 4.644319522916565e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9989402313003579,
+     "meanF_matched": 0.9989402550636428,
+     "meanF_default": 0.9984001429970024,
+     "meanF_float32": 0.9984000629760146,
+     "n_skewers": 16,
+     "max_dF": 0.00021228640168419188,
+     "rms_dF": 1.6630007421988284e-06
+    }
+   },
+   "sampled_peak_rss_GB": 2.7684864
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n1_t16_cpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 16,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 1,
+    "budget_s": 200.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 200.0,
+    "est_s": 30.0
+   },
+   "status": "ok",
+   "wall_s": 49.268624963006005,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "16",
+     "OPENBLAS_NUM_THREADS": "16",
+     "MKL_NUM_THREADS": "16",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.012174359988421202,
+      "io": 0.25734210188966244,
+      "selection": 2.0470256661064923
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.3148860379587859,
+        "pieces": 0.16006135696079582,
+        "tau": 6.151266276021488
+       },
+       "wall": 6.62776699999813
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.144530363031663,
+        "pieces": 24.89759287214838,
+        "tau": 3.606983022997156
+       },
+       "wall": 28.6509696879657
+      }
+     },
+     "wall": 37.595518429996446,
+     "n_cells": 5964
+    },
+    {
+     "shared": {
+      "setup": 0.010577547014690936,
+      "io": 0.29198251687921584,
+      "selection": 1.6928064851090312
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03856838494539261,
+        "pieces": 0.030593835865147412,
+        "tau": 5.232628005207516
+       },
+       "wall": 5.302964122034609
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.051319036982022226,
+        "pieces": 0.08520386496093124,
+        "tau": 3.487309281947091
+       },
+       "wall": 3.625697819981724
+      }
+     },
+     "wall": 10.924255357007496,
+     "n_cells": 5964
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 1.495257088,
+     "gpu_peak_GB": null,
+     "compile_s": 1.3248028779635206
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 16265,
+      "SiIII-1206": 16265
+     },
+     "peak_rss_GB": 1.273491456,
+     "gpu_peak_GB": null,
+     "compile_s": 25.025271867983975
+    }
+   },
+   "peak_rss_GB": 1.56238,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.36045560240745544,
+     "meanF_matched": 0.3604557495758574,
+     "meanF_default": 0.3113329504625165,
+     "n_skewers": 1,
+     "max_dF": 1.878002745456936e-05,
+     "rms_dF": 2.5735604041132514e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.999999463558197,
+     "meanF_matched": 0.9999994595681442,
+     "meanF_default": 0.9999680969859374,
+     "n_skewers": 1,
+     "max_dF": 8.540797180600634e-08,
+     "rms_dF": 1.4840567959547118e-08
+    }
+   },
+   "sampled_peak_rss_GB": 1.433088
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n1_t1_cpu_matched+default+float32+crossings",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 1,
+    "modes": [
+     "matched",
+     "default",
+     "float32",
+     "crossings"
+    ],
+    "repeats": 1,
+    "budget_s": 400.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 400.0,
+    "est_s": 160.0
+   },
+   "status": "ok",
+   "wall_s": 126.75366777495947,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "1",
+     "OPENBLAS_NUM_THREADS": "1",
+     "MKL_NUM_THREADS": "1",
+     "XLA_FLAGS": "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1",
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.013329008943401277,
+      "io": 0.28139285871293396,
+      "selection": 1.7385493941837922
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.2617849081289023,
+        "pieces": 0.13739131367765367,
+        "tau": 23.121402907301672
+       },
+       "wall": 23.522256416035816
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.10299068118911237,
+        "pieces": 18.92951625015121,
+        "tau": 16.545809511910193
+       },
+       "wall": 35.58024660893716
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03841663210187107,
+        "pieces": 0.1531376091297716,
+        "tau": 7.819256635964848
+       },
+       "wall": 8.012991921044886
+      },
+      "crossings": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03588089894037694,
+        "pieces": 0.33669136196840554,
+        "tau": 4.604649452026933
+       },
+       "wall": 4.979045697953552
+      }
+     },
+     "wall": 74.12813257600646,
+     "n_cells": 5964
+    },
+    {
+     "shared": {
+      "setup": 0.008634587982669473,
+      "io": 0.27103941317182034,
+      "selection": 1.4651004238985479
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04154775897040963,
+        "pieces": 0.027579347137361765,
+        "tau": 22.04989951790776
+       },
+       "wall": 22.120388056966476
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03868384403176606,
+        "pieces": 0.15870068315416574,
+        "tau": 16.113763382891193
+       },
+       "wall": 16.312920595984906
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03919469891116023,
+        "pieces": 0.1489408299094066,
+        "tau": 7.3080663500586525
+       },
+       "wall": 7.498129412997514
+      },
+      "crossings": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03822461504023522,
+        "pieces": 0.14692098507657647,
+        "tau": 4.118184500024654
+       },
+       "wall": 4.305050412076525
+      }
+     },
+     "wall": 51.981572242919356,
+     "n_cells": 5964
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 1.355268096,
+     "gpu_peak_GB": null,
+     "compile_s": 1.40186835906934
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 16265,
+      "SiIII-1206": 16265
+     },
+     "peak_rss_GB": 1.106522112,
+     "gpu_peak_GB": null,
+     "compile_s": 19.267326012952253
+    },
+    "float32": {
+     "n_absorbers": {
+      "HI-LyA": 16265,
+      "SiIII-1206": 16265
+     },
+     "peak_rss_GB": 1.074655232,
+     "gpu_peak_GB": null,
+     "compile_s": 0.5148625080473721
+    },
+    "crossings": {
+     "n_absorbers": {
+      "HI-LyA": 1276,
+      "SiIII-1206": 5719
+     },
+     "peak_rss_GB": 1.106612224,
+     "gpu_peak_GB": null,
+     "compile_s": 0.6739952858770266
+    }
+   },
+   "peak_rss_GB": 1.375776,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.36045560240745544,
+     "meanF_matched": 0.3604557495758574,
+     "meanF_default": 0.3113329504625165,
+     "meanF_float32": 0.31133209356482106,
+     "meanF_crossings": 0.3114576844423476,
+     "n_skewers": 1,
+     "max_dF": 1.878002745456936e-05,
+     "rms_dF": 2.5735604041132514e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.999999463558197,
+     "meanF_matched": 0.9999994595681442,
+     "meanF_default": 0.9999680969859374,
+     "meanF_float32": 0.9999680970150455,
+     "meanF_crossings": 0.99996809712721,
+     "n_skewers": 1,
+     "max_dF": 8.540797180600634e-08,
+     "rms_dF": 1.4840567959547118e-08
+    }
+   },
+   "sampled_peak_rss_GB": 1.278763008
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n1_t32_cpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 45.42253628699109,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.006876255036331713,
+      "io": 0.19857999496161938,
+      "selection": 1.2765563969733194
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.21864972612820566,
+        "pieces": 0.11332893616054207,
+        "tau": 3.4056484658503905
+       },
+       "wall": 3.739986281027086
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.1002784789307043,
+        "pieces": 16.584556769928895,
+        "tau": 1.8879877370782197
+       },
+       "wall": 18.575037472997792
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03373795410152525,
+        "pieces": 0.06277468893676996,
+        "tau": 0.940434497082606
+       },
+       "wall": 1.038748809020035
+      }
+     },
+     "wall": 24.836053185048513,
+     "n_cells": 5964
+    },
+    {
+     "shared": {
+      "setup": 0.006828577956184745,
+      "io": 0.20150580862537026,
+      "selection": 1.0645012994064018
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.034579171100631356,
+        "pieces": 0.024718079017475247,
+        "tau": 2.9058156410465017
+       },
+       "wall": 2.9664759769802913
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.033503996091894805,
+        "pieces": 0.060108145931735635,
+        "tau": 1.6093650810653344
+       },
+       "wall": 1.7049319290090352
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03474354592617601,
+        "pieces": 0.06760245305486023,
+        "tau": 0.7325518879806623
+       },
+       "wall": 0.8372491770423949
+      }
+     },
+     "wall": 6.781781138968654,
+     "n_cells": 5964
+    },
+    {
+     "shared": {
+      "setup": 0.006366181070916355,
+      "io": 0.19882528146263212,
+      "selection": 1.059522221563384
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0351037229411304,
+        "pieces": 0.02393381088040769,
+        "tau": 2.7843745660502464
+       },
+       "wall": 2.84471738897264
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04644442314747721,
+        "pieces": 0.059822187991812825,
+        "tau": 1.605547973071225
+       },
+       "wall": 1.7133342970628291
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.033896095934323967,
+        "pieces": 0.060354193090461195,
+        "tau": 0.7184805158758536
+       },
+       "wall": 0.8143680229550228
+      }
+     },
+     "wall": 6.637451788061298,
+     "n_cells": 5964
+    },
+    {
+     "shared": {
+      "setup": 0.006998553057201207,
+      "io": 0.19899420603178442,
+      "selection": 1.050776625983417
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.034580389969050884,
+        "pieces": 0.023612107848748565,
+        "tau": 2.851042757043615
+       },
+       "wall": 2.910347389988601
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.034247976960614324,
+        "pieces": 0.057887236936949193,
+        "tau": 1.6063365160953254
+       },
+       "wall": 1.6999880680814385
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0351960799889639,
+        "pieces": 0.05810982396360487,
+        "tau": 0.7089151090476662
+       },
+       "wall": 0.8038964100414887
+      }
+     },
+     "wall": 6.671301390044391,
+     "n_cells": 5964
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 1.868296192,
+     "gpu_peak_GB": null,
+     "compile_s": 0.8296388910384849
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 16265,
+      "SiIII-1206": 16265
+     },
+     "peak_rss_GB": 1.47970048,
+     "gpu_peak_GB": null,
+     "compile_s": 16.870105543988757
+    },
+    "float32": {
+     "n_absorbers": {
+      "HI-LyA": 16265,
+      "SiIII-1206": 16265
+     },
+     "peak_rss_GB": 1.482469376,
+     "gpu_peak_GB": null,
+     "compile_s": 0.22438078606501222
+    }
+   },
+   "peak_rss_GB": 1.836796,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.36045560240745544,
+     "meanF_matched": 0.3604557495758574,
+     "meanF_default": 0.3113329504625165,
+     "meanF_float32": 0.31133209356482106,
+     "n_skewers": 1,
+     "max_dF": 1.878002745456936e-05,
+     "rms_dF": 2.5735604041132514e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.999999463558197,
+     "meanF_matched": 0.9999994595681442,
+     "meanF_default": 0.9999680969859374,
+     "meanF_float32": 0.9999680970150455,
+     "n_skewers": 1,
+     "max_dF": 8.540797180600634e-08,
+     "rms_dF": 1.4840567959547118e-08
+    }
+   },
+   "sampled_peak_rss_GB": 1.826353152
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n1_t32_gpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "gpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 57.88019459799398,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cuda",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.006986518972553313,
+      "io": 0.19955124135594815,
+      "selection": 1.5470545396674424
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.4494439630070701,
+        "pieces": 0.21385967906098813,
+        "tau": 5.96090970793739
+       },
+       "wall": 6.626850972068496
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.16833506396505982,
+        "pieces": 5.934886216069572,
+        "tau": 3.575979668996297
+       },
+       "wall": 9.682293714955449
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04080225504003465,
+        "pieces": 0.425928142038174,
+        "tau": 3.011036988114938
+       },
+       "wall": 3.481240450986661
+      }
+     },
+     "wall": 21.544199589989148,
+     "n_cells": 5964
+    },
+    {
+     "shared": {
+      "setup": 0.0067241169745102525,
+      "io": 0.19988446775823832,
+      "selection": 1.087721799267456
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03784444811753929,
+        "pieces": 0.04094369104132056,
+        "tau": 4.345183636061847
+       },
+       "wall": 4.426015443983488
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03826095710974187,
+        "pieces": 0.4236244629137218,
+        "tau": 2.824704962898977
+       },
+       "wall": 3.289586714003235
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.037373692844994366,
+        "pieces": 0.4212901999708265,
+        "tau": 2.3940105019137263
+       },
+       "wall": 2.8559285959927365
+      }
+     },
+     "wall": 11.866096097044647,
+     "n_cells": 5964
+    },
+    {
+     "shared": {
+      "setup": 0.00687403604388237,
+      "io": 0.20157620520330966,
+      "selection": 1.1116586847929284
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.037450782023370266,
+        "pieces": 0.039515488082543015,
+        "tau": 4.353154493845068
+       },
+       "wall": 4.431976833962835
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03646916605066508,
+        "pieces": 0.4191713189939037,
+        "tau": 2.8238877789117396
+       },
+       "wall": 3.282218914013356
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.036788039025850594,
+        "pieces": 0.41828546510078013,
+        "tau": 2.396630964940414
+       },
+       "wall": 2.854417872033082
+      }
+     },
+     "wall": 11.888923199963756,
+     "n_cells": 5964
+    },
+    {
+     "shared": {
+      "setup": 0.006720807985402644,
+      "io": 0.20055463805329055,
+      "selection": 1.123732154024765
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03718229290097952,
+        "pieces": 0.03893037128727883,
+        "tau": 4.354819236672483
+       },
+       "wall": 4.432866015005857
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.037535861134529114,
+        "pieces": 0.4179269390879199,
+        "tau": 2.8367250041337684
+       },
+       "wall": 3.2959198360331357
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.037395828985609114,
+        "pieces": 0.4437925078673288,
+        "tau": 2.4047280891099945
+       },
+       "wall": 2.888619033037685
+      }
+     },
+     "wall": 11.948607546044514,
+     "n_cells": 5964
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 1.317343232,
+     "gpu_peak_GB": 0.537128704,
+     "compile_s": 2.1948741381056607
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 16265,
+      "SiIII-1206": 16265
+     },
+     "peak_rss_GB": 1.29675264,
+     "gpu_peak_GB": 0.537128704,
+     "compile_s": 6.392707000952214
+    },
+    "float32": {
+     "n_absorbers": {
+      "HI-LyA": 16265,
+      "SiIII-1206": 16265
+     },
+     "peak_rss_GB": 1.305587712,
+     "gpu_peak_GB": 0.537128704,
+     "compile_s": 0.6253118549939245
+    }
+   },
+   "peak_rss_GB": 1.529844,
+   "devices": [
+    "cuda:0"
+   ],
+   "device_memory": {
+    "bytes_in_use": 6144,
+    "peak_bytes_in_use": 537178112,
+    "bytes_limit": 9363898368
+   },
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.36045560240745544,
+     "meanF_matched": 0.3604557495758574,
+     "meanF_default": 0.31133295046251636,
+     "meanF_float32": 0.3113308971899501,
+     "n_skewers": 1,
+     "max_dF": 1.878002745456936e-05,
+     "rms_dF": 2.5735604041141984e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.999999463558197,
+     "meanF_matched": 0.9999994595681442,
+     "meanF_default": 0.9999680969859374,
+     "meanF_float32": 0.9999680970131319,
+     "n_skewers": 1,
+     "max_dF": 8.540797180600634e-08,
+     "rms_dF": 1.4840567959547118e-08
+    }
+   },
+   "sampled_peak_rss_GB": 1.481990144
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n1_t4_cpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 4,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 1,
+    "budget_s": 200.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 200.0,
+    "est_s": 45.0
+   },
+   "status": "ok",
+   "wall_s": 49.48660866706632,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     2,
+     4,
+     6
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "4",
+     "OPENBLAS_NUM_THREADS": "4",
+     "MKL_NUM_THREADS": "4",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.007062221993692219,
+      "io": 0.24694476916920394,
+      "selection": 1.6183661728864536
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.2969543640501797,
+        "pieces": 0.14019058481790125,
+        "tau": 7.822824598173611
+       },
+       "wall": 8.265390840941109
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.1142119049327448,
+        "pieces": 19.794281224836595,
+        "tau": 4.994149463949725
+       },
+       "wall": 24.904526414931752
+      }
+     },
+     "wall": 35.04248154396191,
+     "n_cells": 5964
+    },
+    {
+     "shared": {
+      "setup": 0.007243308005854487,
+      "io": 0.24871149845421314,
+      "selection": 1.3591315215453506
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0398212579311803,
+        "pieces": 0.02757146442309022,
+        "tau": 7.055206404533237
+       },
+       "wall": 7.123996247071773
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.040454501984640956,
+        "pieces": 0.17598840105347335,
+        "tau": 4.877295182901435
+       },
+       "wall": 5.0955934170633554
+      }
+     },
+     "wall": 13.834916530991904,
+     "n_cells": 5964
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 1.49303296,
+     "gpu_peak_GB": null,
+     "compile_s": 1.141394593869336
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 16265,
+      "SiIII-1206": 16265
+     },
+     "peak_rss_GB": 1.258242048,
+     "gpu_peak_GB": null,
+     "compile_s": 19.808932997868396
+    }
+   },
+   "peak_rss_GB": 1.547352,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.36045560240745544,
+     "meanF_matched": 0.3604557495758574,
+     "meanF_default": 0.3113329504625165,
+     "n_skewers": 1,
+     "max_dF": 1.878002745456936e-05,
+     "rms_dF": 2.5735604041132514e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.999999463558197,
+     "meanF_matched": 0.9999994595681442,
+     "meanF_default": 0.9999680969859374,
+     "n_skewers": 1,
+     "max_dF": 8.540797180600634e-08,
+     "rms_dF": 1.4840567959547118e-08
+    }
+   },
+   "sampled_peak_rss_GB": 1.452163072
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n1_t8_cpu_matched+default",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 1,
+    "platform": "cpu",
+    "threads": 8,
+    "modes": [
+     "matched",
+     "default"
+    ],
+    "repeats": 1,
+    "budget_s": 200.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64,
+    "preset": "quick",
+    "cap_s": 200.0,
+    "est_s": 35.0
+   },
+   "status": "ok",
+   "wall_s": 41.1763186219614,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     2,
+     4,
+     6,
+     8,
+     10,
+     12,
+     14
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "8",
+     "OPENBLAS_NUM_THREADS": "8",
+     "MKL_NUM_THREADS": "8",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.0075847109546884894,
+      "io": 0.24851909186691046,
+      "selection": 1.6341142042074353
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.287972612073645,
+        "pieces": 0.15083021763712168,
+        "tau": 5.279471346409991
+       },
+       "wall": 5.720266486983746
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.12221337296068668,
+        "pieces": 19.355405113077722,
+        "tau": 3.5227600230136886
+       },
+       "wall": 23.002367087989114
+      }
+     },
+     "wall": 30.613064049975947,
+     "n_cells": 5964
+    },
+    {
+     "shared": {
+      "setup": 0.00705200107768178,
+      "io": 0.25709086866118014,
+      "selection": 1.4770873623201624
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.038952577975578606,
+        "pieces": 0.027260798146016896,
+        "tau": 4.7686884687282145
+       },
+       "wall": 4.84256809798535
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04226165299769491,
+        "pieces": 0.15823201171588153,
+        "tau": 3.1777658640639856
+       },
+       "wall": 3.3802081430330873
+      }
+     },
+     "wall": 9.964229214936495,
+     "n_cells": 5964
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 1.636814848,
+     "gpu_peak_GB": null,
+     "compile_s": 0.8776983889983967
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 16265,
+      "SiIII-1206": 16265
+     },
+     "peak_rss_GB": 1.406844928,
+     "gpu_peak_GB": null,
+     "compile_s": 19.622158944956027
+    }
+   },
+   "peak_rss_GB": 1.682932,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.36045560240745544,
+     "meanF_matched": 0.3604557495758574,
+     "meanF_default": 0.3113329504625165,
+     "n_skewers": 1,
+     "max_dF": 1.878002745456936e-05,
+     "rms_dF": 2.5735604041132514e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.999999463558197,
+     "meanF_matched": 0.9999994595681442,
+     "meanF_default": 0.9999680969859374,
+     "n_skewers": 1,
+     "max_dF": 8.540797180600634e-08,
+     "rms_dF": 1.4840567959547118e-08
+    }
+   },
+   "sampled_peak_rss_GB": 1.580314624
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n256_t32_cpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 256,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 2683.367849301896,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.0073375849751755595,
+      "io": 0.38390858529601246,
+      "selection": 13.795475263730623
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.38180449698120356,
+        "pieces": 33.47959988063667,
+        "tau": 671.926638466306
+       },
+       "wall": 705.9575518040219
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.20715667097829282,
+        "pieces": 36.958929650485516,
+        "tau": 415.0385105245514
+       },
+       "wall": 452.3923826069804
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.1289056179812178,
+        "pieces": 19.46799316443503,
+        "tau": 165.0859770575771
+       },
+       "wall": 184.89039375795983
+      }
+     },
+     "wall": 1357.4274217369966,
+     "n_cells": 1099622
+    },
+    {
+     "shared": {
+      "setup": 0.0076970120426267385,
+      "io": 0.3681936077773571,
+      "selection": 13.106167678255588
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.19646824011579156,
+        "pieces": 29.712147291516885,
+        "tau": 661.0102398993913
+       },
+       "wall": 691.0948458920466
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.12284410302527249,
+        "pieces": 19.058142409659922,
+        "tau": 418.1289722324582
+       },
+       "wall": 437.51499356899876
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.13611335202585906,
+        "pieces": 19.58099308994133,
+        "tau": 163.33445845602546
+       },
+       "wall": 183.2523125730222
+      }
+     },
+     "wall": 1325.3444840690354,
+     "n_cells": 1099622
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 4.738514944,
+     "gpu_peak_GB": null,
+     "compile_s": 14.862705911975354
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 4140890,
+      "SiIII-1206": 4140890
+     },
+     "peak_rss_GB": 20.547137536,
+     "gpu_peak_GB": null,
+     "compile_s": 14.87738903798163
+    },
+    "float32": {
+     "n_absorbers": {
+      "HI-LyA": 4140890,
+      "SiIII-1206": 4140890
+     },
+     "peak_rss_GB": 20.580175872,
+     "gpu_peak_GB": null,
+     "compile_s": 1.6380811849376187
+    }
+   },
+   "peak_rss_GB": 20.159392,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.5546497166907242,
+     "meanF_matched": 0.554649840594331,
+     "meanF_default": 0.5250086003303942,
+     "meanF_float32": 0.5250087085926674,
+     "n_skewers": 64,
+     "max_dF": 0.00022395785228393472,
+     "rms_dF": 2.8685730979179415e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9993962239325496,
+     "meanF_matched": 0.9993962160833834,
+     "meanF_default": 0.9994883152286951,
+     "meanF_float32": 0.999488309356219,
+     "n_skewers": 64,
+     "max_dF": 0.00021228640168419188,
+     "rms_dF": 8.326412607895944e-07
+    }
+   },
+   "sampled_peak_rss_GB": 19.815133184
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n256_t32_gpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 256,
+    "platform": "gpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "skipped",
+   "wall_s": 0.0,
+   "reason": "predicted 5446 s for the first + one timed run > cap 3600 s",
+   "predicted_s": 5446.353238401702,
+   "predicted_rss_GB": 24.40972
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n4_t32_cpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 4,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 109.77605670690536,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.006970011978410184,
+      "io": 0.26436683209612966,
+      "selection": 2.70096461486537
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.2121591781033203,
+        "pieces": 0.37666416575666517,
+        "tau": 11.20938082516659
+       },
+       "wall": 11.803368708933704
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.09781958209350705,
+        "pieces": 16.547043023165315,
+        "tau": 6.701309730997309
+       },
+       "wall": 23.349355789017864
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.031198053970001638,
+        "pieces": 0.25017144985031337,
+        "tau": 3.027254794142209
+       },
+       "wall": 3.311595780076459
+      }
+     },
+     "wall": 41.43683348200284,
+     "n_cells": 20433
+    },
+    {
+     "shared": {
+      "setup": 0.006667701993137598,
+      "io": 0.26497129211202264,
+      "selection": 2.4292534198611975
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03252927691210061,
+        "pieces": 0.089125597034581,
+        "tau": 10.176720910007134
+       },
+       "wall": 10.301125468104146
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03228129702620208,
+        "pieces": 0.2383997500874102,
+        "tau": 6.445877251913771
+       },
+       "wall": 6.719908369006589
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.032473105820827186,
+        "pieces": 0.22138978098519146,
+        "tau": 2.6582513219909742
+       },
+       "wall": 2.915287446929142
+      }
+     },
+     "wall": 22.63749137299601,
+     "n_cells": 20433
+    },
+    {
+     "shared": {
+      "setup": 0.006796700996346772,
+      "io": 0.2684567137621343,
+      "selection": 2.390061358222738
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03690573200583458,
+        "pieces": 0.08913328382186592,
+        "tau": 10.181880795164034
+       },
+       "wall": 10.310325414990075
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03512876806780696,
+        "pieces": 0.23368452326394618,
+        "tau": 6.430152682820335
+       },
+       "wall": 6.7019981240155175
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03654082503635436,
+        "pieces": 0.22051779588218778,
+        "tau": 2.6693329961271957
+       },
+       "wall": 2.9301641940837726
+      }
+     },
+     "wall": 22.60810863506049,
+     "n_cells": 20433
+    },
+    {
+     "shared": {
+      "setup": 0.006803445052355528,
+      "io": 0.2666042181663215,
+      "selection": 2.397976823733188
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03289718588348478,
+        "pieces": 0.08920007909182459,
+        "tau": 10.15091321489308
+       },
+       "wall": 10.274805271998048
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.032149906852282584,
+        "pieces": 0.23003027820959687,
+        "tau": 6.452795558841899
+       },
+       "wall": 6.718105111038312
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.031093422905541956,
+        "pieces": 0.23129403311759233,
+        "tau": 2.6644398227799684
+       },
+       "wall": 2.930531670921482
+      }
+     },
+     "wall": 22.595133973984048,
+     "n_cells": 20433
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 2.153459712,
+     "gpu_peak_GB": null,
+     "compile_s": 1.5022432408295572
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 64854,
+      "SiIII-1206": 64854
+     },
+     "peak_rss_GB": 1.855082496,
+     "gpu_peak_GB": null,
+     "compile_s": 16.63125067797955
+    },
+    "float32": {
+     "n_absorbers": {
+      "HI-LyA": 64854,
+      "SiIII-1206": 64854
+     },
+     "peak_rss_GB": 1.823100928,
+     "gpu_peak_GB": null,
+     "compile_s": 0.38143158599268645
+    }
+   },
+   "peak_rss_GB": 2.115376,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.46578648686408997,
+     "meanF_matched": 0.4657866759527455,
+     "meanF_default": 0.42851070674626957,
+     "meanF_float32": 0.428510502069266,
+     "n_skewers": 4,
+     "max_dF": 2.3277764869655826e-05,
+     "rms_dF": 2.17324286137646e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9999967813491821,
+     "meanF_matched": 0.9999967861121566,
+     "meanF_default": 0.99997955774046,
+     "meanF_float32": 0.9999795577458894,
+     "n_skewers": 4,
+     "max_dF": 2.1831886953815882e-07,
+     "rms_dF": 1.0378931689893556e-08
+    }
+   },
+   "sampled_peak_rss_GB": 2.040315904
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n4_t32_gpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 4,
+    "platform": "gpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 186.75037580309436,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cuda",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.006921762018464506,
+      "io": 0.2652097169775516,
+      "selection": 3.0415804870426655
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.4521435230271891,
+        "pieces": 0.6754458643263206,
+        "tau": 18.63944764563348
+       },
+       "wall": 19.77137258206494
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.16917871008627117,
+        "pieces": 7.301772021804936,
+        "tau": 12.277023358270526
+       },
+       "wall": 19.751854934031144
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03911785501986742,
+        "pieces": 1.6954169949749485,
+        "tau": 10.52314963703975
+       },
+       "wall": 12.26210767205339
+      }
+     },
+     "wall": 55.09937098401133,
+     "n_cells": 20433
+    },
+    {
+     "shared": {
+      "setup": 0.006663381005637348,
+      "io": 0.2668113320833072,
+      "selection": 2.4094859429169446
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03521157999057323,
+        "pieces": 0.14292888075578958,
+        "tau": 16.173357372172177
+       },
+       "wall": 16.35384565393906
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03410419507417828,
+        "pieces": 1.6752400781260803,
+        "tau": 11.453147469088435
+       },
+       "wall": 13.166898302035406
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.037353003048337996,
+        "pieces": 1.6943192060571164,
+        "tau": 9.723869937006384
+       },
+       "wall": 11.459189913002774
+      }
+     },
+     "wall": 43.6631291230442,
+     "n_cells": 20433
+    },
+    {
+     "shared": {
+      "setup": 0.015637513948604465,
+      "io": 0.29604649322573096,
+      "selection": 2.512422073748894
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03673975693527609,
+        "pieces": 0.14042982133105397,
+        "tau": 16.110838614753447
+       },
+       "wall": 16.29056695406325
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03457275207620114,
+        "pieces": 1.686293150880374,
+        "tau": 11.45358183013741
+       },
+       "wall": 13.17842786910478
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03868173505179584,
+        "pieces": 1.6726508878637105,
+        "tau": 9.72282634396106
+       },
+       "wall": 11.438175656017847
+      }
+     },
+     "wall": 43.73153442295734,
+     "n_cells": 20433
+    },
+    {
+     "shared": {
+      "setup": 0.006546437041833997,
+      "io": 0.2668443899601698,
+      "selection": 2.4138830550946295
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03837102802935988,
+        "pieces": 0.14193840720690787,
+        "tau": 16.07246347074397
+       },
+       "wall": 16.255135854939
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03657337301410735,
+        "pieces": 1.6736310359556228,
+        "tau": 11.454400531947613
+       },
+       "wall": 13.168870898080058
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.03688034706283361,
+        "pieces": 1.6704253939678892,
+        "tau": 9.72443751594983
+       },
+       "wall": 11.434871144010685
+      }
+     },
+     "wall": 43.54634381795768,
+     "n_cells": 20433
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 1.633247232,
+     "gpu_peak_GB": 0.537169664,
+     "compile_s": 3.48080562800169
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 64854,
+      "SiIII-1206": 64854
+     },
+     "peak_rss_GB": 1.5777792,
+     "gpu_peak_GB": 0.537169664,
+     "compile_s": 6.582984035951085
+    },
+    "float32": {
+     "n_absorbers": {
+      "HI-LyA": 64854,
+      "SiIII-1206": 64854
+     },
+     "peak_rss_GB": 1.642774528,
+     "gpu_peak_GB": 0.537169664,
+     "compile_s": 0.8239320160355419
+    }
+   },
+   "peak_rss_GB": 1.715748,
+   "devices": [
+    "cuda:0"
+   ],
+   "device_memory": {
+    "bytes_in_use": 6144,
+    "peak_bytes_in_use": 537179136,
+    "bytes_limit": 9363898368
+   },
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.46578648686408997,
+     "meanF_matched": 0.4657866759527455,
+     "meanF_default": 0.42851070674626945,
+     "meanF_float32": 0.4285114668624474,
+     "n_skewers": 4,
+     "max_dF": 2.3277764869655826e-05,
+     "rms_dF": 2.1732428613816893e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9999967813491821,
+     "meanF_matched": 0.9999967861121566,
+     "meanF_default": 0.99997955774046,
+     "meanF_float32": 0.9999795577447395,
+     "n_skewers": 4,
+     "max_dF": 2.1831886953815882e-07,
+     "rms_dF": 1.0378931689893556e-08
+    }
+   },
+   "sampled_peak_rss_GB": 1.74641152
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n64_t32_cpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 64,
+    "platform": "cpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 1334.738272393006,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cpu",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.006908971932716668,
+      "io": 0.35958848893642426,
+      "selection": 9.013816118007526
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.2737570599419996,
+        "pieces": 4.698198789963499,
+        "tau": 167.98039262590464
+       },
+       "wall": 172.990483622998
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.12038875999860466,
+        "pieces": 21.17951640265528,
+        "tau": 103.8799034304684
+       },
+       "wall": 125.22117254103068
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.05139677401166409,
+        "pieces": 4.556610649917275,
+        "tau": 41.075991417164914
+       },
+       "wall": 45.72568682790734
+      }
+     },
+     "wall": 353.3179211859824,
+     "n_cells": 288995
+    },
+    {
+     "shared": {
+      "setup": 0.006574144936166704,
+      "io": 0.3680594159523025,
+      "selection": 8.703389649046585
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06348550308030099,
+        "pieces": 2.551724742515944,
+        "tau": 161.42299682053272
+       },
+       "wall": 164.07236577605363
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.044547191937454045,
+        "pieces": 4.6912769202608615,
+        "tau": 103.58008499874268
+       },
+       "wall": 108.3544512919616
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04725221311673522,
+        "pieces": 4.461873002466746,
+        "tau": 40.67322244250681
+       },
+       "wall": 45.227280184975825
+      }
+     },
+     "wall": 326.73242094006855,
+     "n_cells": 288995
+    },
+    {
+     "shared": {
+      "setup": 0.007253212039358914,
+      "io": 0.3673612418351695,
+      "selection": 8.685734528233297
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06429865199606866,
+        "pieces": 2.594055071938783,
+        "tau": 161.38125109800603
+       },
+       "wall": 164.0739377309801
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04953007702715695,
+        "pieces": 4.640735883498564,
+        "tau": 103.44859692454338
+       },
+       "wall": 108.1809856389882
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04993832192849368,
+        "pieces": 4.584234660258517,
+        "tau": 40.976397311664186
+       },
+       "wall": 45.657025889027864
+      }
+     },
+     "wall": 326.9725691229105,
+     "n_cells": 288995
+    },
+    {
+     "shared": {
+      "setup": 0.00696111295837909,
+      "io": 0.36818065389525145,
+      "selection": 8.6741236661328
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.06788943998981267,
+        "pieces": 2.7019332034979016,
+        "tau": 161.91675010335166
+       },
+       "wall": 164.72413542901631
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04743876098655164,
+        "pieces": 4.5807347220834345,
+        "tau": 103.37090059695765
+       },
+       "wall": 108.03801165998448
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0499566700309515,
+        "pieces": 4.518893436877988,
+        "tau": 40.7752089361893
+       },
+       "wall": 45.39104403392412
+      }
+     },
+     "wall": 327.20268683996983,
+     "n_cells": 288995
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 3.876220928,
+     "gpu_peak_GB": null,
+     "compile_s": 8.916545892017893
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 1035287,
+      "SiIII-1206": 1035287
+     },
+     "peak_rss_GB": 7.148158976,
+     "gpu_peak_GB": null,
+     "compile_s": 17.04018690204248
+    },
+    "float32": {
+     "n_absorbers": {
+      "HI-LyA": 1035287,
+      "SiIII-1206": 1035287
+     },
+     "peak_rss_GB": 7.148212224,
+     "gpu_peak_GB": null,
+     "compile_s": 0.33464279398322105
+    }
+   },
+   "peak_rss_GB": 6.994596,
+   "devices": [
+    "TFRT_CPU_0"
+   ],
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.5539532447064783,
+     "meanF_matched": 0.5539533318139858,
+     "meanF_default": 0.5234600509411138,
+     "meanF_float32": 0.5234604622982164,
+     "n_skewers": 64,
+     "max_dF": 0.00022395785228393472,
+     "rms_dF": 2.8685730979179415e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9996944601357136,
+     "meanF_matched": 0.9996944661574725,
+     "meanF_default": 0.9995573667143953,
+     "meanF_float32": 0.9995573301001782,
+     "n_skewers": 64,
+     "max_dF": 0.00021228640168419188,
+     "rms_dF": 8.326412607895944e-07
+    }
+   },
+   "sampled_peak_rss_GB": 7.135625216
+  },
+  {
+   "id": "skewerjax_TNG50-4_s25_n64_t32_gpu_matched+default+float32",
+   "config": {
+    "code": "skewerjax",
+    "snap_base": "/home/STORAGE/TNG50-4",
+    "snapnum": 25,
+    "n_skewers": 64,
+    "platform": "gpu",
+    "threads": 32,
+    "modes": [
+     "matched",
+     "default",
+     "float32"
+    ],
+    "repeats": 3,
+    "budget_s": 1800.0,
+    "res": 1.0,
+    "spacing_kms": 0.25,
+    "n_store": 64
+   },
+   "status": "ok",
+   "wall_s": 1370.003837691038,
+   "metadata": {
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "physical_cores": 24,
+    "logical_cpus": 32,
+    "cpu_set": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31
+    ],
+    "ram_GB": 131.708372,
+    "gpu": "NVIDIA GeForce RTX 3060, 12288 MiB, 580.95.05",
+    "python": "3.11.14",
+    "versions": {
+     "jax": "0.6.2",
+     "jaxlib": "0.6.2",
+     "jax-cuda12-plugin": "0.6.2",
+     "numpy": "1.26.4",
+     "scipy": "1.16.3",
+     "h5py": "3.15.1",
+     "fake_spectra": "2.2.4",
+     "exojax": "2.2.2"
+    },
+    "host": "kosmivara3110",
+    "env": {
+     "OMP_NUM_THREADS": "32",
+     "OPENBLAS_NUM_THREADS": "32",
+     "MKL_NUM_THREADS": "32",
+     "XLA_FLAGS": null,
+     "JAX_PLATFORMS": "cuda",
+     "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    }
+   },
+   "snapshot": {
+    "sim": "TNG50-4",
+    "snapnum": 25,
+    "n_gas": 19250411,
+    "box_ckpc_h": 35000.0,
+    "redshift": 3.008131071630377,
+    "n_files": 11,
+    "size_GB": 5.59971028
+   },
+   "runs": [
+    {
+     "shared": {
+      "setup": 0.006882952991873026,
+      "io": 0.35053083999082446,
+      "selection": 9.341354314005002
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.4746418030699715,
+        "pieces": 8.183037616312504,
+        "tau": 259.9140280367574
+       },
+       "wall": 268.58632500004023
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.19163874199148268,
+        "pieces": 32.71247169619892,
+        "tau": 184.70824988279492
+       },
+       "wall": 217.63353629608173
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.04213696694932878,
+        "pieces": 27.804473762284033,
+        "tau": 157.66976002173033
+       },
+       "wall": 185.53291685006116
+      }
+     },
+     "wall": 681.4519775249064,
+     "n_cells": 288995
+    },
+    {
+     "shared": {
+      "setup": 0.00741923600435257,
+      "io": 0.4035922579932958,
+      "selection": 9.134106458979659
+     },
+     "modes": {
+      "matched": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0634848449844867,
+        "pieces": 4.301482180249877,
+        "tau": 252.54043888184242
+       },
+       "wall": 256.9200337260263
+      },
+      "default": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.05416987300850451,
+        "pieces": 31.852076662238687,
+        "tau": 190.01816366356798
+       },
+       "wall": 221.9410603879951
+      },
+      "float32": {
+       "stages": {
+        "io": 0.0,
+        "physics": 0.0444799920078367,
+        "pieces": 42.09636575076729,
+        "tau": 157.25018340931274
+       },
+       "wall": 199.41011613199953
+      }
+     },
+     "wall": 687.8165487649385,
+     "n_cells": 288995
+    }
+   ],
+   "modes": {
+    "matched": {
+     "n_absorbers": {
+      "HI-LyA": null,
+      "SiIII-1206": null
+     },
+     "peak_rss_GB": 3.541966848,
+     "gpu_peak_GB": 0.524489216,
+     "compile_s": 11.666291274013929
+    },
+    "default": {
+     "n_absorbers": {
+      "HI-LyA": 1035287,
+      "SiIII-1206": 1035287
+     },
+     "peak_rss_GB": 7.275552768,
+     "gpu_peak_GB": 0.952192,
+     "compile_s": -4.307524091913365
+    },
+    "float32": {
+     "n_absorbers": {
+      "HI-LyA": 1035287,
+      "SiIII-1206": 1035287
+     },
+     "peak_rss_GB": 7.255363584,
+     "gpu_peak_GB": 0.95219328,
+     "compile_s": -13.877199281938374
+    }
+   },
+   "peak_rss_GB": 7.12108,
+   "devices": [
+    "cuda:0"
+   ],
+   "device_memory": {
+    "bytes_in_use": 6144,
+    "peak_bytes_in_use": 952193280,
+    "bytes_limit": 9363898368
+   },
+   "agreement": {
+    "HI-LyA": {
+     "meanF_fake_spectra": 0.5539532447064783,
+     "meanF_matched": 0.5539533318139858,
+     "meanF_default": 0.5234600509411138,
+     "meanF_float32": 0.5234602699877907,
+     "n_skewers": 64,
+     "max_dF": 0.00022395785228399023,
+     "rms_dF": 2.8685730979179106e-06
+    },
+    "SiIII-1206": {
+     "meanF_fake_spectra": 0.9996944601357136,
+     "meanF_matched": 0.9996944661574725,
+     "meanF_default": 0.9995573667143953,
+     "meanF_float32": 0.9995573489405989,
+     "n_skewers": 64,
+     "max_dF": 0.00021228640168419188,
+     "rms_dF": 8.326412607894581e-07
+    }
+   },
+   "sampled_peak_rss_GB": 7.224815616
+  }
+ ]
+}

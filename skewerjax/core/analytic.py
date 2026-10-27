@@ -1,4 +1,5 @@
 """Closed-form optical depths of uniform gas (review notes): the validation targets of tau."""
+
 from __future__ import annotations
 
 import jax
@@ -16,7 +17,7 @@ def tau_static_natural(lambda_vals, lambda_rest, A21_GHz, f_osc, a0, Delta_x_Mpc
     lambda_vals, lambda_rest = lambda_vals[None, None, :], lambda_rest[:, None, None]
     A21_GHz, f_osc = A21_GHz[:, None, None], f_osc[:, None, None]
     a0, Delta_x_Mpc, n0_cm3 = a0[None, :, None], Delta_x_Mpc[None, :, None], n0_cm3[None, :, None]
-    prefactor = phys.cross_section_prefactor * f_osc * n0_cm3 * Delta_x_Mpc * 1e2 * phys.Mpc_to_m / a0**2    # [GHz]
+    prefactor = phys.cross_section_prefactor * f_osc * n0_cm3 * Delta_x_Mpc * 1e2 * phys.Mpc_to_m / a0**2  # [GHz]
     nu_GHz = (1 / lambda_rest - a0 / lambda_vals) * phys.c * 10
     return prefactor * lorentzian(nu_GHz, A21_GHz / (4 * jnp.pi))
 
@@ -26,9 +27,9 @@ def tau_static_thermal(lambda_vals, lambda_rest, mass_amu, f_osc, a0, Delta_x_Mp
     lambda_vals, lambda_rest = lambda_vals[None, None, :], lambda_rest[:, None, None]
     mass_amu, f_osc = mass_amu[:, None, None], f_osc[:, None, None]
     a0, Delta_x_Mpc, n0_cm3, T0_K = a0[None, :, None], Delta_x_Mpc[None, :, None], n0_cm3[None, :, None], T0_K[None, :, None]
-    prefactor = phys.cross_section_prefactor * f_osc * n0_cm3 * Delta_x_Mpc * 1e2 * phys.Mpc_to_m / a0**2    # [GHz]
+    prefactor = phys.cross_section_prefactor * f_osc * n0_cm3 * Delta_x_Mpc * 1e2 * phys.Mpc_to_m / a0**2  # [GHz]
     nu_GHz = (1 / lambda_rest - a0 / lambda_vals) * phys.c * 10
-    v_eff_A_GHz = jnp.sqrt(2.0 * phys.kB * T0_K / mass_amu) * 10.0                                        # [A / ns]
+    v_eff_A_GHz = jnp.sqrt(2.0 * phys.kB * T0_K / mass_amu) * 10.0  # [A / ns]
     return prefactor * gaussian(nu_GHz, v_eff_A_GHz / (jnp.sqrt(2.0) * lambda_rest))
 
 
@@ -42,7 +43,9 @@ def tau_radiation_natural(lambda_vals, lambda_rest, A21_GHz, f_osc, a0, x0_Mpc, 
     a0, x0_Mpc, xem_Mpc, xf_Mpc = a0[None, :, None], x0_Mpc[None, :, None], xem_Mpc[None, :, None], xf_Mpc[None, :, None]
     n0_cm3 = n0_cm3[None, :, None]
     # C Gyr_to_s 1e9 = sigma_0 [cm^2 GHz]; 1 / pi of the Lorentzian normalisation
-    prefactor = (phys.cross_section_prefactor * phys.Gyr_to_s * 1e9) / (jnp.pi * phys.H0) * 1e-8 * f_osc * n0_cm3 * lambda_vals / a0
+    prefactor = (
+        (phys.cross_section_prefactor * phys.Gyr_to_s * 1e9) / (jnp.pi * phys.H0) * 1e-8 * f_osc * n0_cm3 * lambda_vals / a0
+    )
     gamma_GHz = A21_GHz / (4 * jnp.pi)
 
     def arctan_term(x_Mpc):
@@ -97,10 +100,10 @@ def tau_mid_point(line_bundle, T0_K, n0_cm3, Delta_x_Mpc, a0, method: str = "tra
     gamma_flat = jnp.tile(A21_GHz / (4.0 * jnp.pi), (1, N_T0, 1, 1)).reshape(-1)
     nu_GHz = (phys.c * 10.0 / lambda0_A) * (1 - a0 / (a0 + 0.5 * phys.H0_over_c * Delta_x_Mpc))
     nu_flat = jnp.reshape(jnp.tile(nu_GHz, (1, N_T0, 1, 1)), (N_lines * N_T0, N_xx))
-    phi = jax.vmap(lambda x, s, g: 10**log10_voigt(x, s, g), in_axes=(0, 0, 0))(nu_flat, sigma_flat, gamma_flat)
+    phi = jax.vmap(lambda x, s, g: 10 ** log10_voigt(x, s, g), in_axes=(0, 0, 0))(nu_flat, sigma_flat, gamma_flat)
     C_j = phys.cross_section_prefactor * f_osc
     rhs = (2 * n0_cm3 * C_j * term) * (1e2 * phys.Mpc_to_m)
-    rhs *= (a0 + 0.5 * phys.H0_over_c * Delta_x_Mpc)**-2
+    rhs *= (a0 + 0.5 * phys.H0_over_c * Delta_x_Mpc) ** -2
     return rhs * phi.reshape(N_lines, N_T0, 1, N_xx)
 
 
@@ -114,5 +117,5 @@ def tau_mid_point_radiation_thermal(line_bundle, T0_K, n0_cm3, Delta_x_Mpc, a0):
     prefactor = n0_cm3 * C_j * lambda0_A / (a0 * phys.H0) * 10 * phys.Gyr_to_s
     sigma_GHz = jnp.sqrt(2.0 * phys.kB * T0_K / mass_amu) * 10.0 / (2.0 * lambda0_A)
     arg = phys.c * 10 / (sigma_GHz * lambda0_A * jnp.sqrt(2.0))
-    arg *= (1 - a0 / (a0 + 0.5 * phys.H0_over_c * Delta_x_Mpc))
+    arg *= 1 - a0 / (a0 + 0.5 * phys.H0_over_c * Delta_x_Mpc)
     return prefactor * jax.scipy.special.erf(arg)

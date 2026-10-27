@@ -25,6 +25,7 @@ The constant -c_s is the order-0 term (key ``ZERO_ORDER_KEY``). The term (A, B) 
 |A| + |B|, and the sum of all weighted terms reproduces the total P and xi exactly, at
 every k (including k = 0) and every lag.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -48,8 +49,7 @@ def subset_orders(overflux, subset_keys: Sequence[str]) -> dict:
     labels = getattr(overflux, "labels", None)
     joiner = getattr(overflux, "key_joiner", "")
     if labels:
-        orders = {joiner.join(m): r for r in range(1, len(labels) + 1)
-                  for m in combinations(labels, r)}
+        orders = {joiner.join(m): r for r in range(1, len(labels) + 1) for m in combinations(labels, r)}
         if all(k in orders for k in subset_keys):
             return {k: orders[k] for k in subset_keys}
     return {k: len(k) for k in subset_keys}
@@ -83,7 +83,7 @@ def bin_index(x: np.ndarray, edges: np.ndarray) -> np.ndarray:
     return np.where((idx >= 0) & (idx < len(edges) - 1), idx, -1)
 
 
-_BIN_CHUNK = 4096   # values per partial sum in binned_mean (bounds float32 accumulation error)
+_BIN_CHUNK = 4096  # values per partial sum in binned_mean (bounds float32 accumulation error)
 
 
 @partial(jax.jit, static_argnames=("n_bins",))
@@ -106,12 +106,12 @@ def binned_mean(values, idx, weights, n_bins: int):
     seg = jnp.where(ok, idx, 0)
     w = jnp.where(ok.reshape((-1,) + (1,) * (values.ndim - 1)), weights, 0.0)
 
-    def chunks(a):                       # (M, ...) -> (n_chunks, chunk, ...), zero padded
+    def chunks(a):  # (M, ...) -> (n_chunks, chunk, ...), zero padded
         a = jnp.pad(a, [(0, pad)] + [(0, 0)] * (a.ndim - 1))
         return a.reshape((n_chunks, chunk) + a.shape[1:])
 
     partial_sum = jax.vmap(lambda a, s: jax.ops.segment_sum(a, s, num_segments=n_bins))
-    seg_c = chunks(seg)                  # padded entries have weight 0
+    seg_c = chunks(seg)  # padded entries have weight 0
     W = jnp.sum(partial_sum(chunks(w), seg_c), axis=0)
     S = jnp.sum(partial_sum(chunks(w * values), seg_c), axis=0)
     return jnp.where(W > 0, S / jnp.where(W > 0, W, 1.0), jnp.nan), W
@@ -188,9 +188,9 @@ def p1d_kernel(total, terms, w, c, pref, chunk: int):
         s_raw, s_w = carry
         t, tm, ww, cc = xs
         f_tot = jnp.fft.rfft(t, axis=-1)
-        f_raw = jnp.fft.rfft(tm, axis=-1)                                    # (n, chunk, K)
-        f_c = jnp.zeros((1, chunk, K), cdt).at[0, :, 0].set(-cc * N)         # rfft of -c_s
-        f_w = jnp.concatenate([f_c, ww[None, :, None] * f_raw], axis=0)      # (n+1, chunk, K)
+        f_raw = jnp.fft.rfft(tm, axis=-1)  # (n, chunk, K)
+        f_c = jnp.zeros((1, chunk, K), cdt).at[0, :, 0].set(-cc * N)  # rfft of -c_s
+        f_w = jnp.concatenate([f_c, ww[None, :, None] * f_raw], axis=0)  # (n+1, chunk, K)
         s_raw = s_raw + jnp.einsum("asf,bsf->abf", f_raw, f_raw.conj())
         s_w = s_w + jnp.einsum("asf,bsf->abf", f_w, f_w.conj())
         return (s_raw, s_w), pref * jnp.abs(f_tot) ** 2
@@ -241,5 +241,4 @@ def p3d_order_spectra(f_w, order_ids, pref, n_orders: int):
 @partial(jax.jit, static_argnames=("shape",))
 def xi3d_from_power(P, shape: tuple, dV: float):
     """xi(r) = fftshift(irfftn(P^*)) / dV on the full (Nx, Ny, Nz) lag grid, centred."""
-    return jnp.fft.fftshift(jnp.fft.irfftn(jnp.conj(P), s=shape, axes=(-3, -2, -1)),
-                            axes=(-3, -2, -1)) / dV
+    return jnp.fft.fftshift(jnp.fft.irfftn(jnp.conj(P), s=shape, axes=(-3, -2, -1)), axes=(-3, -2, -1)) / dV

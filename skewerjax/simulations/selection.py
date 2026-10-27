@@ -8,18 +8,19 @@ of cells streamed by the reader (layer 1) is queried against it. Memory is bound
 plus the tree. Skewer batches are independent, so multi-device runs can distribute them; each worker streams the same
 files.
 """
+
 from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
 
 import numpy as np
+
 from skewerjax.core.selection import _nearest_distance_cpu, _nearest_distance_jztree, path_tree, resolve_backend, selection_radius
 from skewerjax.simulations.gas_cells import GasCells
 
 GEOMETRY_DATASETS = ("Coordinates", "Masses", "Density")
-PREFILTER_GRID = 64                       # cells per box side of the coarse occupancy grid of the paths
+PREFILTER_GRID = 64  # cells per box side of the coarse occupancy grid of the paths
 logger = logging.getLogger(__name__)
 
 
@@ -36,7 +37,7 @@ class _PathOccupancy:
         occ[i[:, 0], i[:, 1], i[:, 2]] = True
         self._dilated = {0: occ}
 
-    def grid(self, k: int) -> Optional[np.ndarray]:
+    def grid(self, k: int) -> np.ndarray | None:
         """The occupancy dilated by k cells, or None when it covers the whole box."""
         if 2 * k + 1 >= self.n:
             return None
@@ -50,7 +51,7 @@ class _PathOccupancy:
             self._dilated[k] = out
         return self._dilated[k]
 
-    def candidates(self, pos: np.ndarray, r_max: float, *, scale: float = 1.0, margin: int = 0) -> Optional[np.ndarray]:
+    def candidates(self, pos: np.ndarray, r_max: float, *, scale: float = 1.0, margin: int = 0) -> np.ndarray | None:
         """Mask of the positions (N, 3) in [0, box) that can be within ``r_max`` of a path; None: all of them.
 
         ``scale``: the positions are given in another unit, x = scale pos (e.g. code coordinates and their length in
@@ -59,7 +60,7 @@ class _PathOccupancy:
         g = self.grid(int(np.floor(r_max / self.h)) + 2 + int(margin))
         if g is None:
             return None
-        q = (pos * (scale / self.h)).astype(np.int32)                   # positions >= 0: truncation is the floor
+        q = (pos * (scale / self.h)).astype(np.int32)  # positions >= 0: truncation is the floor
         q %= self.n
         return g.ravel().take((q[:, 0] * self.n + q[:, 1]) * self.n + q[:, 2])
 
@@ -75,8 +76,16 @@ def read_selected(reader, file_index: int, row_offset: int, sel, base: dict, res
     return reader.to_gas_cells(raw, ids=(np.int64(file_index) << 40) | (row_offset + sel).astype(np.int64))
 
 
-def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", max_rows: int = 4_000_000, workers: int = -1,
-                            backend: str = "cpu", return_info: bool = False) -> GasCells:
+def select_cells_near_paths(
+    reader,
+    paths,
+    *,
+    mode: str = "voronoi",
+    max_rows: int = 4_000_000,
+    workers: int = -1,
+    backend: str = "cpu",
+    return_info: bool = False,
+) -> GasCells:
     """Stream the snapshot and keep the cells that can contribute to any of ``paths``.
 
     Parameters
@@ -100,6 +109,7 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", max_rows: i
     """
     t0 = time.perf_counter()
     from skewerjax.simulations.readers import GAS_DATASETS
+
     rest = [k for k in GAS_DATASETS if k not in GEOMETRY_DATASETS]
     hdr = reader.header
     box = hdr.box_cMpc
@@ -142,14 +152,33 @@ def select_cells_near_paths(reader, paths, *, mode: str = "voronoi", max_rows: i
         n_blocks += 1
         t = time.perf_counter()
         tm["read_selected"] += t - t3
-        logger.debug("select_cells_near_paths: file %d rows %d-%d: %d candidates, %d selected", fi, r0, r0 + n_rows, n_blk, sel.size)
+        logger.debug(
+            "select_cells_near_paths: file %d rows %d-%d: %d candidates, %d selected", fi, r0, r0 + n_rows, n_blk, sel.size
+        )
     if n_sel == 0:
-        raise RuntimeError(f"no gas cell is within reach of the paths: none of the {hdr.n_gas} cells of the snapshot lies within "
-                           f"its selection radius of a path point (box = {box:.4g} cMpc, path spacing ds = {ds:.4g} cMpc). Are the "
-                           "paths in comoving Mpc without h (SkewerJAX's unit; the snapshot's code unit is ckpc/h)?")
+        raise RuntimeError(
+            f"no gas cell is within reach of the paths: none of the {hdr.n_gas} cells of the snapshot lies within "
+            f"its selection radius of a path point (box = {box:.4g} cMpc, path spacing ds = {ds:.4g} cMpc). Are the "
+            "paths in comoving Mpc without h (SkewerJAX's unit; the snapshot's code unit is ckpc/h)?"
+        )
     out = GasCells.concatenate(parts)
-    info = dict(n_gas=hdr.n_gas, n_blocks=n_blocks, n_candidates=n_cand, n_selected=n_sel, ds_cMpc=ds, backend=backend, timings=tm,
-                time_s=time.perf_counter() - t0)
-    logger.debug("select_cells_near_paths: %d of %d cells selected (%d after the prefilter), %d blocks, %.2f s (%s)", n_sel, hdr.n_gas,
-                 n_cand, n_blocks, info["time_s"], ", ".join(f"{k} {v:.2f} s" for k, v in tm.items()))
+    info = dict(
+        n_gas=hdr.n_gas,
+        n_blocks=n_blocks,
+        n_candidates=n_cand,
+        n_selected=n_sel,
+        ds_cMpc=ds,
+        backend=backend,
+        timings=tm,
+        time_s=time.perf_counter() - t0,
+    )
+    logger.debug(
+        "select_cells_near_paths: %d of %d cells selected (%d after the prefilter), %d blocks, %.2f s (%s)",
+        n_sel,
+        hdr.n_gas,
+        n_cand,
+        n_blocks,
+        info["time_s"],
+        ", ".join(f"{k} {v:.2f} s" for k, v in tm.items()),
+    )
     return (out, info) if return_info else out

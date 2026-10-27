@@ -25,13 +25,13 @@ Frames (NumPy, host side):
 * ``SnapshotFrame``: one scale factor a_snap for every point and the linear Hubble flow u = velfac s + v_pec as a
   line-of-sight velocity c tanh(u / c) (fake_spectra's frame, ``spectra.py`` L221-L228; matched option).
 """
+
 from __future__ import annotations
 
 import logging
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional
 
 import jax.numpy as jnp
 import numpy as np
@@ -52,8 +52,9 @@ class SnapshotFrame:
 
     path_length : (N_sk,) path length of every skewer [cMpc] (its velocity span is velfac x path_length).
     """
+
     a_snap: float
-    velfac: float                      # [km/s per cMpc] = a H(z)
+    velfac: float  # [km/s per cMpc] = a H(z)
     path_length: np.ndarray
 
     def scale_factors(self, skewer: int, s):
@@ -92,11 +93,12 @@ class ExactFrame:
         (``SkewerBundle.array_direction``).
     a_dagger_per_skewer : optional (N_sk,) a_dagger of every skewer (instead of one value).
     """
+
     s_grid: np.ndarray
     a_grid: np.ndarray
-    a_dagger_value: Optional[float] = None
-    photon_sign: Optional[np.ndarray] = None
-    a_dagger_per_skewer: Optional[np.ndarray] = None
+    a_dagger_value: float | None = None
+    photon_sign: np.ndarray | None = None
+    a_dagger_per_skewer: np.ndarray | None = None
 
     def scale_factors(self, skewer: int, s):
         """a(s) at path lengths ``s`` [cMpc] of skewer ``skewer``, interpolated in ln a."""
@@ -135,7 +137,7 @@ def scale_factors_along_paths(s, a_ref: float, cosmology, s_ref=None) -> np.ndar
     s_ref = 0.5 * (s[:, 0] + s[:, -1]) if s_ref is None else np.broadcast_to(np.asarray(s_ref, float), (s.shape[0],))
     out = np.empty_like(s)
     for k in range(s.shape[0]):
-        x = s_ref[k] - s[k]                                # towards the observer
+        x = s_ref[k] - s[k]  # towards the observer
         for m in (x >= 0, x < 0):
             if not m.any():
                 continue
@@ -161,6 +163,7 @@ class Absorbers:
     increasing s); turbulence [m/s], collisional [GHz] (None: 0); cell, point: provenance indices (cell of the
     ``Cells`` used, sampling point of the dual segment); a_data: the scale factor of the data (a snapshot's), or None.
     """
+
     s: np.ndarray
     n: np.ndarray
     length: np.ndarray
@@ -168,48 +171,57 @@ class Absorbers:
     v_los: np.ndarray
     cell: np.ndarray
     point: np.ndarray
-    a_data: Optional[float]
+    a_data: float | None
     species: str
     mass_amu: float
     meta: dict = field(default_factory=dict)
-    turbulence: Optional[np.ndarray] = None
-    collisional: Optional[np.ndarray] = None
+    turbulence: np.ndarray | None = None
+    collisional: np.ndarray | None = None
 
     @property
     def n_skewers(self) -> int:
         """Number of skewers N_sk."""
         return self.s.shape[0]
 
-    def column_cm2(self, a: Optional[float] = None) -> np.ndarray:
+    def column_cm2(self, a: float | None = None) -> np.ndarray:
         """(N_sk, M) physical column of every absorber at scale factor ``a`` (default: the data's) [cm^-2]:
         n_com l / a^2."""
         a = self.a_data if a is None else a
         if a is None:
             raise ValueError("column_cm2 needs a scale factor (these absorbers have no a_data).")
-        return self.n * self.length * phys.Mpc_to_cm / a ** 2
+        return self.n * self.length * phys.Mpc_to_cm / a**2
 
-    def with_values(self, **kw) -> "Absorbers":
+    def with_values(self, **kw) -> Absorbers:
         """A copy with some per-absorber arrays replaced (e.g. ``n=...``)."""
         d = {k: getattr(self, k) for k in ("s", "n", "length", "T", "v_los", "cell", "point", "turbulence", "collisional")}
         d.update(kw)
         return Absorbers(**d, a_data=self.a_data, species=self.species, mass_amu=self.mass_amu, meta=dict(self.meta))
 
 
-_FILLS = dict(s=0.0, n=0.0, length=0.0, T=1e4, v_los=0.0, cell=-1, point=-1, turbulence=0.0, collisional=0.0)   # padding
+_FILLS = dict(s=0.0, n=0.0, length=0.0, T=1e4, v_los=0.0, cell=-1, point=-1, turbulence=0.0, collisional=0.0)  # padding
 
 
 def _pad_stack(rows, fill):
     m = max(max((len(r) for r in rows), default=1), 1)
-    return np.stack([np.concatenate([np.asarray(r, dtype=np.result_type(np.asarray(r), type(fill))),
-                                     np.full(m - len(r), fill)]) for r in rows])
+    return np.stack(
+        [
+            np.concatenate([np.asarray(r, dtype=np.result_type(np.asarray(r), type(fill))), np.full(m - len(r), fill)])
+            for r in rows
+        ]
+    )
 
 
 def _species_values(cells, species: str):
     """(n [comoving cm^-3], T [K], velocity (M, 3) [km/s], turbulence [m/s] or None, collisional [GHz] or None)."""
     f = cells.species[species]
     v = lambda k: np.asarray(f[k], dtype=np.float64)
-    return (v("number_density"), v("temperature"), v("velocity"), v("turbulence") if "turbulence" in f else None,
-            v("collisional") if "collisional" in f else None)
+    return (
+        v("number_density"),
+        v("temperature"),
+        v("velocity"),
+        v("turbulence") if "turbulence" in f else None,
+        v("collisional") if "collisional" in f else None,
+    )
 
 
 def _path_s_tangents(points):
@@ -224,8 +236,11 @@ class _AbsorberRows:
 
     def __init__(self, turb, coll):
         self.turb, self.coll = turb, coll
-        keys = ("s", "n", "length", "T", "v_los", "cell", "point") + (("turbulence",) if turb is not None else ()) \
+        keys = (
+            ("s", "n", "length", "T", "v_los", "cell", "point")
+            + (("turbulence",) if turb is not None else ())
             + (("collisional",) if coll is not None else ())
+        )
         self.rows = {k: [] for k in keys}
 
     def add(self, c, **values):
@@ -238,12 +253,17 @@ class _AbsorberRows:
         if self.coll is not None:
             self.rows["collisional"].append(self.coll[c])
 
-    def build(self, species: str, mass_amu: float, a_data: Optional[float], meta: dict) -> "Absorbers":
-        return Absorbers(**{k: _pad_stack(v, _FILLS[k]) for k, v in self.rows.items()}, a_data=None if a_data is None else float(a_data),
-                         species=species, mass_amu=float(mass_amu), meta=meta)
+    def build(self, species: str, mass_amu: float, a_data: float | None, meta: dict) -> Absorbers:
+        return Absorbers(
+            **{k: _pad_stack(v, _FILLS[k]) for k, v in self.rows.items()},
+            a_data=None if a_data is None else float(a_data),
+            species=species,
+            mass_amu=float(mass_amu),
+            meta=meta,
+        )
 
 
-def absorbers_from_components(seg, points, cells, species: str, mass_amu: float, *, a_data: Optional[float] = None) -> Absorbers:
+def absorbers_from_components(seg, points, cells, species: str, mass_amu: float, *, a_data: float | None = None) -> Absorbers:
     """Turn a ``SegmentComponents`` (deposition) of ``cells`` into the ``Absorbers`` of ``species``.
 
     Parameters
@@ -259,13 +279,31 @@ def absorbers_from_components(seg, points, cells, species: str, mass_amu: float,
     for k in range(seg.cell.shape[0]):
         pi, ki = np.nonzero(seg.cell[k] >= 0)
         c = seg.cell[k][pi, ki]
-        rows.add(c, s=s_pt[k][pi] + seg.offset[k][pi, ki], n=seg.weight * n_cell[c], length=seg.length[k][pi, ki], T=T_cell[c],
-                 v_los=np.sum(vel[c] * tan[k][pi], axis=-1), point=pi)
+        rows.add(
+            c,
+            s=s_pt[k][pi] + seg.offset[k][pi, ki],
+            n=seg.weight * n_cell[c],
+            length=seg.length[k][pi, ki],
+            T=T_cell[c],
+            v_los=np.sum(vel[c] * tan[k][pi], axis=-1),
+            point=pi,
+        )
     return rows.build(species, mass_amu, a_data, dict(kind=seg.kind))
 
 
-def absorbers_from_crossings(cross, points, cells, species: str, mass_amu: float, *, a_data: Optional[float] = None, frame=None,
-                             tolerance: Optional[float] = 0.25, max_split: int = 64, split=None) -> Absorbers:
+def absorbers_from_crossings(
+    cross,
+    points,
+    cells,
+    species: str,
+    mass_amu: float,
+    *,
+    a_data: float | None = None,
+    frame=None,
+    tolerance: float | None = 0.25,
+    max_split: int = 64,
+    split=None,
+) -> Absorbers:
     """Absorbers of the Voronoi-adapted segmentation: every cell crossing, split into equal sub-pieces.
 
     A crossing of length l holds one cell, so n, T and v_pec are constant on it; only a(s) and the Hubble
@@ -295,14 +333,19 @@ def absorbers_from_crossings(cross, points, cells, species: str, mass_amu: float
         s = lo[rep] + (j + 0.5) * l[rep] / q[rep]
         pt = np.clip(np.searchsorted(0.5 * (s_pt[k][1:] + s_pt[k][:-1]), s), 0, s_pt.shape[1] - 1)
         cc = c[rep]
-        rows.add(cc, s=s, n=n_cell[cc], length=l[rep] / q[rep], T=T_cell[cc], v_los=np.sum(vel[cc] * tan[k][pt], axis=-1), point=pt)
+        rows.add(
+            cc, s=s, n=n_cell[cc], length=l[rep] / q[rep], T=T_cell[cc], v_los=np.sum(vel[cc] * tan[k][pt], axis=-1), point=pt
+        )
     q_all = np.concatenate(q_list) if len(q_list) else np.zeros(0, np.int64)
-    meta = dict(kind="voronoi_crossings", max_split=int(q_all.max()) if q_all.size else 0,
-                mean_split=float(q_all.mean()) if q_all.size else 0.0)
+    meta = dict(
+        kind="voronoi_crossings",
+        max_split=int(q_all.max()) if q_all.size else 0,
+        mean_split=float(q_all.mean()) if q_all.size else 0.0,
+    )
     return rows.build(species, mass_amu, a_data, meta)
 
 
-def crossing_splits(cross, T_cell, mass_amu: float, frame=None, tolerance: Optional[float] = 0.25, max_split: int = 64) -> list:
+def crossing_splits(cross, T_cell, mass_amu: float, frame=None, tolerance: float | None = 0.25, max_split: int = 64) -> list:
     """Per skewer, the number of equal sub-pieces q of every cell crossing (``absorbers_from_crossings``)."""
     out = []
     for k in range(cross.cell.shape[0]):
@@ -320,8 +363,9 @@ def crossing_splits(cross, T_cell, mass_amu: float, frame=None, tolerance: Optio
 
 
 # --------------------------------------------------------------------------- sampling check
-def sampling_check(ab: Absorbers, frame, *, T_scale: float = 1.0, tolerance: float = 0.25,
-                   warn: bool = True, lorentz_hwhm_kms: float = 0.0) -> dict:
+def sampling_check(
+    ab: Absorbers, frame, *, T_scale: float = 1.0, tolerance: float = 0.25, warn: bool = True, lorentz_hwhm_kms: float = 0.0
+) -> dict:
     """Is every absorber short enough in velocity to be represented at its centroid?
 
     The quadrature puts the absorption of a piece of length l at its centroid, which replaces a
@@ -338,22 +382,38 @@ def sampling_check(ab: Absorbers, frame, *, T_scale: float = 1.0, tolerance: flo
     W = np.stack([frame.hubble_rate(k, ab.s[k]) for k in range(ab.n_skewers)]) * ab.length
     b_G = np.sqrt(2.0 * phys.kB * ab.T * T_scale / ab.mass_amu) / 1e3
     f_G, f_L = 2.0 * np.sqrt(np.log(2.0)) * b_G, 2.0 * lorentz_hwhm_kms
-    b = (0.5346 * f_L + np.sqrt(0.2166 * f_L ** 2 + f_G ** 2)) / (2.0 * np.sqrt(np.log(2.0)))
+    b = (0.5346 * f_L + np.sqrt(0.2166 * f_L**2 + f_G**2)) / (2.0 * np.sqrt(np.log(2.0)))
     ratio = W / np.maximum(b, 1e-30)
     col = ab.n * ab.length
     frac = float((col * (ratio > tolerance)).sum() / max(col.sum(), 1e-300))
-    rep = dict(max_ratio=float(ratio[col > 0].max()) if np.any(col > 0) else 0.0, column_fraction=frac,
-               b_min=float(b[col > 0].min()) if np.any(col > 0) else np.nan, ok=frac < 1e-3, tolerance=tolerance)
+    rep = dict(
+        max_ratio=float(ratio[col > 0].max()) if np.any(col > 0) else 0.0,
+        column_fraction=frac,
+        b_min=float(b[col > 0].min()) if np.any(col > 0) else np.nan,
+        ok=frac < 1e-3,
+        tolerance=tolerance,
+    )
     if warn and not rep["ok"]:
-        warnings.warn(f"{ab.species}: {frac:.2%} of the column sits in pieces wider than {tolerance} b in velocity "
-                      f"(max W/b = {rep['max_ratio']:.2f}, b_min = {rep['b_min']:.2f} km/s). Sample the skewer more "
-                      f"densely: spacing <= {tolerance} b_min / (dv/ds).", stacklevel=2)
+        warnings.warn(
+            f"{ab.species}: {frac:.2%} of the column sits in pieces wider than {tolerance} b in velocity "
+            f"(max W/b = {rep['max_ratio']:.2f}, b_min = {rep['b_min']:.2f} km/s). Sample the skewer more "
+            f"densely: spacing <= {tolerance} b_min / (dv/ds).",
+            stacklevel=2,
+        )
     return rep
 
 
 # --------------------------------------------------------------------------- optical depth
-def absorber_pieces(ab: Absorbers, frame, n_lines: int, *, skewers=None, density_scaling: str = "comoving", T_scale: float = 1.0,
-                    n_scale: float = 1.0) -> Pieces:
+def absorber_pieces(
+    ab: Absorbers,
+    frame,
+    n_lines: int,
+    *,
+    skewers=None,
+    density_scaling: str = "comoving",
+    T_scale: float = 1.0,
+    n_scale: float = 1.0,
+) -> Pieces:
     """The absorbers of ``skewers`` (default all) as ``core.Pieces`` (N_sk, M), padded with empty pieces.
 
     Every absorber is one piece: at its centroid s, with the frame's a(s), the velocity along the photon (the frame's
@@ -373,22 +433,51 @@ def absorber_pieces(ab: Absorbers, frame, n_lines: int, *, skewers=None, density
     else:
         if ab.a_data is None:
             raise ValueError("density_scaling='fixed_column' needs absorbers with a_data.")
-        n_com = n * n_scale * a ** 2 / ab.a_data ** 2
+        n_com = n * n_scale * a**2 / ab.a_data**2
     lines = lambda x: jnp.broadcast_to(jnp.asarray(x)[None], (n_lines,) + x.shape)
     opt = lambda x: np.zeros(T.shape) if x is None else np.asarray(x)[list(ks)]
     a_sk = getattr(frame, "a_dagger_per_skewer", None)
-    a_d = jnp.full(s.shape, frame.a_dagger) if a_sk is None else jnp.broadcast_to(jnp.asarray(np.asarray(a_sk)[list(ks)])[:, None], s.shape)
-    return Pieces(a_dagger=a_d, scale_factor=jnp.asarray(a), length_m=jnp.asarray(l) * phys.Mpc_to_m,
-                  temperature=lines(T * T_scale), turbulence=lines(opt(ab.turbulence)), collisional=lines(opt(ab.collisional)),
-                  los_velocity=lines(-u), number_density=lines(n_com), width_kms=lines(W),
-                  velocity_span_kms=jnp.asarray([frame.velocity_span(k) for k in ks]))
+    a_d = (
+        jnp.full(s.shape, frame.a_dagger)
+        if a_sk is None
+        else jnp.broadcast_to(jnp.asarray(np.asarray(a_sk)[list(ks)])[:, None], s.shape)
+    )
+    return Pieces(
+        a_dagger=a_d,
+        scale_factor=jnp.asarray(a),
+        length_m=jnp.asarray(l) * phys.Mpc_to_m,
+        temperature=lines(T * T_scale),
+        turbulence=lines(opt(ab.turbulence)),
+        collisional=lines(opt(ab.collisional)),
+        los_velocity=lines(-u),
+        number_density=lines(n_com),
+        width_kms=lines(W),
+        velocity_span_kms=jnp.asarray([frame.velocity_span(k) for k in ks]),
+    )
 
 
-def tau_absorbers(ab: Absorbers, line_bundle, velocities_kms, frame, *, velocity_period=False, density_scaling: str = "comoving",
-                  T_scale: float = 1.0, n_scale: float = 1.0, detuning: str = "exact",
-                  pixel_offsets=None, pixel_weights=None, chunk: int = 2048, v_chunk: Optional[int] = 4096,
-                  voigt: str = "ExoJAX", check: Optional[float] = 0.25, per_absorber: bool = False,
-                  dtype: Optional[str] = None, devices=None, skewers=None) -> np.ndarray:
+def tau_absorbers(
+    ab: Absorbers,
+    line_bundle,
+    velocities_kms,
+    frame,
+    *,
+    velocity_period=False,
+    density_scaling: str = "comoving",
+    T_scale: float = 1.0,
+    n_scale: float = 1.0,
+    detuning: str = "exact",
+    pixel_offsets=None,
+    pixel_weights=None,
+    chunk: int = 2048,
+    v_chunk: int | None = 4096,
+    voigt: str = "ExoJAX",
+    check: float | None = 0.25,
+    per_absorber: bool = False,
+    dtype: str | None = None,
+    devices=None,
+    skewers=None,
+) -> np.ndarray:
     """tau(v) of every skewer (or of the ``skewers`` given) from its absorbers, through ``core.compute_optical_depth``.
 
     Parameters
@@ -427,11 +516,21 @@ def tau_absorbers(ab: Absorbers, line_bundle, velocities_kms, frame, *, velocity
     n_lines, M, n_v = line_bundle.n_lines, ab.s.shape[1], v.shape[-1]
     ks = range(ab.n_skewers) if skewers is None else [int(k) for k in np.atleast_1d(skewers)]
     out = np.zeros((n_lines, len(ks), M if per_absorber else 1, n_v))
-    kw = dict(velocity_period=velocity_period, voigt=voigt, detuning=detuning, resolution_tolerance=None, v_chunk=v_chunk,
-              piece_chunk=chunk, per_piece=per_absorber, dtype=None if per_absorber else dtype, devices=devices)
+    kw = dict(
+        velocity_period=velocity_period,
+        voigt=voigt,
+        detuning=detuning,
+        resolution_tolerance=None,
+        v_chunk=v_chunk,
+        piece_chunk=chunk,
+        per_piece=per_absorber,
+        dtype=None if per_absorber else dtype,
+        devices=devices,
+    )
     for i, k in enumerate(ks):
-        pieces = absorber_pieces(ab, frame, n_lines, skewers=[k], density_scaling=density_scaling, T_scale=T_scale,
-                                 n_scale=n_scale)
+        pieces = absorber_pieces(
+            ab, frame, n_lines, skewers=[k], density_scaling=density_scaling, T_scale=T_scale, n_scale=n_scale
+        )
         t = np.asarray(compute_optical_depth(pieces, v_all if v.ndim == 1 else jnp.asarray(v_all), line_bundle, **kw))[:, 0]
         if per_absorber:
             out[:, i] = (t.reshape(n_lines, M, n_v, off.size) * wts).sum(-1)
@@ -449,8 +548,11 @@ def tau_by_path_bins(ab: Absorbers, line_bundle, velocities_kms, frame, s_edges,
     out = []
     for lo, hi in zip(e[:-1], e[1:]):
         inside = (ab.s >= lo) & (ab.s < hi)
-        out.append(tau_absorbers(ab.with_values(n=np.where(inside, ab.n, 0.0)), line_bundle, velocities_kms, frame,
-                                 skewers=[skewer], **kw)[:, 0])
+        out.append(
+            tau_absorbers(
+                ab.with_values(n=np.where(inside, ab.n, 0.0)), line_bundle, velocities_kms, frame, skewers=[skewer], **kw
+            )[:, 0]
+        )
     return np.stack(out)
 
 
@@ -465,7 +567,7 @@ def column_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarra
         live = ab.n[k] > 0
         lo = ab.s[k][live] - 0.5 * ab.length[k][live]
         hi = lo + ab.length[k][live]
-        dens = ab.n[k][live] * phys.Mpc_to_cm / ab.a_data ** 2
+        dens = ab.n[k][live] * phys.Mpc_to_cm / ab.a_data**2
         j0, j1 = np.floor(lo / dz).astype(np.int64), np.floor(hi / dz).astype(np.int64)
         n = j1 - j0 + 1
         cell = np.repeat(np.arange(lo.size), n)
@@ -480,8 +582,15 @@ def column_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarra
 DEPOSITIONS = ("voronoi", "tophat", "voronoi_crossings")
 
 
-def deposit(cells, points, *, deposition: str = "voronoi", selection_backend: str = "cpu", grid_fast_path: bool = True,
-            return_info: bool = False):
+def deposit(
+    cells,
+    points,
+    *,
+    deposition: str = "voronoi",
+    selection_backend: str = "cpu",
+    grid_fast_path: bool = True,
+    return_info: bool = False,
+):
     """Selection and deposition of ``cells`` along ``points`` (N_sk, N, 3) [cMpc]: (the cells the indices refer to,
     ``SegmentComponents``).
 
@@ -504,11 +613,20 @@ def deposit(cells, points, *, deposition: str = "voronoi", selection_backend: st
         mode = "tophat" if deposition == "tophat" else "voronoi"
         use, sel = select_cells(cells, pts, mode=mode, backend=selection_backend, return_info=True)
         t0 = time.perf_counter()
-        seg = (dep.tophat_segments(pts, use.positions, use.size_cMpc, use.box) if deposition == "tophat"
-               else dep.voronoi_segments(pts, use.positions, use.box, gas_size=use.size_cMpc))
+        seg = (
+            dep.tophat_segments(pts, use.positions, use.size_cMpc, use.box)
+            if deposition == "tophat"
+            else dep.voronoi_segments(pts, use.positions, use.box, gas_size=use.size_cMpc)
+        )
     info = dict(selection=sel, deposition=dict(kind=seg.kind, **seg.diagnostics, time_s=time.perf_counter() - t0))
-    logger.debug("deposit: %s pieces of %d dual segments from %d cells (%s), %.3f s", seg.kind, int(np.prod(pts.shape[:2])),
-                 len(use), ", ".join(f"{k}={v}" for k, v in seg.diagnostics.items()), info["deposition"]["time_s"])
+    logger.debug(
+        "deposit: %s pieces of %d dual segments from %d cells (%s), %.3f s",
+        seg.kind,
+        int(np.prod(pts.shape[:2])),
+        len(use),
+        ", ".join(f"{k}={v}" for k, v in seg.diagnostics.items()),
+        info["deposition"]["time_s"],
+    )
     return (use, seg, info) if return_info else (use, seg)
 
 
@@ -522,15 +640,37 @@ def bundle_frame(skewer_bundle, *, a_dagger=None, ii_cosmology: int = 0) -> Exac
     if a_d.ndim > 1 or (a_d.ndim == 1 and a_d.size not in (1, pts.shape[0])):
         raise ValueError(f"a_dagger must be a scalar or one value per skewer ({pts.shape[0]},), got shape {a_d.shape}.")
     per = None if a_d.size <= 1 or np.all(a_d == a_d.ravel()[0]) else np.broadcast_to(a_d, (pts.shape[0],)).copy()
-    return ExactFrame(s, a, a_dagger_value=float(np.ravel(a_d)[0]), photon_sign=np.asarray(skewer_bundle.array_direction),
-                      a_dagger_per_skewer=per)
+    return ExactFrame(
+        s,
+        a,
+        a_dagger_value=float(np.ravel(a_d)[0]),
+        photon_sign=np.asarray(skewer_bundle.array_direction),
+        a_dagger_per_skewer=per,
+    )
 
 
-def cell_pieces(cells, line_bundle, *, skewer_bundle=None, points=None, frame=None, a_dagger=None, ii_cosmology: int = 0,
-                deposition: str = "voronoi", segments=None, selection_backend: str = "cpu",
-                grid_fast_path: bool = True, crossing_tolerance: Optional[float] = 0.25, T_scale: float = 1.0,
-                n_scale: float = 1.0, density_scaling: str = "comoving", a_data: Optional[float] = None, skewers=None,
-                return_parts: bool = False, return_info: bool = False):
+def cell_pieces(
+    cells,
+    line_bundle,
+    *,
+    skewer_bundle=None,
+    points=None,
+    frame=None,
+    a_dagger=None,
+    ii_cosmology: int = 0,
+    deposition: str = "voronoi",
+    segments=None,
+    selection_backend: str = "cpu",
+    grid_fast_path: bool = True,
+    crossing_tolerance: float | None = 0.25,
+    T_scale: float = 1.0,
+    n_scale: float = 1.0,
+    density_scaling: str = "comoving",
+    a_data: float | None = None,
+    skewers=None,
+    return_parts: bool = False,
+    return_info: bool = False,
+):
     """The pieces of the optical-depth sum for every line of ``line_bundle``, from ``cells`` along a set of paths.
 
     The one route from the gas to tau, for every source of cells (toy models, simulations):
@@ -565,6 +705,7 @@ def cell_pieces(cells, line_bundle, *, skewer_bundle=None, points=None, frame=No
     """
     t0 = time.perf_counter()
     from dataclasses import replace
+
     if skewer_bundle is not None:
         points = np.asarray(skewer_bundle.spatial_points, dtype=np.float64)
         frame = bundle_frame(skewer_bundle, a_dagger=a_dagger, ii_cosmology=ii_cosmology) if frame is None else frame
@@ -582,8 +723,14 @@ def cell_pieces(cells, line_bundle, *, skewer_bundle=None, points=None, frame=No
     if segments is not None and segments.cell.shape[:2] != pts.shape[:2]:
         raise ValueError(f"segments were deposited for {segments.cell.shape[:2]} points, the paths have {pts.shape[:2]}.")
     if segments is None:
-        use, seg, dinfo = deposit(cells, pts, deposition="voronoi" if deposition == "voronoi_crossings" else deposition,
-                                  selection_backend=selection_backend, grid_fast_path=grid_fast_path, return_info=True)
+        use, seg, dinfo = deposit(
+            cells,
+            pts,
+            deposition="voronoi" if deposition == "voronoi_crossings" else deposition,
+            selection_backend=selection_backend,
+            grid_fast_path=grid_fast_path,
+            return_info=True,
+        )
     else:
         use, seg, dinfo = cells, segments, dict(selection=None, deposition=dict(kind=segments.kind, **segments.diagnostics))
     t1 = time.perf_counter()
@@ -591,8 +738,10 @@ def cell_pieces(cells, line_bundle, *, skewer_bundle=None, points=None, frame=No
     cross = None
     if deposition == "voronoi_crossings":
         cross = dep.cell_crossings(seg, pts)
-        per_sp = [crossing_splits(cross, np.asarray(use.species[sp]["temperature"]), mass[sp], frame, crossing_tolerance)
-                  for sp in species]
+        per_sp = [
+            crossing_splits(cross, np.asarray(use.species[sp]["temperature"]), mass[sp], frame, crossing_tolerance)
+            for sp in species
+        ]
         split = [np.max(np.stack([q[k] for q in per_sp]), axis=0) for k in range(len(per_sp[0]))]
         abs_ = {sp: absorbers_from_crossings(cross, pts, use, sp, mass[sp], a_data=a_data, split=split) for sp in species}
     else:
@@ -615,13 +764,24 @@ def cell_pieces(cells, line_bundle, *, skewer_bundle=None, points=None, frame=No
         t3 = time.perf_counter()
         ks = list(range(pts.shape[0])) if skewers is None else [int(k) for k in np.atleast_1d(skewers)]
         A0 = abs_[species[0]]
-        info = dict(**dinfo, n_pieces=(A0.cell[ks] >= 0).sum(-1), path_length_cMpc=np.linalg.norm(np.diff(pts[ks], axis=1), axis=-1).sum(-1),
-                    piece_length_cMpc=A0.length[ks].sum(-1),
-                    column_cm2={sp: (abs_[sp].n[ks] * abs_[sp].length[ks]).sum(-1) * phys.Mpc_to_cm for sp in species},
-                    resolution=resolution_report(pieces, line_bundle), timings=dict(deposit=t1 - t0, absorbers=t2 - t1, pieces=t3 - t2),
-                    time_s=t3 - t0)
-        logger.debug("cell_pieces: %s, %d skewers, %s pieces, %.3f s (deposit %.3f, absorbers %.3f, pieces %.3f)", deposition, len(ks),
-                     pieces.shape[-1], info["time_s"], *info["timings"].values())
+        info = dict(
+            **dinfo,
+            n_pieces=(A0.cell[ks] >= 0).sum(-1),
+            path_length_cMpc=np.linalg.norm(np.diff(pts[ks], axis=1), axis=-1).sum(-1),
+            piece_length_cMpc=A0.length[ks].sum(-1),
+            column_cm2={sp: (abs_[sp].n[ks] * abs_[sp].length[ks]).sum(-1) * phys.Mpc_to_cm for sp in species},
+            resolution=resolution_report(pieces, line_bundle),
+            timings=dict(deposit=t1 - t0, absorbers=t2 - t1, pieces=t3 - t2),
+            time_s=t3 - t0,
+        )
+        logger.debug(
+            "cell_pieces: %s, %d skewers, %s pieces, %.3f s (deposit %.3f, absorbers %.3f, pieces %.3f)",
+            deposition,
+            len(ks),
+            pieces.shape[-1],
+            info["time_s"],
+            *info["timings"].values(),
+        )
         if return_info:
             out.append(info)
     return out[0] if len(out) == 1 else tuple(out)

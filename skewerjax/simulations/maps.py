@@ -1,4 +1,5 @@
 """Projected maps of the gas in a slab of a snapshot, streamed in blocks (for figures of the gas around skewers). NumPy."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -6,8 +7,16 @@ import numpy as np
 from skewerjax.simulations import gas_physics as gp
 
 
-def slab_projection(reader, normal_axis: int, centre_cMpc: float, thickness_cMpc: float, n_pix: int = 512, *,
-                    temperature: bool = True, max_rows: int = 4_000_000) -> dict:
+def slab_projection(
+    reader,
+    normal_axis: int,
+    centre_cMpc: float,
+    thickness_cMpc: float,
+    n_pix: int = 512,
+    *,
+    temperature: bool = True,
+    max_rows: int = 4_000_000,
+) -> dict:
     """Gas surface density and mass-weighted temperature of the slab |x_normal - centre| < thickness / 2 (periodic).
 
     Cells are binned at their centres (no spreading over their volume): a display map, adequate when the pixel is not
@@ -38,12 +47,16 @@ def slab_projection(reader, normal_axis: int, centre_cMpc: float, thickness_cMpc
         if not np.any(sel):
             continue
         n_cells += int(sel.sum())
-        m = np.asarray(raw["Masses"], dtype=np.float64)[sel] * 1e10 / H.h                  # [Msun]
+        m = np.asarray(raw["Masses"], dtype=np.float64)[sel] * 1e10 / H.h  # [Msun]
         h2, _, _ = np.histogram2d(x[sel, ax_a], x[sel, ax_b], bins=(edges, edges), weights=m)
         m_sum += h2
         if temperature:
-            T = np.asarray(gp.temperature(np.asarray(raw["InternalEnergy"], dtype=np.float64)[sel] * H.unit_velocity_cms ** 2,
-                                          np.asarray(raw["ElectronAbundance"], dtype=np.float64)[sel]))
+            T = np.asarray(
+                gp.temperature(
+                    np.asarray(raw["InternalEnergy"], dtype=np.float64)[sel] * H.unit_velocity_cms**2,
+                    np.asarray(raw["ElectronAbundance"], dtype=np.float64)[sel],
+                )
+            )
             h2, _, _ = np.histogram2d(x[sel, ax_a], x[sel, ax_b], bins=(edges, edges), weights=m * T)
             mT_sum += h2
     pix_ckpc2 = (box / n_pix * 1e3) ** 2

@@ -21,6 +21,7 @@ any absorbers grouped by cell (also those of an exact deposition, to isolate eac
 Each piece can be switched off (``MatchedIntegration``), which is how the effect chain (``comparison.effects``)
 isolates them; ``matched_tau`` evaluates any combination on a ``SimulationSkewers``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -35,9 +36,24 @@ TOPHAT_NORM = 3.0 / (4.0 * np.pi)
 FAKE_TAUTAIL = 1e-7
 
 
-def fake_chord_absorbers(origin, direction, path_length: float, gas_positions, gas_size, n_cell, T_cell,
-                         velocity_cell, box: float, a_data: float, species: str, mass_amu: float, *,
-                         n_grid: int = 8, interior_only: bool = True, cells=None) -> Absorbers:
+def fake_chord_absorbers(
+    origin,
+    direction,
+    path_length: float,
+    gas_positions,
+    gas_size,
+    n_cell,
+    T_cell,
+    velocity_cell,
+    box: float,
+    a_data: float,
+    species: str,
+    mass_amu: float,
+    *,
+    n_grid: int = 8,
+    interior_only: bool = True,
+    cells=None,
+) -> Absorbers:
     """fake_spectra's chord sampling of the top-hat spheres touching one straight periodic skewer.
 
     Parameters
@@ -64,24 +80,35 @@ def fake_chord_absorbers(origin, direction, path_length: float, gas_positions, g
     s_c = np.mod(d @ e, path_length)
     dr2 = np.sum(d * d, axis=1) - (d @ e) ** 2
     h = np.asarray(gas_size, float)[idx]
-    touch = h * h - dr2 > 0                      # absorption.cpp L235
+    touch = h * h - dr2 > 0  # absorption.cpp L235
     idx, s_c, zr = idx[touch], s_c[touch], np.sqrt(h[touch] ** 2 - dr2[touch])
     if interior_only:
         k = np.arange(1, n_grid)
         wk = np.full(k.size, 1.0 / n_grid)
     else:
         k = np.arange(0, n_grid + 1)
-        wk = np.full(k.size, 1.0 / n_grid); wk[[0, -1]] *= 0.5
+        wk = np.full(k.size, 1.0 / n_grid)
+        wk[[0, -1]] *= 0.5
     pos = s_c[:, None] + zr[:, None] * (2.0 * k[None, :] / n_grid - 1.0)
     ln = 2.0 * zr[:, None] * wk[None, :]
-    n = TOPHAT_NORM * np.asarray(n_cell, float)[idx] * float(a_data) ** 3          # comoving (Absorbers.n)
+    n = TOPHAT_NORM * np.asarray(n_cell, float)[idx] * float(a_data) ** 3  # comoving (Absorbers.n)
     vl = np.asarray(velocity_cell, float)[idx] @ e
     rep = lambda x: np.repeat(x, k.size)
-    ab = Absorbers(s=pos.ravel()[None], n=rep(n)[None], length=ln.ravel()[None], T=rep(np.asarray(T_cell, float)[idx])[None],
-                   v_los=rep(vl)[None], cell=rep(idx)[None], point=-np.ones((1, pos.size), int), a_data=float(a_data),
-                   species=species, mass_amu=float(mass_amu),
-                   meta=dict(kind="fake_chord", zmax_s=s_c, cells=idx, v_los_cell=vl, T_cell=np.asarray(T_cell, float)[idx],
-                             n_per_cell=k.size))
+    ab = Absorbers(
+        s=pos.ravel()[None],
+        n=rep(n)[None],
+        length=ln.ravel()[None],
+        T=rep(np.asarray(T_cell, float)[idx])[None],
+        v_los=rep(vl)[None],
+        cell=rep(idx)[None],
+        point=-np.ones((1, pos.size), int),
+        a_data=float(a_data),
+        species=species,
+        mass_amu=float(mass_amu),
+        meta=dict(
+            kind="fake_chord", zmax_s=s_c, cells=idx, v_los_cell=vl, T_cell=np.asarray(T_cell, float)[idx], n_per_cell=k.size
+        ),
+    )
     return ab
 
 
@@ -91,7 +118,8 @@ def fake_pixel_points(b_kms, dv: float):
         return np.zeros(1), np.ones(1)
     npts = int(2 * np.ceil(dv / b_kms) + 1)
     off = (np.linspace(0.0, 1.0, npts) - 0.5) * dv
-    w = np.ones(npts); w[[0, -1]] = 0.5
+    w = np.ones(npts)
+    w[[0, -1]] = 0.5
     return off, w / w.sum()
 
 
@@ -116,9 +144,24 @@ def apply_tautail(tau_cells, centre_pixel, tautail: float = FAKE_TAUTAIL) -> np.
     return out
 
 
-def fake_emulated_tau(ab: Absorbers, line_bundle, frame, nbins: int, dv: float, *, T_scale: float,
-                      cell_centre_s, cell_v_los, cell_T, pixel_average: bool = True, tautail: bool = True,
-                      detuning: str = "linear", n_scale: float = 1.0, group: int = 100, **kw) -> np.ndarray:
+def fake_emulated_tau(
+    ab: Absorbers,
+    line_bundle,
+    frame,
+    nbins: int,
+    dv: float,
+    *,
+    T_scale: float,
+    cell_centre_s,
+    cell_v_los,
+    cell_T,
+    pixel_average: bool = True,
+    tautail: bool = True,
+    detuning: str = "linear",
+    n_scale: float = 1.0,
+    group: int = 100,
+    **kw,
+) -> np.ndarray:
     """tau (N_lines, nbins) of one skewer (``ab.n_skewers == 1``) with fake_spectra's per-cell pixel
     average, detuning and early stop, each optional.
 
@@ -140,7 +183,7 @@ def fake_emulated_tau(ab: Absorbers, line_bundle, frame, nbins: int, dv: float, 
     live = (ab.n[0] > 0) & (ab.cell[0] >= 0)
     cells = np.unique(ab.cell[0][live])
     T_c = np.asarray(cell_T, float)[cells]
-    b = np.sqrt(2.0 * 8314.46262102654 * T_c * T_scale / ab.mass_amu) / 1e3      # phys.kB, as gas_physics.doppler_b_kms
+    b = np.sqrt(2.0 * 8314.46262102654 * T_c * T_scale / ab.mass_amu) / 1e3  # phys.kB, as gas_physics.doppler_b_kms
     rules = [fake_pixel_points(bb, dv) if pixel_average else (np.zeros(1), np.ones(1)) for bb in b]
     key = np.array([len(r[0]) for r in rules])
     u_c = frame.velfac * np.asarray(cell_centre_s, float)[cells] + np.asarray(cell_v_los, float)[cells]
@@ -152,13 +195,26 @@ def fake_emulated_tau(ab: Absorbers, line_bundle, frame, nbins: int, dv: float, 
         sel = np.nonzero(key == npts)[0]
         off, wts = rules[sel[0]]
         for g0 in range(0, sel.size, group):
-            cs = sel[g0:g0 + group]
+            cs = sel[g0 : g0 + group]
             lo, hi = np.searchsorted(sorted_cells, cells[cs], "left"), np.searchsorted(sorted_cells, cells[cs], "right")
             pick = np.concatenate([order[a:b_] for a, b_ in zip(lo, hi)])
             owner = np.repeat(np.arange(cs.size), hi - lo)
             sub = ab.with_values(**{k: getattr(ab, k)[:, pick] for k in ("s", "n", "length", "T", "v_los", "cell", "point")})
-            t = tau_absorbers(sub, line_bundle, v, frame, velocity_period=nbins * dv, T_scale=T_scale, n_scale=n_scale, detuning=detuning,
-                              pixel_offsets=off, pixel_weights=wts, per_absorber=True, check=None, **kw)[:, 0, :pick.size]
+            t = tau_absorbers(
+                sub,
+                line_bundle,
+                v,
+                frame,
+                velocity_period=nbins * dv,
+                T_scale=T_scale,
+                n_scale=n_scale,
+                detuning=detuning,
+                pixel_offsets=off,
+                pixel_weights=wts,
+                per_absorber=True,
+                check=None,
+                **kw,
+            )[:, 0, : pick.size]
             for li in range(line_bundle.n_lines):
                 per_cell = np.zeros((cs.size, nbins))
                 np.add.at(per_cell, owner, t[li])
@@ -179,6 +235,7 @@ class MatchedIntegration(IntegrationOptions):
     The per-cell options need the snapshot frame and fake_spectra's periodic pixel grid (``spectral_grid()``); they
     are periodic over that grid whatever ``velocity_period`` says.
     """
+
     chord: str = "segments"
     tautail: bool = False
     pixel_average: bool = False
@@ -189,16 +246,34 @@ class MatchedIntegration(IntegrationOptions):
         return self.chord == "fake_7pt" or self.tautail or self.pixel_average
 
 
-def matched_tau(sk, ion, line_bundle, velocities_kms, ext, integ: IntegrationOptions, override: Optional[dict] = None,
-                override_key: str = "", check: Optional[float] = 0.25) -> np.ndarray:
+def matched_tau(
+    sk,
+    ion,
+    line_bundle,
+    velocities_kms,
+    ext,
+    integ: IntegrationOptions,
+    override: Optional[dict] = None,
+    override_key: str = "",
+    check: Optional[float] = 0.25,
+) -> np.ndarray:
     """(N_sk, N_v) tau of ``SimulationSkewers`` ``sk`` for any extraction and (matched) integration options.
 
     Without per-cell options this is ``sk.tau``; with them, fake_spectra's per-cell scheme on straight skewers
     (cached in ``sk.cache`` under the same key format).
     """
     if not getattr(integ, "per_cell", False):
-        return sk.tau(ion, line_bundle, velocities_kms, ext, integ, override=override, override_key=override_key, check=check,
-                      velocity_period=getattr(integ, "velocity_period", False))
+        return sk.tau(
+            ion,
+            line_bundle,
+            velocities_kms,
+            ext,
+            integ,
+            override=override,
+            override_key=override_key,
+            check=check,
+            velocity_period=getattr(integ, "velocity_period", False),
+        )
     if override is not None and not override_key:
         override_key = "override"
     v = np.asarray(velocities_kms, dtype=np.float64)
@@ -208,6 +283,7 @@ def matched_tau(sk, ion, line_bundle, velocities_kms, ext, integ: IntegrationOpt
 
 def _per_cell_tau(sk, ion, line_bundle, v, ext, integ: MatchedIntegration, override):
     from skewerjax.simulations import gas_physics as gp
+
     if integ.frame != "snapshot":
         raise ValueError("fake_spectra's per-cell scheme (fake_7pt / tautail / pixel_average) is defined in its snapshot frame.")
     if integ.chord == "fake_7pt" and ext.deposition != "tophat":
@@ -224,13 +300,39 @@ def _per_cell_tau(sk, ion, line_bundle, v, ext, integ: MatchedIntegration, overr
         e = sk.points[k, -1] - sk.points[k, 0]
         e = e / np.linalg.norm(e)
         if integ.chord == "fake_7pt":
-            Ak = fake_chord_absorbers(sk.points[k, 0], e, sk.box, ci["pos"], ci["size"], ci["n"], ci["T"], ci["vel"],
-                                      sk.box, sk.header.a, ci["species"], ci["mass"])
+            Ak = fake_chord_absorbers(
+                sk.points[k, 0],
+                e,
+                sk.box,
+                ci["pos"],
+                ci["size"],
+                ci["n"],
+                ci["T"],
+                ci["vel"],
+                sk.box,
+                sk.header.a,
+                ci["species"],
+                ci["mass"],
+            )
         else:
-            Ak = A.with_values(**{f: getattr(A, f)[k:k + 1] for f in ("s", "n", "length", "T", "v_los", "cell", "point")})
+            Ak = A.with_values(**{f: getattr(A, f)[k : k + 1] for f in ("s", "n", "length", "T", "v_los", "cell", "point")})
         d = ci["pos"] - sk.points[k, 0]
         d -= sk.box * np.round(d / sk.box)
-        out.append(fake_emulated_tau(Ak, line_bundle, fr, nbins, dv, T_scale=T_scale, cell_centre_s=np.mod(d @ e, sk.box),
-                                     cell_v_los=ci["vel"] @ e, cell_T=ci["T"], pixel_average=integ.pixel_average,
-                                     tautail=integ.tautail, detuning=integ.detuning, n_scale=integ.normalisation)[0])
+        out.append(
+            fake_emulated_tau(
+                Ak,
+                line_bundle,
+                fr,
+                nbins,
+                dv,
+                T_scale=T_scale,
+                cell_centre_s=np.mod(d @ e, sk.box),
+                cell_v_los=ci["vel"] @ e,
+                cell_T=ci["T"],
+                pixel_average=integ.pixel_average,
+                tautail=integ.tautail,
+                detuning=integ.detuning,
+                n_scale=integ.normalisation,
+            )[0]
+        )
     return np.stack(out)

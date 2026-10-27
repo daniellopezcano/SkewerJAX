@@ -1,0 +1,29 @@
+# Lint and the fast test suite on the CPU, on every push and pull request. The tests that need the TNG50-4 snapshots,
+# a GPU or fake_spectra, and the slow ones, are skipped or deselected (tests/README.md).
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      JAX_PLATFORMS: cpu
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive       # the CLOUDY ion tables (skewerjax/simulations/cloudy_tables)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"      # requires-python = ">=3.11" (pyproject.toml)
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,simulations]"
+      - name: Lint
+        run: ruff check .
+      - name: Fast tests (CPU)
+        run: pytest -m "not slow and not tng and not gpu and not fake_spectra"

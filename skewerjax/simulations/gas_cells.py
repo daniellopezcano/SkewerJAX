@@ -14,9 +14,8 @@ it can be passed through ``jit``, ``vmap`` and ``tree_map``; it is format indepe
 (or ``snapshot_cells``) turns it into ``core.Cells``, the container of the gas shared with the toy models (per ion: comoving density,
 temperature, peculiar velocity), which the deposition and the optical depth take.
 """
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 import numpy as np
 from jax import tree_util
@@ -36,7 +35,7 @@ class GasCells:
     ids : optional (N,) identifiers (e.g. file/row or ParticleIDs).
     """
 
-    def __init__(self, positions, volumes, fields: dict, box: Optional[float], a: float, ids=None):
+    def __init__(self, positions, volumes, fields: dict, box: float | None, a: float, ids=None):
         self.positions = positions
         self.volumes = volumes
         self.fields = dict(fields)
@@ -76,15 +75,20 @@ class GasCells:
         (``abstractsnapshot.get_smooth_length`` L256-L284)."""
         return np.cbrt(np.asarray(self.volumes))
 
-    def take(self, idx) -> "GasCells":
+    def take(self, idx) -> GasCells:
         """Subset (numpy fancy index)."""
         idx = np.asarray(idx)
-        return GasCells(np.asarray(self.positions)[idx], np.asarray(self.volumes)[idx],
-                        {k: np.asarray(v)[idx] for k, v in self.fields.items()}, self.box, self.a,
-                        None if self.ids is None else np.asarray(self.ids)[idx])
+        return GasCells(
+            np.asarray(self.positions)[idx],
+            np.asarray(self.volumes)[idx],
+            {k: np.asarray(v)[idx] for k, v in self.fields.items()},
+            self.box,
+            self.a,
+            None if self.ids is None else np.asarray(self.ids)[idx],
+        )
 
     @staticmethod
-    def concatenate(parts) -> "GasCells":
+    def concatenate(parts) -> GasCells:
         """Concatenate containers with the same fields, box and epoch."""
         parts = [p for p in parts if len(p)]
         if not parts:
@@ -93,7 +97,11 @@ class GasCells:
         if any(set(p.fields) != keys or p.box != parts[0].box or p.a != parts[0].a for p in parts):
             raise ValueError("parts differ in fields, box or epoch.")
         ids = None if any(p.ids is None for p in parts) else np.concatenate([np.asarray(p.ids) for p in parts])
-        return GasCells(np.concatenate([np.asarray(p.positions) for p in parts]),
-                        np.concatenate([np.asarray(p.volumes) for p in parts]),
-                        {k: np.concatenate([np.asarray(p.fields[k]) for p in parts]) for k in keys},
-                        parts[0].box, parts[0].a, ids)
+        return GasCells(
+            np.concatenate([np.asarray(p.positions) for p in parts]),
+            np.concatenate([np.asarray(p.volumes) for p in parts]),
+            {k: np.concatenate([np.asarray(p.fields[k]) for p in parts]) for k in keys},
+            parts[0].box,
+            parts[0].a,
+            ids,
+        )

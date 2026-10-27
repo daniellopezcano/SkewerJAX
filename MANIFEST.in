@@ -1,4 +1,9 @@
-include LICENSE
-include README.md
-recursive-include configs *.yaml
-prune notebooks/.ipynb_checkpoints
+# The source distribution: the package (with its data: the line table and the CLOUDY tables), the licence and the docs.
+include LICENSE README.md CHANGELOG.md
+recursive-include skewerjax *.dat
+graft skewerjax/simulations/cloudy_tables
+recursive-include docs *.md
+global-exclude __pycache__ *.py[cod] .ipynb_checkpoints
+prune .project_material
+prune claude_agents
+prune benchmarks/raw

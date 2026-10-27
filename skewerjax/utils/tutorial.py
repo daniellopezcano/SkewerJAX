@@ -5,9 +5,8 @@
   ``cell_window``, or linear interpolation, ``linear_interp_window``).
 * ``binned_input_power``: the input power of a GRF averaged in |k| bins.
 """
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 import numpy as np
 
@@ -33,7 +32,7 @@ def fold(k, dx):
     return np.mod(np.asarray(k, dtype=float) + kn, 2 * kn) - kn
 
 
-def p1d_expected(grf, k_par, axis: int = 1, window: Optional[str] = None, return_sigma: bool = False, step: int = 1):
+def p1d_expected(grf, k_par, axis: int = 1, window: str | None = None, return_sigma: bool = False, step: int = 1):
     """Expected P1D of a 3D ``PowerLawGRF`` delta along grid lines parallel to ``axis`` [length], averaged over the lines
     at every ``step``-th grid column (``step=1``: all of them).
 
@@ -51,17 +50,17 @@ def p1d_expected(grf, k_par, axis: int = 1, window: Optional[str] = None, return
     k = np.asarray(k_par, dtype=float)
     kp = np.abs(fold(k, dx))
     comps = {axis: kp[:, None, None], tr[0]: ka[None, :, None], tr[1]: kb[None, None, :]}
-    P = np.asarray(grf.power_at(*(comps[i] for i in range(3))))                  # P(k, mu): mu along grf.los_axis
+    P = np.asarray(grf.power_at(*(comps[i] for i in range(3))))  # P(k, mu): mu along grf.los_axis
     area = grf.L[tr[0]] * grf.L[tr[1]]
     mean = P.sum((1, 2)) / area
     Nc = [n // step for n in N]
     Pc = P.reshape(-1, step, Nc[0], N[1]).sum(1).reshape(-1, Nc[0], step, Nc[1]).sum(2)
-    sig = np.sqrt((Pc ** 2).sum((1, 2))) / area
+    sig = np.sqrt((Pc**2).sum((1, 2))) / area
     W = 1.0 if WINDOWS[window] is None else WINDOWS[window](k, dx)
     return (mean * W, sig * W) if return_sigma else mean * W
 
 
-def p3d_expected_on_skewer_grid(grf, step: int, k_par, axis: int = 1, window: Optional[str] = "cells"):
+def p3d_expected_on_skewer_grid(grf, step: int, k_par, axis: int = 1, window: str | None = "cells"):
     """Expected P3D (Nx, Ny, N_kpar) of delta on skewers along ``axis`` placed at every ``step``-th grid column, in the
     layout of ``OverfluxStatistics3D`` (transverse fftfreq of the coarse grid, k_par >= 0 [1/length]).
 
@@ -76,7 +75,7 @@ def p3d_expected_on_skewer_grid(grf, step: int, k_par, axis: int = 1, window: Op
     comps = {tr[0]: ka[:, None, None], tr[1]: kb[None, :, None], axis: kp[None, None, :]}
     P = np.asarray(grf.power_at(*(comps[i] for i in range(3))))
     Nc = [n // step for n in N]
-    Pc = P.reshape(step, Nc[0], N[1], -1).sum(0)                       # fold axis a: fine index i = j + m Nc (fftfreq order)
+    Pc = P.reshape(step, Nc[0], N[1], -1).sum(0)  # fold axis a: fine index i = j + m Nc (fftfreq order)
     Pc = Pc.reshape(Nc[0], step, Nc[1], -1).sum(1)
     if WINDOWS[window] is not None:
         Pc = Pc * WINDOWS[window](np.asarray(k_par, dtype=float), dpar)[None, None, :]

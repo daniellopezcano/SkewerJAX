@@ -1,4 +1,5 @@
 """Background cosmology: the scale factor along a photon path, a(x) (review notes)."""
+
 from __future__ import annotations
 
 import diffrax
@@ -45,8 +46,9 @@ class Cosmology:
         try:
             jnp.broadcast_shapes(*(v.shape for v in p))
         except ValueError as e:
-            raise ValueError("Incompatible shapes for cosmological parameters: "
-                             + ", ".join(f"{n}: {v.shape}" for n, v in zip(self._names, p))) from e
+            raise ValueError(
+                "Incompatible shapes for cosmological parameters: " + ", ".join(f"{n}: {v.shape}" for n, v in zip(self._names, p))
+            ) from e
         self.H0, self.Omega_r_0, self.Omega_m_0, self.Omega_k_0, self.Omega_lambda_0 = p
         if not any(isinstance(v, jax.core.Tracer) for v in p):
             for n, v in zip(self._names, p):
@@ -76,8 +78,15 @@ class Cosmology:
         """(N_cosmologies, 5) stacked (H0, Om_r, Om_m, Om_k, Om_L)."""
         return jnp.stack([self.H0, self.Omega_r_0, self.Omega_m_0, self.Omega_k_0, self.Omega_lambda_0], axis=-1)
 
-    def solve_a_of_x(self, ICs: ArrayLike, x_eval_Mpc: ArrayLike, solver: diffrax.AbstractSolver = diffrax.Tsit5(),
-                     rtol: float = 1e-4, atol: float = 1e-4, max_steps: int = 1000) -> jnp.ndarray:
+    def solve_a_of_x(
+        self,
+        ICs: ArrayLike,
+        x_eval_Mpc: ArrayLike,
+        solver: diffrax.AbstractSolver = diffrax.Tsit5(),
+        rtol: float = 1e-4,
+        atol: float = 1e-4,
+        max_steps: int = 1000,
+    ) -> jnp.ndarray:
         """Scale factor a(x) by integrating Eq. dadx_general with ``diffrax`` (one solve per cosmology, vmapped).
 
         Parameters
@@ -90,18 +99,26 @@ class Cosmology:
         -------
         (N_cosmologies, N_eval) scale factors.
         """
+
         def solve_one(H0, Omega_r_0, Omega_m_0, Omega_k_0, Omega_lambda_0, a0, x_eval_Gpc):
             sol = diffrax.diffeqsolve(
-                diffrax.ODETerm(da_dx), solver=solver, t0=x_eval_Gpc[0], t1=x_eval_Gpc[-1], dt0=None, y0=a0,
+                diffrax.ODETerm(da_dx),
+                solver=solver,
+                t0=x_eval_Gpc[0],
+                t1=x_eval_Gpc[-1],
+                dt0=None,
+                y0=a0,
                 args=jnp.array([H0, Omega_r_0, Omega_m_0, Omega_k_0, Omega_lambda_0]),
-                saveat=diffrax.SaveAt(ts=x_eval_Gpc), stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),
-                max_steps=max_steps)
+                saveat=diffrax.SaveAt(ts=x_eval_Gpc),
+                stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),
+                max_steps=max_steps,
+            )
             return sol.ys
 
         ICs = jnp.atleast_1d(ICs)
         if ICs.shape[0] != self.N_cosmologies:
             raise ValueError(f"ICs shape {ICs.shape} incompatible with number of cosmologies {self.N_cosmologies}.")
         ys = jax.vmap(solve_one, in_axes=(0, 0, 0, 0, 0, 0, None))(
-            self.H0, self.Omega_r_0, self.Omega_m_0, self.Omega_k_0, self.Omega_lambda_0, ICs[:, None],
-            x_eval_Mpc * 1e-3)                                                       # Mpc -> Gpc
+            self.H0, self.Omega_r_0, self.Omega_m_0, self.Omega_k_0, self.Omega_lambda_0, ICs[:, None], x_eval_Mpc * 1e-3
+        )  # Mpc -> Gpc
         return ys[..., 0]

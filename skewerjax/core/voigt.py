@@ -1,7 +1,8 @@
 """The Voigt function V(x; sigma, gamma) = (G * L)(x) (review notes, Eq. line_profile), four implementations."""
+
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import jax
 import jax.numpy as jnp
@@ -46,8 +47,9 @@ def _next_pow2(n: int) -> int:
     return 1 << (int(n) - 1).bit_length()
 
 
-def voigt_convolution(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray, *, oversample: int = 1,
-                      work_dtype=jnp.float64) -> jnp.ndarray:
+def voigt_convolution(
+    x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray, *, oversample: int = 1, work_dtype=jnp.float64
+) -> jnp.ndarray:
     """G * L by a zero-padded FFT convolution on a uniform grid x (N,), refined ``oversample`` times.
 
     The kernels are evaluated in ``work_dtype`` (float64 needs ``jax_enable_x64``), convolved, scaled by the fine
@@ -64,8 +66,8 @@ def voigt_convolution(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray, *,
     n_full = 2 * n_hi - 1
     n_fft = _next_pow2(n_full)
     full = jnp.fft.irfft(jnp.fft.rfft(g_hi, n_fft) * jnp.fft.rfft(l_hi, n_fft), n_fft)[:n_full]
-    start = (n_hi - 1) // 2                                        # the 'same' part of the linear convolution
-    conv_hi = full[start:start + n_hi] * (dx / factor)
+    start = (n_hi - 1) // 2  # the 'same' part of the linear convolution
+    conv_hi = full[start : start + n_hi] * (dx / factor)
     return conv_hi[::factor][:n].astype(x.dtype)
 
 
@@ -91,17 +93,17 @@ def harris_H(u: jnp.ndarray, a: jnp.ndarray) -> jnp.ndarray:
     """H(a, u) to first order in a (no fallback): exp(-u^2) + a H1(u) for |u| < 6, the asymptotic
     a / (sqrt(pi) u^2) (1 + 3/(2u^2) + 15/(4u^4) + 105/(8u^6) + 945/(16u^8)) beyond. u, a broadcastable (dimensionless)."""
     au = jnp.abs(u)
-    t = jnp.minimum(au, HARRIS_U_MAX) * (HARRIS_N_TAB / HARRIS_U_MAX)          # the table index, as in fastvoigt.h
+    t = jnp.minimum(au, HARRIS_U_MAX) * (HARRIS_N_TAB / HARRIS_U_MAX)  # the table index, as in fastvoigt.h
     i = jnp.minimum(jnp.floor(t), HARRIS_N_TAB).astype(jnp.int32)
     tab = jnp.asarray(_HARRIS_H1, dtype=au.dtype)
-    h1 = tab[i] + (t - i) * (tab[i + 1] - tab[i])                              # linear interpolation, no search
+    h1 = tab[i] + (t - i) * (tab[i + 1] - tab[i])  # linear interpolation, no search
     inner = jnp.exp(-au * au) + a * h1
-    u2 = 1.0 / jnp.maximum(au, HARRIS_U_MAX) ** 2                 # safe in the inner region (not used there)
+    u2 = 1.0 / jnp.maximum(au, HARRIS_U_MAX) ** 2  # safe in the inner region (not used there)
     wing = a / jnp.sqrt(jnp.pi) * u2 * (1.0 + u2 * (1.5 + u2 * (3.75 + u2 * (13.125 + 59.0625 * u2))))
     return jnp.where(au >= HARRIS_U_MAX, wing, inner)
 
 
-def voigt_harris(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray, *, a_max: Optional[float] = HARRIS_A_MAX) -> jnp.ndarray:
+def voigt_harris(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray, *, a_max: float | None = HARRIS_A_MAX) -> jnp.ndarray:
     """V(x; sigma, gamma) = H(a, u) / (sqrt(2 pi) sigma), u = x / (sqrt(2) sigma), a = gamma / (sqrt(2) sigma), with H to
     first order in a (``harris_H``), as fake_spectra evaluates it.
 

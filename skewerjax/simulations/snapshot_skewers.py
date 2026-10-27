@@ -17,15 +17,15 @@ named option. Periodicity is not one of them: a periodic spectrum is the opt-in 
 ``core.compute_optical_depth``, which ``tau``, ``optical_depth`` and ``compute_tau`` pass through (default: none). fake_spectra's per-cell integration scheme and the option sets that reproduce it are in
 ``skewerjax.comparison`` (which depends on this module, not the other way round).
 """
+
 from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Callable, Optional
 
-import h5py
 import jax.numpy as jnp
 import numpy as np
 
@@ -57,6 +57,7 @@ class ExtractionOptions:
     cloudy_density : "hydrogen" (hden = n_H) or "fake_spectra" (0.774132 rho / m_p); metals only.
     cloudy_interpolation : "linear" (bilinear in log f) or "cubic" (fake_spectra); metals only.
     """
+
     deposition: str = "voronoi"
     mass_unit: str = "amu"
     T_constants: str = "codata"
@@ -65,7 +66,7 @@ class ExtractionOptions:
     cloudy_density: str = "hydrogen"
     cloudy_interpolation: str = "linear"
 
-    def replace(self, **kw) -> "ExtractionOptions":
+    def replace(self, **kw) -> ExtractionOptions:
         return replace(self, **kw)
 
 
@@ -78,12 +79,13 @@ class IntegrationOptions:
     detuning : "exact" (nu = (c / lambda) expm1(-dv / c)) or "linear" (fake_spectra).
     dtype : None (the input precision, float64 under x64) or "float32": opt-in faster kernel.
     """
+
     frame: str = "exact"
     normalisation: float = 1.0
     detuning: str = "exact"
-    dtype: Optional[str] = None
+    dtype: str | None = None
 
-    def replace(self, **kw) -> "IntegrationOptions":
+    def replace(self, **kw) -> IntegrationOptions:
         return replace(self, **kw)
 
 
@@ -100,8 +102,11 @@ def ion_cell_fields(n_ion, T, velocity, a: float) -> dict:
     """The per-species fields of ``core.Cells`` from the gas physics of a snapshot at scale factor ``a``:
     ``number_density`` = n_ion a^3 [comoving cm^-3] (n_ion physical [cm^-3]), ``temperature`` [K] and ``velocity`` (N, 3)
     [km/s, physical peculiar] (``SimulationSkewers.to_cells``, ``snapshot_cells.gas_to_cells``)."""
-    return {"number_density": np.asarray(n_ion, dtype=np.float64) * a ** 3, "temperature": np.asarray(T, dtype=np.float64),
-            "velocity": np.asarray(velocity, dtype=np.float64)}
+    return {
+        "number_density": np.asarray(n_ion, dtype=np.float64) * a**3,
+        "temperature": np.asarray(T, dtype=np.float64),
+        "velocity": np.asarray(velocity, dtype=np.float64),
+    }
 
 
 # --------------------------------------------------------------------------- HDF5 result cache
@@ -123,17 +128,21 @@ def h5_read(group) -> dict:
     return out
 
 
-def cached(path, name: str, build: Callable[[], dict], enabled: bool = True, attrs: Optional[dict] = None) -> dict:
+def cached(path, name: str, build: Callable[[], dict], enabled: bool = True, attrs: dict | None = None) -> dict:
     """Dict ``name`` from the HDF5 file ``path`` (one group per result), built and stored if missing."""
     if path is None or not enabled:
         return build()
     path = Path(path)
     if path.exists():
+        import h5py  # optional dependency (the simulations extra): imported where it is used
+
         with h5py.File(path, "r") as f:
             if name in f:
                 return h5_read(f[name])
     d = build()
     path.parent.mkdir(parents=True, exist_ok=True)
+    import h5py  # optional dependency (the simulations extra): imported where it is used
+
     with h5py.File(path, "a") as f:
         g = f.create_group(name)
         h5_write(g, d)
@@ -160,14 +169,28 @@ class SimulationSkewers:
     selection_backend : "cpu" (default), "jztree" or "auto": back end of ``select_cells_near_paths``.
     """
 
-    def __init__(self, reader, points, *, cosmology=None, cells=None, max_rows: int = 4_000_000,
-                 name: Optional[str] = None, cache=None, scale_factors=None, selection_backend: str = "cpu"):
+    def __init__(
+        self,
+        reader,
+        points,
+        *,
+        cosmology=None,
+        cells=None,
+        max_rows: int = 4_000_000,
+        name: str | None = None,
+        cache=None,
+        scale_factors=None,
+        selection_backend: str = "cpu",
+    ):
         self.reader, self.header = reader, reader.header
         self.box = self.header.box_cMpc
         self.points = np.asarray(points, dtype=np.float64)
         t = time.perf_counter()
-        self.cells = cells if cells is not None else sel.select_cells_near_paths(reader, self.points, mode="voronoi", max_rows=max_rows,
-                                                                                   backend=selection_backend)
+        self.cells = (
+            cells
+            if cells is not None
+            else sel.select_cells_near_paths(reader, self.points, mode="voronoi", max_rows=max_rows, backend=selection_backend)
+        )
         self.selection_s = time.perf_counter() - t
         g = path_geometry(jnp.asarray(self.points))
         self.s = np.asarray(g["s"])
@@ -198,8 +221,9 @@ class SimulationSkewers:
         ``cofm_code`` [ckpc/h], across the box once (first and last points the same place), sampled every
         ``spacing_kms`` of Hubble flow (a H(z) ds)."""
         H = reader.header
-        pts = axis_aligned_skewer_points(np.atleast_2d(cofm_code) * H.code_length_cMpc, axis, H.box_cMpc,
-                                         spacing_kms / H.velfac_kms_per_cMpc)
+        pts = axis_aligned_skewer_points(
+            np.atleast_2d(cofm_code) * H.code_length_cMpc, axis, H.box_cMpc, spacing_kms / H.velfac_kms_per_cMpc
+        )
         sk = cls(reader, pts, **kw)
         sk.axis = np.atleast_1d(np.asarray(axis))
         return sk
@@ -229,25 +253,38 @@ class SimulationSkewers:
         if key not in self._props:
             if not ion.is_HI and not hasattr(self, "_cloudy"):
                 self._cloudy = gp.CloudyIonTable(self.header.redshift)
-            P = gp.ion_properties(self.cells, ion, mass_unit=ext.mass_unit, T_constants=ext.T_constants, x_HI_model=ext.x_HI_model,
-                                  cloudy=getattr(self, "_cloudy", None), cloudy_density=ext.cloudy_density,
-                                  cloudy_interpolation=ext.cloudy_interpolation)
+            P = gp.ion_properties(
+                self.cells,
+                ion,
+                mass_unit=ext.mass_unit,
+                T_constants=ext.T_constants,
+                x_HI_model=ext.x_HI_model,
+                cloudy=getattr(self, "_cloudy", None),
+                cloudy_density=ext.cloudy_density,
+                cloudy_interpolation=ext.cloudy_interpolation,
+            )
             self._props[key] = {k: (v if isinstance(v, (str, float)) else np.asarray(v)) for k, v in P.items()}
         return self._props[key]
 
-    def cell_inputs(self, ion: gp.Ion, ext: ExtractionOptions = ExtractionOptions(), override: Optional[dict] = None) -> dict:
+    def cell_inputs(self, ion: gp.Ion, ext: ExtractionOptions = ExtractionOptions(), override: dict | None = None) -> dict:
         """What the deposition needs per cell: pos, size [cMpc], n [physical cm^-3], T [K], vel (N, 3)
         [km/s], mass [u], species. ``override`` replaces any of them (e.g. another code's values)."""
         need = override is None or not {"n", "T"} <= set(override)
         P = self.properties(ion, ext) if need else None
-        d = dict(pos=np.asarray(self.cells.positions), size=np.asarray(self.cells.size_cMpc),
-                 n=None if P is None else P["n_ion"], T=None if P is None else P["T"],
-                 vel=np.asarray(self.cells.fields["velocity"]), mass=ion.mass_amu, species=ion.species)
+        d = dict(
+            pos=np.asarray(self.cells.positions),
+            size=np.asarray(self.cells.size_cMpc),
+            n=None if P is None else P["n_ion"],
+            T=None if P is None else P["T"],
+            vel=np.asarray(self.cells.fields["velocity"]),
+            mass=ion.mass_amu,
+            species=ion.species,
+        )
         if override:
             d.update(override)
         return d
 
-    def to_cells(self, species, ext: ExtractionOptions = ExtractionOptions(), override: Optional[dict] = None) -> Cells:
+    def to_cells(self, species, ext: ExtractionOptions = ExtractionOptions(), override: dict | None = None) -> Cells:
         """The selected cells as ``core.Cells``, the container of the gas shared with the toy models.
 
         species : a species key (e.g. "HI", as in ``LineBundle.species_keys``), an ``Ion``, or a sequence of them.
@@ -262,16 +299,23 @@ class SimulationSkewers:
         for ion in ions:
             ci = self.cell_inputs(ion, ext, override)
             per[ion.species] = ion_cell_fields(ci["n"], ci["T"], ci["vel"], a)
-        vol = np.asarray(self.cells.volumes) if not (override and "size" in override) else np.asarray(ci["size"], dtype=np.float64) ** 3
+        vol = (
+            np.asarray(self.cells.volumes)
+            if not (override and "size" in override)
+            else np.asarray(ci["size"], dtype=np.float64) ** 3
+        )
         return Cells(np.asarray(ci["pos"], dtype=np.float64), vol, per, box=self.box, ids=self.cells.ids)
 
-    def segments(self, kind: str, inputs: Optional[dict] = None) -> dep.SegmentComponents:
+    def segments(self, kind: str, inputs: dict | None = None) -> dep.SegmentComponents:
         """Deposited pieces of every dual segment ("voronoi" or "tophat"); cached for the selected cells."""
         if kind not in ("voronoi", "tophat"):
             raise ValueError(f"segments kind must be 'voronoi' or 'tophat', got {kind!r}.")
-        build = lambda pos, size: (dep.voronoi_segments(self.points, pos, self.box, gas_size=size) if kind == "voronoi"
-                                   else dep.tophat_segments(self.points, pos, size, self.box))
-        if inputs is not None:                                   # other per-cell positions / sizes: not cached
+        build = lambda pos, size: (
+            dep.voronoi_segments(self.points, pos, self.box, gas_size=size)
+            if kind == "voronoi"
+            else dep.tophat_segments(self.points, pos, size, self.box)
+        )
+        if inputs is not None:  # other per-cell positions / sizes: not cached
             return build(inputs["pos"], inputs["size"])
         if kind not in self._seg:
             self._seg[kind] = build(np.asarray(self.cells.positions), np.asarray(self.cells.size_cMpc))
@@ -284,21 +328,29 @@ class SimulationSkewers:
             self._seg["crossings"] = dep.cell_crossings(self.segments("voronoi"), self.points)
         return self._seg["crossings"]
 
-    def absorbers(self, ion: gp.Ion, ext: ExtractionOptions = ExtractionOptions(), override: Optional[dict] = None,
-                  frame=None) -> ab_.Absorbers:
+    def absorbers(
+        self, ion: gp.Ion, ext: ExtractionOptions = ExtractionOptions(), override: dict | None = None, frame=None
+    ) -> ab_.Absorbers:
         """Deposited absorbers of every skewer (one per piece of cell in each dual segment; for
         ``deposition="voronoi_crossings"`` one per sub-piece of each cell crossing, split with ``frame``'s Hubble rate)."""
         cells = self.to_cells(ion, ext, override)
         if ext.deposition == "voronoi_crossings":
             if override and "pos" in override:
                 raise ValueError("deposition='voronoi_crossings' uses the selected cells' own positions.")
-            return ab_.absorbers_from_crossings(self.crossings(), self.points, cells, ion.species, ion.mass_amu, a_data=self.header.a,
-                                                frame=frame)
+            return ab_.absorbers_from_crossings(
+                self.crossings(), self.points, cells, ion.species, ion.mass_amu, a_data=self.header.a, frame=frame
+            )
         seg = self.segments(ext.deposition, self.cell_inputs(ion, ext, override) if override and "pos" in override else None)
         return ab_.absorbers_from_components(seg, self.points, cells, ion.species, ion.mass_amu, a_data=self.header.a)
 
-    def column_per_pixel(self, ion: gp.Ion, ext: ExtractionOptions = ExtractionOptions(), nbins: Optional[int] = None,
-                         override: Optional[dict] = None, weight: Optional[str] = None) -> np.ndarray:
+    def column_per_pixel(
+        self,
+        ion: gp.Ion,
+        ext: ExtractionOptions = ExtractionOptions(),
+        nbins: int | None = None,
+        override: dict | None = None,
+        weight: str | None = None,
+    ) -> np.ndarray:
         """(N_sk, nbins) physical column [cm^-2] in equal position pixels of the box; with
         ``weight="T"`` or ``"v_los"``, the column-weighted mean of that quantity per pixel instead."""
         nbins = nbins or self.header.pixel_grid(1.0)[0]
@@ -329,7 +381,7 @@ class SimulationSkewers:
         n_c, T_c, v_c = np.asarray(P["n_ion"]), np.asarray(P["T"]), np.asarray(self.cells.fields["velocity"])
         live = seg.cell >= 0
         cc = np.where(live, seg.cell, 0)
-        nl = np.where(live, seg.weight * n_c[cc] * seg.length, 0.0)                # n l of every piece
+        nl = np.where(live, seg.weight * n_c[cc] * seg.length, 0.0)  # n l of every piece
         ll = np.where(live, seg.length, 0.0)
         col = nl.sum(-1)
         wt = np.where((col > 0)[..., None], nl, ll)
@@ -338,12 +390,27 @@ class SimulationSkewers:
         vel = (wt[..., None] * v_c[cc]).sum(-2) / norm[..., None]
         n = col / np.maximum(self.line_elements, 1e-300)
         a = self.header.a
-        return dict(n=n, n_com=n * a ** 3, T=T, velocity=vel, v_los=np.sum(vel * self.tangents, -1),
-                    column=col * phys.Mpc_to_cm * a, line_elements=self.line_elements)
+        return dict(
+            n=n,
+            n_com=n * a**3,
+            T=T,
+            velocity=vel,
+            v_los=np.sum(vel * self.tangents, -1),
+            column=col * phys.Mpc_to_cm * a,
+            line_elements=self.line_elements,
+        )
 
-    def optical_depth(self, line_bundle, velocities_kms=None, ext: ExtractionOptions = ExtractionOptions(),
-                      integ: IntegrationOptions = IntegrationOptions(), check: Optional[float] = 0.25, *,
-                      velocity_period=False, line_frame: str = "own"):
+    def optical_depth(
+        self,
+        line_bundle,
+        velocities_kms=None,
+        ext: ExtractionOptions = ExtractionOptions(),
+        integ: IntegrationOptions = IntegrationOptions(),
+        check: float | None = 0.25,
+        *,
+        velocity_period=False,
+        line_frame: str = "own",
+    ):
         """tau of every line of ``line_bundle`` (any species): (velocities [km/s], tau (N_lines, N_sk, N_v)).
 
         ``line_frame="own"`` (default): each line on its own line-centred axis; ``"reference"``: every line evaluated
@@ -357,9 +424,18 @@ class SimulationSkewers:
             velocities_kms = self.spectral_grid(1.0, self.frame(integ.frame))[0]
         v = np.asarray(velocities_kms, dtype=np.float64)
         dV = np.asarray(line_bundle.delta_v) if line_frame == "reference" else np.zeros(line_bundle.n_lines)
-        taus = [self.tau(gp.ion_from_species(line.species), LineBundle([line.id], ref_line_id=line.id), v + dV[j], ext, integ,
-                         check=check, velocity_period=velocity_period)
-                for j, line in enumerate(line_bundle.lines)]
+        taus = [
+            self.tau(
+                gp.ion_from_species(line.species),
+                LineBundle([line.id], ref_line_id=line.id),
+                v + dV[j],
+                ext,
+                integ,
+                check=check,
+                velocity_period=velocity_period,
+            )
+            for j, line in enumerate(line_bundle.lines)
+        ]
         return v, np.stack(taus)
 
     # ------------------------------------------------------------------ layer 6
@@ -374,8 +450,10 @@ class SimulationSkewers:
         elif kind == "exact" and self.scale_factors is not None:
             a = self.scale_factors
             if np.any(a[:, 0] < a[:, -1]):
-                raise ValueError("SimulationSkewers puts the observer before the first point, so a(x) must decrease along the "
-                                 "points; reverse the points of the SkewerBundle or define its ICs at the observer's end.")
+                raise ValueError(
+                    "SimulationSkewers puts the observer before the first point, so a(x) must decrease along the "
+                    "points; reverse the points of the SkewerBundle or define its ICs at the observer's end."
+                )
             fr = ab_.ExactFrame(self.s, a, a_dagger_value=float(a[0, 0]))
         elif kind == "exact":
             s_ref = np.full(self.n_skewers, 0.5 * self.box)
@@ -386,30 +464,74 @@ class SimulationSkewers:
         self._frames[kind] = fr
         return fr
 
-    def pieces(self, ion: gp.Ion, line_bundle, ext: ExtractionOptions = ExtractionOptions(),
-               integ: IntegrationOptions = IntegrationOptions(), skewers=None):
+    def pieces(
+        self,
+        ion: gp.Ion,
+        line_bundle,
+        ext: ExtractionOptions = ExtractionOptions(),
+        integ: IntegrationOptions = IntegrationOptions(),
+        skewers=None,
+    ):
         """The deposited pieces of ``ion`` as ``core.Pieces`` for the lines of ``line_bundle`` (that species only), in
         the frame ``integ.frame``: what ``core.compute_optical_depth`` sums, e.g.
         ``compute_optical_depth(sk.pieces(HI, lya), v, lya, velocity_period=True)``."""
         fr = self.frame(integ.frame)
         T_scale = gp.FAKE_SPECTRA_B2_RATIO if ext.b_constants == "fake_spectra" else 1.0
         seg = self.segments("voronoi" if ext.deposition == "voronoi_crossings" else ext.deposition)
-        return ab_.cell_pieces(self.to_cells(ion, ext), line_bundle, points=self.points, frame=fr, deposition=ext.deposition,
-                               segments=seg, a_data=self.header.a, T_scale=T_scale, n_scale=integ.normalisation, skewers=skewers)
+        return ab_.cell_pieces(
+            self.to_cells(ion, ext),
+            line_bundle,
+            points=self.points,
+            frame=fr,
+            deposition=ext.deposition,
+            segments=seg,
+            a_data=self.header.a,
+            T_scale=T_scale,
+            n_scale=integ.normalisation,
+            skewers=skewers,
+        )
 
-    def tau_key(self, ion: gp.Ion, line_bundle, velocities_kms, ext: ExtractionOptions, integ, override_key: str = "",
-                velocity_period=False) -> str:
+    def tau_key(
+        self,
+        ion: gp.Ion,
+        line_bundle,
+        velocities_kms,
+        ext: ExtractionOptions,
+        integ,
+        override_key: str = "",
+        velocity_period=False,
+    ) -> str:
         """Cache key of a tau result: skewers, ion, lines, velocity grid, override name and every option."""
         v = np.asarray(velocities_kms, dtype=np.float64)
         opts = {**asdict(relevant_options(ext, ion)), **asdict(integ), "velocity_period": velocity_period}
-        geo = hashlib.md5(self.points.tobytes() + (b"" if self.scale_factors is None else self.scale_factors.tobytes())).hexdigest()[:10]
-        return "/".join(["tau", str(self.name), geo, ion.species, ",".join(map(str, line_bundle.lambda0_A)),
-                         hashlib.md5(v.tobytes()).hexdigest()[:10], override_key,
-                         ",".join(f"{k}={w}" for k, w in sorted(opts.items()))])
+        geo = hashlib.md5(
+            self.points.tobytes() + (b"" if self.scale_factors is None else self.scale_factors.tobytes())
+        ).hexdigest()[:10]
+        return "/".join(
+            [
+                "tau",
+                str(self.name),
+                geo,
+                ion.species,
+                ",".join(map(str, line_bundle.lambda0_A)),
+                hashlib.md5(v.tobytes()).hexdigest()[:10],
+                override_key,
+                ",".join(f"{k}={w}" for k, w in sorted(opts.items())),
+            ]
+        )
 
-    def tau(self, ion: gp.Ion, line_bundle, velocities_kms, ext: ExtractionOptions = ExtractionOptions(),
-            integ: IntegrationOptions = IntegrationOptions(), override: Optional[dict] = None, override_key: str = "",
-            check: Optional[float] = 0.25, velocity_period=False) -> np.ndarray:
+    def tau(
+        self,
+        ion: gp.Ion,
+        line_bundle,
+        velocities_kms,
+        ext: ExtractionOptions = ExtractionOptions(),
+        integ: IntegrationOptions = IntegrationOptions(),
+        override: dict | None = None,
+        override_key: str = "",
+        check: float | None = 0.25,
+        velocity_period=False,
+    ) -> np.ndarray:
         """(N_sk, N_v) optical depth of the first line of ``line_bundle`` (one species) for ``ext`` and ``integ``;
         cached when the object has a ``name`` and a ``cache`` (``override_key`` names an override).
 
@@ -418,17 +540,40 @@ class SimulationSkewers:
         if override is not None and not override_key:
             override_key = "override"
         v = np.asarray(velocities_kms, dtype=np.float64)
-        build = lambda: dict(tau=self.compute_tau(ion, line_bundle, v, ext, integ, override, check, velocity_period=velocity_period))
-        return cached(self.cache, self.tau_key(ion, line_bundle, v, ext, integ, override_key, velocity_period), build,
-                      enabled=self.name is not None)["tau"]
+        build = lambda: dict(
+            tau=self.compute_tau(ion, line_bundle, v, ext, integ, override, check, velocity_period=velocity_period)
+        )
+        return cached(
+            self.cache,
+            self.tau_key(ion, line_bundle, v, ext, integ, override_key, velocity_period),
+            build,
+            enabled=self.name is not None,
+        )["tau"]
 
-    def compute_tau(self, ion: gp.Ion, line_bundle, velocities_kms, ext: ExtractionOptions = ExtractionOptions(),
-                    integ: IntegrationOptions = IntegrationOptions(), override: Optional[dict] = None,
-                    check: Optional[float] = 0.25, velocity_period=False) -> np.ndarray:
+    def compute_tau(
+        self,
+        ion: gp.Ion,
+        line_bundle,
+        velocities_kms,
+        ext: ExtractionOptions = ExtractionOptions(),
+        integ: IntegrationOptions = IntegrationOptions(),
+        override: dict | None = None,
+        check: float | None = 0.25,
+        velocity_period=False,
+    ) -> np.ndarray:
         """``tau`` without the cache: the deposited absorbers through ``absorbers.tau_absorbers``."""
         T_scale = gp.FAKE_SPECTRA_B2_RATIO if ext.b_constants == "fake_spectra" else 1.0
         fr = self.frame(integ.frame)
         A = self.absorbers(ion, ext, override, frame=fr)
-        return ab_.tau_absorbers(A, line_bundle, np.asarray(velocities_kms, dtype=np.float64), fr, velocity_period=velocity_period,
-                                 T_scale=T_scale, n_scale=integ.normalisation, detuning=integ.detuning, check=check,
-                                 dtype=integ.dtype)[0]
+        return ab_.tau_absorbers(
+            A,
+            line_bundle,
+            np.asarray(velocities_kms, dtype=np.float64),
+            fr,
+            velocity_period=velocity_period,
+            T_scale=T_scale,
+            n_scale=integ.normalisation,
+            detuning=integ.detuning,
+            check=check,
+            dtype=integ.dtype,
+        )[0]

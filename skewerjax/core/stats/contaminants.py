@@ -1,9 +1,10 @@
 """P1D metal-contamination models (McDonald et al. 2006; Ma et al.) and their fits to P_tot / P_Lya."""
+
 from __future__ import annotations
 
 import jax
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 from scipy.optimize import differential_evolution, lsq_linear, minimize, minimize_scalar
 
 
@@ -321,11 +322,7 @@ def fit_ma_model_profiled(
 
         a_auto, a_cross = lsq.x
 
-        model_ratio = (
-            1.0
-            + a_auto * basis_auto
-            + a_cross * basis_cross
-        )
+        model_ratio = 1.0 + a_auto * basis_auto + a_cross * basis_cross
 
         residual = _compute_residual_from_ratio(
             ratio_model=model_ratio,

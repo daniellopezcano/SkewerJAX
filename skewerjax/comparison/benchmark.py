@@ -42,6 +42,7 @@ after each mode (cumulative over the process: modes run matched, default, float3
 **Agreement.** SkewerJAX's matched mode against fake_spectra's tau on the first ``n_store`` skewers (max and rms
 |dF|), and the mean flux of every mode against fake_spectra's on all skewers.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,12 +59,12 @@ from pathlib import Path
 from typing import Optional
 
 if __name__ == "__main__" and Path(sys.path[0]).resolve() == Path(__file__).resolve().parent:
-    sys.path.pop(0)                                    # run as a file: no shadowing by the sibling modules
+    sys.path.pop(0)  # run as a file: no shadowing by the sibling modules
 
-import numpy as np                                     # noqa: E402
+import numpy as np  # noqa: E402
 
 STAGES = ("setup", "io", "selection", "physics", "pieces", "tau")
-SHARED_STAGES = ("setup", "io", "selection")          # once per SkewerJAX run, whatever the modes
+SHARED_STAGES = ("setup", "io", "selection")  # once per SkewerJAX run, whatever the modes
 SPECIES = {"HI-LyA": ("H", 1, 1215), "SiIII-1206": ("Si", 3, 1206)}
 MODES = {
     "matched": "fake_spectra's scheme in SkewerJAX (FAKE_SPECTRA_EXTRACTION + FAKE_SPECTRA_INTEGRATION), its pixel grid",
@@ -74,7 +75,7 @@ MODES = {
 CPU_SETS = {1: [0], 4: [0, 2, 4, 6], 8: list(range(0, 16, 2)), 16: list(range(16)), 32: list(range(32))}
 """Logical CPUs per thread count on the benchmark machine (i9-13900KF: CPUs 0-15 are the 8 P-cores with their
 hyperthreads, 16-31 the E-cores): 4 and 8 use one thread per P-core."""
-STOPPED = ("timeout", "memory_limit", "skipped")      # a series stops at the first of these
+STOPPED = ("timeout", "memory_limit", "skipped")  # a series stops at the first of these
 
 
 # --------------------------------------------------------------------------- skewers, timers, memory
@@ -118,6 +119,7 @@ class StageTimer:
             def timed(*a, _f=f, _name=name, **k):
                 with self.stage(_name):
                     return _f(*a, **k)
+
             saved.append((obj, attr, f, own))
             setattr(obj, attr, timed)
         try:
@@ -162,6 +164,7 @@ class RssSampler:
 def machine_metadata() -> dict:
     """Hardware and software of this process (CPU set, versions, thread environment)."""
     import importlib.metadata as md
+
     cpu = next((ln.split(":", 1)[1].strip() for ln in open("/proc/cpuinfo") if ln.startswith("model name")), platform.processor())
     cores = len({ln.split(":", 1)[1].strip() for ln in open("/proc/cpuinfo") if ln.startswith("core id")}) or None
     mem = next((int(ln.split()[1]) / 1e6 for ln in open("/proc/meminfo") if ln.startswith("MemTotal")), None)
@@ -173,25 +176,55 @@ def machine_metadata() -> dict:
             vers[p] = None
     gpu = None
     try:
-        gpu = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
-                             capture_output=True, text=True, timeout=20).stdout.strip() or None
+        gpu = (
+            subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            ).stdout.strip()
+            or None
+        )
     except (OSError, subprocess.SubprocessError):
         pass
-    env = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "XLA_FLAGS", "JAX_PLATFORMS", "XLA_PYTHON_CLIENT_PREALLOCATE")
-    return dict(cpu=cpu, physical_cores=cores, logical_cpus=os.cpu_count(), cpu_set=sorted(os.sched_getaffinity(0)), ram_GB=mem,
-                gpu=gpu, python=platform.python_version(), versions=vers, host=platform.node(),
-                env={k: os.environ.get(k) for k in env})
+    env = (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "XLA_FLAGS",
+        "JAX_PLATFORMS",
+        "XLA_PYTHON_CLIENT_PREALLOCATE",
+    )
+    return dict(
+        cpu=cpu,
+        physical_cores=cores,
+        logical_cpus=os.cpu_count(),
+        cpu_set=sorted(os.sched_getaffinity(0)),
+        ram_GB=mem,
+        gpu=gpu,
+        python=platform.python_version(),
+        versions=vers,
+        host=platform.node(),
+        env={k: os.environ.get(k) for k in env},
+    )
 
 
 def snapshot_info(snap_base, snapnum: int) -> dict:
     """Gas cells, box, redshift, files and size on disk of one snapshot (from the header of its first file)."""
     import h5py
+
     d = Path(snap_base) / f"snapdir_{int(snapnum):03d}"
     files = sorted(d.glob(f"snap_{int(snapnum):03d}.*.hdf5"), key=lambda p: int(p.name.split(".")[1]))
     with h5py.File(files[0], "r") as f:
         h = f["Header"].attrs
-        out = dict(sim=Path(snap_base).name, snapnum=int(snapnum), n_gas=int(h["NumPart_Total"][0]) + (int(h["NumPart_Total_HighWord"][0]) << 32),
-                   box_ckpc_h=float(h["BoxSize"]), redshift=float(h["Redshift"]), n_files=len(files))
+        out = dict(
+            sim=Path(snap_base).name,
+            snapnum=int(snapnum),
+            n_gas=int(h["NumPart_Total"][0]) + (int(h["NumPart_Total_HighWord"][0]) << 32),
+            box_ckpc_h=float(h["BoxSize"]),
+            redshift=float(h["Redshift"]),
+            n_files=len(files),
+        )
     out["size_GB"] = sum(p.stat().st_size for p in files) / 1e9
     return out
 
@@ -216,7 +249,9 @@ def _keep_running(reps: list, t_start: float, budget_s: float) -> bool:
 def run_fake_spectra(c: dict, out: Path) -> dict:
     """fake_spectra: a new ``Spectra`` object per run, ``get_tau`` per species (the C engine is OpenMP)."""
     import shutil
+
     from fake_spectra import spectra
+
     cofm, axis = benchmark_skewers(c["n_skewers"])
     reps, taus, t_start = [], {}, time.perf_counter()
     work = out / "fs_work" / config_id(c)
@@ -224,10 +259,20 @@ def run_fake_spectra(c: dict, out: Path) -> dict:
         T = StageTimer()
         t0 = time.perf_counter()
         with T.stage("setup"):
-            sp = spectra.Spectra(int(c["snapnum"]), str(c["snap_base"]), cofm.copy(), axis.copy(), res=c["res"], savefile="b.hdf5",
-                                 savedir=str(work), reload_file=True, quiet=True)
-        with T.patched((sp.snapshot_set, "get_data", "io"), (sp, "particles_near_lines", "selection"),
-                       (sp, "_do_interpolation_work", "tau")):
+            sp = spectra.Spectra(
+                int(c["snapnum"]),
+                str(c["snap_base"]),
+                cofm.copy(),
+                axis.copy(),
+                res=c["res"],
+                savefile="b.hdf5",
+                savedir=str(work),
+                reload_file=True,
+                quiet=True,
+            )
+        with T.patched(
+            (sp.snapshot_set, "get_data", "io"), (sp, "particles_near_lines", "selection"), (sp, "_do_interpolation_work", "tau")
+        ):
             for name, (el, st, ll) in SPECIES.items():
                 with T.stage("physics"):
                     taus[name] = np.asarray(sp.get_tau(el, st, ll))
@@ -237,23 +282,27 @@ def run_fake_spectra(c: dict, out: Path) -> dict:
         if not _keep_running(reps, t_start, c["budget_s"]):
             break
     shutil.rmtree(work, ignore_errors=True)
-    np.savez(out / f"{config_id(c)}.npz", **{f"tau_{k}": v[:c["n_store"]] for k, v in taus.items()},
-             **{f"meanF_{k}": np.exp(-v).mean(axis=1) for k, v in taus.items()})
+    np.savez(
+        out / f"{config_id(c)}.npz",
+        **{f"tau_{k}": v[: c["n_store"]] for k, v in taus.items()},
+        **{f"meanF_{k}": np.exp(-v).mean(axis=1) for k, v in taus.items()},
+    )
     return dict(runs=reps, peak_rss_GB=peak_rss_GB(), n_v=nbins, dv_kms=dv)
 
 
 def _mode_tau(mode: str, sk, ion, lb, c: dict, T: StageTimer):
     """tau (N_sk, N_v) of one species in one SkewerJAX mode, timed by stage; also the number of absorbers with gas
     (all skewers; None for the matched mode, whose chords are built inside its tau)."""
-    from skewerjax.core import absorbers as ab_
-    from skewerjax.simulations import ExtractionOptions
     from skewerjax.comparison.effects import FAKE_SPECTRA_EXTRACTION, FAKE_SPECTRA_INTEGRATION
     from skewerjax.comparison.emulation import matched_tau
+    from skewerjax.core import absorbers as ab_
+    from skewerjax.simulations import ExtractionOptions
+
     if mode == "matched":
         with T.stage("physics"):
             sk.properties(ion, FAKE_SPECTRA_EXTRACTION)
-        v, _ = sk.spectral_grid(c["res"])                                  # fake_spectra's periodic pixel grid
-        with T.stage("tau"):                                              # chords and pieces are timed inside, as "pieces"
+        v, _ = sk.spectral_grid(c["res"])  # fake_spectra's periodic pixel grid
+        with T.stage("tau"):  # chords and pieces are timed inside, as "pieces"
             return matched_tau(sk, ion, lb, v, FAKE_SPECTRA_EXTRACTION, FAKE_SPECTRA_INTEGRATION), None
     ext = ExtractionOptions(deposition="voronoi_crossings") if mode == "crossings" else ExtractionOptions()
     with T.stage("physics"):
@@ -262,7 +311,7 @@ def _mode_tau(mode: str, sk, ion, lb, c: dict, T: StageTimer):
         fr = sk.frame("exact")
         v, _ = sk.spectral_grid(c["res"], fr)
         A = sk.absorbers(ion, ext, frame=fr)
-    with T.stage("tau"):                                                  # periodic, as fake_spectra
+    with T.stage("tau"):  # periodic, as fake_spectra
         tau = ab_.tau_absorbers(A, lb, v, fr, velocity_period=True, check=None, dtype="float32" if mode == "float32" else None)[0]
     return tau, int((np.asarray(A.n) > 0).sum())
 
@@ -270,11 +319,13 @@ def _mode_tau(mode: str, sk, ion, lb, c: dict, T: StageTimer):
 def run_skewerjax(c: dict, out: Path) -> dict:
     """SkewerJAX: per run, one reader and one selection; then every mode of ``c["modes"]`` on the same cells."""
     import jax
+
     jax.config.update("jax_enable_x64", True)
+    from skewerjax.comparison import emulation as em
     from skewerjax.core import LineBundle
     from skewerjax.core import absorbers as ab_
-    from skewerjax.comparison import emulation as em
     from skewerjax.simulations import HI, ArepoHDF5Reader, Ion, SimulationSkewers
+
     ions = {"HI-LyA": HI, "SiIII-1206": Ion("Si", 3)}
     lbs = {k: LineBundle([k], ref_line_id=k) for k in SPECIES}
     cofm, axis = benchmark_skewers(c["n_skewers"])
@@ -294,15 +345,20 @@ def run_skewerjax(c: dict, out: Path) -> dict:
             Tm = StageTimer()
             sampler.reset()
             tm = time.perf_counter()
-            sk = SimulationSkewers.axis_aligned(rd, cofm, axis, c["spacing_kms"], cells=cells)   # fresh caches, same cells
+            sk = SimulationSkewers.axis_aligned(rd, cofm, axis, c["spacing_kms"], cells=cells)  # fresh caches, same cells
             n_abs = {}
             with Tm.patched((rd, "read_rows", "io"), (ab_, "absorber_pieces", "pieces"), (em, "fake_chord_absorbers", "pieces")):
                 for name, ion in ions.items():
                     taus[(m, name)], n_abs[name] = _mode_tau(m, sk, ion, lbs[name], c, Tm)
-            rep["modes"][m] = dict(stages={s: Tm.t[s] for s in STAGES if s not in ("setup", "selection")}, wall=time.perf_counter() - tm)
+            rep["modes"][m] = dict(
+                stages={s: Tm.t[s] for s in STAGES if s not in ("setup", "selection")}, wall=time.perf_counter() - tm
+            )
             if r == 0:
-                info[m] = dict(n_absorbers=n_abs, peak_rss_GB=sampler.read(),
-                               gpu_peak_GB=(dev.memory_stats() or {}).get("peak_bytes_in_use", 0) / 1e9 if gpu else None)
+                info[m] = dict(
+                    n_absorbers=n_abs,
+                    peak_rss_GB=sampler.read(),
+                    gpu_peak_GB=(dev.memory_stats() or {}).get("peak_bytes_in_use", 0) / 1e9 if gpu else None,
+                )
             else:
                 info[m]["peak_rss_GB"] = max(info[m]["peak_rss_GB"], sampler.read())
         rep["wall"] = time.perf_counter() - t0
@@ -315,11 +371,16 @@ def run_skewerjax(c: dict, out: Path) -> dict:
     for m in c["modes"]:
         warm = [x["modes"][m]["wall"] for x in reps[1:]]
         info[m]["compile_s"] = reps[0]["modes"][m]["wall"] - float(np.median(warm)) if warm else None
-    np.savez(out / f"{config_id(c)}.npz", **{f"tau_{m}_{k}": v[:c["n_store"]] for (m, k), v in taus.items()},
-             **{f"meanF_{m}_{k}": np.exp(-v).mean(axis=1) for (m, k), v in taus.items()})
+    np.savez(
+        out / f"{config_id(c)}.npz",
+        **{f"tau_{m}_{k}": v[: c["n_store"]] for (m, k), v in taus.items()},
+        **{f"meanF_{m}_{k}": np.exp(-v).mean(axis=1) for (m, k), v in taus.items()},
+    )
     res = dict(runs=reps, modes=info, peak_rss_GB=peak_rss_GB(), devices=[str(d) for d in jax.devices()])
     if gpu:
-        res["device_memory"] = {k: v for k, v in (dev.memory_stats() or {}).items() if k in ("peak_bytes_in_use", "bytes_in_use", "bytes_limit")}
+        res["device_memory"] = {
+            k: v for k, v in (dev.memory_stats() or {}).items() if k in ("peak_bytes_in_use", "bytes_in_use", "bytes_limit")
+        }
     res["agreement"] = agreement(c, out, taus)
     return res
 
@@ -339,7 +400,7 @@ def agreement(c: dict, out: Path, taus: dict) -> Optional[dict]:
         if ("matched", name) in taus:
             k = min(c["n_store"], c["n_skewers"])
             dF = np.exp(-taus[("matched", name)][:k]) - np.exp(-fs[f"tau_{name}"][:k])
-            row.update(n_skewers=k, max_dF=float(np.abs(dF).max()), rms_dF=float(np.sqrt(np.mean(dF ** 2))))
+            row.update(n_skewers=k, max_dF=float(np.abs(dF).max()), rms_dF=float(np.sqrt(np.mean(dF**2))))
         rows[name] = row
     return rows
 
@@ -348,16 +409,37 @@ def worker(c: dict, out: Path):
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
     res = (run_fake_spectra if c["code"] == "fake_spectra" else run_skewerjax)(c, out)
-    rec = dict(id=config_id(c), config=c, status="ok", wall_s=time.perf_counter() - t0, metadata=machine_metadata(),
-               snapshot=snapshot_info(c["snap_base"], c["snapnum"]), **res)
+    rec = dict(
+        id=config_id(c),
+        config=c,
+        status="ok",
+        wall_s=time.perf_counter() - t0,
+        metadata=machine_metadata(),
+        snapshot=snapshot_info(c["snap_base"], c["snapnum"]),
+        **res,
+    )
     (out / f"{config_id(c)}.json").write_text(json.dumps(rec, indent=1))
 
 
 # --------------------------------------------------------------------------- configurations
-def make_config(code: str, snap_base, snapnum: int, n_skewers: int, *, platform: str = "cpu", threads: int = 32,
-                modes=("matched", "default"), repeats: int = 3, budget_s: float = 1800.0, res: float = 1.0,
-                spacing_kms: float = 0.25, n_store: int = 64, preset: str = "full", cap_s: Optional[float] = None,
-                est_s: Optional[float] = None) -> dict:
+def make_config(
+    code: str,
+    snap_base,
+    snapnum: int,
+    n_skewers: int,
+    *,
+    platform: str = "cpu",
+    threads: int = 32,
+    modes=("matched", "default"),
+    repeats: int = 3,
+    budget_s: float = 1800.0,
+    res: float = 1.0,
+    spacing_kms: float = 0.25,
+    n_store: int = 64,
+    preset: str = "full",
+    cap_s: Optional[float] = None,
+    est_s: Optional[float] = None,
+) -> dict:
     """One configuration. ``repeats``: timed runs after the first (fewer when ``budget_s`` [s] is reached);
     ``modes``: SkewerJAX's modes, in order (ignored for fake_spectra); ``res``: pixel width [km/s];
     ``spacing_kms``: SkewerJAX's point spacing [km/s]; ``n_store``: skewers whose tau is saved for the agreement;
@@ -367,10 +449,23 @@ def make_config(code: str, snap_base, snapnum: int, n_skewers: int, *, platform:
         platform, modes = "cpu", None
     elif unknown := set(modes) - set(MODES):
         raise ValueError(f"unknown modes {unknown}; known: {list(MODES)}")
-    return dict(code=code, snap_base=str(snap_base), snapnum=int(snapnum), n_skewers=int(n_skewers), platform=platform,
-                threads=int(threads), modes=None if modes is None else list(modes), repeats=int(repeats), budget_s=float(budget_s),
-                res=float(res), spacing_kms=float(spacing_kms), n_store=int(n_store), preset=preset,
-                cap_s=None if cap_s is None else float(cap_s), est_s=None if est_s is None else float(est_s))
+    return dict(
+        code=code,
+        snap_base=str(snap_base),
+        snapnum=int(snapnum),
+        n_skewers=int(n_skewers),
+        platform=platform,
+        threads=int(threads),
+        modes=None if modes is None else list(modes),
+        repeats=int(repeats),
+        budget_s=float(budget_s),
+        res=float(res),
+        spacing_kms=float(spacing_kms),
+        n_store=int(n_store),
+        preset=preset,
+        cap_s=None if cap_s is None else float(cap_s),
+        est_s=None if est_s is None else float(est_s),
+    )
 
 
 SIMULATIONS = ("TNG50-4", "TNG50-3", "TNG50-2")
@@ -378,23 +473,27 @@ N_SKEWERS = (1, 4, 16, 64, 256, 1024)
 PRESETS = {
     "full": "the whole study: N = 1 ... 1024 in TNG50-4, -3, -2, and 1-16 threads at N = 16 (~10 h or more; caps 1 h, 48 GB)",
     "quick": "a reduced study in <= 30 min of new runs: TNG50-3 and TNG50-2 at small N, 1-16 threads at N = 1, one or two "
-             "timed runs, per-point caps (the TNG50-4 series of the full study is kept as it is)",
+    "timed runs, per-point caps (the TNG50-4 series of the full study is kept as it is)",
 }
 QUICK_BUDGET_S = 1800.0
 # The quick preset's points, (sim, N, code, platform): estimated wall time and cap [s], timed runs. Estimates from the
 # full study's records (TNG50-3, TNG50-4: setup + io + selection + the modes, per run) and the old suite's TNG50-2
 # point (selection ~7.5x TNG50-3, ~2x the cells per skewer; fake_spectra's cold read of 349 GB ~250 s).
 QUICK_SCALING = [
-    ("TNG50-3", 1, "fake_spectra", "cpu", 90, 240, 2), ("TNG50-3", 1, "skewerjax", "cpu", 100, 300, 2),
+    ("TNG50-3", 1, "fake_spectra", "cpu", 90, 240, 2),
+    ("TNG50-3", 1, "skewerjax", "cpu", 100, 300, 2),
     ("TNG50-3", 1, "skewerjax", "gpu", 120, 300, 3),
-    ("TNG50-3", 4, "fake_spectra", "cpu", 110, 300, 3), ("TNG50-3", 4, "skewerjax", "cpu", 270, 600, 3),
+    ("TNG50-3", 4, "fake_spectra", "cpu", 110, 300, 3),
+    ("TNG50-3", 4, "skewerjax", "cpu", 270, 600, 3),
     ("TNG50-3", 4, "skewerjax", "gpu", 280, 600, 3),
-    ("TNG50-3", 16, "fake_spectra", "cpu", 110, 300, 3), ("TNG50-3", 16, "skewerjax", "cpu", 860, 1200, 3),
+    ("TNG50-3", 16, "fake_spectra", "cpu", 110, 300, 3),
+    ("TNG50-3", 16, "skewerjax", "cpu", 860, 1200, 3),
     ("TNG50-3", 16, "skewerjax", "gpu", 930, 1200, 3),
-    ("TNG50-2", 1, "fake_spectra", "cpu", 420, 900, 1), ("TNG50-2", 1, "skewerjax", "cpu", 270, 600, 1),
+    ("TNG50-2", 1, "fake_spectra", "cpu", 420, 900, 1),
+    ("TNG50-2", 1, "skewerjax", "cpu", 270, 600, 1),
     ("TNG50-2", 1, "skewerjax", "gpu", 270, 600, 1),
 ]
-QUICK_THREADS = {1: (160, 400), 4: (45, 200), 8: (35, 200), 16: (30, 200)}   # SkewerJAX at N = 1: estimate, cap [s]
+QUICK_THREADS = {1: (160, 400), 4: (45, 200), 8: (35, 200), 16: (30, 200)}  # SkewerJAX at N = 1: estimate, cap [s]
 
 
 def benchmark_sets(name: str, data_dir, snapnum: int = 25, preset: str = "full") -> list:
@@ -420,37 +519,71 @@ def benchmark_sets(name: str, data_dir, snapnum: int = 25, preset: str = "full")
         raise ValueError(f"unknown preset {preset!r}: {list(PRESETS)}")
     sim = lambda s: Path(data_dir) / s
     if preset == "quick" and name == "scaling":
-        return [make_config(code, sim(s), snapnum, n, platform=p, repeats=rep, preset="quick", cap_s=cap, est_s=est, budget_s=cap)
-                for s, n, code, p, est, cap, rep in QUICK_SCALING]
+        return [
+            make_config(code, sim(s), snapnum, n, platform=p, repeats=rep, preset="quick", cap_s=cap, est_s=est, budget_s=cap)
+            for s, n, code, p, est, cap, rep in QUICK_SCALING
+        ]
     if preset == "quick" and name == "threads":
         out = []
         for t, (est, cap) in QUICK_THREADS.items():
             modes = ("matched", "default", "float32", "crossings") if t == 1 else ("matched", "default")
-            out += [make_config("fake_spectra", sim("TNG50-4"), snapnum, 1, threads=t, repeats=2, preset="quick", cap_s=120, est_s=15,
-                                budget_s=120),
-                    make_config("skewerjax", sim("TNG50-4"), snapnum, 1, threads=t, modes=modes, repeats=1, preset="quick", cap_s=cap,
-                                est_s=est, budget_s=cap)]
+            out += [
+                make_config(
+                    "fake_spectra",
+                    sim("TNG50-4"),
+                    snapnum,
+                    1,
+                    threads=t,
+                    repeats=2,
+                    preset="quick",
+                    cap_s=120,
+                    est_s=15,
+                    budget_s=120,
+                ),
+                make_config(
+                    "skewerjax",
+                    sim("TNG50-4"),
+                    snapnum,
+                    1,
+                    threads=t,
+                    modes=modes,
+                    repeats=1,
+                    preset="quick",
+                    cap_s=cap,
+                    est_s=est,
+                    budget_s=cap,
+                ),
+            ]
         return out
     if name == "scaling":
         out = []
         for s in SIMULATIONS:
             extra = ("float32",) if s == "TNG50-4" else ()
-            rep = 2 if s == "TNG50-2" else 3                              # each TNG50-2 run streams 349 GB
+            rep = 2 if s == "TNG50-2" else 3  # each TNG50-2 run streams 349 GB
             for n in N_SKEWERS:
-                out += [make_config("fake_spectra", sim(s), snapnum, n, repeats=rep),
-                        make_config("skewerjax", sim(s), snapnum, n, modes=("matched", "default") + extra, repeats=rep),
-                        make_config("skewerjax", sim(s), snapnum, n, platform="gpu", modes=("matched", "default") + extra, repeats=rep)]
+                out += [
+                    make_config("fake_spectra", sim(s), snapnum, n, repeats=rep),
+                    make_config("skewerjax", sim(s), snapnum, n, modes=("matched", "default") + extra, repeats=rep),
+                    make_config(
+                        "skewerjax", sim(s), snapnum, n, platform="gpu", modes=("matched", "default") + extra, repeats=rep
+                    ),
+                ]
         return out
     if name == "threads":
         out = []
         for t in (1, 4, 8, 16):
             modes = ("matched", "default", "float32", "crossings") if t == 1 else ("matched", "default")
-            out += [make_config("fake_spectra", sim("TNG50-4"), snapnum, 16, threads=t),
-                    make_config("skewerjax", sim("TNG50-4"), snapnum, 16, threads=t, modes=modes, repeats=2)]
+            out += [
+                make_config("fake_spectra", sim("TNG50-4"), snapnum, 16, threads=t),
+                make_config("skewerjax", sim("TNG50-4"), snapnum, 16, threads=t, modes=modes, repeats=2),
+            ]
         return out
     if name == "smoke":
-        return [make_config(code, sim("TNG50-4"), snapnum, n, platform=p, repeats=1)
-                for n in (1, 4) for code, p in (("fake_spectra", "cpu"), ("skewerjax", "cpu"), ("skewerjax", "gpu"))]
+        return [
+            make_config(code, sim("TNG50-4"), snapnum, n, platform=p, repeats=1)
+            for n in (1, 4)
+            for code, p in (("fake_spectra", "cpu"), ("skewerjax", "cpu"), ("skewerjax", "gpu"))
+        ]
     raise ValueError(f"unknown set {name!r}: scaling, threads, smoke")
 
 
@@ -460,14 +593,21 @@ def worker_env(c: dict) -> dict:
     on one core), no GPU preallocation, the CUDA libraries of the pip wheels."""
     root = str(Path(__file__).resolve().parents[2])
     t = str(c["threads"])
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join([root] + [x for x in [os.environ.get("PYTHONPATH")] if x]),
-               OMP_NUM_THREADS=t, OPENBLAS_NUM_THREADS=t, MKL_NUM_THREADS=t, XLA_PYTHON_CLIENT_PREALLOCATE="false",
-               JAX_PLATFORMS="cuda" if c["platform"] == "gpu" else "cpu")
+    env = dict(
+        os.environ,
+        PYTHONPATH=os.pathsep.join([root] + [x for x in [os.environ.get("PYTHONPATH")] if x]),
+        OMP_NUM_THREADS=t,
+        OPENBLAS_NUM_THREADS=t,
+        MKL_NUM_THREADS=t,
+        XLA_PYTHON_CLIENT_PREALLOCATE="false",
+        JAX_PLATFORMS="cuda" if c["platform"] == "gpu" else "cpu",
+    )
     env.pop("XLA_FLAGS", None)
     if c["threads"] == 1:
         env["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
     if c["platform"] == "gpu":
         import site
+
         libs = sorted(str(p) for s in site.getsitepackages() for p in Path(s).glob("nvidia/*/lib"))
         env["LD_LIBRARY_PATH"] = ":".join(libs + [env.get("LD_LIBRARY_PATH", "")])
     return env
@@ -490,6 +630,7 @@ def run_config(c: dict, out, *, cap_s: float = 3600.0, mem_cap_GB: float = 48.0,
     memory falls below ``mem_floor_GB``; a run over ``cap_s`` is stopped as ``timeout``. A failed run is recorded as
     ``error`` (and run again next time)."""
     import psutil
+
     out = Path(out)
     f = out / f"{config_id(c)}.json"
     cap_s = c.get("cap_s") or cap_s
@@ -559,8 +700,16 @@ def _predict(points: list, n: int) -> Optional[float]:
     return y2 + (y2 - y1) * (n - n2) / (n2 - n1)
 
 
-def run_suite(configs, out, *, cap_s: float = 3600.0, mem_cap_GB: float = 48.0, mem_floor_GB: float = 16.0,
-              total_budget_s: Optional[float] = None, log=print) -> list:
+def run_suite(
+    configs,
+    out,
+    *,
+    cap_s: float = 3600.0,
+    mem_cap_GB: float = 48.0,
+    mem_floor_GB: float = 16.0,
+    total_budget_s: Optional[float] = None,
+    log=print,
+) -> list:
     """Every configuration in order; existing results are kept (``_remeasure``). Along a series (``series_key``, by
     increasing N), a point is skipped when a smaller N stopped at a limit, or when the extrapolation of the two
     previous points puts its first run plus one timed run over its cap (``c["cap_s"]``, else ``cap_s``), or its peak
@@ -579,8 +728,12 @@ def run_suite(configs, out, *, cap_s: float = 3600.0, mem_cap_GB: float = 48.0, 
         rec = None
         spent = time.perf_counter() - t_suite
         if not exists and total_budget_s is not None and spent + (c.get("est_s") or 0.0) > total_budget_s:
-            rec = _record(c, "budget", wall_s=0.0, reason=f"{spent:.0f} s spent + {c.get('est_s') or 0:.0f} s estimated > budget "
-                                                          f"{total_budget_s:.0f} s")
+            rec = _record(
+                c,
+                "budget",
+                wall_s=0.0,
+                reason=f"{spent:.0f} s spent + {c.get('est_s') or 0:.0f} s estimated > budget {total_budget_s:.0f} s",
+            )
             log(f"skip {config_id(c)}: {rec['reason']}")
         if rec is None and c["platform"] == "gpu" and not exists:
             has_gpu = gpu_available() if has_gpu is None else has_gpu
@@ -591,13 +744,24 @@ def run_suite(configs, out, *, cap_s: float = 3600.0, mem_cap_GB: float = 48.0, 
             cap_c = c.get("cap_s") or cap_s
             stopped = [r for r in prev if r["status"] in STOPPED and r["config"]["n_skewers"] < c["n_skewers"]]
             ok = [r for r in prev if r["status"] == "ok"]
-            t_pts = [(r["config"]["n_skewers"], r["runs"][0]["wall"] + (r["runs"][1]["wall"] if len(r["runs"]) > 1 else r["runs"][0]["wall"]))
-                     for r in ok]
+            t_pts = [
+                (
+                    r["config"]["n_skewers"],
+                    r["runs"][0]["wall"] + (r["runs"][1]["wall"] if len(r["runs"]) > 1 else r["runs"][0]["wall"]),
+                )
+                for r in ok
+            ]
             m_pts = [(r["config"]["n_skewers"], r["peak_rss_GB"]) for r in ok]
             t_pred, m_pred = _predict(t_pts, c["n_skewers"]), _predict(m_pts, c["n_skewers"])
-            reason = (f"N = {stopped[0]['config']['n_skewers']} stopped ({stopped[0]['status']})" if stopped
-                      else f"predicted {t_pred:.0f} s for the first + one timed run > cap {cap_c:.0f} s" if t_pred and t_pred > cap_c
-                      else f"predicted peak RSS {m_pred:.1f} GB > cap {mem_cap_GB:.0f} GB" if m_pred and m_pred > mem_cap_GB else None)
+            reason = (
+                f"N = {stopped[0]['config']['n_skewers']} stopped ({stopped[0]['status']})"
+                if stopped
+                else f"predicted {t_pred:.0f} s for the first + one timed run > cap {cap_c:.0f} s"
+                if t_pred and t_pred > cap_c
+                else f"predicted peak RSS {m_pred:.1f} GB > cap {mem_cap_GB:.0f} GB"
+                if m_pred and m_pred > mem_cap_GB
+                else None
+            )
             if reason:
                 rec = _record(c, "skipped", wall_s=0.0, reason=reason, predicted_s=t_pred, predicted_rss_GB=m_pred)
                 f.write_text(json.dumps(rec, indent=1))
@@ -627,10 +791,17 @@ def collect(raw_dir, results_file, *, sets=(), launcher_wall_s: Optional[float] 
         p = r["config"].get("preset", "full")
         by_preset[p] = by_preset.get(p, 0.0) + r.get("wall_s", 0.0)
     prev = json.loads(Path(results_file).read_text()).get("launches", []) if Path(results_file).exists() else []
-    res = dict(created=time.strftime("%Y-%m-%d %H:%M"), sets=list(sets), machine=ok[0]["metadata"] if ok else None,
-               snapshots=[snaps[s] for s in sorted(snaps, key=lambda s: snaps[s]["n_gas"])],
-               runtime_s=sum(r.get("wall_s", 0.0) for r in recs), runtime_by_preset_s=by_preset, launcher_wall_s=launcher_wall_s,
-               launches=prev + list(launches or []), records=recs)
+    res = dict(
+        created=time.strftime("%Y-%m-%d %H:%M"),
+        sets=list(sets),
+        machine=ok[0]["metadata"] if ok else None,
+        snapshots=[snaps[s] for s in sorted(snaps, key=lambda s: snaps[s]["n_gas"])],
+        runtime_s=sum(r.get("wall_s", 0.0) for r in recs),
+        runtime_by_preset_s=by_preset,
+        launcher_wall_s=launcher_wall_s,
+        launches=prev + list(launches or []),
+        records=recs,
+    )
     Path(results_file).parent.mkdir(parents=True, exist_ok=True)
     Path(results_file).write_text(json.dumps(res, indent=1))
     return res
@@ -649,33 +820,60 @@ def result_rows(records) -> list:
     rows = []
     for r in records:
         c = r["config"]
-        base = dict(code=c["code"], platform=c["platform"], sim=Path(c["snap_base"]).name, n_skewers=c["n_skewers"],
-                    threads=c["threads"], status=r["status"], id=r["id"], preset=c.get("preset", "full"))
+        base = dict(
+            code=c["code"],
+            platform=c["platform"],
+            sim=Path(c["snap_base"]).name,
+            n_skewers=c["n_skewers"],
+            threads=c["threads"],
+            status=r["status"],
+            id=r["id"],
+            preset=c.get("preset", "full"),
+        )
         if r["status"] != "ok":
-            for m in (c.get("modes") or [None]):
+            for m in c.get("modes") or [None]:
                 rows.append(dict(base, mode=m, reason=r.get("reason", ""), wall_s=r.get("wall_s", 0.0)))
             continue
         timed, first = r["runs"][1:] or r["runs"], r["runs"][0]
         snap = r["snapshot"]
-        for m in (c["modes"] or [None]):
+        for m in c["modes"] or [None]:
             if m is None:
                 st = {s: [x["stages"][s] for x in timed] for s in STAGES}
                 tot, first_wall = [x["wall"] for x in timed], first["wall"]
                 mem, extra = r["peak_rss_GB"], dict(compile_s=None, gpu_peak_GB=None, n_absorbers=None)
                 agr = None
             else:
-                st = {s: [x["shared"][s] if s in SHARED_STAGES else x["modes"][m]["stages"].get(s, 0.0) for x in timed] for s in STAGES}
+                st = {
+                    s: [x["shared"][s] if s in SHARED_STAGES else x["modes"][m]["stages"].get(s, 0.0) for x in timed]
+                    for s in STAGES
+                }
                 st["io"] = [a + x["modes"][m]["stages"].get("io", 0.0) for a, x in zip(st["io"], timed)]
                 tot = [sum(x["shared"].values()) + x["modes"][m]["wall"] for x in timed]
                 first_wall = sum(first["shared"].values()) + first["modes"][m]["wall"]
                 info = r["modes"][m]
-                mem, extra = info["peak_rss_GB"], dict(compile_s=info["compile_s"], gpu_peak_GB=info["gpu_peak_GB"],
-                                                       n_absorbers=info["n_absorbers"])
+                mem, extra = (
+                    info["peak_rss_GB"],
+                    dict(compile_s=info["compile_s"], gpu_peak_GB=info["gpu_peak_GB"], n_absorbers=info["n_absorbers"]),
+                )
                 agr = r.get("agreement")
-            rows.append(dict(base, mode=m, n_timed=len(timed), total=_stat(tot), first=first_wall,
-                             stages={s: _stat(v) for s, v in st.items()}, peak_rss_GB=mem, process_rss_GB=r["peak_rss_GB"],
-                             n_cells_selected=timed[0].get("n_cells"), n_gas=snap["n_gas"], snapshot=snap, agreement=agr,
-                             wall_s=r["wall_s"], **extra))
+            rows.append(
+                dict(
+                    base,
+                    mode=m,
+                    n_timed=len(timed),
+                    total=_stat(tot),
+                    first=first_wall,
+                    stages={s: _stat(v) for s, v in st.items()},
+                    peak_rss_GB=mem,
+                    process_rss_GB=r["peak_rss_GB"],
+                    n_cells_selected=timed[0].get("n_cells"),
+                    n_gas=snap["n_gas"],
+                    snapshot=snap,
+                    agreement=agr,
+                    wall_s=r["wall_s"],
+                    **extra,
+                )
+            )
     return rows
 
 
@@ -698,19 +896,32 @@ def value(rows, what: str = "total", **match) -> float:
 def print_setup(res: dict) -> None:
     """Machine, software, thread settings, snapshots, runtime and the points that did not run, of a results file."""
     m = res["machine"] or {}
-    print(f"CPU: {m.get('cpu')}, {m.get('physical_cores')} cores / {m.get('logical_cpus')} logical CPUs, {m.get('ram_GB', 0):.0f} GB RAM")
-    print(f"GPU: {m.get('gpu') or 'none'} | Python {m.get('python')} | " + ", ".join(f"{k} {v}" for k, v in (m.get("versions") or {}).items() if v))
+    print(
+        f"CPU: {m.get('cpu')}, {m.get('physical_cores')} cores / {m.get('logical_cpus')} logical CPUs, {m.get('ram_GB', 0):.0f} GB RAM"
+    )
+    print(
+        f"GPU: {m.get('gpu') or 'none'} | Python {m.get('python')} | "
+        + ", ".join(f"{k} {v}" for k, v in (m.get("versions") or {}).items() if v)
+    )
     cpus = lambda c: f"{c[0]}-{c[-1]}" if c == list(range(c[0], c[-1] + 1)) else ",".join(map(str, c))
-    print("threads: OMP / OpenBLAS / MKL = the configuration's count; process pinned to CPUs",
-          "; ".join(f"{t} thr: {cpus(c)}" for t, c in CPU_SETS.items()))
-    print("         XLA: the pinned CPU set (single-threaded Eigen on one core); fake_spectra: OpenMP; XLA_PYTHON_CLIENT_PREALLOCATE=false")
+    print(
+        "threads: OMP / OpenBLAS / MKL = the configuration's count; process pinned to CPUs",
+        "; ".join(f"{t} thr: {cpus(c)}" for t, c in CPU_SETS.items()),
+    )
+    print(
+        "         XLA: the pinned CPU set (single-threaded Eigen on one core); fake_spectra: OpenMP; XLA_PYTHON_CLIENT_PREALLOCATE=false"
+    )
     for s in res["snapshots"]:
-        print(f"{s['sim']}: snapshot {s['snapnum']:03d} (z = {s['redshift']:.3f}), {s['n_gas']:,} gas cells, box {s['box_ckpc_h'] / 1e3:.0f} cMpc/h, "
-              f"{s['n_files']} files, {s['size_GB']:.0f} GB")
+        print(
+            f"{s['sim']}: snapshot {s['snapnum']:03d} (z = {s['redshift']:.3f}), {s['n_gas']:,} gas cells, box {s['box_ckpc_h'] / 1e3:.0f} cMpc/h, "
+            f"{s['n_files']} files, {s['size_GB']:.0f} GB"
+        )
     recs = res["records"]
     n_ok = sum(r["status"] == "ok" for r in recs)
-    print(f"{len(recs)} configurations, {n_ok} measured; benchmark runtime {res['runtime_s'] / 3600:.1f} h (sum over configurations), "
-          f"results of {res['created']}")
+    print(
+        f"{len(recs)} configurations, {n_ok} measured; benchmark runtime {res['runtime_s'] / 3600:.1f} h (sum over configurations), "
+        f"results of {res['created']}"
+    )
     for p, t in sorted((res.get("runtime_by_preset_s") or {}).items()):
         n_p = sum(r["config"].get("preset", "full") == p and r["status"] == "ok" for r in recs)
         print(f"  preset {p}: {n_p} measured configurations, {t / 60:.0f} min")
@@ -718,22 +929,64 @@ def print_setup(res: dict) -> None:
         print(f"  launch {x['date']}: preset {x['preset']}, sets {','.join(x['sets'])}, {x['wall_s'] / 60:.1f} min")
     for r in recs:
         if r["status"] != "ok":
-            print(f"  not measured: {r['id']}: {r['status']}" + (f" ({r['reason']})" if r.get("reason") else f" after {r.get('wall_s', 0):.0f} s"))
+            print(
+                f"  not measured: {r['id']}: {r['status']}"
+                + (f" ({r['reason']})" if r.get("reason") else f" after {r.get('wall_s', 0):.0f} s")
+            )
 
 
 def print_rows(rows, **match) -> None:
     """Every measured row matching ``match``: median stages, total and first run [s], compilation [s], memory [GB],
     the number of timed runs, the spread of the total (max/min - 1) and the preset that measured it."""
-    rs = sorted(select_rows(rows, **match), key=lambda r: (r["n_gas"], r["threads"], r["n_skewers"], r["code"] != "fake_spectra", r["platform"],
-                                                            list(MODES).index(r["mode"]) if r["mode"] else -1))
-    head = ["sim", "N", "thr", "code", "dev", "mode", "runs", *STAGES, "total", "spread", "first", "compile", "RSS", "GPU", "preset"]
+    rs = sorted(
+        select_rows(rows, **match),
+        key=lambda r: (
+            r["n_gas"],
+            r["threads"],
+            r["n_skewers"],
+            r["code"] != "fake_spectra",
+            r["platform"],
+            list(MODES).index(r["mode"]) if r["mode"] else -1,
+        ),
+    )
+    head = [
+        "sim",
+        "N",
+        "thr",
+        "code",
+        "dev",
+        "mode",
+        "runs",
+        *STAGES,
+        "total",
+        "spread",
+        "first",
+        "compile",
+        "RSS",
+        "GPU",
+        "preset",
+    ]
     out = [head]
     for r in rs:
-        out.append([r["sim"], r["n_skewers"], r["threads"], "fs" if r["code"] == "fake_spectra" else "sjx", r["platform"], r["mode"] or "",
-                    r["n_timed"], *[f"{r['stages'][s][0]:.3g}" for s in STAGES], f"{r['total'][0]:.4g}",
-                    f"{r['total'][2] / r['total'][1] - 1:.0%}", f"{r['first']:.4g}",
-                    "" if r["compile_s"] is None else f"{r['compile_s']:.3g}", f"{r['peak_rss_GB']:.2f}",
-                    "" if r["gpu_peak_GB"] is None else f"{r['gpu_peak_GB']:.2f}", r.get("preset", "full")])
+        out.append(
+            [
+                r["sim"],
+                r["n_skewers"],
+                r["threads"],
+                "fs" if r["code"] == "fake_spectra" else "sjx",
+                r["platform"],
+                r["mode"] or "",
+                r["n_timed"],
+                *[f"{r['stages'][s][0]:.3g}" for s in STAGES],
+                f"{r['total'][0]:.4g}",
+                f"{r['total'][2] / r['total'][1] - 1:.0%}",
+                f"{r['first']:.4g}",
+                "" if r["compile_s"] is None else f"{r['compile_s']:.3g}",
+                f"{r['peak_rss_GB']:.2f}",
+                "" if r["gpu_peak_GB"] is None else f"{r['gpu_peak_GB']:.2f}",
+                r.get("preset", "full"),
+            ]
+        )
     w = [max(len(str(x)) for x in col) for col in zip(*out)]
     for row in out:
         print("  ".join(str(x).rjust(n) for x, n in zip(row, w)))
@@ -747,6 +1000,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     import logging
     import warnings
+
     logging.getLogger("jax._src.xla_bridge").setLevel(logging.CRITICAL)
     warnings.filterwarnings("ignore")
     worker(json.loads(a.config), Path(a.out))

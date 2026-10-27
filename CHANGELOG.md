@@ -3,6 +3,45 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — repository reorganisation: one test suite, packaging, tooling (2026-10-26)
+
+No result changes, except the one intended: `voigt="convolution"` is no longer a mode of the line profiles and of tau.
+
+### Removed
+- `voigt="convolution"` from `compute_optical_depth`, `optical_depth_kernel`, `voigt_line_profiles` and
+  `line_profiles`: it returned all-NaN tau (the frequency offsets of tau decrease along an increasing velocity grid,
+  and the FFT convolution assumes an increasing uniform grid) and nothing used it. Any mode other than
+  `line_profiles.PROFILE_MODES` = ("ExoJAX", "harris") raises a `ValueError` naming them. `core.voigt.voigt_convolution`
+  and `log10_voigt(mode="convolution")` stay, as standalone functions (notebook 06).
+- `scripts/validation/` (`check_*.py`, `run_all.py`, `_common.py`) and `tests/test_validation_scripts.py`: every check
+  is now a test, with the same tolerances.
+- `configs/global_setup.yaml` (read by nothing; its float32 / x64-off values contradicted the package),
+  `cuda-keyring_1.1-1_all.deb` (moved out of the repository), `SAVED_FIGURES/` (empty), `build/`,
+  `skewerjax.egg-info/`, every `__pycache__/`.
+
+### Changed
+- **Tests:** one pytest suite laid out like the package: `tests/core/`, `simulations/`, `utils/`, `comparison/`,
+  `regression/` (data in `tests/regression/data/`, renamed `route_toy.npz`, `modules_toy.npz`, `modules_tng.npz`,
+  contents unchanged). Merged: the two regression modules; streamed selection into `core/test_selection.py`; the frame
+  checks into `core/test_spectral_frames.py`; Harris into `core/test_voigt.py`; the precision / sharding tests, the
+  periodicity tests and the closed forms into `core/test_optical_depth.py`; the input checks into
+  `core/test_validation.py`. Markers `slow`, `tng`, `gpu`, `fake_spectra` (registered in `pyproject.toml`; the
+  missing requirements skip the tests with the reason), a fast default `-m "not slow"`, `tests/README.md`.
+  `scripts/dev/run_tests.py` and its pytest stand-in support the same markers (for environments without pytest).
+- **Benchmarks:** one home, `benchmarks/`: `results/fake_spectra_benchmark.json` (the summary notebook 10 reads, 152
+  kB, committed) and `raw/` (the per-run records, git-ignored). `utils.paths` defaults, the benchmark script and
+  notebook 10 follow.
+- **Packaging:** the core dependencies are what `import skewerjax` needs (h5py moved to the `simulations` extra: it is
+  imported where it is used); extras `simulations`, `plots`, `comparison`, `notebooks`, `dev` (pytest, pytest-cov, ruff,
+  pre-commit, nbstripout), `gpu`. `.gitmodules` declares the CLOUDY tables submodule (sbird/cloudy_tables, already a
+  gitlink without it). `MANIFEST.in` tidied.
+- **Tooling:** ruff (`E`, `F`, `I`, `B`, `UP`; line length 130; notebooks excluded) with its fixes applied to the code
+  of notebooks 01–07 (imports, annotations, unused names) and imports only in `core/stats` and `comparison`; `ruff
+  format` over the package, tests and scripts; `.pre-commit-config.yaml` (ruff, nbstripout `--keep-id`, whitespace,
+  end of file, large files); a CI workflow (`.github/workflows/tests.yml`: ruff and the fast CPU tests).
+- `.gitignore` rewritten (45 lines instead of the 225-line template).
+- New: `scripts/dev/update_regression_references.py`, `scripts/figures/optical_depth_vs_analytic.py`.
+
 ## Unreleased — revision checkpoint of notebooks 01–07: input checks, debugging tools, faster streamed selection (2026-10-26)
 
 No result changes: every array of the in-scope code bitwise identical to the previous commit (232 arrays, incl.

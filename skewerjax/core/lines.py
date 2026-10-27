@@ -1,10 +1,11 @@
 """Atomic transitions: the line table (``LINES``) and ``LineBundle``, the lines of one calculation."""
+
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.resources import files
-from typing import Dict, List, Optional, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -16,6 +17,7 @@ from skewerjax.core.constants import phys
 @dataclass(frozen=True)
 class Line:
     """One transition of ``lines_table.dat``: rest wavelength [A], oscillator strength, Einstein A [Hz], mass [amu]."""
+
     id: str
     species: str
     name: str
@@ -29,9 +31,9 @@ class Line:
         return self.A21_Hz * 1e-9
 
 
-def _load_lines() -> Dict[str, Line]:
+def _load_lines() -> dict[str, Line]:
     """Parse ``lines_table.dat`` (header line, then id, species, name..., lambda0_A, f_osc, A21_Hz, mass_amu)."""
-    lines: Dict[str, Line] = {}
+    lines: dict[str, Line] = {}
     with (files("skewerjax.core") / "lines_table.dat").open("r", encoding="utf-8") as f:
         next(f)
         for row in f:
@@ -41,13 +43,20 @@ def _load_lines() -> Dict[str, Line]:
             parts = row.split()
             if len(parts) < 6:
                 continue
-            name = " ".join(parts[2:len(parts) - 4]) if len(parts) > 6 else parts[1]
-            lines[parts[0]] = Line(id=parts[0], species=parts[1], name=name, lambda0_A=float(parts[-4]),
-                                   f_osc=float(parts[-3]), A21_Hz=float(parts[-2]), mass_amu=float(parts[-1]))
+            name = " ".join(parts[2 : len(parts) - 4]) if len(parts) > 6 else parts[1]
+            lines[parts[0]] = Line(
+                id=parts[0],
+                species=parts[1],
+                name=name,
+                lambda0_A=float(parts[-4]),
+                f_osc=float(parts[-3]),
+                A21_Hz=float(parts[-2]),
+                mass_amu=float(parts[-1]),
+            )
     return lines
 
 
-LINES: Dict[str, Line] = _load_lines()
+LINES: dict[str, Line] = _load_lines()
 
 
 def get_line(line_id: str) -> Line:
@@ -87,8 +96,9 @@ class LineBundle:
             raise ValueError(f"Unknown reference line ID: {ref_line_id}")
         self.lines = [LINES[lid] for lid in line_ids]
         self.ref_line = LINES[ref_line_id]
-        self._arrays = tuple(np.array([getattr(l, a) for l in self.lines], dtype=np.float64)
-                             for a in ("lambda0_A", "f_osc", "A21_GHz", "mass_amu"))
+        self._arrays = tuple(
+            np.array([getattr(l, a) for l in self.lines], dtype=np.float64) for a in ("lambda0_A", "f_osc", "A21_GHz", "mass_amu")
+        )
 
     def tree_flatten(self):
         return self._arrays, (tuple(self.lines), self.ref_line)
@@ -106,7 +116,7 @@ class LineBundle:
         return len(self.lines)
 
     @property
-    def species_keys(self) -> List[str]:
+    def species_keys(self) -> list[str]:
         """Species in order of first appearance, e.g. ``["HI", "SiIII"]``."""
         return list(dict.fromkeys(l.species for l in self.lines))
 
@@ -145,11 +155,11 @@ class LineBundle:
         return phys.c_kms * jnp.log(self.ref_line.lambda0_A / self.lambda0_A)
 
     # -- species bookkeeping
-    def lines_for_species(self, species: str) -> List[Line]:
+    def lines_for_species(self, species: str) -> list[Line]:
         """The lines of ``species``, in bundle order."""
         return [l for l in self.lines if l.species == species]
 
-    def indices_for_species(self, species: str) -> List[int]:
+    def indices_for_species(self, species: str) -> list[int]:
         """Line indices of ``species`` (to slice arrays such as tau[indices])."""
         return [i for i, l in enumerate(self.lines) if l.species == species]
 
@@ -160,7 +170,7 @@ class LineBundle:
                 return float(phys.c_kms * jnp.log(self.ref_line.lambda0_A / l.lambda0_A))
         raise KeyError(f"Line {line_id!r} is not present in this LineBundle")
 
-    def ref_index(self) -> Optional[int]:
+    def ref_index(self) -> int | None:
         """Index of the reference line in the bundle, or None."""
         return next((i for i, l in enumerate(self.lines) if l.id == self.ref_line.id), None)
 
@@ -176,15 +186,15 @@ def _species_to_element(species: str) -> str:
     return m.group(1)
 
 
-def get_mass_amu(elements: Sequence[str]) -> Dict[str, float]:
+def get_mass_amu(elements: Sequence[str]) -> dict[str, float]:
     """Atomic masses [amu] of plain elements ('H', 'Si', ...; case-insensitive), from the line table: {element: mass}."""
-    table: Dict[str, float] = {}
+    table: dict[str, float] = {}
     for line in LINES.values():
         try:
             elem = _species_to_element(line.species)
         except ValueError:
             continue
-        if line.mass_amu == line.mass_amu:                 # skip NaN
+        if line.mass_amu == line.mass_amu:  # skip NaN
             table.setdefault(elem, float(line.mass_amu))
     elems = [e.strip()[:1].upper() + e.strip()[1:].lower() for e in elements]
     missing = [e for e in elems if e not in table]

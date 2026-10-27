@@ -1,7 +1,8 @@
 """Skewers: the sampling points of a set of sightlines, their geometry and their scale factors a(x)."""
+
 from __future__ import annotations
 
-from typing import Optional, Sequence, Union
+from collections.abc import Sequence
 
 import jax
 import jax.numpy as jnp
@@ -72,9 +73,9 @@ def grid_skewer_points(L_box, N_grid: int, N_ppsk: int, direction: str = "y") ->
     c = jnp.linspace(0.0, L_box, N_grid, endpoint=False) + 0.5 * (L_box / N_grid)
     g1, g2 = jnp.meshgrid(c, c, indexing="ij")
     xyz = jnp.zeros((N_grid, N_grid, N_ppsk, 3), dtype=jnp.float32)
-    xyz = xyz.at[..., d].set(jnp.linspace(0.0, L_box, N_ppsk)[None, None, :])
-    xyz = xyz.at[..., t1].set(g1[..., None])
-    return xyz.at[..., t2].set(g2[..., None])
+    xyz = xyz.at[..., d].set(jnp.linspace(0.0, L_box, N_ppsk)[None, None, :].astype(xyz.dtype))  # float32 by design
+    xyz = xyz.at[..., t1].set(g1[..., None].astype(xyz.dtype))
+    return xyz.at[..., t2].set(g2[..., None].astype(xyz.dtype))
 
 
 def axis_aligned_skewer_points(cofm, axis, box: float, spacing: float) -> np.ndarray:
@@ -108,8 +109,9 @@ def photon_directions(points: jnp.ndarray, direction) -> jnp.ndarray:
     """
     fwd = points[1:] - points[:-1]
     bwd = points[:-1] - points[1:]
-    diffs = jnp.where(direction == 1, jnp.concatenate([fwd, fwd[-1][None, :]], axis=0),
-                      jnp.concatenate([bwd[0][None, :], bwd], axis=0))
+    diffs = jnp.where(
+        direction == 1, jnp.concatenate([fwd, fwd[-1][None, :]], axis=0), jnp.concatenate([bwd[0][None, :], bwd], axis=0)
+    )
     return diffs / jnp.maximum(jnp.linalg.norm(diffs, axis=-1, keepdims=True), 1e-20)
 
 
@@ -159,20 +161,38 @@ class SkewerBundle:
     kernels ``photon_directions``, ``comoving_distances`` are pure and vmapped over skewers.
     """
 
-    _leaves = ("spatial_points", "a0", "x0", "ICs_defined_at_index", "is_absorption", "array_direction",
-               "los_directions", "comoving_positions_from_ICs", "scale_factors", "quadri_vectors")
+    _leaves = (
+        "spatial_points",
+        "a0",
+        "x0",
+        "ICs_defined_at_index",
+        "is_absorption",
+        "array_direction",
+        "los_directions",
+        "comoving_positions_from_ICs",
+        "scale_factors",
+        "quadri_vectors",
+    )
 
-    def __init__(self, spatial_points: ArrayLike, a0: ArrayLike = 1.0, x0: ArrayLike = 0.0,
-                 ICs_defined_at_index: ArrayLike = -1,
-                 ICs_at_emission_or_absorption: Union[str, Sequence[str]] = "absorption",
-                 los_directions: Optional[ArrayLike] = None, manual_scale_factors: Optional[ArrayLike] = None,
-                 cosmologies: Optional[Cosmology] = None):
+    def __init__(
+        self,
+        spatial_points: ArrayLike,
+        a0: ArrayLike = 1.0,
+        x0: ArrayLike = 0.0,
+        ICs_defined_at_index: ArrayLike = -1,
+        ICs_at_emission_or_absorption: str | Sequence[str] = "absorption",
+        los_directions: ArrayLike | None = None,
+        manual_scale_factors: ArrayLike | None = None,
+        cosmologies: Cosmology | None = None,
+    ):
         spatial_points = jnp.asarray(spatial_points)
         if spatial_points.ndim != 3 or spatial_points.shape[-1] != 3:
             raise ValueError(f"spatial_points must be (N_sk, N_ppsk, 3), got {spatial_points.shape}")
         N_sk, N_ppsk = spatial_points.shape[:2]
         if N_sk < 1 or N_ppsk < 2:
-            raise ValueError(f"a SkewerBundle needs at least one skewer of at least 2 points, got (N_sk, N_ppsk) = {(N_sk, N_ppsk)}.")
+            raise ValueError(
+                f"a SkewerBundle needs at least one skewer of at least 2 points, got (N_sk, N_ppsk) = {(N_sk, N_ppsk)}."
+            )
         check_values("SkewerBundle: spatial_points [cMpc]", spatial_points)
         check_values("SkewerBundle: a0", a0, minimum=0.0, strict=True)
         a0 = jnp.broadcast_to(jnp.asarray(a0), (N_sk,))
@@ -192,8 +212,9 @@ class SkewerBundle:
         if los_directions is not None:
             los_directions = jnp.asarray(los_directions)
             if los_directions.shape != (N_sk, N_ppsk, 3):
-                raise ValueError(f"Provided los_directions shape {los_directions.shape} must match (N_sk, N_ppsk, 3) = "
-                                 f"{(N_sk, N_ppsk, 3)}")
+                raise ValueError(
+                    f"Provided los_directions shape {los_directions.shape} must match (N_sk, N_ppsk, 3) = {(N_sk, N_ppsk, 3)}"
+                )
             max_dev = jnp.max(jnp.abs(jnp.linalg.norm(los_directions, axis=-1) - 1.0))
             if max_dev > 1e-5:
                 raise ValueError(f"los_directions must be normalized. Max |‖d‖-1| = {max_dev:.3e}")
@@ -204,8 +225,10 @@ class SkewerBundle:
         if manual_scale_factors is not None:
             scale_factors = jnp.asarray(manual_scale_factors)
             if scale_factors.ndim != 3 or scale_factors.shape[1:] != (N_sk, N_ppsk):
-                raise ValueError(f"manual_scale_factors must have shape (N_cosmologies, N_sk, N_ppsk) = (., {N_sk}, {N_ppsk}), "
-                                 f"got {scale_factors.shape}")
+                raise ValueError(
+                    f"manual_scale_factors must have shape (N_cosmologies, N_sk, N_ppsk) = (., {N_sk}, {N_ppsk}), "
+                    f"got {scale_factors.shape}"
+                )
         else:
             if cosmologies is None:
                 raise ValueError("When manual_scale_factors is not provided, you must supply the 'cosmologies' argument.")
@@ -214,8 +237,10 @@ class SkewerBundle:
         try:
             check_values("SkewerBundle: scale factors a(x)", scale_factors, minimum=0.0, strict=True)
         except ValueError as e:
-            raise ValueError(f"{e} The scale factor must stay finite and > 0 along every path: check a0, the cosmology and the "
-                             "path lengths (a path of emission longer than the distance to a = 0?), or manual_scale_factors.") from None
+            raise ValueError(
+                f"{e} The scale factor must stay finite and > 0 along every path: check a0, the cosmology and the "
+                "path lengths (a path of emission longer than the distance to a = 0?), or manual_scale_factors."
+            ) from None
 
         self.spatial_points, self.a0, self.x0 = spatial_points, a0, x0
         self.ICs_defined_at_index, self.is_absorption, self.array_direction = ic, is_absorption, direction

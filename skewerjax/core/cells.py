@@ -27,9 +27,10 @@ A regular grid of cells (``cells_on_grid``) carries ``grid`` = its shape: its ge
 in C order, and its Voronoi cells are the cubes of side box / N centred on them, so the deposition can find the cell of
 a position from the position itself (``deposition.grid_segments``).
 """
+
 from __future__ import annotations
 
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 import numpy as np
 from jax import tree_util
@@ -64,8 +65,16 @@ class Cells:
     ``grid`` are static).
     """
 
-    def __init__(self, positions, volumes, species: dict, box: Optional[float] = None, ids=None, grid: Optional[tuple] = None,
-                 validate: bool = True):
+    def __init__(
+        self,
+        positions,
+        volumes,
+        species: dict,
+        box: float | None = None,
+        ids=None,
+        grid: tuple | None = None,
+        validate: bool = True,
+    ):
         self.positions = positions
         self.volumes = volumes
         self.species = {sp: dict(f) for sp, f in species.items()}
@@ -93,7 +102,7 @@ class Cells:
         if validate:
             self._validate()
 
-    _MINIMUM = {"temperature": 0.0, "turbulence": 0.0, "collisional": 0.0}      # lower bounds of the fields (None: any)
+    _MINIMUM = {"temperature": 0.0, "turbulence": 0.0, "collisional": 0.0}  # lower bounds of the fields (None: any)
 
     def _validate(self):
         """Finite values and physical ranges (class docstring); ``ValueError`` otherwise."""
@@ -126,8 +135,11 @@ class Cells:
         return int(np.shape(self.positions)[0])
 
     def __repr__(self):
-        return (f"Cells({len(self)} cells, species {self.species_keys}, box={self.box}"
-                + (f", grid={self.grid}" if self.grid is not None else "") + ")")
+        return (
+            f"Cells({len(self)} cells, species {self.species_keys}, box={self.box}"
+            + (f", grid={self.grid}" if self.grid is not None else "")
+            + ")"
+        )
 
     @property
     def species_keys(self) -> tuple:
@@ -148,23 +160,30 @@ class Cells:
             return np.zeros(len(self))
         raise KeyError(f"unknown field {field!r} (allowed: {FIELDS}).")
 
-    def take(self, idx) -> "Cells":
+    def take(self, idx) -> Cells:
         """Subset (NumPy index). The subset is no longer a full grid (``grid`` = None)."""
         idx = np.asarray(idx)
-        return Cells(np.asarray(self.positions)[idx], np.asarray(self.volumes)[idx],
-                     {sp: {k: np.asarray(v)[idx] for k, v in f.items()} for sp, f in self.species.items()}, self.box,
-                     None if self.ids is None else np.asarray(self.ids)[idx], validate=False)
+        return Cells(
+            np.asarray(self.positions)[idx],
+            np.asarray(self.volumes)[idx],
+            {sp: {k: np.asarray(v)[idx] for k, v in f.items()} for sp, f in self.species.items()},
+            self.box,
+            None if self.ids is None else np.asarray(self.ids)[idx],
+            validate=False,
+        )
 
-    def select_species(self, species) -> "Cells":
+    def select_species(self, species) -> Cells:
         """The same cells with only the species ``species`` (a key or a sequence of keys)."""
         keys = [species] if isinstance(species, str) else list(species)
         missing = [sp for sp in keys if sp not in self.species]
         if missing:
             raise KeyError(f"the cells hold no species {missing} (they hold {self.species_keys}).")
-        return Cells(self.positions, self.volumes, {sp: self.species[sp] for sp in keys}, self.box, self.ids, self.grid, validate=False)
+        return Cells(
+            self.positions, self.volumes, {sp: self.species[sp] for sp in keys}, self.box, self.ids, self.grid, validate=False
+        )
 
     @staticmethod
-    def merge_species(parts) -> "Cells":
+    def merge_species(parts) -> Cells:
         """One container with the species of every part (same generating points, volumes and box)."""
         parts = list(parts)
         p0 = parts[0]
@@ -182,7 +201,7 @@ class Cells:
 
 
 # --------------------------------------------------------------------------- builders
-Value = Union[float, np.ndarray, Callable, dict]
+Value = float | np.ndarray | Callable | dict
 
 
 def _resolve(value, positions: np.ndarray, species: str, vector: bool) -> np.ndarray:
@@ -204,9 +223,19 @@ def _resolve(value, positions: np.ndarray, species: str, vector: bool) -> np.nda
     raise ValueError(f"{species}: a per-cell value of shape {a.shape} cannot fill {want}.")
 
 
-def cells_from_values(positions, box: Optional[float], number_density: dict, *, temperature: Value = 1e4, velocity: Value = 0.0,
-                      turbulence: Optional[Value] = None, collisional: Optional[Value] = None, volumes=None, ids=None,
-                      grid: Optional[tuple] = None) -> Cells:
+def cells_from_values(
+    positions,
+    box: float | None,
+    number_density: dict,
+    *,
+    temperature: Value = 1e4,
+    velocity: Value = 0.0,
+    turbulence: Value | None = None,
+    collisional: Value | None = None,
+    volumes=None,
+    ids=None,
+    grid: tuple | None = None,
+) -> Cells:
     """``Cells`` from generating points and per-species values.
 
     Parameters
@@ -230,8 +259,11 @@ def cells_from_values(positions, box: Optional[float], number_density: dict, *, 
         volumes = np.full(m, float(box) ** 3 / m)
     species = {}
     for sp, n in number_density.items():
-        f = {"number_density": _resolve(n, pos, sp, False), "temperature": _resolve(temperature, pos, sp, False),
-             "velocity": _resolve(velocity, pos, sp, True)}
+        f = {
+            "number_density": _resolve(n, pos, sp, False),
+            "temperature": _resolve(temperature, pos, sp, False),
+            "velocity": _resolve(velocity, pos, sp, True),
+        }
         if turbulence is not None:
             f["turbulence"] = _resolve(turbulence, pos, sp, False)
         if collisional is not None:

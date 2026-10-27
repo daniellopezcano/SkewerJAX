@@ -6,6 +6,7 @@ matplotlib, iminuit, diffrax, ExoJAX), the optional fake_spectra, and imports th
 one tiny optical depth. Forces JAX to the CPU for this process if no NVIDIA GPU is found (quiet CUDA logs).
 Exit code 1 only if a core component (jax, skewerjax) is missing.
 """
+
 from __future__ import annotations
 
 import math
@@ -32,7 +33,7 @@ def report(ok: bool, msg: str):
 def try_import(name: str):
     try:
         return __import__(name, fromlist=["_"]), ""
-    except Exception as e:                                    # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         return None, f"{type(e).__name__}: {e}"
 
 
@@ -40,11 +41,12 @@ def nvidia_gpus():
     """GPU names from nvidia-smi ([] if absent), and the driver version."""
     if shutil.which("nvidia-smi") is None:
         return None, []
-    q = lambda f: subprocess.run(["nvidia-smi", f"--query-gpu={f}", "--format=csv,noheader"], capture_output=True, text=True,
-                                 check=True).stdout.split("\n")
+    q = lambda f: subprocess.run(
+        ["nvidia-smi", f"--query-gpu={f}", "--format=csv,noheader"], capture_output=True, text=True, check=True
+    ).stdout.split("\n")
     try:
         return q("driver_version")[0].strip(), [n.strip() for n in q("name") if n.strip()]
-    except Exception:                                         # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return "unknown", []
 
 
@@ -58,19 +60,20 @@ def section(name: str, test):
     print(f"{name:11s}: {getattr(mod, '__version__', 'unknown')}")
     try:
         report(*test(mod))
-    except Exception as e:                                    # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         report(False, f"{name} test -> {type(e).__name__}: {e}")
     return mod
 
 
 def test_jax(jax):
     import jax.numpy as jnp
+
     print(f"Backend    : {jax.default_backend()} | devices {jax.devices()}")
     plugins = [p for p in ("jax_plugins.xla_cuda13", "jax_plugins.xla_cuda12") if try_import(p)[0] is not None]
     print(f"Plugins    : {', '.join(plugins) or 'none'}")
     try:
         gpus = jax.devices("gpu")
-    except Exception:                                         # noqa: BLE001
+    except Exception:  # noqa: BLE001
         gpus = []
     dev = gpus[0] if gpus else jax.devices()[0]
     if plugins and not gpus:
@@ -86,6 +89,7 @@ def test_jax(jax):
 
 def test_h5py(h5py):
     import numpy as np
+
     fd, path = tempfile.mkstemp(prefix="skewerjax_", suffix=".h5")
     os.close(fd)
     with h5py.File(path, "w") as f:
@@ -98,24 +102,32 @@ def test_h5py(h5py):
 
 def test_iminuit(iminuit):
     import numpy as np
+
     x = np.linspace(-1, 1, 50)
     y = 2.5 * x - 0.4 + np.random.default_rng(0).normal(0, 0.05, x.size)
     m = iminuit.Minuit(lambda a, b: np.sum(((y - a * x - b) / 0.05) ** 2), a=1.0, b=0.0)
     m.errordef = iminuit.Minuit.LEAST_SQUARES
     m.migrad()
-    return abs(m.values["a"] - 2.5) < 0.1 and abs(m.values["b"] + 0.4) < 0.1, f"linear fit a = {m.values['a']:.3f}, b = {m.values['b']:.3f}"
+    return abs(m.values["a"] - 2.5) < 0.1 and abs(
+        m.values["b"] + 0.4
+    ) < 0.1, f"linear fit a = {m.values['a']:.3f}, b = {m.values['b']:.3f}"
 
 
 def test_skewerjax(sjx):
     import jax.numpy as jnp
     import numpy as np
+
+    import skewerjax.comparison
+    import skewerjax.simulations  # noqa: F401, E401
     from skewerjax.core import LineBundle, SkewerBundle, cells_on_grid, compute_optical_depth
-    import skewerjax.simulations, skewerjax.comparison                       # noqa: F401, E401
+
     pts = jnp.stack([jnp.linspace(0.0, 1e-3, 16), jnp.full(16, 5e-4), jnp.full(16, 5e-4)], -1)[None]
     sb = SkewerBundle(spatial_points=pts, manual_scale_factors=jnp.ones((1, 1, 16)))
-    cells = cells_on_grid(1e-3, {"HI": np.full((4, 4, 4), 1e-7)}, temperature=1e4)        # uniform gas: 4^3 cells
+    cells = cells_on_grid(1e-3, {"HI": np.full((4, 4, 4), 1e-7)}, temperature=1e4)  # uniform gas: 4^3 cells
     tau = compute_optical_depth(sb, jnp.linspace(-200, 200, 64), LineBundle(["HI-LyA"]), cells, a_dagger=1.0)
-    return bool(jnp.all(jnp.isfinite(tau)) and float(tau.max()) > 0), f"blocks core / simulations / comparison import; tau {tuple(tau.shape)}"
+    return bool(
+        jnp.all(jnp.isfinite(tau)) and float(tau.max()) > 0
+    ), f"blocks core / simulations / comparison import; tau {tuple(tau.shape)}"
 
 
 def main() -> int:
@@ -124,13 +136,23 @@ def main() -> int:
         os.environ["JAX_PLATFORMS"] = "cpu"
     header("Environment")
     print(f"Python     : {platform.python_version()} | {platform.platform()}\nExecutable : {sys.executable}")
-    print(f"JAX_PLATFORMS={os.getenv('JAX_PLATFORMS')!r} | XLA_PYTHON_CLIENT_PREALLOCATE={os.getenv('XLA_PYTHON_CLIENT_PREALLOCATE')!r} "
-          f"| XLA_PYTHON_CLIENT_MEM_FRACTION={os.getenv('XLA_PYTHON_CLIENT_MEM_FRACTION')!r}")
-    print(f"NVIDIA     : driver={driver} | GPUs={gpus or 'none'}" if driver else "NVIDIA     : nvidia-smi not found (CPU-only is fine)")
+    print(
+        f"JAX_PLATFORMS={os.getenv('JAX_PLATFORMS')!r} | XLA_PYTHON_CLIENT_PREALLOCATE={os.getenv('XLA_PYTHON_CLIENT_PREALLOCATE')!r} "
+        f"| XLA_PYTHON_CLIENT_MEM_FRACTION={os.getenv('XLA_PYTHON_CLIENT_MEM_FRACTION')!r}"
+    )
+    print(
+        f"NVIDIA     : driver={driver} | GPUs={gpus or 'none'}"
+        if driver
+        else "NVIDIA     : nvidia-smi not found (CPU-only is fine)"
+    )
     jax = section("jax", test_jax)
     section("numpy", lambda np: (bool(np.isfinite(np.sin(np.arange(10.0))).all()), "np.sin finite"))
-    section("scipy", lambda sp: (lambda v: (abs(v - 2) < 1e-8, f"quad sin(0..pi) = {v:.12f}"))(
-        __import__("scipy.integrate", fromlist=["quad"]).quad(math.sin, 0.0, math.pi)[0]))
+    section(
+        "scipy",
+        lambda sp: (lambda v: (abs(v - 2) < 1e-8, f"quad sin(0..pi) = {v:.12f}"))(
+            __import__("scipy.integrate", fromlist=["quad"]).quad(math.sin, 0.0, math.pi)[0]
+        ),
+    )
     section("h5py", test_h5py)
     section("matplotlib", lambda mpl: (mpl.use("Agg") or True, "headless backend 'Agg'"))
     section("iminuit", test_iminuit)

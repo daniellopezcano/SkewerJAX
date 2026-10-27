@@ -70,7 +70,8 @@ imports the other subpackages. `simulations` holds every source of gas cells: th
 | background | `Cosmology(H0, Omega_r_0, Omega_m_0, Omega_k_0, Omega_lambda_0)` | batches of cosmologies; `solve_a_of_x(rtol, atol)` |
 | skewers | `SkewerBundle(spatial_points, cosmologies, a0, x0, ...)` | `ICs_defined_at_index`, `ICs_at_emission_or_absorption`, `manual_scale_factors` |
 | gas cells | `Cells(positions, volumes, species, box)`, `cells_from_values`, `cells_on_grid`, `grid_points`, `voronoi_volumes` | (filled by the sources of `skewerjax.simulations`) |
-| line profiles | `core.line_profiles`: `line_profiles(v, lines, temperature=..., los_velocity=..., scale_factor=..., a_dagger=...)`, `voigt_line_profiles`, `voigt_widths_GHz`, `voigt_width_kms` | `voigt` (`"ExoJAX"`, `"convolution"`, `"harris"`: first order in the damping parameter, a ≤ 10⁻³, exact above), `detuning` (`"exact"`, `"linear"`), `velocity_period` |
+| line profiles | `core.line_profiles`: `line_profiles(v, lines, temperature=..., los_velocity=..., scale_factor=..., a_dagger=...)`, `voigt_line_profiles`, `voigt_widths_GHz`, `voigt_width_kms` | `voigt` (`PROFILE_MODES`: `"ExoJAX"`, `"harris"`: first order in the damping parameter, a ≤ 10⁻³, exact above; any other mode raises), `detuning` (`"exact"`, `"linear"`), `velocity_period` |
+| Voigt function | `core.voigt`: `voigt_exojax`, `voigt_harris`, `voigt_convolution` (FFT on an increasing uniform grid), `voigt_scipy` (wofz, NumPy), `log10_voigt(mode=)` | standalone; the line profiles and τ use ExoJAX or Harris |
 | τ | `compute_optical_depth(bundle, v, lines, cells, a_dagger=...)` or `compute_optical_depth(pieces, v, lines)` | `deposition` (`"voronoi"` default, `"tophat"`, `"voronoi_crossings"`), `line_frame`, `velocity_period`, `voigt`, `detuning`, `resolution_tolerance`, `v_chunk`, `piece_chunk`, `batch_size`, `per_piece`, `dtype`, `devices`, `return_info` |
 | debugging | `check_skewers(cells, bundle, lines)`, `enable_logging()`, `return_info=True` | see "Debugging and input checks" |
 | τ (layers) | `select_cells` → `voronoi_segments` / `grid_segments` / `tophat_segments` → `absorbers_from_components` → `absorber_pieces` (all in `cell_pieces`) → `Pieces` → `optical_depth_from_pieces` → `optical_depth_kernel` | `resolution_report(pieces, lines)`; `voronoi_segments(..., backend="jax")`; `tau_absorbers`, `tau_by_path_bins` |
@@ -96,7 +97,7 @@ from skewerjax.simulations import ArepoHDF5Reader, SimulationSkewers, Extraction
 
 reader = ArepoHDF5Reader("/home/STORAGE/TNG50-4", 25)
 sk = SimulationSkewers.axis_aligned(reader, [[17500.25, 17500.75, 0.0]], [3], spacing_kms=0.25)  # cofm in ckpc/h, axis z
-v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA"))           # (2, 1, N_v)
+v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA"))  # (2, 1, N_v)
 ```
 
 - **Skewers:** `SimulationSkewers.axis_aligned` (straight, along a box axis) or `SimulationSkewers.from_bundle` (any
@@ -163,7 +164,8 @@ Sharding uses one call for any number of devices:
 ```python
 import jax
 from skewerjax.core import optical_depth_sharded
-tau = optical_depth_sharded(pieces, v, lines, devices=jax.devices())    # = optical_depth_from_pieces(...) bit for bit
+
+tau = optical_depth_sharded(pieces, v, lines, devices=jax.devices())  # = optical_depth_from_pieces(...) bit for bit
 ```
 
 The skewers are padded to a multiple of the device count, and the padding is dropped from the result. On one device the
@@ -198,10 +200,11 @@ first bad entry. They are skipped for traced values, so `jit`, `vmap` and `grad`
 
 ```python
 from skewerjax.core import check_skewers, compute_optical_depth, enable_logging
-report = check_skewers(cells, bundle, lines)          # when a result looks wrong
-print(report)                                         # coverage, column, window, resolution: ok / FAILED, with numbers
+
+report = check_skewers(cells, bundle, lines)  # when a result looks wrong
+print(report)  # coverage, column, window, resolution: ok / FAILED, with numbers
 tau, info = compute_optical_depth(bundle, v, lines, cells, return_info=True)
-enable_logging()                                      # the package's log messages (logger "skewerjax") on stderr
+enable_logging()  # the package's log messages (logger "skewerjax") on stderr
 ```
 
 - `check_skewers(cells, bundle, lines)` returns a `SkewerCheck` (`report.ok`, `report.checks[name]`), with four
@@ -227,13 +230,19 @@ enable_logging()                                      # the package's log messag
 ## Validation, tests and benchmarks
 
 ```bash
-python scripts/validation/run_all.py [--quick] [--skip tng,fake] [--outdir validation_output]
-pytest                                                                  # tests/, CPU, seconds per test
-python scripts/dev/run_tests.py [test_module ...]                       # the same, without pytest
+pytest                                                                  # the fast default (-m "not slow"); tests/README.md
+pytest -m "slow or not slow"                                            # every test; markers: slow, tng, gpu, fake_spectra
+python scripts/dev/run_tests.py [-m EXPR] [--all] [path ...]            # the same, without pytest
+python scripts/dev/update_regression_references.py                     # only for an intended change of the results
 python scripts/dev/check_markdown_math.py notebooks/*.ipynb             # the notebooks' markdown math (MathJax)
-SKEWERJAX_SLOW=1 pytest                                                 # also the TNG50-4 / fake_spectra checks
+python scripts/figures/optical_depth_vs_analytic.py                     # tau of uniform gas against its closed forms
 python scripts/benchmarks/benchmark_fake_spectra.py [--preset quick|full] [--sets scaling,threads]   # SkewerJAX vs fake_spectra (quick <= 30 min, full ~10 h; --sets smoke ~4 min)
 ```
+
+The suite (`tests/`) mirrors the package: `core/` (one module per area; `test_optical_depth.py` for τ),
+`simulations/`, `utils/`, `comparison/` and `regression/` (every result against `tests/regression/data/*.npz`). The
+physics checks (closed forms of τ, Voigt limits, a(x), statistics recovery, jit / vmap of every kernel, the TNG50-4
+field extraction and τ, the comparison with fake_spectra) are tests with markers.
 
 The benchmark (`comparison.benchmark`, launched by `scripts/benchmarks/benchmark_fake_spectra.py`) runs every
 configuration (code, snapshot, number of skewers, device, threads) in its own process, pinned to a fixed CPU set with
@@ -245,9 +254,9 @@ larger skewer counts of a series that hit (or is predicted to hit) a limit, and 
 interrupted run resumes. Two presets (`benchmark.PRESETS`): `quick` (the default; TNG50-3 and TNG50-2 at small N and
 the threads at N = 1, one or two timed runs, a cap and an estimate per point, and no point started once the time spent
 plus its estimate would exceed `--budget`, 1800 s) and `full` (N up to 1024 on the three snapshots, the threads at
-N = 16; it re-measures the quick points that hold fewer timed runs). Every record keeps its preset. All records go to one
-results file, `notebooks/benchmark_records/fake_spectra_benchmark.json` (with the runtime per preset and the list of
-launches), which `10_comparison_fake_spectra_performance` plots (`RUN_BENCHMARKS = True` re-runs the missing
+N = 16; it re-measures the quick points that hold fewer timed runs). Every record keeps its preset. The raw records go to
+`benchmarks/raw/fake_spectra` (git-ignored), and their summary to `benchmarks/results/fake_spectra_benchmark.json`
+(committed; with the runtime per preset and the list of launches), which `10_comparison_fake_spectra_performance` plots (`RUN_BENCHMARKS = True` re-runs the missing
 configurations of its `PRESET`).
 
 ## Figures: `skewerjax.utils.plotting`
@@ -256,10 +265,11 @@ One call at the top of a notebook or script applies the style of every figure:
 
 ```python
 from skewerjax.utils.plotting import use_style, use_backend
-use_backend()          # interactive figures (ipympl, "%matplotlib widget") in a live notebook; inline when headless
-use_style()            # "paper" (default): white background, publication look, Paul Tol's colour-blind-safe "bright" scheme
-use_style("dark")      # black background, NeonGlow under every line (the same colours, in the same order)
-from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG, DIM, LABELS   # FG, BG, DIM follow the style
+
+use_backend()  # interactive figures (ipympl, "%matplotlib widget") in a live notebook; inline when headless
+use_style()  # "paper" (default): white background, publication look, Paul Tol's colour-blind-safe "bright" scheme
+use_style("dark")  # black background, NeonGlow under every line (the same colours, in the same order)
+from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG, DIM, LABELS  # FG, BG, DIM follow the style
 ```
 
 - Only the background, the foreground (`FG`, `BG`, `DIM`, `ENTITY_COLORS["total"]`) and the direction of the

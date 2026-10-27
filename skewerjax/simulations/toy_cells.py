@@ -6,6 +6,7 @@ velocities given as arrays on the grid or as functions of the nodes. A regular g
 the cell of node x_j is the cube of side L / N centred on it, so no other generating points are needed, and the gas is
 the realisation itself, piecewise constant.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -32,15 +33,22 @@ def interpolate_periodic(field: jnp.ndarray, pos_xyz: jnp.ndarray, L_box) -> jnp
     i0 = jnp.floor(u).astype(jnp.int32)
     f = u - i0.astype(u.dtype)
 
-    ix0 = jnp.mod(i0[:, 0], Nx); ix1 = jnp.mod(ix0 + 1, Nx)
-    iy0 = jnp.mod(i0[:, 1], Ny); iy1 = jnp.mod(iy0 + 1, Ny)
-    iz0 = jnp.mod(i0[:, 2], Nz); iz1 = jnp.mod(iz0 + 1, Nz)
+    ix0 = jnp.mod(i0[:, 0], Nx)
+    ix1 = jnp.mod(ix0 + 1, Nx)
+    iy0 = jnp.mod(i0[:, 1], Ny)
+    iy1 = jnp.mod(iy0 + 1, Ny)
+    iz0 = jnp.mod(i0[:, 2], Nz)
+    iz1 = jnp.mod(iz0 + 1, Nz)
     fx, fy, fz = f[:, 0], f[:, 1], f[:, 2]
 
-    c000 = field[ix0, iy0, iz0]; c100 = field[ix1, iy0, iz0]
-    c010 = field[ix0, iy1, iz0]; c110 = field[ix1, iy1, iz0]
-    c001 = field[ix0, iy0, iz1]; c101 = field[ix1, iy0, iz1]
-    c011 = field[ix0, iy1, iz1]; c111 = field[ix1, iy1, iz1]
+    c000 = field[ix0, iy0, iz0]
+    c100 = field[ix1, iy0, iz0]
+    c010 = field[ix0, iy1, iz0]
+    c110 = field[ix1, iy1, iz0]
+    c001 = field[ix0, iy0, iz1]
+    c101 = field[ix1, iy0, iz1]
+    c011 = field[ix0, iy1, iz1]
+    c111 = field[ix1, iy1, iz1]
 
     c00 = c000 * (1 - fx) + c100 * fx
     c10 = c010 * (1 - fx) + c110 * fx
@@ -83,6 +91,8 @@ def grf_cells(delta, grf: PowerLawGRF, n_bar: dict, *, temperature=1e4, velocity
     n = {sp: nb * one for sp, nb in n_bar.items()}
     cells = cells_on_grid(box, n, temperature=temperature, velocity=velocity, turbulence=turbulence, collisional=collisional)
     if float(one.min()) <= 0.0:
-        warnings.warn(f"grf_cells: min(1 + delta) = {float(one.min()):.3f} <= 0, so the density is negative somewhere; "
-                      "lower A_s.", stacklevel=2)
+        warnings.warn(
+            f"grf_cells: min(1 + delta) = {float(one.min()):.3f} <= 0, so the density is negative somewhere; lower A_s.",
+            stacklevel=2,
+        )
     return cells

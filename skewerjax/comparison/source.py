@@ -11,6 +11,7 @@ Nothing of fake_spectra is imported in reference mode. ``cell_inputs`` converts 
 SkewerJAX units, in the order of SkewerJAX's selected cells, so that they can be fed to ``SimulationSkewers``
 (``override=``) to isolate the inputs from the integration. NumPy / h5py only.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -19,11 +20,10 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
-import h5py
 import numpy as np
 
 from skewerjax.comparison import driver as drv
-from skewerjax.comparison.driver import SKEWER_SETS
+from skewerjax.comparison.driver import SKEWER_SETS  # noqa: F401  (re-exported by skewerjax.comparison)
 from skewerjax.simulations.snapshot_skewers import cached, h5_read, h5_write
 
 
@@ -39,8 +39,9 @@ class FakeSpectraSource:
     live : force the mode (default: live when ``cache`` is given and fake_spectra is importable).
     """
 
-    def __init__(self, reference=None, cache=None, snap_base=None, snapnum=None, res: float = 1.0, build=None,
-                 live: Optional[bool] = None):
+    def __init__(
+        self, reference=None, cache=None, snap_base=None, snapnum=None, res: float = 1.0, build=None, live: Optional[bool] = None
+    ):
         self.reference = None if reference is None else Path(reference)
         self.cache = None if cache is None else Path(cache)
         self.snap_base, self.snapnum, self.res, self.build = snap_base, snapnum, res, build
@@ -61,11 +62,20 @@ class FakeSpectraSource:
         return f"live (cache {self.cache})" if self.live else f"reference file ({self.reference})"
 
     def _ref(self, name):
+        import h5py  # optional dependency (the simulations extra): imported where it is used
+
         with h5py.File(self.reference, "r") as f:
             return h5_read(f[name])
 
-    def run(self, tag: str, sset: str = "single", sf_neutral: bool = False, species: str = "H:1:1215",
-            products: str = "tau,colden", kernel: str = "default") -> dict:
+    def run(
+        self,
+        tag: str,
+        sset: str = "single",
+        sf_neutral: bool = False,
+        species: str = "H:1:1215",
+        products: str = "tau,colden",
+        kernel: str = "default",
+    ) -> dict:
         """A full fake_spectra run (``fs_<tag>``): tau, colden, ... of the skewer set ``sset``."""
         name = f"fs_{tag}"
         if not self.live:
@@ -73,10 +83,32 @@ class FakeSpectraSource:
         else:
             f = self.cache / f"{name}.h5"
             if not f.exists():
-                cmd = [sys.executable, "-m", "skewerjax.comparison.driver", "full", "--snap-base", str(self.snap_base),
-                       "--snapnum", str(self.snapnum), "--cache", str(self.cache), "--tag", tag, "--set", sset, "--res",
-                       str(self.res), "--sf-neutral", str(int(sf_neutral)), "--species", species, "--products", products,
-                       "--kernel", kernel] + ([] if self.build is None else ["--build", str(self.build)])
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "skewerjax.comparison.driver",
+                    "full",
+                    "--snap-base",
+                    str(self.snap_base),
+                    "--snapnum",
+                    str(self.snapnum),
+                    "--cache",
+                    str(self.cache),
+                    "--tag",
+                    tag,
+                    "--set",
+                    sset,
+                    "--res",
+                    str(self.res),
+                    "--sf-neutral",
+                    str(int(sf_neutral)),
+                    "--species",
+                    species,
+                    "--products",
+                    products,
+                    "--kernel",
+                    kernel,
+                ] + ([] if self.build is None else ["--build", str(self.build)])
                 self.cache.mkdir(parents=True, exist_ok=True)
                 subprocess.run(cmd, check=True, capture_output=True)
             d = drv.load_h5(f)
@@ -92,8 +124,16 @@ class FakeSpectraSource:
     def spectra_object(self, sset: str, sf_neutral: bool = False):
         key = (sset, sf_neutral)
         if key not in self._spec:
-            self._spec[key] = drv.make_spectra(self.spectra, self.snap_base, self.snapnum, self.cache / "fs_work", sset, self.res,
-                                               sf_neutral, f"obj_{sset}_{int(sf_neutral)}")
+            self._spec[key] = drv.make_spectra(
+                self.spectra,
+                self.snap_base,
+                self.snapnum,
+                self.cache / "fs_work",
+                sset,
+                self.res,
+                sf_neutral,
+                f"obj_{sset}_{int(sf_neutral)}",
+            )
         return self._spec[key]
 
     def constants(self) -> dict:
@@ -114,12 +154,19 @@ class FakeSpectraSource:
         H = reader.header
         f = self.cell_values(reader, cells, sset, ion.element, ion.stage, sf_neutral)
         rscale = float(self.constants()["rscale"])
-        return dict(pos=np.mod(f["pos"] * H.code_length_cMpc, H.box_cMpc), size=f["hh"] * H.code_length_cMpc,
-                    n=f["elem_den"] / rscale, T=f["temp"].astype(float), vel=f["vel"].astype(float))
+        return dict(
+            pos=np.mod(f["pos"] * H.code_length_cMpc, H.box_cMpc),
+            size=f["hh"] * H.code_length_cMpc,
+            n=f["elem_den"] / rscale,
+            T=f["temp"].astype(float),
+            vel=f["vel"].astype(float),
+        )
 
     def export(self, path=None) -> int:
         """Add every result used so far to the reference file (groups already there are kept); returns its size [bytes]."""
         path = Path(path or self.reference)
+        import h5py  # optional dependency (the simulations extra): imported where it is used
+
         with h5py.File(path, "a") as f:
             for n, d in self.used.items():
                 if n not in f:

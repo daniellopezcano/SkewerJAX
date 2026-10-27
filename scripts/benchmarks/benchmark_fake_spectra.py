@@ -26,10 +26,12 @@ such. Every record keeps its preset (``config["preset"]``); notebook 10 says whi
 
 Inputs: ``skewerjax.utils.paths.DATA_DIR`` (``$SKEWERJAX_DATA``) / TNG50-4, -3, -2, snapshot 25 (z = 3), read only.
 Outputs: one record per configuration (``.json``, ``.npz`` of tau, a log) in ``--raw`` (default
-``BENCHMARK_RAW_DIR / "fake_spectra"``, git-ignored), and all records in one results file, ``--results`` (default
-``BENCHMARK_RECORDS_DIR / "fake_spectra_benchmark.json"``), which notebook ``10_comparison_fake_spectra_performance``
+``BENCHMARK_RAW_DIR / "fake_spectra"`` = ``benchmarks/raw/fake_spectra``, git-ignored), and the summary of all records,
+``--results`` (default ``BENCHMARK_RECORDS_DIR / "fake_spectra_benchmark.json"`` =
+``benchmarks/results/fake_spectra_benchmark.json``, committed), which notebook ``10_comparison_fake_spectra_performance``
 reads.
 """
+
 import argparse
 import importlib.util
 import sys
@@ -59,8 +61,12 @@ def main(argv=None):
     ap.add_argument("--results", default=str(RESULTS), help="the results file the notebook reads")
     ap.add_argument("--data", default=str(PATHS.DATA_DIR), help="folder with TNG50-4/, TNG50-3/, TNG50-2/")
     ap.add_argument("--cap", type=float, default=3600.0, help="wall-time cap per configuration without its own [s]")
-    ap.add_argument("--budget", type=float, default=None,
-                    help="no configuration starts beyond this total [s] (default: 1800 for quick, none for full)")
+    ap.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help="no configuration starts beyond this total [s] (default: 1800 for quick, none for full)",
+    )
     ap.add_argument("--mem-cap", type=float, default=48.0, help="worker RSS cap [GB]")
     ap.add_argument("--mem-floor", type=float, default=16.0, help="stop a worker when the machine has less available [GB]")
     ap.add_argument("--list", action="store_true", help="print the configurations and exit")
@@ -69,18 +75,38 @@ def main(argv=None):
     cs = [c for s in sets for c in B.benchmark_sets(s, a.data, preset=a.preset)]
     budget = a.budget if a.budget is not None else (B.QUICK_BUDGET_S if a.preset == "quick" else None)
     if a.list:
-        print("\n".join(f"{B.config_id(c)}  (cap {c.get('cap_s') or a.cap:.0f} s"
-                        + (f", estimate {c['est_s']:.0f} s)" if c.get("est_s") else ")") for c in cs))
+        print(
+            "\n".join(
+                f"{B.config_id(c)}  (cap {c.get('cap_s') or a.cap:.0f} s"
+                + (f", estimate {c['est_s']:.0f} s)" if c.get("est_s") else ")")
+                for c in cs
+            )
+        )
         return
     t0 = time.perf_counter()
     print(f"preset {a.preset}, sets {a.sets}, budget {budget or 'none'} s, {time.strftime('%Y-%m-%d %H:%M')}", flush=True)
-    B.run_suite(cs, a.raw, cap_s=a.cap, mem_cap_GB=a.mem_cap, mem_floor_GB=a.mem_floor, total_budget_s=budget,
-                log=lambda m: print(m, flush=True))
+    B.run_suite(
+        cs,
+        a.raw,
+        cap_s=a.cap,
+        mem_cap_GB=a.mem_cap,
+        mem_floor_GB=a.mem_floor,
+        total_budget_s=budget,
+        log=lambda m: print(m, flush=True),
+    )
     wall = time.perf_counter() - t0
-    res = B.collect(a.raw, a.results, sets=sets, launcher_wall_s=wall,
-                    launches=[dict(preset=a.preset, sets=sets, wall_s=wall, date=time.strftime("%Y-%m-%d %H:%M"))])
-    print(f"{len(res['records'])} records -> {a.results}; this launch {time.perf_counter() - t0:.0f} s, "
-          f"all configurations {res['runtime_s'] / 3600:.2f} h", flush=True)
+    res = B.collect(
+        a.raw,
+        a.results,
+        sets=sets,
+        launcher_wall_s=wall,
+        launches=[dict(preset=a.preset, sets=sets, wall_s=wall, date=time.strftime("%Y-%m-%d %H:%M"))],
+    )
+    print(
+        f"{len(res['records'])} records -> {a.results}; this launch {time.perf_counter() - t0:.0f} s, "
+        f"all configurations {res['runtime_s'] / 3600:.2f} h",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

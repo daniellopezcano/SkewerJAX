@@ -3,11 +3,11 @@
 A field source of ``skewerjax.simulations``: the realisation becomes gas cells with ``toy_cells.grf_cells``, the same
 container (``core.Cells``) as a snapshot (``snapshot_skewers``).
 """
+
 from __future__ import annotations
 
 import warnings
 from functools import partial
-from typing import Tuple
 
 import jax
 import jax.numpy as jnp
@@ -31,8 +31,7 @@ def _broadcast_axes(named: dict) -> dict:
     ndims = {len(v) for v in given.values()}
     ndim = max(ndims)
     if ndims - {1, ndim}:
-        raise ValueError(f"Inconsistent dimensionality between inputs: "
-                         f"{ {k: len(v) for k, v in given.items()} }.")
+        raise ValueError(f"Inconsistent dimensionality between inputs: { {k: len(v) for k, v in given.items()} }.")
     return {k: (None if v is None else (v * ndim if len(v) == 1 else v)) for k, v in named.items()}
 
 
@@ -145,13 +144,31 @@ class PowerLawGRF:
     * Memory: one real field plus one rfft half-spectrum (complex, ~N_pix/2 entries).
     """
 
-    def __init__(self, A_s, k_0, n_s, *, L=None, N=None, k_min=None, k_max=None, N_k=None, beta=None, sigma_fog=None,
-                 fog: str = "lorentzian", A_bao=None, r_bao=None, sigma_bao=None, los_axis: int = -1):
+    def __init__(
+        self,
+        A_s,
+        k_0,
+        n_s,
+        *,
+        L=None,
+        N=None,
+        k_min=None,
+        k_max=None,
+        N_k=None,
+        beta=None,
+        sigma_fog=None,
+        fog: str = "lorentzian",
+        A_bao=None,
+        r_bao=None,
+        sigma_bao=None,
+        los_axis: int = -1,
+    ):
         mode_a = L is not None or N is not None
         mode_b = any(v is not None for v in (k_min, k_max, N_k))
         if mode_a == mode_b:
-            raise ValueError("Specify the grid either with (L, N) or with two or three of "
-                             "(k_min, k_max, N_k), not both and not neither.")
+            raise ValueError(
+                "Specify the grid either with (L, N) or with two or three of (k_min, k_max, N_k), not both and not neither."
+            )
 
         if mode_a:
             if L is None or N is None:
@@ -160,9 +177,9 @@ class PowerLawGRF:
             L_ax = ax["L"]
             N_ax = tuple(_as_int(n, "N") for n in ax["N"])
         else:
-            ax = _broadcast_axes({"k_min": _as_axes(k_min, "k_min"),
-                                  "k_max": _as_axes(k_max, "k_max"),
-                                  "N_k": _as_axes(N_k, "N_k")})
+            ax = _broadcast_axes(
+                {"k_min": _as_axes(k_min, "k_min"), "k_max": _as_axes(k_max, "k_max"), "N_k": _as_axes(N_k, "N_k")}
+            )
             if sum(v is not None for v in ax.values()) < 2:
                 raise ValueError("Mode (b) needs at least two of (k_min, k_max, N_k).")
             for name in ("k_min", "k_max", "N_k"):
@@ -178,9 +195,11 @@ class PowerLawGRF:
                 if kmin is None:
                     kmin = kmax / nk
                 if kmax is not None and not np.isclose(kmax, nk * kmin, rtol=1e-8, atol=0.0):
-                    raise ValueError(f"Over-determined grid on axis {i} is inconsistent: "
-                                     f"k_max = {kmax} but N_k * k_min = {nk} * {kmin} = {nk * kmin} "
-                                     "(convention: k_max = Nyquist = N_k * k_min).")
+                    raise ValueError(
+                        f"Over-determined grid on axis {i} is inconsistent: "
+                        f"k_max = {kmax} but N_k * k_min = {nk} * {kmin} = {nk * kmin} "
+                        "(convention: k_max = Nyquist = N_k * k_min)."
+                    )
                 L_ax.append(2.0 * np.pi / kmin)
                 N_ax.append(2 * nk)
             L_ax, N_ax = tuple(L_ax), tuple(N_ax)
@@ -197,8 +216,8 @@ class PowerLawGRF:
             warnings.warn("jax_enable_x64 is off: PowerLawGRF runs in float32.", stacklevel=2)
 
         self.A_s, self.k_0, self.n_s = A_s, k_0, n_s
-        self.shape: Tuple[int, ...] = N_ax
-        self.L: Tuple[float, ...] = L_ax
+        self.shape: tuple[int, ...] = N_ax
+        self.L: tuple[float, ...] = L_ax
         if not -len(N_ax) <= int(los_axis) < len(N_ax):
             raise ValueError(f"los_axis = {los_axis} is not an axis of a {len(N_ax)}D grid.")
         self.los_axis = int(los_axis) % len(N_ax)
@@ -223,8 +242,14 @@ class PowerLawGRF:
     _OPTIONAL = ("beta", "sigma_fog", "A_bao", "r_bao", "sigma_bao")
 
     def tree_flatten(self):
-        opt = tuple(n for n in self._OPTIONAL if getattr(self, n) is not None)       # the terms switched on are leaves
-        return (self.A_s, self.k_0, self.n_s) + tuple(getattr(self, n) for n in opt), (self.shape, self.L, opt, self.fog, self.los_axis)
+        opt = tuple(n for n in self._OPTIONAL if getattr(self, n) is not None)  # the terms switched on are leaves
+        return (self.A_s, self.k_0, self.n_s) + tuple(getattr(self, n) for n in opt), (
+            self.shape,
+            self.L,
+            opt,
+            self.fog,
+            self.los_axis,
+        )
 
     @classmethod
     def tree_unflatten(cls, aux, leaves):
@@ -243,8 +268,7 @@ class PowerLawGRF:
             extra += f", fog={self.fog!r}"
         if self.anisotropic and self.ndim > 1:
             extra += f", los_axis={self.los_axis}"
-        return (f"PowerLawGRF(A_s={self.A_s}, k_0={self.k_0}, n_s={self.n_s}, "
-                f"L={self.L}, N={self.shape}{extra})")
+        return f"PowerLawGRF(A_s={self.A_s}, k_0={self.k_0}, n_s={self.n_s}, L={self.L}, N={self.shape}{extra})"
 
     @property
     def anisotropic(self) -> bool:
@@ -257,7 +281,7 @@ class PowerLawGRF:
         return len(self.shape)
 
     @property
-    def dx(self) -> Tuple[float, ...]:
+    def dx(self) -> tuple[float, ...]:
         """Cell sizes L_i / N_i [length]."""
         return tuple(l / n for l, n in zip(self.L, self.shape))
 
@@ -272,16 +296,16 @@ class PowerLawGRF:
         return float(np.prod(self.L))
 
     @property
-    def k_min(self) -> Tuple[float, ...]:
+    def k_min(self) -> tuple[float, ...]:
         """Fundamental mode per axis, 2 pi / L_i [1 / length]."""
         return tuple(2.0 * np.pi / l for l in self.L)
 
     @property
-    def k_max(self) -> Tuple[float, ...]:
+    def k_max(self) -> tuple[float, ...]:
         """Largest |k_i| on each axis, 2 pi (N_i // 2) / L_i (= Nyquist for even N_i)."""
         return tuple(2.0 * np.pi * (n // 2) / l for l, n in zip(self.L, self.shape))
 
-    def x_grid(self) -> Tuple[np.ndarray, ...]:
+    def x_grid(self) -> tuple[np.ndarray, ...]:
         """1D position axes x_j = j * dx_i, one per dimension [length]."""
         return tuple(np.arange(n) * d for n, d in zip(self.shape, self.dx))
 
@@ -305,7 +329,7 @@ class PowerLawGRF:
         if real:
             axes[-1] = 2.0 * jnp.pi * jnp.fft.rfftfreq(self.shape[-1], d=self.dx[-1])
         k_vec = tuple(jnp.meshgrid(*axes, indexing="ij", sparse=True))
-        return k_vec, jnp.sqrt(sum(k ** 2 for k in k_vec))
+        return k_vec, jnp.sqrt(sum(k**2 for k in k_vec))
 
     # -- spectrum -----------------------------------------------------------
     def power(self, k, mu=None):
@@ -328,7 +352,7 @@ class PowerLawGRF:
                 raise ValueError("this PowerLawGRF is anisotropic: give mu = |k_par| / |k| (power(k, mu)).")
             mu = jnp.asarray(mu)
             if self.beta is not None:
-                p = p * (1.0 + self.beta * mu ** 2) ** 2
+                p = p * (1.0 + self.beta * mu**2) ** 2
             if self.sigma_fog is not None:
                 x2 = (k_safe * mu * self.sigma_fog) ** 2
                 p = p / (1.0 + x2) if self.fog == "lorentzian" else p * jnp.exp(-x2)
@@ -351,7 +375,7 @@ class PowerLawGRF:
         if len(k_components) != self.ndim:
             raise ValueError(f"power_at needs {self.ndim} components, got {len(k_components)}.")
         k_components = [jnp.asarray(c) for c in k_components]
-        k_mod = jnp.sqrt(sum(c ** 2 for c in k_components))
+        k_mod = jnp.sqrt(sum(c**2 for c in k_components))
         if not self.anisotropic:
             return self.power(k_mod)
         return self.power(k_mod, jnp.abs(k_components[self.los_axis]) / jnp.where(k_mod > 0, k_mod, 1.0))
@@ -377,8 +401,8 @@ class PowerLawGRF:
         if self.ndim == 1:
             return 2.0 * A * G * jnp.cos(k * r0)
         if self.ndim == 3:
-            return 4.0 * jnp.pi * A * G * (sg ** 2 * jnp.cos(k * r0) + r0 * jnp.sin(k * r0) / k)
-        t, w = np.polynomial.legendre.leggauss(256)                       # 2D: the Hankel transform, by quadrature
+            return 4.0 * jnp.pi * A * G * (sg**2 * jnp.cos(k * r0) + r0 * jnp.sin(k * r0) / k)
+        t, w = np.polynomial.legendre.leggauss(256)  # 2D: the Hankel transform, by quadrature
         lo = jnp.maximum(0.0, r0 - 10.0 * sg)
         hi = r0 + 10.0 * sg
         r = lo + 0.5 * (hi - lo) * (t + 1.0)
@@ -389,7 +413,7 @@ class PowerLawGRF:
     def _check_positive(self):
         """P_pl + P_BAO >= 0 on a dense k grid covering every mode (and at every mode in 1D and 2D); ValueError if not."""
         kmin = min(self.k_min)
-        kmax = float(np.sqrt(sum(k ** 2 for k in self.k_max)))
+        kmax = float(np.sqrt(sum(k**2 for k in self.k_max)))
         k = np.unique(np.concatenate([np.geomspace(0.5 * kmin, 1.01 * kmax, 4000), np.linspace(0.5 * kmin, 1.01 * kmax, 4000)]))
         if self.ndim <= 2:
             k = np.unique(np.concatenate([k, np.asarray(self.k_grid(real=True)[1]).ravel()]))
@@ -397,13 +421,15 @@ class PowerLawGRF:
         iso = np.asarray(self.A_s * (k / self.k_0) ** (self.n_s - 1.0) + self.bao_power(jnp.asarray(k)))
         if iso.min() < 0.0:
             j = int(np.argmin(iso))
-            raise ValueError(f"PowerLawGRF: P(k) < 0 at k = {k[j]:.4g} (P_pl + P_BAO = {iso[j]:.3g}): not a valid Gaussian field. "
-                             f"Lower A_bao (= {self.A_bao}) or widen sigma_bao.")
+            raise ValueError(
+                f"PowerLawGRF: P(k) < 0 at k = {k[j]:.4g} (P_pl + P_BAO = {iso[j]:.3g}): not a valid Gaussian field. "
+                f"Lower A_bao (= {self.A_bao}) or widen sigma_bao."
+            )
 
     def variance(self):
         """Expected real-space variance sigma^2 = (1/V) sum_{k != 0} P(k) on this grid."""
         n_last = self.shape[-1]
-        w = jnp.full(n_last // 2 + 1, 2.0).at[0].set(1.0)   # rfft half-axis -> full-grid weights
+        w = jnp.full(n_last // 2 + 1, 2.0).at[0].set(1.0)  # rfft half-axis -> full-grid weights
         if n_last % 2 == 0:
             w = w.at[-1].set(1.0)
         return jnp.sum(w * self.power_grid()) / self.volume
@@ -430,7 +456,7 @@ class PowerLawGRF:
 
 @partial(jax.jit, static_argnames=("return_modes",))
 def _sample_power_law_grf(grf: PowerLawGRF, key: jax.Array, return_modes: bool):
-    dtype = jnp.result_type(float)                      # float64 under x64
+    dtype = jnp.result_type(float)  # float64 under x64
     white_k = jnp.fft.rfftn(jax.random.normal(key, grf.shape, dtype=dtype))
     # <|white_k|^2> = N_pix  ->  <|FFT(delta)|^2> = N_pix P / dV  ->  <P_hat> = P
     fft_delta = white_k * jnp.sqrt(grf.power_grid() / grf.cell_volume)
@@ -445,9 +471,15 @@ def bessel_j0(x):
     x = jnp.abs(jnp.asarray(x))
     small = x <= 3.0
     y = (jnp.where(small, x, 3.0) / 3.0) ** 2
-    j_small = (1.0 + y * (-2.2499997 + y * (1.2656208 + y * (-0.3163866 + y * (0.0444479 + y * (-0.0039444 + y * 0.0002100))))))
+    j_small = 1.0 + y * (-2.2499997 + y * (1.2656208 + y * (-0.3163866 + y * (0.0444479 + y * (-0.0039444 + y * 0.0002100)))))
     xl = jnp.where(small, 3.0, x)
     z = 3.0 / xl
-    f0 = 0.79788456 + z * (-0.00000077 + z * (-0.00552740 + z * (-0.00009512 + z * (0.00137237 + z * (-0.00072805 + z * 0.00014476)))))
-    th = xl - 0.78539816 + z * (-0.04166397 + z * (-0.00003954 + z * (0.00262573 + z * (-0.00054125 + z * (-0.00029333 + z * 0.00013558)))))
+    f0 = 0.79788456 + z * (
+        -0.00000077 + z * (-0.00552740 + z * (-0.00009512 + z * (0.00137237 + z * (-0.00072805 + z * 0.00014476))))
+    )
+    th = (
+        xl
+        - 0.78539816
+        + z * (-0.04166397 + z * (-0.00003954 + z * (0.00262573 + z * (-0.00054125 + z * (-0.00029333 + z * 0.00013558)))))
+    )
     return jnp.where(small, j_small, f0 * jnp.cos(th) / jnp.sqrt(xl))

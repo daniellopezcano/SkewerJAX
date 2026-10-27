@@ -1,7 +1,6 @@
 """Spectral coordinates: the observer's velocity v_dagger, local wavelengths lambda' and detunings nu (review notes, Sec. 2.2)."""
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 import jax.numpy as jnp
 from jax.typing import ArrayLike
@@ -9,8 +8,9 @@ from jax.typing import ArrayLike
 from skewerjax.core.constants import phys
 
 
-def local_wavelength_A(velocities_kms: ArrayLike, lambda0_A: ArrayLike, a_dagger: ArrayLike, scale_factor: ArrayLike,
-                       LoS_velocity: ArrayLike) -> jnp.ndarray:
+def local_wavelength_A(
+    velocities_kms: ArrayLike, lambda0_A: ArrayLike, a_dagger: ArrayLike, scale_factor: ArrayLike, LoS_velocity: ArrayLike
+) -> jnp.ndarray:
     """lambda'_j = lambda_j exp(v_dagger / c) a(x) / a_dagger D^-1(x), D^-1 = sqrt((1 + beta) / (1 - beta)) (Eq. velocity_units_normalized).
 
     Parameters
@@ -24,10 +24,13 @@ def local_wavelength_A(velocities_kms: ArrayLike, lambda0_A: ArrayLike, a_dagger
     (N_lines, *batch, N_v) local wavelengths [A] (a full cube: the optical depth uses ``frequency_offset_GHz``).
     """
     velocities_kms, lambda0_A, a_dagger, scale_factor, LoS_velocity = (
-        jnp.asarray(v) for v in (velocities_kms, lambda0_A, a_dagger, scale_factor, LoS_velocity))
+        jnp.asarray(v) for v in (velocities_kms, lambda0_A, a_dagger, scale_factor, LoS_velocity)
+    )
     if scale_factor.shape != LoS_velocity.shape[1:]:
-        raise ValueError(f"scale_factor shape {scale_factor.shape} incompatible with LoS_velocity shape "
-                         f"{LoS_velocity.shape}. Expected scale_factor.shape == LoS_velocity.shape[1:]")
+        raise ValueError(
+            f"scale_factor shape {scale_factor.shape} incompatible with LoS_velocity shape "
+            f"{LoS_velocity.shape}. Expected scale_factor.shape == LoS_velocity.shape[1:]"
+        )
     if a_dagger.ndim != 0 and a_dagger.shape != scale_factor.shape:
         raise ValueError(f"a_dagger must be scalar or have shape {scale_factor.shape}; got {a_dagger.shape}")
     nb = scale_factor.ndim
@@ -38,8 +41,9 @@ def local_wavelength_A(velocities_kms: ArrayLike, lambda0_A: ArrayLike, a_dagger
     return lam * vel * ratio * jnp.sqrt((1.0 + beta) / (1.0 - beta))
 
 
-def local_wavelength_from_observed_A(wavelengths_A: ArrayLike, scale_factor_obs: ArrayLike, scale_factor: ArrayLike,
-                                     LoS_velocity: ArrayLike) -> jnp.ndarray:
+def local_wavelength_from_observed_A(
+    wavelengths_A: ArrayLike, scale_factor_obs: ArrayLike, scale_factor: ArrayLike, LoS_velocity: ArrayLike
+) -> jnp.ndarray:
     """lambda' = lambda_obs a(x) / a_obs D^-1(x) for observed-wavelength grids (Eq. wavelength_cosmological_z_and_doppler).
 
     Parameters
@@ -54,10 +58,13 @@ def local_wavelength_from_observed_A(wavelengths_A: ArrayLike, scale_factor_obs:
     ``line_wavelength_grid_A`` with the same a_obs.
     """
     wavelengths_A, scale_factor_obs, scale_factor, LoS_velocity = (
-        jnp.asarray(v) for v in (wavelengths_A, scale_factor_obs, scale_factor, LoS_velocity))
+        jnp.asarray(v) for v in (wavelengths_A, scale_factor_obs, scale_factor, LoS_velocity)
+    )
     if scale_factor.shape != LoS_velocity.shape[1:]:
-        raise ValueError(f"`scale_factor` shape {scale_factor.shape} incompatible with `LoS_velocity` shape "
-                         f"{LoS_velocity.shape}. Expected scale_factor.shape == LoS_velocity.shape[1:]")
+        raise ValueError(
+            f"`scale_factor` shape {scale_factor.shape} incompatible with `LoS_velocity` shape "
+            f"{LoS_velocity.shape}. Expected scale_factor.shape == LoS_velocity.shape[1:]"
+        )
     N_lines, batch, nb = LoS_velocity.shape[0], scale_factor.shape, scale_factor.ndim
     if wavelengths_A.ndim == 1:
         wl = wavelengths_A[(None,) + (None,) * nb + (slice(None),)]
@@ -77,8 +84,9 @@ def local_wavelength_from_observed_A(wavelengths_A: ArrayLike, scale_factor_obs:
     elif scale_factor_obs.shape == LoS_velocity.shape:
         ratio = a / scale_factor_obs[..., None]
     else:
-        raise ValueError(f"`scale_factor_obs` must be scalar, ({N_lines},), {batch} or {LoS_velocity.shape}; "
-                         f"got {scale_factor_obs.shape}.")
+        raise ValueError(
+            f"`scale_factor_obs` must be scalar, ({N_lines},), {batch} or {LoS_velocity.shape}; got {scale_factor_obs.shape}."
+        )
     beta = LoS_velocity[..., None] / phys.c_kms
     return wl * ratio * jnp.sqrt((1.0 + beta) / (1.0 - beta))
 
@@ -94,9 +102,15 @@ def line_centre_velocity_kms(a_dagger: ArrayLike, scale_factor: ArrayLike, LoS_v
     return phys.c_kms * (jnp.log(ratio)[None, :] + 0.5 * (jnp.log1p(-beta) - jnp.log1p(beta)))
 
 
-def frequency_offset_GHz(velocities_kms: ArrayLike, lambda0_A: ArrayLike, a_dagger: ArrayLike, scale_factor: ArrayLike,
-                         LoS_velocity: ArrayLike, velocity_period: Optional[ArrayLike] = None,
-                         detuning: str = "exact") -> jnp.ndarray:
+def frequency_offset_GHz(
+    velocities_kms: ArrayLike,
+    lambda0_A: ArrayLike,
+    a_dagger: ArrayLike,
+    scale_factor: ArrayLike,
+    LoS_velocity: ArrayLike,
+    velocity_period: ArrayLike | None = None,
+    detuning: str = "exact",
+) -> jnp.ndarray:
     """nu_j = c (1 / lambda' - 1 / lambda_j) [GHz] of every (line, piece, velocity), from the detuning dv = v - v_c.
 
     "exact" (default): nu = (c / lambda_j) expm1(-dv / c), the exact exponential mapping. "linear": nu = -(c / lambda_j)
@@ -109,13 +123,16 @@ def frequency_offset_GHz(velocities_kms: ArrayLike, lambda0_A: ArrayLike, a_dagg
     LoS_velocity (N_lines, N_points) -> (N_lines, N_points, N_v).
     """
     velocities_kms, lambda0_A, a_dagger, scale_factor, LoS_velocity = (
-        jnp.asarray(v) for v in (velocities_kms, lambda0_A, a_dagger, scale_factor, LoS_velocity))
+        jnp.asarray(v) for v in (velocities_kms, lambda0_A, a_dagger, scale_factor, LoS_velocity)
+    )
     if scale_factor.ndim != 1:
         raise ValueError(f"`frequency_offset_GHz` expects flattened scale_factor (N_points,), got {scale_factor.shape}.")
     if LoS_velocity.ndim != 2:
         raise ValueError(f"`frequency_offset_GHz` expects flattened LoS_velocity (N_lines, N_points), got {LoS_velocity.shape}.")
     if LoS_velocity.shape[1] != scale_factor.shape[0]:
-        raise ValueError(f"LoS_velocity.shape[1]={LoS_velocity.shape[1]} does not match scale_factor.shape[0]={scale_factor.shape[0]}.")
+        raise ValueError(
+            f"LoS_velocity.shape[1]={LoS_velocity.shape[1]} does not match scale_factor.shape[0]={scale_factor.shape[0]}."
+        )
     if a_dagger.ndim != 0 and a_dagger.shape != scale_factor.shape:
         raise ValueError(f"a_dagger must be scalar or have shape {scale_factor.shape}; got {a_dagger.shape}.")
     if velocities_kms.ndim == 2 and velocities_kms.shape[0] != LoS_velocity.shape[0]:
@@ -132,7 +149,7 @@ def frequency_offset_GHz(velocities_kms: ArrayLike, lambda0_A: ArrayLike, a_dagg
         delta = jnp.mod(delta + 0.5 * P, P) - 0.5 * P
     x = -delta / phys.c_kms
     factor = jnp.expm1(x) if detuning == "exact" else x
-    return factor * (phys.c * 10.0) / lambda0_A[:, None, None]       # c / lambda [GHz] = 10 x (m/s) / A
+    return factor * (phys.c * 10.0) / lambda0_A[:, None, None]  # c / lambda [GHz] = 10 x (m/s) / A
 
 
 def line_wavelength_grid_A(velocities_kms: ArrayLike, line_bundle, a_dagger: ArrayLike, a_obs: ArrayLike = 1.0) -> jnp.ndarray:
@@ -151,8 +168,11 @@ def line_wavelength_grid_A(velocities_kms: ArrayLike, line_bundle, a_dagger: Arr
             per_line[name] = a
         else:
             raise ValueError(f"`{name}` must be scalar or have shape ({N_lines},), got {a.shape}.")
-    return (lambda0_A[:, None] * (per_line["a_obs"][:, None] / per_line["a_dagger"][:, None])
-            * jnp.exp(velocities_kms[None, :] / phys.c_kms))
+    return (
+        lambda0_A[:, None]
+        * (per_line["a_obs"][:, None] / per_line["a_dagger"][:, None])
+        * jnp.exp(velocities_kms[None, :] / phys.c_kms)
+    )
 
 
 def velocities_in_line_frames(velocities_kms: ArrayLike, line_bundle, reference_line_idx: int = 0) -> jnp.ndarray:

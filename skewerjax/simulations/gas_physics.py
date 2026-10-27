@@ -35,23 +35,23 @@ Conventions and choices (the fake_spectra choices are the matched options, ``ske
   which overshoots near the -30 "log 0" floor of the table. The table is read directly
   (``CloudyIonTable``): no fake_spectra-derived code runs in SkewerJAX.
 """
+
 from __future__ import annotations
 
 import re
 from importlib.resources import files
 from pathlib import Path
-from typing import Optional
 
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 from jax.scipy.ndimage import map_coordinates
 
 from skewerjax.core.constants import phys
 from skewerjax.core.lines import get_mass_amu
 
 # ---------------------------------------------------------------------------- constants
-M_U_G = 1.0 / phys.g_to_amu                       # atomic mass unit [g]
-CONSTANTS = {                                      # (m_p [g], k_B [erg/K]) used in T
+M_U_G = 1.0 / phys.g_to_amu  # atomic mass unit [g]
+CONSTANTS = {  # (m_p [g], k_B [erg/K]) used in T
     "codata": (phys.mp, phys.kB_erg_per_K),
     "fake_spectra": (1.67262178e-24, 1.38066e-16),  # fake_spectra unitsystem.py L21, L23
 }
@@ -60,7 +60,7 @@ FAKE_C_BOLTZMANN, FAKE_C_PROTONMASS = 1.3806504e-16, 1.67262178e-24
 FAKE_SPECTRA_B2_RATIO = (FAKE_C_BOLTZMANN / FAKE_C_PROTONMASS) / (phys.kB_erg_per_K / M_U_G)
 """(b_fake / b_SkewerJAX)^2 at equal T and A: fake_spectra's (k_B / m_p) over SkewerJAX's
 (k_B / m_u) = 0.992777. Multiplying T by it inside the profile reproduces fake_spectra's b."""
-CLOUDY_HDEN_FACTOR = 0.774132                     # convert_cloudy.CloudyTable.ion, rho *= 0.774132
+CLOUDY_HDEN_FACTOR = 0.774132  # convert_cloudy.CloudyTable.ion, rho *= 0.774132
 GFM_METALS_ORDER = ("H", "He", "C", "N", "O", "Ne", "Mg", "Si", "Fe")
 _ROMAN = ("I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X")
 
@@ -173,8 +173,7 @@ _RAHMATI_GAMMA_FG09 = np.array([3.99e-14, 3.03e-13, 6e-13, 5.53e-13, 4.31e-13, 3
 _RAHMATI_GRAY = np.array([2.59e-18, 2.37e-18, 2.27e-18, 2.15e-18, 2.02e-18, 1.94e-18, 1.82e-18, 1.71e-18, 1.60e-18])
 
 
-def rahmati_neutral_fraction(n_H, T, redshift: float, *, gamma_uvb: Optional[float] = None,
-                             f_bar: float = 0.17):
+def rahmati_neutral_fraction(n_H, T, redshift: float, *, gamma_uvb: float | None = None, f_bar: float = 0.17):
     """Rahmati+13 photoionisation-equilibrium x_HI with self-shielding (their Eqs. 13-14, A8;
     fake_spectra ``gas_properties._neutral_fraction`` L92-L99).
 
@@ -185,12 +184,17 @@ def rahmati_neutral_fraction(n_H, T, redshift: float, *, gamma_uvb: Optional[flo
     g_tab = float(np.interp(redshift, _RAHMATI_Z, _RAHMATI_GAMMA_FG09))
     gamma = g_tab if gamma_uvb is None else float(gamma_uvb)
     gray = float(np.interp(redshift, _RAHMATI_Z, _RAHMATI_GRAY))
-    n_ssh = 6.73e-3 * (gray / 2.49e-18) ** (-2.0 / 3.0) * (T / 1e4) ** 0.17 * (gamma / 1e-12) ** (2.0 / 3.0) \
+    n_ssh = (
+        6.73e-3
+        * (gray / 2.49e-18) ** (-2.0 / 3.0)
+        * (T / 1e4) ** 0.17
+        * (gamma / 1e-12) ** (2.0 / 3.0)
         * (f_bar / 0.17) ** (-1.0 / 3.0)
+    )
     y = n_H / n_ssh
-    photo = gamma * (0.98 * (1.0 + y ** 1.64) ** -2.28 + 0.02 * (1.0 + y) ** -0.84)
+    photo = gamma * (0.98 * (1.0 + y**1.64) ** -2.28 + 0.02 * (1.0 + y) ** -0.84)
     lam = 315614.0 / T
-    alpha_A = 1.269e-13 * lam ** 1.503 / (1.0 + (lam / 0.522) ** 0.47) ** 1.923
+    alpha_A = 1.269e-13 * lam**1.503 / (1.0 + (lam / 0.522) ** 0.47) ** 1.923
     coll = 1.17e-10 * jnp.sqrt(T) * jnp.exp(-157809.0 / T) / (1.0 + jnp.sqrt(T / 1e5))
     A = alpha_A + coll
     B = 2.0 * alpha_A + photo / jnp.maximum(n_H, 1e-300) + coll
@@ -208,8 +212,9 @@ def arepo_equilibrium_neutral_fraction(n_H, T, n_e, gamma_HI: float, shielding=1
     return alpha / (alpha + coll + gamma_HI * shielding / ne)
 
 
-def neutral_fraction(cells, n_H, T, *, model: str = "stored_sf", redshift: float,
-                     gamma_HI: Optional[float] = None, f_bar: float = 0.17):
+def neutral_fraction(
+    cells, n_H, T, *, model: str = "stored_sf", redshift: float, gamma_HI: float | None = None, f_bar: float = 0.17
+):
     """x_HI per cell for the H I ionisation ``model`` (see module docstring).
 
     Parameters
@@ -251,7 +256,7 @@ def fake_spectra_sf_threshold(h: float = 0.6774, t_0_star=2.27, T_SN=5.73e7, T_c
     u_c = 1.0 / (4 / (1 + 3 * X)) * 1.5 * (k_B / m_p) * T_c
     mw = 4 / (8 - 5 * (1 - X))
     u_SN = 1.0 / mw * 1.5 * (k_B / m_p) * T_SN
-    rhoinf = 277.476 * 6.769911178294544e-22 * h ** 2
+    rhoinf = 277.476 * 6.769911178294544e-22 * h**2
     tcool = 4.64419e-10 * unit_time / h
     u_h = u_SN / A_0
     u_4 = 1.0 / mw * 1.5 * (k_B / m_p) * 1e4
@@ -287,12 +292,12 @@ class CloudyIonTable:
         if table.shape[1:3] != (self.LOG_DENS.size, self.LOG_TEMP.size):
             raise ValueError(f"unexpected CLOUDY table shape {table.shape}")
         reds = np.arange(table.shape[0], dtype=np.float64)
-        z = 4.0 if 4.0 < redshift < 4.1 else float(redshift)          # convert_cloudy's round-off guard
+        z = 4.0 if 4.0 < redshift < 4.1 else float(redshift)  # convert_cloudy's round-off guard
         if not reds[0] <= z <= reds[-1]:
             raise ValueError(f"z = {redshift} outside the table range [{reds[0]}, {reds[-1]}].")
         j = min(int(np.floor(z)), reds.size - 2)
         w = z - reds[j]
-        self.red_table = (1.0 - w) * table[j] + w * table[j + 1]          # (55, 112, 9, 17) log10 f
+        self.red_table = (1.0 - w) * table[j] + w * table[j + 1]  # (55, 112, 9, 17) log10 f
         self.log_dens, self.log_temp = self.LOG_DENS, self.LOG_TEMP
         self.redshift = float(redshift)
 
@@ -311,6 +316,7 @@ class CloudyIonTable:
         """Ion fraction f = n_ion / n_element for hydrogen density ``hden`` [cm^-3] and T [K]."""
         if interpolation == "cubic":
             from scipy.ndimage import map_coordinates as map_coordinates_np
+
             # as CloudyTable.ion: the density coordinate is not clamped (callers clamp rho / m_p before
             # the x 0.774132), points off the grid take mode="nearest"
             x, y = self._coords(np.asarray(hden, dtype=np.float64), np.asarray(T, dtype=np.float64), np, clamp_density=False)
@@ -322,9 +328,17 @@ class CloudyIonTable:
 
 
 # ---------------------------------------------------------------------------- per-ion densities
-def ion_properties(cells, ion: Ion, *, mass_unit: str = "amu", T_constants: str = "codata",
-                   x_HI_model: str = "stored_sf", cloudy: Optional[CloudyIonTable] = None,
-                   cloudy_density: str = "hydrogen", cloudy_interpolation: str = "linear") -> dict:
+def ion_properties(
+    cells,
+    ion: Ion,
+    *,
+    mass_unit: str = "amu",
+    T_constants: str = "codata",
+    x_HI_model: str = "stored_sf",
+    cloudy: CloudyIonTable | None = None,
+    cloudy_density: str = "hydrogen",
+    cloudy_interpolation: str = "linear",
+) -> dict:
     """Per-cell n_H, T, ion fraction and ion density for ``ion`` (one code path for every ion).
 
     cells : ``GasCells`` with fields ``rho``, ``u``, ``n_e``, ``metals`` (and ``x_HI_stored``, ``sfr`` for H I).
@@ -349,12 +363,13 @@ def ion_properties(cells, ion: Ion, *, mass_unit: str = "amu", T_constants: str 
             cloudy = CloudyIonTable(redshift)
         if cloudy_density == "hydrogen":
             hden = n_H
-        elif cloudy_density == "fake_spectra":             # rho/m_p, clamped, then x 0.774132 (spectra.py L691-L698, convert_cloudy L183)
-            rho_atoms = jnp.clip(rho / CONSTANTS["fake_spectra"][0], 10 ** CloudyIonTable.LOG_DENS[0], 10 ** CloudyIonTable.LOG_DENS[-1])
+        elif cloudy_density == "fake_spectra":  # rho/m_p, clamped, then x 0.774132 (spectra.py L691-L698, convert_cloudy L183)
+            rho_atoms = jnp.clip(
+                rho / CONSTANTS["fake_spectra"][0], 10 ** CloudyIonTable.LOG_DENS[0], 10 ** CloudyIonTable.LOG_DENS[-1]
+            )
             hden = CLOUDY_HDEN_FACTOR * rho_atoms
         else:
             raise ValueError(f"cloudy_density must be 'hydrogen' or 'fake_spectra', got {cloudy_density!r}.")
         frac = cloudy.fraction(ion, hden, T, interpolation=cloudy_interpolation)
     n_elem = element_number_density(rho, metals[:, ion.metals_column], ion.mass_amu, mass_unit)
-    return dict(n_H=n_H, T=T, ion_fraction=frac, n_elem=n_elem, n_ion=n_elem * frac,
-                mass_amu=ion.mass_amu, species=ion.species)
+    return dict(n_H=n_H, T=T, ion_fraction=frac, n_elem=n_elem, n_ion=n_elem * frac, mass_amu=ion.mass_amu, species=ion.species)

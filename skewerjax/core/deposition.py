@@ -35,22 +35,22 @@ Periodicity of the box (the gas, not the spectrum): generator positions are alwa
 relative to each point, x_i + mi(g - x_i), mi(d) = d - L round(d / L), so paths may cross the box faces any number
 of times.
 """
+
 from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
 from functools import partial
-from typing import Optional
 
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 from scipy.spatial import cKDTree
 
 from skewerjax.core.selection import VORONOI_FACTOR, wrap_positions
 from skewerjax.core.skewers import path_geometry
 
-TOPHAT_NORM = 3.0 / (4.0 * np.pi)          # density inside a sphere of radius V^(1/3), per n_cell
+TOPHAT_NORM = 3.0 / (4.0 * np.pi)  # density inside a sphere of radius V^(1/3), per n_cell
 
 
 @dataclass
@@ -66,6 +66,7 @@ class SegmentComponents:
     kind : "voronoi" or "tophat".
     diagnostics : dict (e.g. the k-nearest-neighbour guarantee, the largest nearest-generator distance).
     """
+
     cell: np.ndarray
     length: np.ndarray
     offset: np.ndarray
@@ -78,13 +79,19 @@ class SegmentComponents:
         """(N_sk, N) number of pieces of every dual segment."""
         return (self.cell >= 0).sum(axis=-1)
 
-    def compact(self) -> "SegmentComponents":
+    def compact(self) -> SegmentComponents:
         """Drop the trailing empty slots (K -> the largest number of components of any point)."""
         order = np.argsort(-(self.length * (self.cell >= 0)), axis=-1, kind="stable")
         take = lambda a: np.take_along_axis(a, order, axis=-1)
         k = max(int(self.n_components.max()), 1)
-        return SegmentComponents(take(self.cell)[..., :k], take(self.length)[..., :k], take(self.offset)[..., :k],
-                                 self.weight, self.kind, self.diagnostics)
+        return SegmentComponents(
+            take(self.cell)[..., :k],
+            take(self.length)[..., :k],
+            take(self.offset)[..., :k],
+            self.weight,
+            self.kind,
+            self.diagnostics,
+        )
 
     def column_lengths(self, n_cells) -> np.ndarray:
         """(N_sk, N) sum over components of weight x n_cell x length [n units x cMpc]."""
@@ -122,9 +129,18 @@ def _crossing(A, D, ga, gb, t0, t1):
     return jnp.clip(tc, t0[None, :], t1[None, :])
 
 
-def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=None, n_sub: Optional[int] = None,
-                     max_sub: int = 4096, backend: str = "numpy", chunk: int = 64,
-                     k_chunk: int = 512) -> SegmentComponents:
+def voronoi_segments(
+    points,
+    gas_positions,
+    box: float | None,
+    *,
+    gas_size=None,
+    n_sub: int | None = None,
+    max_sub: int = 4096,
+    backend: str = "numpy",
+    chunk: int = 64,
+    k_chunk: int = 512,
+) -> SegmentComponents:
     """Nearest-generating-point (Voronoi) deposition on the dual segments of ``points``.
 
     Every half-segment is sampled at ``n_sub`` + 1 sub-points; each sub-point is labelled with its
@@ -161,12 +177,12 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
     P = A.shape[0]
     gpos = wrap_positions(gas_positions, box)
     size = None if gas_size is None else np.asarray(gas_size, dtype=np.float64)
-    L_half = np.stack([np.linalg.norm(Bl - A, axis=-1), np.linalg.norm(Bh - A, axis=-1)], axis=1)     # (P, 2)
+    L_half = np.stack([np.linalg.norm(Bl - A, axis=-1), np.linalg.norm(Bh - A, axis=-1)], axis=1)  # (P, 2)
     if n_sub is not None:
         S = int(n_sub)
     elif size is None:
         S = 8
-    else:                                   # sub-interval <= 1/16 of the smallest cell near the paths
+    else:  # sub-interval <= 1/16 of the smallest cell near the paths
         S = int(np.clip(np.ceil(16.0 * L_half.max() / max(size.min(), 1e-12)), 8, max_sub))
     if backend == "jax":
         cell, length, offset, kd = _voronoi_segments_jax(A, Bl, Bh, L_half, gpos, box, S, n_sk, chunk, k_chunk)
@@ -175,7 +191,7 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
         return SegmentComponents(cell.reshape(shp), length.reshape(shp), offset.reshape(shp), 1.0, "voronoi", diag).compact()
     tree = cKDTree(gpos, boxsize=box) if box is not None else cKDTree(gpos)
     t = np.linspace(0.0, 1.0, S + 1)
-    sub = np.stack([A[:, None, :] + t[None, :, None] * (B - A)[:, None, :] for B in (Bl, Bh)], axis=1)   # (P, 2, S+1, 3)
+    sub = np.stack([A[:, None, :] + t[None, :, None] * (B - A)[:, None, :] for B in (Bl, Bh)], axis=1)  # (P, 2, S+1, 3)
     dist, lab = tree.query(wrap_positions(sub.reshape(-1, 3), box), k=1, workers=-1)
     lab = lab.reshape(P, 2, S + 1)
     rows, labs, lens, moms = [], [], [], []
@@ -192,14 +208,17 @@ def voronoi_segments(points, gas_positions, box: Optional[float], *, gas_size=No
             rows.append(np.broadcast_to(np.arange(P)[:, None], lab_.shape).ravel())
             labs.append(lab_.ravel())
             lens.append(((hi - lo) * Lh).ravel())
-            moms.append((sign * 0.5 * (hi ** 2 - lo ** 2) * Lh ** 2).ravel())
+            moms.append((sign * 0.5 * (hi**2 - lo**2) * Lh**2).ravel())
     diag = dict(n_sub=S, sub_over_min_cell=float(L_half.max() / S / size.min()) if size is not None else None)
-    if size is not None:                        # how far the path gets from the gas, in sizes of its nearest cell
+    if size is not None:  # how far the path gets from the gas, in sizes of its nearest cell
         diag["max_distance_over_size"] = float(np.max(dist / size[lab.reshape(-1)]))
         if box is None and diag["max_distance_over_size"] > VORONOI_FACTOR:
-            warnings.warn(f"voronoi_segments: parts of the paths lie {diag['max_distance_over_size']:.1f} cell sizes from the nearest "
-                          f"generating point (more than {VORONOI_FACTOR}): the paths leave the (non-periodic) gas, and those "
-                          "stretches take the nearest cell's gas.", stacklevel=2)
+            warnings.warn(
+                f"voronoi_segments: parts of the paths lie {diag['max_distance_over_size']:.1f} cell sizes from the nearest "
+                f"generating point (more than {VORONOI_FACTOR}): the paths leave the (non-periodic) gas, and those "
+                "stretches take the nearest cell's gas.",
+                stacklevel=2,
+            )
     return _merge_pieces(rows, labs, lens, moms, P, len(gpos), (n_sk, n_p), diag)
 
 
@@ -211,7 +230,8 @@ def _merge_pieces(rows, labs, lens, moms, P: int, M: int, shape, diag) -> Segmen
     keep = lens > 0
     key = rows[keep].astype(np.int64) * M + labs[keep]
     ukey, inv = np.unique(key, return_inverse=True)
-    L_ = np.bincount(inv, weights=lens[keep]); M_ = np.bincount(inv, weights=moms[keep])
+    L_ = np.bincount(inv, weights=lens[keep])
+    M_ = np.bincount(inv, weights=moms[keep])
     prow, plab = ukey // M, ukey % M
     counts = np.bincount(prow, minlength=P)
     K = max(int(counts.max()), 1)
@@ -257,18 +277,18 @@ def grid_segments(points, shape, box: float, *, chunk: int = 1_000_000) -> Segme
         Lh = np.linalg.norm(D, axis=-1)
         for c0 in range(0, P, chunk):
             sl = slice(c0, c0 + chunk)
-            u0, du = A[sl] / dx, D[sl] / dx                                   # positions in units of the spacing
-            f0 = np.floor(u0 + 0.5)                                           # the node of the start
-            nmax = np.abs(np.floor(u0 + du + 0.5) - f0).max(axis=0).astype(np.int64)   # crossings per axis (at most)
+            u0, du = A[sl] / dx, D[sl] / dx  # positions in units of the spacing
+            f0 = np.floor(u0 + 0.5)  # the node of the start
+            nmax = np.abs(np.floor(u0 + du + 0.5) - f0).max(axis=0).astype(np.int64)  # crossings per axis (at most)
             ts = [np.zeros((u0.shape[0], 1)), np.ones((u0.shape[0], 1))]
             for i in range(3):
                 if nmax[i] == 0:
                     continue
                 m = np.arange(nmax[i])[None, :]
-                s_i = np.sign(du[:, i:i + 1])
-                face = f0[:, i:i + 1] + s_i * (0.5 + m)                       # the planes ahead of the start
+                s_i = np.sign(du[:, i : i + 1])
+                face = f0[:, i : i + 1] + s_i * (0.5 + m)  # the planes ahead of the start
                 with np.errstate(divide="ignore", invalid="ignore"):
-                    t = (face - u0[:, i:i + 1]) / du[:, i:i + 1]
+                    t = (face - u0[:, i : i + 1]) / du[:, i : i + 1]
                 ts.append(np.where((s_i != 0) & (t > 0) & (t < 1), t, 1.0))
             T = np.sort(np.concatenate(ts, axis=1), axis=1)
             lo, hi = T[:, :-1], T[:, 1:]
@@ -279,7 +299,7 @@ def grid_segments(points, shape, box: float, *, chunk: int = 1_000_000) -> Segme
             rows.append(np.broadcast_to(np.arange(c0, c0 + u0.shape[0])[:, None], lab.shape).ravel())
             labs.append(lab.ravel())
             lens.append(((hi - lo) * lh).ravel())
-            moms.append((sign * 0.5 * (hi ** 2 - lo ** 2) * lh ** 2).ravel())
+            moms.append((sign * 0.5 * (hi**2 - lo**2) * lh**2).ravel())
     return _merge_pieces(rows, labs, lens, moms, P, M, (n_sk, n_p), dict(grid=tuple(int(n) for n in N)))
 
 
@@ -302,7 +322,7 @@ def _voronoi_chunk(A, Bl, Bh, L_half, gpos, box, S: int, k_chunk: int):
     c = jnp.mean(A, axis=0)
     neg, cand = jax.lax.top_k(-jnp.sum(mi(gpos - c) ** 2, axis=-1), k_chunk)
     cut = jnp.sqrt(-neg[-1])
-    gimg = A[:, None, :] + mi(gpos[cand][None, :, :] - A[:, None, :])           # (C, K, 3) images near x_i
+    gimg = A[:, None, :] + mi(gpos[cand][None, :, :] - A[:, None, :])  # (C, K, 3) images near x_i
     d1 = jnp.sqrt(jnp.min(jnp.sum((gimg - A[:, None, :]) ** 2, axis=-1), axis=-1))
     rho = 2.0 * jnp.max(L_half, axis=-1) + d1
     complete = cut > jnp.max(rho + jnp.linalg.norm(A - c, axis=-1))
@@ -311,7 +331,7 @@ def _voronoi_chunk(A, Bl, Bh, L_half, gpos, box, S: int, k_chunk: int):
     cells, lens, moms = [], [], []
     for h, (B, sign) in enumerate(((Bl, -1.0), (Bh, 1.0))):
         D = B - A
-        sub = A[:, None, :] + t[None, :, None] * D[:, None, :]                   # (C, S+1, 3)
+        sub = A[:, None, :] + t[None, :, None] * D[:, None, :]  # (C, S+1, 3)
         lab = jax.vmap(lambda sb, g: jnp.argmin(jnp.sum((sb[:, None, :] - g[None]) ** 2, -1), axis=-1))(sub, gimg)
         la, lb = lab[:, :-1], lab[:, 1:]
         ga = jnp.take_along_axis(gimg, la[..., None], axis=1)
@@ -321,14 +341,14 @@ def _voronoi_chunk(A, Bl, Bh, L_half, gpos, box, S: int, k_chunk: int):
         for lab_, lo, hi in ((la, t0[None, :], tc), (lb, tc, t1[None, :])):
             cells.append(cand[lab_])
             lens.append((hi - lo) * Lh)
-            moms.append(sign * 0.5 * (hi ** 2 - lo ** 2) * Lh ** 2)
-    cell, ln, mo = (jnp.concatenate(x, axis=1) for x in (cells, lens, moms))    # (C, 4S)
+            moms.append(sign * 0.5 * (hi**2 - lo**2) * Lh**2)
+    cell, ln, mo = (jnp.concatenate(x, axis=1) for x in (cells, lens, moms))  # (C, 4S)
     M = gpos.shape[0]
-    key = jnp.where(ln > 0, cell, M)                                             # zero-length pieces: sentinel
+    key = jnp.where(ln > 0, cell, M)  # zero-length pieces: sentinel
     order = jnp.argsort(key, axis=1)
     key, ln, mo = (jnp.take_along_axis(x, order, axis=1) for x in (key, ln, mo))
     new = jnp.concatenate([jnp.ones_like(key[:, :1], bool), key[:, 1:] != key[:, :-1]], axis=1)
-    grp = jnp.cumsum(new, axis=1) - 1                                            # group of every piece
+    grp = jnp.cumsum(new, axis=1) - 1  # group of every piece
     seg_sum = jax.vmap(lambda g, x: jnp.zeros(x.shape, x.dtype).at[g].add(x))
     L_, M_ = seg_sum(grp, ln), seg_sum(grp, mo)
     lab_g = jax.vmap(lambda g, k: jnp.full(k.shape, M, k.dtype).at[g].set(k))(grp, key)
@@ -388,7 +408,7 @@ def _tophat_half(A, B, G, h, valid):
     t2 = jnp.clip((-bq + sq) / L2s, 0.0, 1.0)
     dt = jnp.where(good, jnp.maximum(t2 - t1, 0.0), 0.0)
     length = dt * jnp.sqrt(L2s)
-    moment = jnp.where(good & (t2 > t1), 0.5 * (t2 ** 2 - t1 ** 2) * L2s, 0.0)
+    moment = jnp.where(good & (t2 > t1), 0.5 * (t2**2 - t1**2) * L2s, 0.0)
     return length, moment
 
 
@@ -409,7 +429,7 @@ def _tophat_pairs(A, r_half, gpos, size, box):
     return idx
 
 
-def tophat_segments(points, gas_positions, gas_size, box: Optional[float], *, chunk: int = 4096) -> SegmentComponents:
+def tophat_segments(points, gas_positions, gas_size, box: float | None, *, chunk: int = 4096) -> SegmentComponents:
     """fake_spectra's top-hat spheres (radius ``gas_size`` = V^(1/3)) on the dual segments.
 
     Returns SegmentComponents with weight 3 / (4 pi): a sphere of radius V^(1/3) and density
@@ -430,15 +450,17 @@ def tophat_segments(points, gas_positions, gas_size, box: Optional[float], *, ch
     for c0 in range(0, A.shape[0], chunk):
         sl = slice(c0, c0 + chunk)
         for B, sign in ((Bl, -1.0), (Bh, 1.0)):
-            l_, m_ = _tophat_half(jnp.asarray(A[sl]), jnp.asarray(B[sl]), jnp.asarray(G[sl]), jnp.asarray(H[sl]),
-                                  jnp.asarray(valid[sl]))
+            l_, m_ = _tophat_half(
+                jnp.asarray(A[sl]), jnp.asarray(B[sl]), jnp.asarray(G[sl]), jnp.asarray(H[sl]), jnp.asarray(valid[sl])
+            )
             length[sl] += np.asarray(l_)
             moment[sl] += sign * np.asarray(m_)
     offset = np.where(length > 0, moment / np.where(length > 0, length, 1.0), 0.0)
     cell = np.where(length > 0, idx, -1)
     shp = (n_sk, n_p, idx.shape[1])
-    return SegmentComponents(cell.reshape(shp), length.reshape(shp), offset.reshape(shp), TOPHAT_NORM, "tophat",
-                             dict(max_candidates=int(idx.shape[1]))).compact()
+    return SegmentComponents(
+        cell.reshape(shp), length.reshape(shp), offset.reshape(shp), TOPHAT_NORM, "tophat", dict(max_candidates=int(idx.shape[1]))
+    ).compact()
 
 
 # --------------------------------------------------------------------------- cell crossings (Voronoi-adapted segmentation)
@@ -456,6 +478,7 @@ class CellCrossings:
     cell : (N_sk, M) int, index into the cells (-1: padding).
     diagnostics : dict (``max_gap``: largest mismatch [cMpc] between consecutive ends, 0 for straight paths).
     """
+
     s_lo: np.ndarray
     s_hi: np.ndarray
     cell: np.ndarray
@@ -498,7 +521,9 @@ def cell_crossings(seg: SegmentComponents, points) -> CellCrossings:
         new = np.concatenate([[True], c[1:] != c[:-1]])
         start = np.nonzero(new)[0]
         end = np.concatenate([start[1:], [c.size]]) - 1
-        rows_lo.append(lo[start]); rows_hi.append(hi[end]); rows_c.append(c[start])
+        rows_lo.append(lo[start])
+        rows_hi.append(hi[end])
+        rows_c.append(c[start])
     m = max(max(len(r) for r in rows_c), 1)
     pad = lambda rows, f: np.stack([np.concatenate([r, np.full(m - len(r), f)]) for r in rows])
     return CellCrossings(pad(rows_lo, 0.0), pad(rows_hi, 0.0), pad(rows_c, -1).astype(np.int64), dict(max_gap=gap))
@@ -522,5 +547,9 @@ def segment_fields(seg: SegmentComponents, n, T, v_los) -> dict:
     col = np.where(live, seg.weight * np.asarray(n)[c] * seg.length, 0.0)
     tot = col.sum(-1)
     safe = np.where(tot > 0, tot, 1.0)
-    return dict(column_length=tot, T=np.where(tot > 0, (col * np.asarray(T)[c]).sum(-1) / safe, 0.0),
-                v_los=np.where(tot > 0, (col * v_los).sum(-1) / safe, 0.0), n_components=live.sum(-1))
+    return dict(
+        column_length=tot,
+        T=np.where(tot > 0, (col * np.asarray(T)[c]).sum(-1) / safe, 0.0),
+        v_los=np.where(tot > 0, (col * v_los).sum(-1) / safe, 0.0),
+        n_components=live.sum(-1),
+    )

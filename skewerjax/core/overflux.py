@@ -5,11 +5,12 @@ per sample (skewer) s, delta_j = F_j / <F_j>_s - 1, the subset products delta_A 
 C_s = sum_{|A| >= 2} <delta_A>_s, so that the total overflux delta_tot = prod_j F_j / <prod_j F_j> - 1 decomposes
 exactly into the subset terms (``core.stats.two_point``).
 """
+
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from itertools import combinations
-from typing import Sequence
 
 import jax.numpy as jnp
 
@@ -82,8 +83,10 @@ class DeltaFieldBuilder:
 
     def build(self):
         if self._built and self.fields is None:
-            raise RuntimeError("This DeltaFieldBuilder has already been built and its temporary fields were released. "
-                               "Create a new instance to rebuild.")
+            raise RuntimeError(
+                "This DeltaFieldBuilder has already been built and its temporary fields were released. "
+                "Create a new instance to rebuild."
+            )
         f = self.fields
         zero = jnp.any(jnp.mean(f, axis=2) == 0.0, axis=0) | (jnp.mean(jnp.prod(f, axis=0), axis=1) == 0.0)
         self._drop(zero, "zero mean in single field or total field")
@@ -93,7 +96,7 @@ class DeltaFieldBuilder:
                 logger.warning("NaNs detected in delta_terms[%r].", k)
         self.delta_terms, self.total, self.C_per_sample = out["delta_terms"], out["total"], out["C_per_sample"]
         self.subset_keys = list(self.delta_terms)
-        self.composite_keys = self.subset_keys[self.N_lines:]
+        self.composite_keys = self.subset_keys[self.N_lines :]
         self.field_total = out["field_total"] if self.keep_field_total else None
         if not self.keep_fields:
             self.fields = None

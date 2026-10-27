@@ -10,6 +10,7 @@ Cost (TNG50-4, 19.3 M cells): one pass over the positions of the whole snapshot 
 of ``max_rows``; the region test runs axis by axis on the cells still inside), then the other datasets of the kept rows
 only; memory is one block plus the kept cells.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -45,15 +46,16 @@ def select_cells_in_region(reader, lo, hi, *, margin: float = 0.0, max_rows: int
     ``select_cells_near_paths``.
     """
     from skewerjax.simulations.readers import GAS_DATASETS
+
     box = reader.header.box_cMpc
     origin, width = _region(lo, hi, margin, box)
     parts, n_sel = [], 0
     rest = [k for k in GAS_DATASETS if k != "Coordinates"]
-    order = np.argsort(width, kind="stable")                         # the narrowest axis first: most cells leave at once
+    order = np.argsort(width, kind="stable")  # the narrowest axis first: most cells leave at once
     for fi, r0, base in reader.iter_blocks(("Coordinates",), max_rows=max_rows):
         c = base["Coordinates"]
         sel = np.arange(c.shape[0])
-        for ax in order:                                              # the same test per axis, on the survivors only
+        for ax in order:  # the same test per axis, on the survivors only
             x = reader.positions_cMpc(c[sel, ax])
             sel = sel[np.mod(x - origin[ax], box) < width[ax]]
         if sel.size:
@@ -79,14 +81,25 @@ def gas_to_cells(gas: GasCells, species, ext: ExtractionOptions = ExtractionOpti
     for ion in ions:
         if not ion.is_HI and cloudy is None:
             cloudy = gp.CloudyIonTable(1.0 / a - 1.0)
-        P = gp.ion_properties(gas, ion, mass_unit=ext.mass_unit, T_constants=ext.T_constants, x_HI_model=ext.x_HI_model, cloudy=cloudy,
-                              cloudy_density=ext.cloudy_density, cloudy_interpolation=ext.cloudy_interpolation)
+        P = gp.ion_properties(
+            gas,
+            ion,
+            mass_unit=ext.mass_unit,
+            T_constants=ext.T_constants,
+            x_HI_model=ext.x_HI_model,
+            cloudy=cloudy,
+            cloudy_density=ext.cloudy_density,
+            cloudy_interpolation=ext.cloudy_interpolation,
+        )
         per[ion.species] = ion_cell_fields(P["n_ion"], P["T"], gas.fields["velocity"], a)
-    return Cells(np.asarray(gas.positions, dtype=np.float64), np.asarray(gas.volumes, dtype=np.float64), per, box=gas.box, ids=gas.ids)
+    return Cells(
+        np.asarray(gas.positions, dtype=np.float64), np.asarray(gas.volumes, dtype=np.float64), per, box=gas.box, ids=gas.ids
+    )
 
 
-def snapshot_cells(reader, species, lo, hi, *, margin: float = 0.0, ext: ExtractionOptions = ExtractionOptions(),
-                   max_rows: int = 4_000_000) -> Cells:
+def snapshot_cells(
+    reader, species, lo, hi, *, margin: float = 0.0, ext: ExtractionOptions = ExtractionOptions(), max_rows: int = 4_000_000
+) -> Cells:
     """The gas cells of a sub-box of a snapshot as ``core.Cells``, for the given species, without skewers.
 
     ``select_cells_in_region(reader, lo, hi, margin=margin)`` then ``gas_to_cells(cells, species, ext)``; see both.

@@ -8,20 +8,22 @@ Command line (one run in its own process; fake_spectra's memory is released at e
 writes ``<cache>/fs_<TAG>.h5`` with the products of the skewer set ``SET`` (``SKEWER_SETS``) and the box constants.
 fake_spectra must be importable (installed, or ``--build DIR`` with its build directory).
 """
+
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
 
-import h5py
 import numpy as np
 
 # The skewer sets of the comparisons (axis 1/2/3 = x/y/z, cofm in ckpc/h, TNG50-4 box 35000 ckpc/h).
 SKEWER_SETS = {
     "single": dict(axis=np.array([3], dtype=np.int32), cofm=np.array([[17500.25, 17500.75, 0.0]])),
-    "nset": dict(axis=np.tile(np.array([1, 2, 3], dtype=np.int32), 6)[:16],
-                 cofm=np.random.default_rng(2155).uniform(0.0, 35000.0, size=(16, 3))),
+    "nset": dict(
+        axis=np.tile(np.array([1, 2, 3], dtype=np.int32), 6)[:16],
+        cofm=np.random.default_rng(2155).uniform(0.0, 35000.0, size=(16, 3)),
+    ),
     "face": dict(axis=np.array([3, 1], dtype=np.int32), cofm=np.array([[5.0, 17500.75, 0.0], [0.0, 34995.0, 12000.5]])),
 }
 SKEWER_SETS["sk8"] = dict(axis=SKEWER_SETS["nset"]["axis"][8:9].copy(), cofm=SKEWER_SETS["nset"]["cofm"][8:9].copy())
@@ -33,16 +35,37 @@ def import_fake_spectra(build=None):
     if build is not None:
         sys.path.insert(0, str(build))
     from fake_spectra import spectra
+
     return spectra
 
 
-def make_spectra(spectra, snap_base, snapnum: int, savedir, sset: str, res: float = 1.0, sf_neutral: bool = False,
-                 name: str = "spectra", kernel=None):
+def make_spectra(
+    spectra,
+    snap_base,
+    snapnum: int,
+    savedir,
+    sset: str,
+    res: float = 1.0,
+    sf_neutral: bool = False,
+    name: str = "spectra",
+    kernel=None,
+):
     """A fake_spectra ``Spectra`` object for the skewer set ``sset`` (its HDF5 save file goes to ``savedir``)."""
     Path(savedir).mkdir(parents=True, exist_ok=True)
     s = SKEWER_SETS[sset]
-    return spectra.Spectra(int(snapnum), str(snap_base), s["cofm"].copy(), s["axis"].copy(), res=res, savefile=f"{name}.hdf5",
-                           savedir=str(savedir), reload_file=True, sf_neutral=sf_neutral, kernel=kernel, quiet=True)
+    return spectra.Spectra(
+        int(snapnum),
+        str(snap_base),
+        s["cofm"].copy(),
+        s["axis"].copy(),
+        res=res,
+        savefile=f"{name}.hdf5",
+        savedir=str(savedir),
+        reload_file=True,
+        sf_neutral=sf_neutral,
+        kernel=kernel,
+        quiet=True,
+    )
 
 
 def constants(spec) -> dict:
@@ -56,8 +79,12 @@ def run_full(spec, species: str = "H:1:1215", products=("tau", "colden")) -> dic
     """The ``products`` of ``spec`` for ``species`` = "element:stage:line" (e.g. "Si:3:1206"), plus the constants."""
     elem, stage, line = species.split(":")
     stage, line = int(stage), int(line)
-    get = {"tau": lambda: spec.get_tau(elem, stage, line), "colden": lambda: spec.get_col_density(elem, stage),
-           "temp": lambda: spec.get_temp(elem, stage), "velocity": lambda: spec.get_velocity(elem, stage)}
+    get = {
+        "tau": lambda: spec.get_tau(elem, stage, line),
+        "colden": lambda: spec.get_col_density(elem, stage),
+        "temp": lambda: spec.get_temp(elem, stage),
+        "velocity": lambda: spec.get_velocity(elem, stage),
+    }
     out = {p: np.asarray(get[p]()) for p in products}
     out.update(axis=np.asarray(spec.axis), cofm=np.asarray(spec.cofm), **{k: np.asarray(v) for k, v in constants(spec).items()})
     return out
@@ -72,7 +99,10 @@ def cell_values(spec, file_names, rows, element: str = "H", stage: int = 1) -> d
     ss = spec.snapshot_set
     seg_of = {Path(f).name: i for i, f in enumerate(ss._files)}
     file_names, rows = np.asarray(file_names), np.asarray(rows)
-    out = {k: np.zeros((rows.size, 3) if k in ("pos", "vel") else rows.size, np.float32) for k in ("pos", "hh", "elem_den", "temp", "vel")}
+    out = {
+        k: np.zeros((rows.size, 3) if k in ("pos", "vel") else rows.size, np.float32)
+        for k in ("pos", "hh", "elem_den", "temp", "vel")
+    }
     amumass = spec.lines.get_mass(element)
     for name in np.unique(file_names):
         sel = np.nonzero(file_names == name)[0]
@@ -95,12 +125,16 @@ def cell_values(spec, file_names, rows, element: str = "H", stage: int = 1) -> d
 
 
 def save_h5(path, d: dict):
+    import h5py  # optional dependency (the simulations extra): imported where it is used
+
     with h5py.File(path, "w") as f:
         for k, v in d.items():
             f.create_dataset(k, data=np.asarray(v))
 
 
 def load_h5(path) -> dict:
+    import h5py  # optional dependency (the simulations extra): imported where it is used
+
     with h5py.File(path, "r") as f:
         return {k: f[k][()] for k in f}
 
@@ -121,8 +155,17 @@ def main(argv=None):
     ap.add_argument("--kernel", default="default")
     a = ap.parse_args(argv)
     spectra = import_fake_spectra(a.build)
-    spec = make_spectra(spectra, a.snap_base, a.snapnum, Path(a.cache) / "fs_work", a.sset, a.res, bool(a.sf_neutral), f"run_{a.tag}",
-                        kernel=None if a.kernel == "default" else a.kernel)
+    spec = make_spectra(
+        spectra,
+        a.snap_base,
+        a.snapnum,
+        Path(a.cache) / "fs_work",
+        a.sset,
+        a.res,
+        bool(a.sf_neutral),
+        f"run_{a.tag}",
+        kernel=None if a.kernel == "default" else a.kernel,
+    )
     save_h5(Path(a.cache) / f"fs_{a.tag}.h5", run_full(spec, a.species, tuple(a.products.split(","))))
 
 

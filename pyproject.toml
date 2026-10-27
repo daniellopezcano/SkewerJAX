@@ -22,33 +22,84 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: POSIX :: Linux",
 ]
-# Lower bounds = the versions this package is developed and validated with (Python 3.11.14).
-# numpy < 2 is required by exojax 2.2.2 (its own metadata). The CPU build of JAX comes with `jax`;
-# for NVIDIA GPUs use the `gpu` extra (JAX's own extra name: jax[cuda12]).
+# What `import skewerjax` needs (the three blocks and the figure style are imported with the package). Lower bounds =
+# the versions this package is developed and validated with (Python 3.11.14); numpy < 2 is required by exojax 2.2.2.
+# JAX: the CPU build comes with `jax`; for NVIDIA GPUs install the `gpu` extra (JAX's own extra, jax[cuda12]) or follow
+# https://docs.jax.dev/en/latest/installation.html (docs/installation.md).
 dependencies = [
   "jax>=0.6.2",
   "jaxlib>=0.6.2",
   "numpy>=1.26.4,<2",
   "scipy>=1.16.3",
-  "h5py>=3.15.1",
   "matplotlib>=3.10.8",
   "diffrax>=0.7.0",
   "exojax>=2.2.2",
 ]
 
 [project.optional-dependencies]
+# snapshot readers (Arepo / IllustrisTNG HDF5), the result cache and the fake_spectra comparison files
+simulations = ["h5py>=3.15.1"]
+# optional figure extras: Tol's colour schemes (a vendored copy is used without it) and interactive notebook figures
+plots = ["tol-colors>=2.2", "ipympl>=0.10.0"]
+# the comparison with fake_spectra (fake_spectra itself: pip install -e path/to/fake_spectra) and the benchmark
+comparison = ["h5py>=3.15.1", "fake-spectra>=2.2.4", "psutil>=7.2.1"]
+notebooks = ["jupyter>=1.1.1", "ipykernel>=7.2.0", "ipympl>=0.10.0", "ipywidgets>=8.1.8", "nbformat>=5.10.4", "nbconvert>=7.17.1"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.17", "pre-commit>=4", "nbstripout>=0.8", "nbformat>=5.10.4", "nbconvert>=7.17.1",
+       "psutil>=7.2.1"]
 gpu = ["jax[cuda12]>=0.6.2"]
 gpu-local = ["jax[cuda12-local]>=0.6.2"]
-comparison = ["fake-spectra>=2.2.4", "psutil>=7.2.1"]
-notebooks = ["jupyter>=1.1.1", "ipykernel>=7.2.0", "ipympl>=0.10.0", "ipywidgets>=8.1.8", "nbformat>=5.10.4", "nbconvert>=7.17.1"]
-dev = ["pytest", "nbformat>=5.10.4", "nbconvert>=7.17.1", "psutil>=7.2.1"]
 
 [tool.setuptools.packages.find]
 include = ["skewerjax*"]
 
 [tool.setuptools.package-data]
+# the line table and the CLOUDY ion tables (the git submodule skewerjax/simulations/cloudy_tables, sbird/cloudy_tables)
 skewerjax = ["core/*.dat", "simulations/cloudy_tables/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+pythonpath = ["tests"]
+# the fast default: the slow tests are deselected (pytest -m "slow or not slow" runs everything; tests/README.md)
+addopts = "-q -m 'not slow'"
+markers = [
+  "slow: long-running checks (minutes): full resolution scans, the whole-snapshot checks, fake_spectra live",
+  "tng: needs the TNG50-4 snapshots in $SKEWERJAX_DATA (skipped without them)",
+  "gpu: needs a GPU visible to JAX, e.g. JAX_PLATFORMS=cuda,cpu (skipped without one)",
+  "fake_spectra: needs fake_spectra importable (skipped without it)",
+]
+filterwarnings = ["ignore::DeprecationWarning:jax.*"]
+
+[tool.coverage.run]
+source = ["skewerjax"]
+omit = ["skewerjax/simulations/cloudy_tables/*"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+extend-exclude = ["skewerjax/simulations/cloudy_tables", ".project_material", "claude_agents", "notebooks"]   # notebooks: hand-formatted; nbstripout only
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+  "E501",    # the formatter keeps lines at 130; the long ones left are strings and docstrings
+  "E731",    # small lambdas are the house style for one-line helpers (ramps, per-line closures)
+  "E741",    # `l` is the piece length / line variable of the notes
+  "E702",    # `a = ...; b = ...` on one line in the figure code
+  "B023",    # loop variables in lambdas are deliberate where they are evaluated in the same iteration
+  "B905",    # zip() without strict=: the arrays are built with equal lengths
+  "B008",    # frozen option dataclasses as defaults (ExtractionOptions(), ...) are immutable: intended
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]                   # the re-exports of the package (__all__ is built from dir())
+"skewerjax/comparison/**" = ["UP", "B007"]    # out of scope of the tidying: imports only (the fake_spectra comparison)
+"skewerjax/core/stats/**" = ["UP"]            # out of scope of the tidying: imports only (the summary statistics)
+"tests/**" = ["E402"]                          # imports after the JAX setup (conftest, helpers)
+"scripts/**" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["skewerjax"]
+known-local-folder = ["helpers", "outputs", "analytic_cases", "conftest"]
+
+[tool.ruff.format]
+quote-style = "double"

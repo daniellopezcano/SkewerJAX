@@ -26,24 +26,33 @@ TNG conventions (https://www.tng-project.org/data/docs/specifications/, PartType
   Mg, Si, Fe, other. For star-forming cells, T and x_HI follow the effective equation of state
   ("use with caution").
 """
+
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional, Sequence
 
-import h5py
 import numpy as np
 
 from skewerjax.core.constants import phys
 
-KPC_CM = 3.085678e21                     # 1 kpc [cm] (Arepo / fake_spectra value)
-GAS_GROUP = "PartType0"                  # the HDF5 group of the gas cells
+KPC_CM = 3.085678e21  # 1 kpc [cm] (Arepo / fake_spectra value)
+GAS_GROUP = "PartType0"  # the HDF5 group of the gas cells
 logger = logging.getLogger(__name__)
-GAS_DATASETS = ("Coordinates", "Velocities", "Masses", "Density", "InternalEnergy",
-                "ElectronAbundance", "NeutralHydrogenAbundance", "GFM_Metals", "StarFormationRate")
+GAS_DATASETS = (
+    "Coordinates",
+    "Velocities",
+    "Masses",
+    "Density",
+    "InternalEnergy",
+    "ElectronAbundance",
+    "NeutralHydrogenAbundance",
+    "GFM_Metals",
+    "StarFormationRate",
+)
 
 
 @dataclass(frozen=True)
@@ -53,10 +62,11 @@ class SnapshotHeader:
     Lengths in code units are ``unit_length_cm / h`` comoving cm (ckpc/h for TNG); the box is
     also given in comoving Mpc without h (SkewerJAX's length unit, ``SkewerBundle``).
     """
+
     redshift: float
     a: float
     h: float
-    box_code: float                # [code length, ckpc/h]
+    box_code: float  # [code length, ckpc/h]
     omega_m: float
     omega_l: float
     omega_b: float
@@ -79,7 +89,7 @@ class SnapshotHeader:
     @property
     def hubble_kms_mpc(self) -> float:
         """H(z) [km/s/Mpc] for flat LCDM without radiation (the simulation's own expansion)."""
-        return 100.0 * self.h * np.sqrt(self.omega_m / self.a ** 3 + self.omega_l)
+        return 100.0 * self.h * np.sqrt(self.omega_m / self.a**3 + self.omega_l)
 
     @property
     def velfac_kms_per_cMpc(self) -> float:
@@ -94,13 +104,19 @@ class SnapshotHeader:
     @property
     def density_cgs(self) -> float:
         """Code density -> physical g/cm^3 (h^2 / a^3 included)."""
-        return self.unit_mass_g / self.unit_length_cm ** 3 * self.h ** 2 / self.a ** 3
+        return self.unit_mass_g / self.unit_length_cm**3 * self.h**2 / self.a**3
 
     def cosmology(self):
         """The simulation's flat LCDM without radiation as a ``core.Cosmology`` (H0 = 100 h km/s/Mpc in 1/Gyr)."""
         from skewerjax.core.cosmology import Cosmology
-        return Cosmology(H0=100 * self.h * 1e6 * phys.Gyr_to_s / phys.Gpc_to_m, Omega_r_0=0.0, Omega_m_0=self.omega_m,
-                         Omega_k_0=0.0, Omega_lambda_0=self.omega_l)
+
+        return Cosmology(
+            H0=100 * self.h * 1e6 * phys.Gyr_to_s / phys.Gpc_to_m,
+            Omega_r_0=0.0,
+            Omega_m_0=self.omega_m,
+            Omega_k_0=0.0,
+            Omega_lambda_0=self.omega_l,
+        )
 
     def pixel_grid(self, res_kms: float) -> tuple[int, float]:
         """fake_spectra's periodic pixel grid: nbins = int(v_max / res), dv = v_max / nbins [km/s]
@@ -146,35 +162,52 @@ class ArepoHDF5Reader:
             raise FileNotFoundError(f"no snap_{self.snapnum:03d}.*.hdf5 in {snapdir}")
         key = lambda p: int(re.search(r"\.(\d+)\.hdf5$", p.name).group(1))
         self.files = sorted(files, key=key)
+        import h5py  # optional dependency (the simulations extra): imported where it is used
+
         with h5py.File(self.files[0], "r") as f:
             hdr = dict(f["Header"].attrs)
             par = dict(f["Parameters"].attrs) if "Parameters" in f else {}
             self.config = dict(f["Config"].attrs) if "Config" in f else {}
             self.parameters = par
             self.dataset_attrs = {k: dict(v.attrs) for k, v in f[GAS_GROUP].items()}
-        n_gas = int(np.asarray(hdr.get("NumPart_Total", [0]))[0]) + \
-            (int(np.asarray(hdr.get("NumPart_Total_HighWord", [0]))[0]) << 32)
+        n_gas = int(np.asarray(hdr.get("NumPart_Total", [0]))[0]) + (
+            int(np.asarray(hdr.get("NumPart_Total_HighWord", [0]))[0]) << 32
+        )
         a = _attr(hdr, "Time")
         if not 0.0 < a <= 1.0:
             raise ValueError(f"header Time (scale factor) must be in (0, 1], got {a}.")
         self.header = SnapshotHeader(
-            redshift=1.0 / a - 1.0, a=a, h=_attr(hdr, "HubbleParam"), box_code=_attr(hdr, "BoxSize"),
-            omega_m=_attr(hdr, "Omega0"), omega_l=_attr(hdr, "OmegaLambda"),
+            redshift=1.0 / a - 1.0,
+            a=a,
+            h=_attr(hdr, "HubbleParam"),
+            box_code=_attr(hdr, "BoxSize"),
+            omega_m=_attr(hdr, "Omega0"),
+            omega_l=_attr(hdr, "OmegaLambda"),
             omega_b=_attr(hdr, "OmegaBaryon", _attr(par, "OmegaBaryon", 0.0486)),
             unit_length_cm=_attr(hdr, "UnitLength_in_cm", _attr(par, "UnitLength_in_cm", KPC_CM)),
             unit_mass_g=_attr(hdr, "UnitMass_in_g", _attr(par, "UnitMass_in_g", 1.989e43)),
             unit_velocity_cms=_attr(hdr, "UnitVelocity_in_cm_per_s", _attr(par, "UnitVelocity_in_cm_per_s", 1e5)),
-            n_files=len(self.files), n_gas=n_gas)
-        logger.debug("ArepoHDF5Reader: %s, %d files, %d gas cells, z = %.3f, box %.4g cMpc", snapdir, len(self.files), n_gas,
-                     self.header.redshift, self.header.box_cMpc)
+            n_files=len(self.files),
+            n_gas=n_gas,
+        )
+        logger.debug(
+            "ArepoHDF5Reader: %s, %d files, %d gas cells, z = %.3f, box %.4g cMpc",
+            snapdir,
+            len(self.files),
+            n_gas,
+            self.header.redshift,
+            self.header.box_cMpc,
+        )
 
     # ------------------------------------------------------------------ raw access
     def n_rows(self, file_index: int) -> int:
         """Number of gas cells in one file."""
+        import h5py  # optional dependency (the simulations extra): imported where it is used
+
         with h5py.File(self.files[file_index], "r") as f:
             return int(f[self.part_type]["Density"].shape[0]) if self.part_type in f else 0
 
-    def read_rows(self, file_index: int, datasets: Sequence[str], start: int = 0, stop: Optional[int] = None) -> dict:
+    def read_rows(self, file_index: int, datasets: Sequence[str], start: int = 0, stop: int | None = None) -> dict:
         """Read ``datasets`` of one file: all rows in [start, stop).
 
         Returns raw code-unit arrays with their native dtypes.
@@ -182,6 +215,8 @@ class ArepoHDF5Reader:
         if not 0 <= file_index < len(self.files):
             raise IndexError(f"file_index {file_index} out of range [0, {len(self.files)}).")
         out = {}
+        import h5py  # optional dependency (the simulations extra): imported where it is used
+
         with h5py.File(self.files[file_index], "r") as f:
             g = f[self.part_type]
             for k in datasets:
@@ -212,7 +247,7 @@ class ArepoHDF5Reader:
     def volumes_cMpc3(self, masses, density) -> np.ndarray:
         """Cell volume m / rho (comoving) [cMpc^3]."""
         v_code = np.asarray(masses, dtype=np.float64) / np.asarray(density, dtype=np.float64)
-        return v_code * self.header.code_length_cMpc ** 3
+        return v_code * self.header.code_length_cMpc**3
 
     def to_gas_cells(self, raw: dict, ids=None):
         """Convert raw TNG datasets to :class:`GasCells` in physical units.
@@ -223,12 +258,13 @@ class ArepoHDF5Reader:
         ``velocity`` (N, 3) physical peculiar velocity [km/s] (= Velocities x sqrt(a)).
         """
         from skewerjax.simulations.gas_cells import GasCells
+
         hdr = self.header
         fields = {}
         if "Density" in raw:
             fields["rho"] = np.asarray(raw["Density"], dtype=np.float64) * hdr.density_cgs
         if "InternalEnergy" in raw:
-            fields["u"] = np.asarray(raw["InternalEnergy"], dtype=np.float64) * hdr.unit_velocity_cms ** 2
+            fields["u"] = np.asarray(raw["InternalEnergy"], dtype=np.float64) * hdr.unit_velocity_cms**2
         if "ElectronAbundance" in raw:
             fields["n_e"] = np.asarray(raw["ElectronAbundance"], dtype=np.float64)
         if "NeutralHydrogenAbundance" in raw:
@@ -239,7 +275,11 @@ class ArepoHDF5Reader:
             fields["sfr"] = np.asarray(raw["StarFormationRate"], dtype=np.float64)
         if "Velocities" in raw:
             fields["velocity"] = np.asarray(raw["Velocities"], dtype=np.float64) * np.sqrt(hdr.a)
-        return GasCells(positions=self.positions_cMpc(raw["Coordinates"]),
-                        volumes=self.volumes_cMpc3(raw["Masses"], raw["Density"]),
-                        fields=fields, box=hdr.box_cMpc, a=hdr.a,
-                        ids=None if ids is None else np.asarray(ids))
+        return GasCells(
+            positions=self.positions_cMpc(raw["Coordinates"]),
+            volumes=self.volumes_cMpc3(raw["Masses"], raw["Density"]),
+            fields=fields,
+            box=hdr.box_cMpc,
+            a=hdr.a,
+            ids=None if ids is None else np.asarray(ids),
+        )

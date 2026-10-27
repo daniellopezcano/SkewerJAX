@@ -1,4 +1,5 @@
 """P1D and xi1D of overflux fields: total, per line pair and per order (``OverfluxStatistics1D``)."""
+
 from __future__ import annotations
 
 import logging
@@ -8,8 +9,15 @@ import jax.numpy as jnp
 import numpy as np
 
 from skewerjax.core.stats.two_point import (
-    ZERO_ORDER_KEY, bin_index, binned_mean, lag_axis, order_sum, p1d_kernel,
-    rfft_multiplicity, subset_orders, xi_from_power,
+    ZERO_ORDER_KEY,
+    bin_index,
+    binned_mean,
+    lag_axis,
+    order_sum,
+    p1d_kernel,
+    rfft_multiplicity,
+    subset_orders,
+    xi_from_power,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,8 +99,9 @@ class OverfluxStatistics1D:
         if self.n_samples_kept == 0:
             raise ValueError("All samples were removed by the initialization validity checks.")
         if self.n_samples_removed > 0:
-            logger.warning("Removed %d invalid samples out of %d during initialization.",
-                           self.n_samples_removed, self.n_samples_initial)
+            logger.warning(
+                "Removed %d invalid samples out of %d during initialization.", self.n_samples_removed, self.n_samples_initial
+            )
             keep = np.asarray(valid_mask)
             total, C_per_sample, C_norm, terms = total[keep], C_per_sample[keep], C_norm[keep], terms[:, keep]
 
@@ -103,8 +112,8 @@ class OverfluxStatistics1D:
         self.delta_terms = {k: terms[i] for i, k in enumerate(self.subset_keys)}
 
         self.N_v = total.shape[1]
-        self.k = 2.0 * jnp.pi * jnp.fft.rfftfreq(self.N_v, d=self.dv)      # [s/km]
-        self.lags = jnp.asarray(lag_axis(self.N_v, self.dv))               # [km/s], centred
+        self.k = 2.0 * jnp.pi * jnp.fft.rfftfreq(self.N_v, d=self.dv)  # [s/km]
+        self.lags = jnp.asarray(lag_axis(self.N_v, self.dv))  # [km/s], centred
         self.n_modes = jnp.asarray(rfft_multiplicity(self.N_v) * self.n_samples_kept)
         self.ordered_pairs = list(product(self.subset_keys, repeat=2))
 
@@ -112,13 +121,24 @@ class OverfluxStatistics1D:
         self.term_keys = [ZERO_ORDER_KEY] + self.subset_keys
         self.term_orders = [0] + [orders[k] for k in self.subset_keys]
         self.term_pairs = list(product(self.term_keys, repeat=2))
-        self.pair_orders = {(a, b): oa + ob for (a, oa), (b, ob)
-                            in product(zip(self.term_keys, self.term_orders), repeat=2)}
+        self.pair_orders = {(a, b): oa + ob for (a, oa), (b, ob) in product(zip(self.term_keys, self.term_orders), repeat=2)}
 
-        for name in ("Pk_total_per_sample", "Pk_total", "Pk_total_err", "Pk_pair", "Pk_pair_complex",
-                     "Pk_total_from_terms", "Pk_total_by_order", "Pk_total_from_terms_contributions",
-                     "xi_total_per_sample", "xi_total", "xi_pair", "xi_total_from_terms",
-                     "xi_total_by_order", "xi_total_from_terms_contributions"):
+        for name in (
+            "Pk_total_per_sample",
+            "Pk_total",
+            "Pk_total_err",
+            "Pk_pair",
+            "Pk_pair_complex",
+            "Pk_total_from_terms",
+            "Pk_total_by_order",
+            "Pk_total_from_terms_contributions",
+            "xi_total_per_sample",
+            "xi_total",
+            "xi_pair",
+            "xi_total_from_terms",
+            "xi_total_by_order",
+            "xi_total_from_terms_contributions",
+        ):
             setattr(self, name, None)
         self._P_raw = self._P_w = None
 
@@ -129,22 +149,25 @@ class OverfluxStatistics1D:
             return self
         C = self.C_per_sample[:, 0]
         w, c = 1.0 / (1.0 + C), C / (1.0 + C)
-        P_raw, P_w, P_tot = p1d_kernel(self.total, self._terms, w, c, self.dv / self.N_v,
-                                       min(self.chunk_size, self.n_samples_kept))
+        P_raw, P_w, P_tot = p1d_kernel(
+            self.total, self._terms, w, c, self.dv / self.N_v, min(self.chunk_size, self.n_samples_kept)
+        )
         self._P_raw, self._P_w = P_raw, P_w
 
         self.Pk_total_per_sample = P_tot
         self.Pk_total = jnp.mean(P_tot, axis=0)
-        self.Pk_total_err = jnp.std(P_tot, axis=0, ddof=1) / np.sqrt(P_tot.shape[0]) \
-            if P_tot.shape[0] > 1 else jnp.full_like(self.Pk_total, jnp.nan)
+        self.Pk_total_err = (
+            jnp.std(P_tot, axis=0, ddof=1) / np.sqrt(P_tot.shape[0])
+            if P_tot.shape[0] > 1
+            else jnp.full_like(self.Pk_total, jnp.nan)
+        )
 
         idx = {k: i for i, k in enumerate(self.subset_keys)}
         self.Pk_pair_complex = {(a, b): P_raw[idx[a], idx[b]] for a, b in self.ordered_pairs}
         self.Pk_pair = {p: v.real for p, v in self.Pk_pair_complex.items()}
 
         tidx = {k: i for i, k in enumerate(self.term_keys)}
-        self.Pk_total_from_terms_contributions = {(a, b): P_w[tidx[a], tidx[b]].real
-                                                  for a, b in self.term_pairs}
+        self.Pk_total_from_terms_contributions = {(a, b): P_w[tidx[a], tidx[b]].real for a, b in self.term_pairs}
         by_order = order_sum(P_w, self.term_orders).real
         self.Pk_total_by_order = {n: by_order[n] for n in range(by_order.shape[0])}
         self.Pk_total_from_terms = jnp.sum(by_order, axis=0)
@@ -162,14 +185,13 @@ class OverfluxStatistics1D:
         self.xi_total_per_sample = shift(xi_from_power(self.Pk_total_per_sample, N, dv))
         self.xi_total = jnp.mean(self.xi_total_per_sample, axis=0)
 
-        xi_raw = xi_from_power(self._P_raw, N, dv)                          # (n, n, N_v)
+        xi_raw = xi_from_power(self._P_raw, N, dv)  # (n, n, N_v)
         idx = {k: i for i, k in enumerate(self.subset_keys)}
         self.xi_pair = {(a, b): xi_raw[idx[a], idx[b]] for a, b in self.ordered_pairs}
 
         xi_w = shift(xi_from_power(self._P_w, N, dv))
         tidx = {k: i for i, k in enumerate(self.term_keys)}
-        self.xi_total_from_terms_contributions = {(a, b): xi_w[tidx[a], tidx[b]]
-                                                  for a, b in self.term_pairs}
+        self.xi_total_from_terms_contributions = {(a, b): xi_w[tidx[a], tidx[b]] for a, b in self.term_pairs}
         by_order = order_sum(xi_w, self.term_orders)
         self.xi_total_by_order = {n: by_order[n] for n in range(by_order.shape[0])}
         self.xi_total_from_terms = jnp.sum(by_order, axis=0)
@@ -200,5 +222,6 @@ def p1d_from_tau(tau, dv: float):
     tau : (N_sk, N_v); dv : pixel width [km/s]. Returns (k [s/km], P [km/s]) as NumPy arrays.
     """
     from skewerjax.core.overflux import DeltaFieldBuilder
+
     st = OverfluxStatistics1D(DeltaFieldBuilder(np.asarray(tau)[None]).build(), dv).compute_p1d()
     return np.asarray(st.k)[1:], np.asarray(st.Pk_total)[1:]

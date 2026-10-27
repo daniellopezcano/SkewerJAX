@@ -1,0 +1,3 @@
+[submodule "skewerjax/simulations/cloudy_tables"]
+	path = skewerjax/simulations/cloudy_tables
+	url = https://github.com/sbird/cloudy_tables.git

@@ -23,12 +23,12 @@
 
 Everything here is off by default: the main route never calls it.
 """
+
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -55,6 +55,7 @@ def enable_logging(level=logging.DEBUG, *, stream=None) -> logging.Logger:
 @dataclass
 class SkewerCheck:
     """The report of ``check_skewers``: one entry per check (each a dict with ``ok`` and its numbers)."""
+
     checks: dict = field(default_factory=dict)
     info: dict = field(default_factory=dict)
 
@@ -76,7 +77,7 @@ class SkewerCheck:
 def _fine_samples(points: np.ndarray, spacing: float, max_samples: int):
     """Midpoints and lengths of a fine subdivision of every segment of the polylines ``points`` (N_sk, N, 3): per
     skewer (positions (M, 3), lengths (M,)), sub-intervals <= ``spacing`` (coarser if the total exceeds max_samples)."""
-    seg = np.linalg.norm(np.diff(points, axis=1), axis=-1)                      # (N_sk, N - 1)
+    seg = np.linalg.norm(np.diff(points, axis=1), axis=-1)  # (N_sk, N - 1)
     total = float(np.ceil(seg / spacing).sum())
     if total > max_samples:
         spacing *= total / max_samples
@@ -91,9 +92,20 @@ def _fine_samples(points: np.ndarray, spacing: float, max_samples: int):
     return out, spacing
 
 
-def check_skewers(cells, skewer_bundle, line_bundle, *, deposition: str = "voronoi", oversample: int = 16,
-                  max_samples: int = 2_000_000, column_tolerance: float = 1e-2, window_tolerance: float = 1e-3,
-                  dv_kms: Optional[float] = None, resolution_tolerance: float = 0.25, window: bool = True) -> SkewerCheck:
+def check_skewers(
+    cells,
+    skewer_bundle,
+    line_bundle,
+    *,
+    deposition: str = "voronoi",
+    oversample: int = 16,
+    max_samples: int = 2_000_000,
+    column_tolerance: float = 1e-2,
+    window_tolerance: float = 1e-3,
+    dv_kms: float | None = None,
+    resolution_tolerance: float = 0.25,
+    window: bool = True,
+) -> SkewerCheck:
     """Independent checks of the pieces and of tau for ``cells`` along ``skewer_bundle`` (module docstring).
 
     Parameters
@@ -116,10 +128,12 @@ def check_skewers(cells, skewer_bundle, line_bundle, *, deposition: str = "voron
     """
     from skewerjax.core.absorbers import cell_pieces
     from skewerjax.core.optical_depth import Pieces, compute_optical_depth, resolution_report
+
     t_start = time.perf_counter()
     rep = SkewerCheck()
-    pieces, parts, info = cell_pieces(cells, line_bundle, skewer_bundle=skewer_bundle, deposition=deposition, return_parts=True,
-                                      return_info=True)
+    pieces, parts, info = cell_pieces(
+        cells, line_bundle, skewer_bundle=skewer_bundle, deposition=deposition, return_parts=True, return_info=True
+    )
     rep.info["cell_pieces"] = info
     pts = np.asarray(skewer_bundle.spatial_points, dtype=np.float64)
     path_len = np.linalg.norm(np.diff(pts, axis=1), axis=-1).sum(-1)
@@ -131,11 +145,20 @@ def check_skewers(cells, skewer_bundle, line_bundle, *, deposition: str = "voron
     covered = ab0.length.sum(-1)
     rel = np.abs(covered / path_len - 1.0)
     if deposition == "tophat":
-        rep.checks["coverage"] = dict(ok=None, path_length=path_len, piece_length=covered,
-                                      summary="skipped: top-hat spheres overlap, their chords do not tile the path")
+        rep.checks["coverage"] = dict(
+            ok=None,
+            path_length=path_len,
+            piece_length=covered,
+            summary="skipped: top-hat spheres overlap, their chords do not tile the path",
+        )
     else:
-        rep.checks["coverage"] = dict(ok=bool(np.all(rel < 1e-9)), path_length=path_len, piece_length=covered, rel_error=rel,
-                                      summary=f"sum of piece lengths / path length - 1: max {rel.max():.1e} over {len(rel)} skewers")
+        rep.checks["coverage"] = dict(
+            ok=bool(np.all(rel < 1e-9)),
+            path_length=path_len,
+            piece_length=covered,
+            rel_error=rel,
+            summary=f"sum of piece lengths / path length - 1: max {rel.max():.1e} over {len(rel)} skewers",
+        )
     rep.info["time_coverage_s"] = time.perf_counter() - t
 
     # 2. column against a fine nearest-generator sampling over all the cells
@@ -155,7 +178,7 @@ def check_skewers(cells, skewer_bundle, line_bundle, *, deposition: str = "voron
         for k, (pos, dl) in enumerate(samples):
             lab = tree.query(wrap_positions(pos, box), k=1, workers=-1)[1]
             c = ab0.cell[k]
-            miss = ~np.isin(lab, np.asarray(sel_idx)[c[c >= 0]])            # cells of the samples that hold no piece
+            miss = ~np.isin(lab, np.asarray(sel_idx)[c[c >= 0]])  # cells of the samples that hold no piece
             if miss.any():
                 missing |= set(np.unique(lab[miss]).tolist())
                 missing_len += float(dl[miss].sum())
@@ -167,14 +190,19 @@ def check_skewers(cells, skewer_bundle, line_bundle, *, deposition: str = "voron
         for sp in species:
             p, q = out[sp]["pieces"], out[sp]["sampled"]
             out[sp]["rel_error"] = np.abs(p - q) / np.maximum(np.abs(q), 1e-300)
-            out[sp]["column_cm2"] = p * phys.Mpc_to_cm                   # comoving n_com l [cm^-2]
+            out[sp]["column_cm2"] = p * phys.Mpc_to_cm  # comoving n_com l [cm^-2]
             worst = max(worst, float(out[sp]["rel_error"].max()))
         ok = worst < column_tolerance and not missing
-        rep.checks["column"] = dict(ok=ok, per_species=out, missing_cells=np.array(sorted(missing), dtype=np.int64),
-                                    missing_length_cMpc=missing_len, sample_spacing_cMpc=spacing,
-                                    summary=f"pieces vs fine sampling ({spacing:.2g} cMpc): max relative difference {worst:.1e}; "
-                                            f"{len(missing)} cells met by the samples are missing from the pieces "
-                                            f"({missing_len:.2g} cMpc of path)")
+        rep.checks["column"] = dict(
+            ok=ok,
+            per_species=out,
+            missing_cells=np.array(sorted(missing), dtype=np.int64),
+            missing_length_cMpc=missing_len,
+            sample_spacing_cMpc=spacing,
+            summary=f"pieces vs fine sampling ({spacing:.2g} cMpc): max relative difference {worst:.1e}; "
+            f"{len(missing)} cells met by the samples are missing from the pieces "
+            f"({missing_len:.2g} cMpc of path)",
+        )
     rep.info["time_column_s"] = time.perf_counter() - t
 
     # 3. the window integral on one period per skewer
@@ -188,23 +216,34 @@ def check_skewers(cells, skewer_bundle, line_bundle, *, deposition: str = "voron
         for k in range(pieces.shape[1]):
             n_px = int(np.ceil(span[k] / dv))
             v = (np.arange(n_px) + 0.5) * (span[k] / n_px)
-            one = Pieces(**{f: (getattr(pieces, f)[k:k + 1] if getattr(pieces, f).ndim < 3 else getattr(pieces, f)[:, k:k + 1])
-                            for f in pieces.__dataclass_fields__})
+            one = Pieces(
+                **{
+                    f: (getattr(pieces, f)[k : k + 1] if getattr(pieces, f).ndim < 3 else getattr(pieces, f)[:, k : k + 1])
+                    for f in pieces.__dataclass_fields__
+                }
+            )
             _, ti = compute_optical_depth(one, v, line_bundle, velocity_period=True, resolution_tolerance=None, return_info=True)
             frac[:, k] = ti["window_fraction"][:, 0]
         dev = float(np.max(np.abs(1.0 - frac)))
-        rep.checks["window"] = dict(ok=dev < window_tolerance, window_fraction=frac, dv_kms=dv,
-                                    summary=f"integral of tau over one period / its value from the pieces: "
-                                            f"{frac.min():.6f} to {frac.max():.6f} (dv = {dv:.3g} km/s)")
+        rep.checks["window"] = dict(
+            ok=dev < window_tolerance,
+            window_fraction=frac,
+            dv_kms=dv,
+            summary=f"integral of tau over one period / its value from the pieces: "
+            f"{frac.min():.6f} to {frac.max():.6f} (dv = {dv:.3g} km/s)",
+        )
     else:
         rep.checks["window"] = dict(ok=None, summary="skipped (window=False)")
     rep.info["time_window_s"] = time.perf_counter() - t
 
     # 4. resolution
-    rep.checks["resolution"] = dict(res, ok=bool(res["ok"]),
-                                    summary="column fraction in pieces wider than "
-                                            f"{resolution_tolerance} b: max {np.max(res['column_fraction']):.1e} "
-                                            f"(max W/b = {np.max(res['max_ratio']):.2f})")
+    rep.checks["resolution"] = dict(
+        res,
+        ok=bool(res["ok"]),
+        summary="column fraction in pieces wider than "
+        f"{resolution_tolerance} b: max {np.max(res['column_fraction']):.1e} "
+        f"(max W/b = {np.max(res['max_ratio']):.2f})",
+    )
     rep.info["time_s"] = time.perf_counter() - t_start
     logger.info("%s", rep)
     return rep

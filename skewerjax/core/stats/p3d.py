@@ -1,4 +1,5 @@
 """P3D and xi3D of overflux fields on a regular grid of skewers (``OverfluxStatistics3D``)."""
+
 from __future__ import annotations
 
 import logging
@@ -8,8 +9,16 @@ import jax.numpy as jnp
 import numpy as np
 
 from skewerjax.core.stats.two_point import (
-    ZERO_ORDER_KEY, LazyPairs, bin_index, binned_mean, lag_axis, p3d_kernel,
-    p3d_order_spectra, rfft_multiplicity, subset_orders, xi3d_from_power,
+    ZERO_ORDER_KEY,
+    LazyPairs,
+    bin_index,
+    binned_mean,
+    lag_axis,
+    p3d_kernel,
+    p3d_order_spectra,
+    rfft_multiplicity,
+    subset_orders,
+    xi3d_from_power,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,7 +90,7 @@ class OverfluxStatistics3D:
 
         N_sk, N_pix = total.shape
         if grid_shape is None:
-            N_xy = int(round(N_sk ** 0.5))
+            N_xy = int(round(N_sk**0.5))
             if N_xy * N_xy != N_sk:
                 raise ValueError(f"N_sk={N_sk} is not a perfect square; pass grid_shape=(Nx, Ny).")
             grid_shape = (N_xy, N_xy)
@@ -92,10 +101,10 @@ class OverfluxStatistics3D:
         self.N_sk, self.Nx, self.Ny, self.N_pix = N_sk, Nx, Ny, N_pix
         self.N_xy = Nx if Nx == Ny else None
         self.shape = (Nx, Ny, N_pix)
-        self.L_x, self.L_y = Nx * self.dx, Ny * self.dy                        # [cMpc]
+        self.L_x, self.L_y = Nx * self.dx, Ny * self.dy  # [cMpc]
         self.L_perp = self.L_x if self.N_xy is not None else (self.L_x, self.L_y)
-        self.L_Lambda = N_pix * self.dv                                         # [km/s]
-        self.A_perp = self.L_x * self.L_y                                       # [cMpc^2]
+        self.L_Lambda = N_pix * self.dv  # [km/s]
+        self.A_perp = self.L_x * self.L_y  # [cMpc^2]
         self.dV = self.dx * self.dy * self.dv
         self.N_vox = Nx * Ny * N_pix
 
@@ -108,8 +117,11 @@ class OverfluxStatistics3D:
         if self.n_samples_kept == 0:
             raise ValueError("All samples were removed by the initialization validity checks.")
         if self.n_samples_removed > 0:
-            logger.warning("Removed %d invalid skewers out of %d. They are zeroed (not dropped) "
-                           "to preserve the grid shape.", self.n_samples_removed, N_sk)
+            logger.warning(
+                "Removed %d invalid skewers out of %d. They are zeroed (not dropped) to preserve the grid shape.",
+                self.n_samples_removed,
+                N_sk,
+            )
             total = jnp.where(valid_mask[:, None], total, 0.0)
             terms = jnp.where(valid_mask[None, :, None], terms, 0.0)
             C_per_sample = jnp.where(valid_mask[:, None], C_per_sample, 0.0)
@@ -129,29 +141,44 @@ class OverfluxStatistics3D:
         self.term_keys = [ZERO_ORDER_KEY] + self.subset_keys
         self.term_orders = [0] + [orders[k] for k in self.subset_keys]
         self.term_pairs = list(product(self.term_keys, repeat=2))
-        self.pair_orders = {(a, b): oa + ob for (a, oa), (b, ob)
-                            in product(zip(self.term_keys, self.term_orders), repeat=2)}
+        self.pair_orders = {(a, b): oa + ob for (a, oa), (b, ob) in product(zip(self.term_keys, self.term_orders), repeat=2)}
 
         # wavenumber and lag axes
-        self.kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Nx, d=self.dx)                # [1/cMpc]
+        self.kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Nx, d=self.dx)  # [1/cMpc]
         self.ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Ny, d=self.dy)
         self.k_perp_1d = self.kx
-        self.k_par = 2.0 * jnp.pi * jnp.fft.rfftfreq(N_pix, d=self.dv)          # [s/km], >= 0
+        self.k_par = 2.0 * jnp.pi * jnp.fft.rfftfreq(N_pix, d=self.dv)  # [s/km], >= 0
         self.k_perp_2d = jnp.sqrt(self.kx[:, None] ** 2 + self.ky[None, :] ** 2)
-        self.r_x = jnp.asarray(lag_axis(Nx, self.dx))                           # [cMpc], centred
+        self.r_x = jnp.asarray(lag_axis(Nx, self.dx))  # [cMpc], centred
         self.r_y = jnp.asarray(lag_axis(Ny, self.dy))
         self.r_perp_1d = self.r_x
-        self.pi_lags = jnp.asarray(lag_axis(N_pix, self.dv))                    # [km/s], centred
+        self.pi_lags = jnp.asarray(lag_axis(N_pix, self.dv))  # [km/s], centred
         self._mult_par = jnp.asarray(rfft_multiplicity(N_pix))
 
-        for name in ("Pk3d_total", "Pk3d_pair", "Pk3d_pair_complex", "Pk3d_total_by_order",
-                     "Pk3d_total_from_terms", "Pk3d_total_from_terms_contributions",
-                     "xi3d_total", "xi3d_pair", "xi3d_total_by_order", "xi3d_total_from_terms",
-                     "xi3d_total_from_terms_contributions"):
+        for name in (
+            "Pk3d_total",
+            "Pk3d_pair",
+            "Pk3d_pair_complex",
+            "Pk3d_total_by_order",
+            "Pk3d_total_from_terms",
+            "Pk3d_total_from_terms_contributions",
+            "xi3d_total",
+            "xi3d_pair",
+            "xi3d_total_by_order",
+            "xi3d_total_from_terms",
+            "xi3d_total_from_terms_contributions",
+        ):
             setattr(self, name, None)
 
-        logger.info("OverfluxStatistics3D initialized: grid=(%d, %d, %d), dx=%.4g, dy=%.4g cMpc, dv=%.4g km/s.",
-                    Nx, Ny, N_pix, self.dx, self.dy, self.dv)
+        logger.info(
+            "OverfluxStatistics3D initialized: grid=(%d, %d, %d), dx=%.4g, dy=%.4g cMpc, dv=%.4g km/s.",
+            Nx,
+            Ny,
+            N_pix,
+            self.dx,
+            self.dy,
+            self.dv,
+        )
 
     # ------------------------------------------------------------------ P3D
     def compute_p3d(self):
@@ -159,8 +186,7 @@ class OverfluxStatistics3D:
         if self.Pk3d_total is not None:
             return self
         pref = self.dV / self.N_vox
-        f_tot, f_raw, f_w = p3d_kernel(self.total.reshape(self.shape),
-                                       self._terms.reshape((-1,) + self.shape), self._w, self._c)
+        f_tot, f_raw, f_w = p3d_kernel(self.total.reshape(self.shape), self._terms.reshape((-1,) + self.shape), self._w, self._c)
         self._f_raw, self._f_w = f_raw, f_w
         self.Pk3d_total = pref * jnp.abs(f_tot) ** 2
 
@@ -178,8 +204,7 @@ class OverfluxStatistics3D:
         self.Pk3d_pair_complex = LazyPairs(self.ordered_pairs, raw)
         self.Pk3d_pair = LazyPairs(self.ordered_pairs, lambda p: raw(p).real)
         self.Pk3d_total_from_terms_contributions = LazyPairs(self.term_pairs, lambda p: wtd(p).real)
-        logger.info("compute_p3d() done: pref=%.4e, %d subset terms, %d orders.",
-                    pref, len(self.subset_keys), P_ord.shape[0])
+        logger.info("compute_p3d() done: pref=%.4e, %d subset terms, %d orders.", pref, len(self.subset_keys), P_ord.shape[0])
         return self
 
     # ------------------------------------------------------------------ xi3D
@@ -194,8 +219,7 @@ class OverfluxStatistics3D:
         self.xi3d_total_by_order = {n: xi_ord[n] for n in range(xi_ord.shape[0])}
         self.xi3d_total_from_terms = jnp.sum(xi_ord, axis=0)
         self.xi3d_pair = LazyPairs(self.ordered_pairs, lambda p: to_xi(self._raw_pair(p)))
-        self.xi3d_total_from_terms_contributions = LazyPairs(self.term_pairs,
-                                                             lambda p: to_xi(self._w_pair(p)))
+        self.xi3d_total_from_terms_contributions = LazyPairs(self.term_pairs, lambda p: to_xi(self._w_pair(p)))
         return self
 
     # ------------------------------------------------------------------ binning

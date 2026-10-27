@@ -16,8 +16,8 @@ reproduces the scheme of fake_spectra, so that the two codes can be compared opt
   generating points, volumes and, per species, density, temperature and peculiar velocity). One route takes them to
   τ: selection of the cells along the skewers, deposition into the exact pieces of the cells (`core.Pieces`), and the
   sum of one profile per piece at its centroid. Periodicity is one opt-in option, `velocity_period` (default: none).
-  Voigt profiles come from ExoJAX, with an FFT convolution, a fast first-order expansion in the damping parameter
-  (`voigt="harris"`) and SciPy's Faddeeva function as alternatives.
+  Voigt profiles come from ExoJAX, with a fast first-order expansion in the damping parameter (`voigt="harris"`) as
+  the alternative for τ; an FFT convolution and SciPy's Faddeeva function are standalone references (`core.voigt`).
 - **JAX-first containers and kernels.** Every container (`LineBundle`, `Cosmology`, `SkewerBundle`, `Cells`,
   `Pieces`, `GasCells`) is a pytree, and the τ sum works under `jit`, `vmap` and `grad`; the geometry (selection,
   deposition) runs on the host.
@@ -63,25 +63,34 @@ subpackage.
 
 ```python
 import jax, jax.numpy as jnp, numpy as np
-jax.config.update("jax_enable_x64", True)          # SkewerJAX follows this flag; the validated tolerances are float64
+
+jax.config.update("jax_enable_x64", True)  # SkewerJAX follows this flag; the validated tolerances are float64
 from skewerjax.core import LineBundle, Cosmology, SkewerBundle, grid_skewer_points, phys, compute_optical_depth
 from skewerjax.simulations import PowerLawGRF, grf_cells
 
 lines = LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
 cosmo = Cosmology(H0=phys.H0, Omega_r_0=0.0, Omega_m_0=1.0, Omega_k_0=0.0, Omega_lambda_0=0.0)
-L, z = 50.0, 2.2                                                       # box [cMpc], redshift of the far end
-skewers = SkewerBundle(spatial_points=grid_skewer_points(L, 4, 1024, direction="y").reshape(16, 1024, 3),
-                       cosmologies=cosmo, a0=1 / (1 + z), x0=L)
-grf = PowerLawGRF(A_s=0.04, k_0=2.0, n_s=-1.25, L=(L,) * 3, N=(64,) * 3)            # sigma_delta = 0.2
+L, z = 50.0, 2.2  # box [cMpc], redshift of the far end
+skewers = SkewerBundle(
+    spatial_points=grid_skewer_points(L, 4, 1024, direction="y").reshape(16, 1024, 3), cosmologies=cosmo, a0=1 / (1 + z), x0=L
+)
+grf = PowerLawGRF(A_s=0.04, k_0=2.0, n_s=-1.25, L=(L,) * 3, N=(64,) * 3)  # sigma_delta = 0.2
 delta = grf.sample(jax.random.PRNGKey(0))
-cells = grf_cells(delta, grf, {"HI": 1e-12, "SiIII": 1e-12 / 50}, temperature=1.5e4)   # the grid cells: n = n_bar (1 + delta)
+cells = grf_cells(delta, grf, {"HI": 1e-12, "SiIII": 1e-12 / 50}, temperature=1.5e4)  # the grid cells: n = n_bar (1 + delta)
 a_dagger = 1 / (1 + z)
-P = float(phys.c_kms * jnp.log(a_dagger / skewers.scale_factors[0, 0, 0]))   # the box in velocity
-v = (jnp.arange(512) + 0.5) * P / 512                                  # one period of the box
-tau = compute_optical_depth(skewers, v, lines, cells, a_dagger=a_dagger, resolution_tolerance=None,
-                            line_frame="reference",                    # both lines on the Lya axis
-                            velocity_period=True)                      # periodic over the box (default: no wrap)
-print(tau.shape, np.exp(-np.asarray(tau)).mean(axis=(1, 2)))           # (2, 16, 512): <F> of Lya and Si III
+P = float(phys.c_kms * jnp.log(a_dagger / skewers.scale_factors[0, 0, 0]))  # the box in velocity
+v = (jnp.arange(512) + 0.5) * P / 512  # one period of the box
+tau = compute_optical_depth(
+    skewers,
+    v,
+    lines,
+    cells,
+    a_dagger=a_dagger,
+    resolution_tolerance=None,
+    line_frame="reference",  # both lines on the Lya axis
+    velocity_period=True,
+)  # periodic over the box (default: no wrap)
+print(tau.shape, np.exp(-np.asarray(tau)).mean(axis=(1, 2)))  # (2, 16, 512): <F> of Lya and Si III
 ```
 
 Notebook `00_quickstart` runs the same chain step by step, and continues with the statistics.
@@ -89,13 +98,24 @@ Notebook `00_quickstart` runs the same chain step by step, and continues with th
 ## Installation
 
 ```bash
-pip install -e .            # CPU; add ".[gpu]" for NVIDIA GPUs (jax[cuda12]), ".[notebooks,comparison,dev]" for the rest
+git clone --recurse-submodules <repository URL>      # the CLOUDY ion tables are a git submodule
+cd SkewerJAX
+pip install -e ".[simulations]"                      # CPU; the core alone: pip install -e .
 python scripts/verify_install.py
 ```
 
+| extra | adds | for |
+|---|---|---|
+| (none) | jax, numpy < 2, scipy, matplotlib, diffrax, exojax | the core: toy fields, τ, statistics, figures |
+| `simulations` | h5py | the snapshot readers (Arepo / IllustrisTNG), the result cache |
+| `plots` | tol-colors, ipympl | Tol's colour package (a vendored copy is used without it), interactive figures |
+| `notebooks` | jupyter, ipykernel, ipympl, ipywidgets, nbconvert | running the notebooks |
+| `comparison` | h5py, fake-spectra, psutil | the comparison with fake_spectra and its benchmark |
+| `dev` | pytest, pytest-cov, ruff, pre-commit, nbstripout, nbconvert | the tests and the tooling |
+| `gpu` | jax[cuda12] | NVIDIA GPUs (see the JAX installation guide for other set-ups) |
+
 Python ≥ 3.11 and JAX ≥ 0.6.2 are required, with NumPy < 2 (an ExoJAX constraint). `docs/installation.md` covers
-venv/conda environments, the JAX CPU/GPU builds (from the official JAX guide), the optional dependencies, the data
-paths and troubleshooting.
+venv/conda environments, the JAX CPU/GPU builds, the data paths and troubleshooting.
 
 ## Notebooks
 
@@ -146,20 +166,26 @@ font sizes). `use_backend()` (interactive ipympl figures in a live notebook) is 
 Every notebook opens with the dependency graph highlighting the ingredients it uses. Notebooks `00_quickstart_step_by_step`, 05, 07 and 09 need TNG50 snapshots, and 10 to re-run its benchmark (see
 "Simulation data" in `docs/installation.md`).
 
-## Validation, tests and benchmarks
+## Tests
 
 ```bash
-python scripts/validation/run_all.py --quick --skip tng,fake    # toy-input checks (~2 min)
-python scripts/validation/run_all.py                            # every check, incl. TNG50-4 and live fake_spectra
-pytest                                                          # tests/ (CPU, ~3 min); TNG50-4 tests skip without the data; SKEWERJAX_SLOW=1 adds the TNG scripts
-python scripts/dev/run_tests.py [test_module ...]               # the same suite without pytest
-python scripts/benchmarks/benchmark_fake_spectra.py --sets smoke        # SkewerJAX vs fake_spectra, 1 and 4 skewers (~4 min)
-python scripts/benchmarks/benchmark_fake_spectra.py --preset quick     # the reduced scaling study (<= 30 min); --preset full: the whole one
+pip install -e ".[dev,simulations]"
+pytest                                   # the fast default (every test except the `slow` ones; ~5 min with the TNG50-4 data)
+pytest -m "slow or not slow"             # everything; markers: slow, tng (needs the snapshots), gpu, fake_spectra
+pytest -m "not tng"                      # what the CI runs: no data needed
+pre-commit install                       # once: ruff, nbstripout and the file checks on every commit
 ```
 
-The validation scripts compare against closed forms (static and expanding media, Voigt limits, cosmological a(x)),
-check the recovery of input power spectra, the JAX transformations, and the field extraction from TNG50-4, and run
-fake_spectra itself.
+One suite (`tests/`, laid out like the package): unit tests of every module; the physics checks (closed forms of τ,
+Voigt limits, a(x) of pure backgrounds, the recovery of input power spectra, jit / vmap of every kernel); the field
+extraction and τ on TNG50-4; the comparison with fake_spectra; and a regression of every result against reference
+arrays. `tests/README.md` explains the markers and when to regenerate the references
+(`scripts/dev/update_regression_references.py`). The benchmark against fake_spectra:
+
+```bash
+python scripts/benchmarks/benchmark_fake_spectra.py --sets smoke        # 1 and 4 skewers (~4 min)
+python scripts/benchmarks/benchmark_fake_spectra.py --preset quick     # the reduced scaling study (<= 30 min); --preset full: the whole one
+```
 
 When a result looks wrong, `skewerjax.core.check_skewers(cells, bundle, lines)` runs independent checks of the pieces
 and of τ: coverage of the path, the column against a fine sampling of the cells, and the window integral.
@@ -169,7 +195,10 @@ shows the package's log messages (see `docs/usage.md`, "Debugging and input chec
 ## Benchmark
 
 The two codes run on identical skewers of TNG50 snapshot 25 (z = 3), computing Lyα and Si III λ1206 at 1 km/s
-pixels (`scripts/benchmarks/benchmark_fake_spectra.py`, notebook `10_comparison_fake_spectra_performance`).
+pixels (`scripts/benchmarks/benchmark_fake_spectra.py`, notebook `10_comparison_fake_spectra_performance`, which reads
+the summary `benchmarks/results/fake_spectra_benchmark.json`; the raw per-run records go to `benchmarks/raw/`,
+git-ignored). The numbers were measured before the revision checkpoint of 2026-10-26, whose streamed selection is about
+2.4× faster: SkewerJAX's selection stage and totals are now smaller.
 - **Hardware:** Intel i9-13900KF (32 threads), 132 GB RAM, NVIDIA RTX 3060 12 GB, shared with another user's jobs
   during the runs (a few tens of per cent of noise).
 - **Software:** JAX 0.6.2, fake_spectra 2.2.4.
@@ -203,25 +232,28 @@ pixels (`scripts/benchmarks/benchmark_fake_spectra.py`, notebook `10_comparison_
 ## Repository layout
 
 ```
-skewerjax/
-  core/            lines, constants, cosmology, skewers, gas cells, selection, deposition, absorbers (cells -> pieces),
-                   Voigt, line profiles, spectral frames, optical depth (incl. sharding), overflux, analytic references
-    stats/         P1D/xi1D, P3D/xi3D, shared two-point kernels, metal-contamination models
-  simulations/     the field sources (-> core.Cells): toy fields (grf: PowerLawGRF; toy_cells: grf_cells, the grid
-                   cells) and snapshots (readers, raw gas cells, gas physics, streamed selection, snapshot_cells,
-                   SimulationSkewers, maps)
-    cloudy_tables/ CLOUDY ionisation tables (git submodule)
-  comparison/      fake_spectra emulation, matched options and effect chain, fake_spectra driver and source, benchmark
-  utils/           plotting.py (shared style, dependency graph plot_dag, figure helpers), paths.py (data and
-                   benchmark folders outside the repository: SKEWERJAX_DATA, ...), tutorial.py (GRF expectations)
-notebooks/         00-10 tutorials (delivered with outputs cleared), benchmark_records/ (the benchmark results read by 10)
+skewerjax/            the package
+  core/               lines, constants, cosmology, skewers, gas cells, selection, deposition, absorbers (cells -> pieces),
+                      Voigt, line profiles, spectral frames, optical depth (incl. sharding), overflux, closed forms,
+                      input checks (validation) and diagnostics (check_skewers)
+    stats/            P1D/xi1D, P3D/xi3D, shared two-point kernels, metal-contamination models
+  simulations/        the sources of gas cells: toy fields (PowerLawGRF, grf_cells) and snapshots (readers, gas physics,
+                      streamed selection, snapshot_cells, SimulationSkewers, maps)
+    cloudy_tables/    CLOUDY ionisation tables (git submodule sbird/cloudy_tables)
+  comparison/         fake_spectra emulation, matched options and effect chain, fake_spectra driver, benchmark
+  utils/              plotting (style, figures), paths (data and benchmark folders), tutorial (GRF expectations)
+notebooks/            00-10 tutorials (committed with outputs cleared)
+tests/                one pytest suite: core/, simulations/, utils/, comparison/, regression/ (+ data/); README.md
+benchmarks/
+  results/            the benchmark summary read by notebook 10 (committed)
+  raw/                the per-run records (git-ignored)
 scripts/
-  validation/      check_*.py and run_all.py
-  benchmarks/      benchmark_fake_spectra.py (per-configuration records: benchmark_results/raw/fake_spectra, git-ignored)
-  dev/             run_tests.py (the suite without pytest), check_markdown_math.py (the notebooks' markdown math)
-  verify_install.py
-tests/             pytest suite (CPU, toy inputs; data/: reference arrays of the regression test)
-docs/              installation.md, usage.md
+  benchmarks/         benchmark_fake_spectra.py
+  dev/                update_regression_references.py, check_markdown_math.py, run_tests.py (+ pytest_shim: the suite
+                      without pytest)
+  figures/            optical_depth_vs_analytic.py
+  verify_install.py   environment smoke test
+docs/                 installation.md, usage.md
 ```
 
 ## References and acknowledgements

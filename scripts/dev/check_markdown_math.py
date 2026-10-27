@@ -18,13 +18,15 @@ Checks every markdown cell, outside code spans (`...`) and fenced code:
      and code), and one form for the Lyman lines: $\\mathrm{Ly}\\alpha$, $\\mathrm{Ly}\\beta$ (not Ly$\\alpha$, Lyα,
      Lya or Ly-alpha in the text).
 """
+
 from __future__ import annotations
 
 import json
 import re
 import sys
 
-SUPPORTED = set("""
+SUPPORTED = set(
+    """
 alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu xi pi varpi rho varrho sigma
 varsigma tau upsilon phi varphi chi psi omega Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega
 frac tfrac dfrac sqrt left right big Big bigg Bigg bigl bigr Bigl Bigr biggl biggr middle sum prod int iint oint lim limsup liminf max min
@@ -41,9 +43,36 @@ begin end array aligned align cases matrix pmatrix bmatrix gathered split
 displaystyle textstyle scriptstyle limits nolimits
 underset overset stackrel substack color boxed tag nonumber notag
 Re Im backslash setminus
-""".split())
-PACKAGE_ONLY = {"bm", "si", "SI", "num", "unit", "qty", "dd", "dv", "pdv", "abs", "norm", "expval", "coloneqq", "eqqcolon",
-                "mathbbm", "textsc", "label", "eqref", "ref", "cite", "ce", "vb", "vu", "order", "tr", "Tr"}
+""".split()
+)
+PACKAGE_ONLY = {
+    "bm",
+    "si",
+    "SI",
+    "num",
+    "unit",
+    "qty",
+    "dd",
+    "dv",
+    "pdv",
+    "abs",
+    "norm",
+    "expval",
+    "coloneqq",
+    "eqqcolon",
+    "mathbbm",
+    "textsc",
+    "label",
+    "eqref",
+    "ref",
+    "cite",
+    "ce",
+    "vb",
+    "vu",
+    "order",
+    "tr",
+    "Tr",
+}
 
 GREEK = "αβγδεζηθικλμνξοπρστυφχψωϕϑϵΓΔΘΛΞΠΣΦΨΩ"
 SYMBOLS = "≈≃≅∝≤≥≪≫±∓×·⟨⟩√∑∏∫∂∇∞→←↔⇒∈∉⊂⊥∥‖†′″ℓ−⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺₀₁₂₃₄₅₆₇₈₉₋ᵢⱼₖₚ"
@@ -54,8 +83,10 @@ PLAIN = [
 ]
 
 
-SPELLED = re.compile(r"(?<![\w\\$`-])(alpha|beta|gamma|delta|epsilon|zeta|theta|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|"
-                     r"phi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Sigma|Phi|Psi|Omega|dagger)(?![\w$`-])")
+SPELLED = re.compile(
+    r"(?<![\w\\$`-])(alpha|beta|gamma|delta|epsilon|zeta|theta|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|"
+    r"phi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Sigma|Phi|Psi|Omega|dagger)(?![\w$`-])"
+)
 LYMAN = re.compile(r"Ly\$\\(alpha|beta)\$|Ly[αβ]|\bLy-?(?:a|b|alpha|beta)\b|\bLyman-?(?:alpha|beta)\b")
 
 
@@ -74,14 +105,14 @@ def _math_spans(text: str):
             if j < 0:
                 issues.append("unbalanced $$")
                 break
-            spans.append((i, j + 2, True, t[i + 2:j]))
+            spans.append((i, j + 2, True, t[i + 2 : j]))
             i = j + 2
         elif t[i] == "$":
             j = t.find("$", i + 1)
             if j < 0 or "\n\n" in t[i:j]:
-                issues.append(f"unbalanced $ near {t[i:i + 40]!r}")
+                issues.append(f"unbalanced $ near {t[i : i + 40]!r}")
                 break
-            spans.append((i, j + 1, False, t[i + 1:j]))
+            spans.append((i, j + 1, False, t[i + 1 : j]))
             i = j + 1
         else:
             i += 1
@@ -105,7 +136,7 @@ def check_markdown(src: str) -> list:
             line_end = text.find("\n", b)
             line_end = len(text) if line_end < 0 else line_end
             if text[line_start:a].strip() or text[b:line_end].strip():
-                issues.append(f"display math not on its own lines: {text[line_start:min(line_end, line_start + 60)]!r}")
+                issues.append(f"display math not on its own lines: {text[line_start : min(line_end, line_start + 60)]!r}")
             before, after = text[:line_start], text[line_end:]
             if before.strip() and not re.search(r"\n[ \t]*\n$", before):
                 issues.append("display math not separated from the text before it (blank line)")
@@ -114,25 +145,27 @@ def check_markdown(src: str) -> list:
     for line in text.splitlines():
         if line.lstrip().startswith("|"):
             ls, _ = _math_spans(line)
-            for a, b, disp, body in ls:
+            for _a, _b, _disp, body in ls:
                 if "|" in body:
                     issues.append(f"'|' inside math in a table row: {body[:40]!r}")
     # outside math
     out = list(text)
     for a, b, *_ in spans:
         out[a:b] = " " * (b - a)
-    plain = re.sub(r"(?<=\S) · (?=\S)", "   ", "".join(out))        # " · " is the heading separator, not a product
+    plain = re.sub(r"(?<=\S) · (?=\S)", "   ", "".join(out))  # " · " is the heading separator, not a product
     for ch in sorted({c for c in plain if c in GREEK or c in SYMBOLS or 0x0300 <= ord(c) <= 0x036F}):
         k = plain.index(ch)
-        issues.append(f"Unicode math {ch!r} outside LaTeX: {plain[max(0, k - 25):k + 15].strip()!r}")
+        issues.append(f"Unicode math {ch!r} outside LaTeX: {plain[max(0, k - 25) : k + 15].strip()!r}")
     for rx, what in PLAIN:
         for m in rx.finditer(plain):
-            issues.append(f"{what} outside LaTeX: {plain[max(0, m.start() - 15):m.end() + 10].strip()!r}")
-    plain_links = re.sub(r"\]\([^)]*\)", "]", plain)                 # link targets are URLs, not text
+            issues.append(f"{what} outside LaTeX: {plain[max(0, m.start() - 15) : m.end() + 10].strip()!r}")
+    plain_links = re.sub(r"\]\([^)]*\)", "]", plain)  # link targets are URLs, not text
     for m in re.finditer(r"\\[A-Za-z]+", plain_links):
-        issues.append(f"LaTeX macro outside math: {plain_links[max(0, m.start() - 15):m.end() + 10].strip()!r}")
+        issues.append(f"LaTeX macro outside math: {plain_links[max(0, m.start() - 15) : m.end() + 10].strip()!r}")
     for m in SPELLED.finditer(plain_links):
-        issues.append(f"spelled-out symbol {m.group(1)!r} (write it in LaTeX): {plain_links[max(0, m.start() - 20):m.end() + 10].strip()!r}")
+        issues.append(
+            f"spelled-out symbol {m.group(1)!r} (write it in LaTeX): {plain_links[max(0, m.start() - 20) : m.end() + 10].strip()!r}"
+        )
     for m in LYMAN.finditer(text.replace(r"$\mathrm{Ly}\alpha$", "").replace(r"$\mathrm{Ly}\beta$", "")):
         issues.append(f"Lyman line not written as $\\mathrm{{Ly}}\\alpha$: {m.group()!r}")
     return issues
