@@ -300,11 +300,11 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   input of an anisotropic `PowerLawGRF` evaluated at every mode), `plot_nH_T_fractions`, `plot_gas_cells` (the standard
   view of a `core.Cells` along one skewer, `plot_gas_cells(cells, select_cells(cells, bundle.spatial_points), bundle)`:
   the cells it crosses in 3D (cubes, or Voronoi polyhedra), one row per species: density, temperature, peculiar
-  velocity with one arrow per cell; 04 and 05),
+  velocity with one arrow per cell, scaled by `velocity_arrow_scale` with a reference arrow in the 3D scene; 04 and 05),
   `plot_deposition_cells`, `plot_deposition_pieces`, `plot_deposition_rings(parts, bundle, v, tau_pieces, period=,
   half_range_cMpc=, half_range_kms=)` (one simulation skewer from the parts of `cell_pieces`, the pieces within
   ±`half_range_cMpc` of its seam, its end and its start side by side: the cells in 3D with the box faces and the
-  tangents; the pieces with their v∥ = v·t̂ (one arrow scale in the three figures); the same pieces on the ring of s
+  tangents; the pieces with their v∥ = v·t̂ (arrows at one scale with the rings; every arrow figure sets its scale with `velocity_arrow_scale` and draws a reference arrow); the same pieces on the ring of s
   (period L), on the ring of v† (period P, at their line centres, window ±`half_range_kms`), and their dτ_p with
   `velocity_period=True` and the total τ; 07),
   `plot_voigt_limits`, `plot_frames_axes` (one figure per case, all of the same size and layout: `{"own", "global",

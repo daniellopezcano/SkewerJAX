@@ -2309,6 +2309,220 @@ def _cell_faces(cells, centres, sizes):
     return _voronoi_faces(cells, centres, sizes)
 
 
+# --------------------------------------------------------------------------- velocity arrows (04, 05, 07)
+ARROW_FRACTION, ARROW_PERCENTILE = 0.8, 90.0  # the 90th-percentile speed is drawn 0.8 median cell sizes long
+ARROW_EXTEND = 0.1  # the axis limits may grow by this fraction of the largest span per side to hold the arrows
+ARROW_MIN_SPAN = 0.06  # ... and that arrow is at least this fraction of the panel's largest span (many small cells)
+
+
+def velocity_arrow_scale(
+    velocities,
+    sizes,
+    *,
+    span=None,
+    fraction: float = ARROW_FRACTION,
+    percentile: float = ARROW_PERCENTILE,
+    min_span_fraction: float = ARROW_MIN_SPAN,
+    scale=None,
+):
+    """The length of the velocity arrows per unit speed [cMpc per km/s] for the cells shown in a figure.
+
+    The ``percentile``-th percentile of their speeds is drawn ``fraction`` x the median of their sizes long: the arrows
+    stand out without swamping the cells, and one fast outlier does not shrink every other arrow (a percentile, not
+    the maximum); with ``span`` (the largest extent of the panels [cMpc]) that arrow is at least ``min_span_fraction``
+    x span long, so that the arrows stay visible when many small cells fill a large panel. velocities : (K, 3) vectors
+    or (K,) speeds or signed components [km/s]; sizes : (K,) cell sizes V^(1/3) [cMpc]; scale : an explicit value
+    [cMpc per km/s], returned as is (the override). Finite and > 0 for any input: without moving cells 1 km/s stands in
+    for the percentile, without sizes 1 cMpc for the median.
+    """
+    if scale is not None:
+        if not (np.isfinite(scale) and scale > 0):
+            raise ValueError(f"the arrow scale must be a finite number > 0 [cMpc per km/s], got {scale!r}.")
+        return float(scale)
+    v = np.asarray(velocities, dtype=float)
+    speed = np.linalg.norm(v, axis=-1) if v.ndim == 2 else np.abs(v.ravel())
+    speed = speed[np.isfinite(speed) & (speed > 0)]
+    h = np.asarray(sizes, dtype=float).ravel()
+    h = h[np.isfinite(h) & (h > 0)]
+    v_p = float(np.percentile(speed, percentile)) if speed.size else 1.0
+    length = fraction * (float(np.median(h)) if h.size else 1.0)
+    if span is not None and np.isfinite(span) and span > 0:
+        length = max(length, min_span_fraction * float(span))
+    return length / v_p
+
+
+def round_speed(v: float, *, below: bool = False) -> float:
+    """The number of the form 1, 2 or 5 x 10^n nearest to ``v`` > 0 in log (``below``: the largest one <= v); 1 for
+    v <= 0 or not finite. The speed of the reference arrows [km/s]."""
+    if not (np.isfinite(v) and v > 0):
+        return 1.0
+    n = np.floor(np.log10(v))
+    cand = np.array([m * 10.0**e for e in (n - 1, n, n + 1) for m in (1.0, 2.0, 5.0)])
+    if below:
+        return float(cand[cand <= v * (1 + 1e-12)].max())
+    return float(cand[np.argmin(np.abs(np.log(cand / v)))])
+
+
+def velocity_key_speed(velocities) -> float:
+    """The speed of the reference arrow [km/s]: the median speed of the moving cells, rounded to 1, 2 or 5 x 10^n."""
+    v = np.asarray(velocities, dtype=float)
+    speed = np.linalg.norm(v, axis=-1) if v.ndim == 2 else np.abs(v.ravel())
+    speed = speed[np.isfinite(speed) & (speed > 0)]
+    return round_speed(float(np.median(speed)) if speed.size else 1.0)
+
+
+def _fit_arrows(starts, arrows, lo, hi, *, extend: float = ARROW_EXTEND):
+    """Arrows from ``starts`` (K, d) that stay inside the limits ``lo``, ``hi`` (d,): the limits grow to hold the tips,
+    by at most ``extend`` x the largest span per side, and an arrow that still leaves them is shortened so that its tip
+    lies on the limit (``capped``). Returns (arrows (K, d), capped (K,) bool, lo, hi)."""
+    starts, arrows = np.atleast_2d(np.asarray(starts, dtype=float)), np.atleast_2d(np.asarray(arrows, dtype=float))
+    lo, hi = np.array(lo, dtype=float), np.array(hi, dtype=float)
+    tips = starts + arrows
+    margin = extend * float(np.max(hi - lo))
+    lo, hi = np.minimum(lo, np.maximum(tips.min(0), lo - margin)), np.maximum(hi, np.minimum(tips.max(0), hi + margin))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t_hi = np.where(arrows > 0, (hi - starts) / arrows, np.inf)
+        t_lo = np.where(arrows < 0, (lo - starts) / arrows, np.inf)
+    t = np.clip(np.minimum(t_hi, t_lo).min(1), 0.0, 1.0)
+    return arrows * t[:, None], t < 1.0 - 1e-12, lo, hi
+
+
+def _screen_axis(view) -> int:
+    """The data axis most parallel to the screen for a 3D ``view`` = (elevation, azimuth) [deg]: the one with the
+    smallest component along the line of sight, so its projection shortens a length the least."""
+    el, az = np.radians(view[0]), np.radians(view[1])
+    sight = np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
+    return int(np.argmin(np.abs(sight)))
+
+
+def _velocity_key_3d(ax, lo, hi, scale: float, v_key: float, view, avoid, *, note: str = "lengths in projection") -> float:
+    """The reference arrow of a 3D panel, inside the scene: ``v_key`` km/s at the arrows' ``scale`` [cMpc per km/s],
+    along the data axis most parallel to the screen (``_screen_axis``), so that the projection shortens it exactly as it
+    does the arrows. It starts from the box corner (of the upper half on the screen) whose arrow and label are, in projection,
+    farthest from the points ``avoid`` (cell vertices, path), and points inwards; its label ("200 km/s" and ``note``) sits in a
+    small box past its tip or beside its middle (inwards, above or below on the screen), wherever it is clearest. The speed is lowered to a rounder value when the arrow would be longer than 60 % of
+    the box along its axis. Returns the speed drawn [km/s]."""
+    from matplotlib import patheffects as pe
+
+    lo, hi = np.asarray(lo, dtype=float), np.asarray(hi, dtype=float)
+    span = hi - lo
+    i = _screen_axis(view)
+    if v_key * scale > 0.6 * span[i]:
+        v_key = round_speed(0.6 * span[i] / scale, below=True)
+    length = v_key * scale
+    el, az = np.radians(view[0]), np.radians(view[1])
+    up = np.array([-np.sin(el) * np.cos(az), -np.sin(el) * np.sin(az), np.cos(el)])  # the screen's up, in data space
+    inset = 0.06 * span
+    corners = np.array(np.meshgrid(*[(0, 1)] * 3, indexing="ij")).reshape(3, -1).T
+    pos = np.where(corners == 1, hi - inset, lo + inset)
+    avoid = np.asarray(avoid, dtype=float).reshape(-1, 3)
+
+    def label_at(start, direction, side="inward"):  # past the tip, or beside the middle: inwards, above or below on the screen
+        if side == "ahead":
+            return start + (length + 0.12 * span[i]) * direction
+        mid = start + 0.5 * length * direction
+        inward = 0.5 * (lo + hi) - mid
+        inward[i] = 0.0
+        inward = inward / span.max()
+        inward = -up if not np.any(inward) else inward / np.linalg.norm(inward)
+        offset = {"inward": inward, "above": up, "below": -up}[side]
+        return np.clip(mid + 0.09 * span.max() * offset, lo, hi)
+
+    from mpl_toolkits.mplot3d import proj3d
+
+    M = ax.get_proj()  # the panel's projection (limits, box aspect and view are set): clearance on the screen
+
+    def screen(p):
+        x, y, _ = proj3d.proj_transform(*np.atleast_2d(p).T, M)
+        return np.stack([x, y], -1)
+
+    av = screen(avoid) if avoid.size else np.zeros((0, 2))
+    box2 = screen(pos)
+    scale2 = float(np.max(np.ptp(box2, axis=0)))
+    y2 = (box2[:, 1] - box2[:, 1].min()) / scale2  # the height of every corner on the screen
+    best = None
+    for k in range(len(corners)):  # the upper half on the screen: the clearest of arrow and label, then the highest
+        if y2[k] < np.median(y2):
+            continue
+        d = np.zeros(3)
+        d[i] = -1.0 if corners[k][i] == 1 else 1.0  # inwards
+        for side in ("inward", "ahead", "above", "below"):
+            pts_k = screen(np.vstack([pos[k] + np.linspace(0, 1, 9)[:, None] * (length * d), label_at(pos[k], d, side)[None]]))
+            dist = float(np.min(np.linalg.norm(av[None] - pts_k[:, None], axis=-1))) / scale2 if av.size else 1.0
+            score = dist + 0.05 * y2[k]
+            if best is None or score > best[0]:
+                best = (score, pos[k], d, side)
+    _, start, direction, side = best
+    ax.quiver(
+        *start,
+        *(length * direction),
+        color=FG,
+        lw=2.8,
+        arrow_length_ratio=0.3,
+        normalize=False,
+        zorder=30,
+        path_effects=[pe.Stroke(linewidth=5.0, foreground=BG), pe.Normal()],
+    )
+    label = f"{v_key:g} km/s" + (f"\n{note}" if note else "")
+    at = label_at(start, direction, side)  # the label never leaves the scene
+    ax.text(
+        *at,
+        label,
+        fontsize=FONT_MIN["annotation"],
+        color=FG,
+        ha="center",
+        va="center",
+        zorder=31,
+        bbox=dict(boxstyle="round,pad=0.2", facecolor=BG, edgecolor=DIM, alpha=0.85),
+    )
+    return v_key
+
+
+def _velocity_key_2d(ax, v_key: float, scale: float, *, x: float = 0.97, y: float = 0.93):
+    """The reference arrow of a 2D panel whose x axis is a length [cMpc]: ``v_key`` km/s at ``scale`` [cMpc per km/s],
+    horizontal, ending at ``x`` (axes fraction) at height ``y``, labelled in a small box to its left."""
+    from matplotlib import patheffects as pe
+
+    x0, x1 = ax.get_xlim()
+    tip = x0 + x * (x1 - x0)
+    tr = ax.get_xaxis_transform()
+    ax.annotate(
+        "",
+        (tip, y),
+        (tip - v_key * scale, y),
+        xycoords=tr,
+        zorder=12,
+        arrowprops=dict(
+            arrowstyle="-|>",
+            color=FG,
+            lw=2.4,
+            mutation_scale=14,
+            shrinkA=0,
+            shrinkB=0,
+            path_effects=[pe.withStroke(linewidth=4.0, foreground=BG)],
+        ),
+    )
+    ax.text(
+        tip - v_key * scale - 0.01 * (x1 - x0),
+        y,
+        f"{v_key:g} km/s",
+        transform=tr,
+        ha="right",
+        va="center",
+        zorder=12,
+        fontsize=FONT_MIN["annotation"],
+        color=FG,
+        bbox=dict(boxstyle="round,pad=0.25", facecolor=BG, edgecolor=DIM, alpha=0.9),
+    )
+
+
+def _mark_capped(ax, tips, capped):
+    """An open circle at the tip of every capped arrow (longer than drawn: cut at the panel edge)."""
+    if np.any(capped):
+        t = np.atleast_2d(tips)[capped]
+        ax.scatter(*t.T, s=60, facecolors="none", edgecolors=FG, linewidths=1.6, depthshade=False, zorder=29)
+
+
 def _draw_cells_3d(
     ax,
     faces,
@@ -2384,6 +2598,7 @@ def plot_gas_cells(
     zoom: float = 1.1,
     decades: float = 12.0,
     alpha: float = 0.55,
+    arrow_scale=None,
     figsize=None,
 ):
     """What a ``core.Cells`` holds for the optical depth, along one skewer: the same 3D view for any source (04, 05).
@@ -2405,8 +2620,14 @@ def plot_gas_cells(
     velocity colour bars, and the arrow scale, are shared by the rows. ``view`` = (elevation, azimuth) [deg]; ``zoom``
     scales the 3D boxes (data aspect 1:1:1); ``alpha`` is the opacity of the cell faces.
 
+    Arrows: one scale for the figure, ``velocity_arrow_scale`` of the cells drawn (their 90th-percentile speed is 0.8
+    median cell sizes long, and at least 6 % of the box), or ``arrow_scale`` [cMpc per km/s]; every arrow inside the panel (the limits grow a little,
+    an arrow still too long is cut at the edge and ends with an open circle); a reference arrow of a round speed inside
+    each velocity panel (``_velocity_key_3d``; lengths are shown in projection).
+
     Returns (fig, axs (n_species, 3), info {"n_selected", "n_crossed", "crossed": indices into ``selected``,
-    "path_length": [cMpc], "arrow_kms": the speed of an arrow one median cell size long [km/s]}).
+    "path_length": [cMpc], "arrow_scale": [cMpc per km/s], "arrow_kms": the speed of an arrow one median cell size long
+    [km/s], "key_kms": the reference arrow [km/s], "n_capped": arrows cut at the panel edge}).
     """
     import re
 
@@ -2428,9 +2649,17 @@ def plot_gas_cells(
     t_lim = (t_lim[0], max(t_lim[1], t_lim[0] + 1e-3))
     v_par = {sp: np.sum(f["velocity"] * tang, axis=1) for sp, f in fields.items()}
     v_lim = max(max(float(np.abs(x).max()) for x in v_par.values()), 1e-6)
-    speed = max(max(float(np.linalg.norm(f["velocity"], axis=1).max()) for f in fields.values()), 1e-6)
+    vel_all = np.concatenate([f["velocity"] for f in fields.values()])
+    scale = velocity_arrow_scale(
+        vel_all, np.tile(size, len(sp_list)), span=float(np.max(hi - lo)), scale=arrow_scale
+    )  # one per figure
     h_med = float(np.median(size))
-    arrow_kms = speed / 1.2  # the fastest cell: an arrow of 1.2 median cell sizes
+    arrows, capped = {}, {}
+    for sp, f in fields.items():  # the limits grow once, for every panel (the same view in each)
+        arrows[sp], capped[sp], lo, hi = _fit_arrows(g, f["velocity"] * scale, lo, hi)
+    for sp, f in fields.items():  # the final limits: shorten again against them
+        arrows[sp], capped[sp], _, _ = _fit_arrows(g, f["velocity"] * scale, lo, hi, extend=0.0)
+    v_key = velocity_key_speed(vel_all)
     n = len(sp_list)
     fig = plt.figure(figsize=figsize or (24, 7.6 * n + 1.6), layout="constrained")
     fig.get_layout_engine().set(
@@ -2467,20 +2696,19 @@ def plot_gas_cells(
                 alpha=alpha,
                 view=view,
                 zoom=zoom,
-                arrows=f["velocity"] / arrow_kms * h_med if c == 2 else None,
+                arrows=arrows[sp] if c == 2 else None,
             )
-            ax.set_title(titles[c], pad=0)
-            if c == 2:
-                ax.text2D(
-                    0.99,
-                    0.93,
-                    f"arrows: {arrow_kms:.0f} km/s per {h_med:.2g} cMpc",
-                    transform=ax.transAxes,
-                    ha="right",
-                    va="top",
-                    fontsize=FONT_MIN["annotation"],
-                    color=FG,
+            if c == 2:  # the arrows: their key in the scene, the caption in the title
+                _mark_capped(ax, g + arrows[sp], capped[sp])
+                v_key = _velocity_key_3d(
+                    ax, lo, hi, scale, v_key, view, np.concatenate([g, pts] + [np.concatenate(f) for f in faces]), note=""
                 )
+                ax.set_title(
+                    titles[c] + "\n(arrows: lengths in projection" + ("; o: cut at the edge)" if np.any(capped[sp]) else ")"),
+                    pad=0,
+                )
+            else:
+                ax.set_title(titles[c], pad=0)
             cb = fig.colorbar(
                 mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
                 ax=ax,
@@ -2493,7 +2721,16 @@ def plot_gas_cells(
             )
             cb.locator = mpl.ticker.MaxNLocator(4)
             cb.update_ticks()
-    info = dict(n_selected=len(selected), n_crossed=int(idx.size), crossed=idx, path_length=float(s0[-1]), arrow_kms=arrow_kms)
+    info = dict(
+        n_selected=len(selected),
+        n_crossed=int(idx.size),
+        crossed=idx,
+        path_length=float(s0[-1]),
+        arrow_scale=scale,
+        arrow_kms=h_med / scale,
+        key_kms=v_key,
+        n_capped=int(max(np.count_nonzero(c) for c in capped.values())),
+    )
     return fig, axs, info
 
 
@@ -3438,8 +3675,23 @@ def _deposition_view(parts, bundle, half_range_cMpc: float, species: str, period
     )
 
 
+def _deposition_arrows(D, cells, species: str, arrow_kms=None, arrow_cMpc=None, *, parallel: bool = False):
+    """The arrow scale [cMpc per km/s] and the reference speed [km/s] of the deposition figures, from what their arrows
+    show (``velocity_arrow_scale``, ``velocity_key_speed``): the vectors v of the cells of the pieces shown (3D, figure
+    (a)), or the components v_par = v . t of those pieces (``parallel``: along s, figures (b) and (c), which so share
+    one scale). ``arrow_cMpc`` / ``arrow_kms`` when both are given (the override)."""
+    if (arrow_kms is None) != (arrow_cMpc is None):
+        raise ValueError("give both arrow_kms and arrow_cMpc (an arrow of arrow_cMpc cMpc per arrow_kms km/s), or neither.")
+    R, shown = D["R"], D["shown"]
+    cell = np.unique(R["cell"][shown])
+    vel = R["v_los"][shown] if parallel else np.asarray(cells.species[species]["velocity"], dtype=float)[cell]
+    size = np.asarray(cells.size_cMpc, dtype=float)[R["cell"][shown] if parallel else cell]
+    over = None if arrow_kms is None else float(arrow_cMpc) / float(arrow_kms)
+    return velocity_arrow_scale(vel, size, span=D["hr"], scale=over), velocity_key_speed(vel)  # each panel: l of path
+
+
 def _velocity_arrow_handle(
-    arrow_kms: float, arrow_cMpc: float, what: str = r"$v_\parallel = \mathbf{v}\cdot\hat t$ (colour of its piece)"
+    key_kms: float, scale: float, what: str = r"$v_\parallel = \mathbf{v}\cdot\hat t$ (colour of its piece)", extra: str = ""
 ):
     from matplotlib import patheffects as pe
     from matplotlib.lines import Line2D
@@ -3454,7 +3706,7 @@ def _velocity_arrow_handle(
         markersize=9,
         markeredgecolor=FG,
         path_effects=[pe.Stroke(linewidth=4.0, foreground=FG), pe.Normal()],
-        label=rf"{what}: arrow of {arrow_cMpc:g} cMpc per {arrow_kms:.0f} km/s",
+        label=rf"{what}; key: {key_kms:g} km/s{extra}",
     )
 
 
@@ -3471,8 +3723,8 @@ def plot_deposition_cells(
     *,
     half_range_cMpc: float = 2.0,
     species: str = "HI",
-    arrow_kms: float = 100.0,
-    arrow_cMpc: float = 0.1,
+    arrow_kms=None,
+    arrow_cMpc=None,
     view=(20.0, -76.0),
     zoom: float = 1.3,
     figsize=(22, 7.5),
@@ -3482,7 +3734,12 @@ def plot_deposition_cells(
     parts : the parts of ``core.cell_pieces(cells, lines, skewer_bundle=bundle, return_parts=True)``; bundle : the
     ``SkewerBundle`` (one straight skewer through a periodic box, from one face to the opposite one); half_range_cMpc :
     l [cMpc], the cells of the pieces with centroids in s in [-l, l) around the seam s = 0 = L; arrow_kms, arrow_cMpc :
-    the scale of the velocity arrows (the same in ``plot_deposition_pieces`` and ``plot_deposition_rings``).
+    an arrow of ``arrow_cMpc`` per ``arrow_kms`` (both or neither); default ``velocity_arrow_scale`` of the cells shown
+    (their 90th-percentile speed 0.8 median cell sizes long); ``plot_deposition_pieces`` and ``plot_deposition_rings``
+    share one scale of their own, from the components v_par that they draw. Every arrow stays inside its panel (an arrow still too long after the limits grow a
+    little is cut at the edge and ends with an open circle); each panel holds a reference arrow of a round speed
+    (``_velocity_key_3d``: lengths are shown in projection, and the two panels' boxes differ in size). ``info`` holds
+    ``arrow_scale`` [cMpc per km/s], ``key_kms`` and ``n_capped``.
 
     (a1) the end of the box (s in [L - l, L)), (a2) its start (s in [0, l)): the cells in the colour of their density of
     ``species`` (one label on each: E1, ... at the end, S1, ... at the start), their peculiar velocities (arrows from
@@ -3496,8 +3753,9 @@ def plot_deposition_cells(
     R, use, box = D["R"], parts["cells"], parts["cells"].box
     pts, s_pts, tan_pts, L = D["pts"], D["s_pts"], D["tan_pts"], D["L"]
     green, red = PALETTE["green"], PALETTE["red"]
-    kpc = arrow_cMpc / arrow_kms  # cMpc of arrow per km/s
+    kpc, v_key = _deposition_arrows(D, use, species, arrow_kms, arrow_cMpc)  # cMpc of arrow per km/s, key [km/s]
     h_med = float(np.median(np.asarray(use.size_cMpc)[R["cell"][D["shown"]]]))
+    n_capped, keys = 0, []
     fig = plt.figure(figsize=figsize)
     axs = [fig.add_axes([-0.085 + 0.495 * k, 0.18, 0.6, 0.73], projection="3d", computed_zorder=False) for k in range(2)]
     for kp, k in enumerate((1, 0)):  # panel 0: the end (stretch 1), panel 1: the start
@@ -3519,6 +3777,8 @@ def plot_deposition_cells(
         allv = np.concatenate([np.concatenate(f) for f in faces] + [seg_pts])
         lo, hi = allv.min(0), allv.max(0)
         lo[0], hi[0] = min(lo[0], x_face - 0.1), max(hi[0], x_face + 0.1)
+        arrows, capped, lo, hi = _fit_arrows(g, vel * kpc, lo, hi)  # every arrow inside the panel
+        n_capped += int(np.count_nonzero(capped))
         _draw_cells_3d(
             a3,
             faces,
@@ -3527,11 +3787,17 @@ def plot_deposition_cells(
             seg_pts,
             lo,
             hi,
-            arrows=vel * kpc,
+            arrows=arrows,
             view=view,
             zoom=zoom,
             path_color=red,
             arrow_color=[R["colour"](c) for c in cells],
+        )
+        _mark_capped(a3, g + arrows, capped)
+        keys.append(
+            _velocity_key_3d(
+                a3, lo, hi, kpc, v_key, view, np.concatenate([g, seg_pts] + [np.concatenate(f) for f in faces]), note=""
+            )
         )
         quad = np.array([[x_face, lo[1], lo[2]], [x_face, hi[1], lo[2]], [x_face, hi[1], hi[2]], [x_face, lo[1], hi[2]]])
         a3.add_collection3d(Poly3DCollection([quad], facecolors=[mpl.colors.to_rgba(green, 0.22)], edgecolors="none", zorder=0))
@@ -3588,7 +3854,12 @@ def plot_deposition_cells(
     )
     handles = [
         Line2D([], [], color=red, lw=2.6, marker=">", markevery=[1], markersize=9, label=r"skewer and its unit tangent $\hat t$"),
-        _velocity_arrow_handle(arrow_kms, arrow_cMpc, r"cell velocity $\mathbf{v}$ (colour of its cell)"),
+        _velocity_arrow_handle(
+            min(keys),
+            kpc,
+            r"cell velocity $\mathbf{v}$",
+            " in each panel, projected" + ("; o: cut at the edge" if n_capped else ""),
+        ),
         Line2D([], [], color=green, lw=4.0, label="box face (the seam)"),
         Line2D([], [], color=FG, ls="none", marker="o", markersize=5, label="generating point"),
     ]
@@ -3605,7 +3876,8 @@ def plot_deposition_cells(
     fig.patches.append(
         mpl.patches.Rectangle((0, 0), 1, 1, transform=fig.transFigure, fill=False, edgecolor="none")
     )  # bbox_inches="tight"
-    return fig, tuple(axs), D["info"]  # misses 3D axis labels: keep the page
+    info = dict(D["info"], arrow_scale=kpc, key_kms=min(keys), n_capped=n_capped)
+    return fig, tuple(axs), info  # misses 3D axis labels: keep the page
 
 
 def plot_deposition_pieces(
@@ -3614,8 +3886,8 @@ def plot_deposition_pieces(
     *,
     half_range_cMpc: float = 2.0,
     species: str = "HI",
-    arrow_kms: float = 100.0,
-    arrow_cMpc: float = 0.1,
+    arrow_kms=None,
+    arrow_cMpc=None,
     figsize=(22, 8.5),
 ):
     """Row (b) of the deposition figures of notebook 07: the pieces of one simulation skewer around its seam, along s.
@@ -3626,7 +3898,10 @@ def plot_deposition_pieces(
     a narrow bar, just above a bar too narrow for it; bold: the piece on the velocity seam), the cell crossings
     (solid), the ends of the dual segments (dotted), the box face (green), and each piece's v_par = v . t as an arrow
     in its colour from the centre of the piece along s (with its sign); arrows that would overlap each other or a
-    label are stacked (``_arrow_levels``). Returns (fig, (ax_end, ax_start), info).
+    label are stacked (``_arrow_levels``), at one scale with ``plot_deposition_rings`` (from the v_par drawn: the
+    90th-percentile |v_par| 0.8 median cell sizes long; every arrow inside its panel; one
+    still too long after the limits grow a little is cut at the edge and ends with an open circle), with a reference
+    arrow of a round speed in a box at the top of (b2). Returns (fig, (ax_end, ax_start), info).
     """
     from matplotlib import patheffects as pe
     from matplotlib.lines import Line2D
@@ -3637,7 +3912,8 @@ def plot_deposition_pieces(
     s_all, l_all, c_all, n_all, u_all, col = R["s"], R["l"], R["cell"], R["n"], R["v_los"], R["colour"]
     floor, top = D["floor"], D["top"]
     green = PALETTE["green"]
-    kpc = arrow_cMpc / arrow_kms
+    kpc, v_key = _deposition_arrows(D, parts["cells"], species, arrow_kms, arrow_cMpc, parallel=True)
+    n_capped = 0
     fs = FONT_MIN["floor"]  # piece labels: small, in their bars
     fig, axs = plt.subplots(1, 2, figsize=figsize, sharey=True, layout="constrained")
     panels = []
@@ -3683,10 +3959,11 @@ def plot_deposition_pieces(
             fontweight="bold",
         )
         pad = 0.03 * (s_hi - s_lo)
-        a_lo, a_hi = min(s_lo, (s_p + d).min()), max(s_hi, (s_p + d).max())  # every arrow inside the axis
+        d_fit, cap, (a_lo,), (a_hi,) = _fit_arrows(s_p[:, None], d[:, None], [s_lo], [s_hi])  # every arrow inside the axis
+        d, n_capped = d_fit[:, 0], n_capped + int(np.count_nonzero(cap))
         xl = (a_lo - (pad if k == 0 else 0.3 * pad), a_hi + (pad if k == 1 else 0.3 * pad))
         b.set(xlim=xl, yscale="log", xlabel=LABELS["s"])
-        panels.append((b, idx, d, s_lo, s_hi, xl))
+        panels.append((b, idx, d, s_lo, s_hi, xl, cap))
     axs[0].set_ylim(floor, top * 10**1.0)  # provisional: the labels and arrows set the top below
     axs[0].set_ylabel(rf"$n_{{\rm com}}$ of {D['name']} [cm$^{{-3}}$]")
     axs[0].set_title(f"end of the box: s from L − {D['hr']:g} cMpc to L", pad=10)
@@ -3697,7 +3974,7 @@ def plot_deposition_pieces(
         Line2D([], [], color=FG, lw=2.2, label="cell crossing"),
         Line2D([], [], color=DIM, lw=1.3, ls=(0, (3.0, 2.5)), label="end of a dual segment"),
         Line2D([], [], color=green, lw=3.5, label="box face (the seam)"),
-        _velocity_arrow_handle(arrow_kms, arrow_cMpc),
+        _velocity_arrow_handle(v_key, kpc, extra=" (top right of b2)" + ("; o: cut at the edge" if n_capped else "")),
     ]
     fig.legend(
         handles=handles, loc="outside lower center", ncols=3, fontsize=FONT_MIN["legend"], columnspacing=1.6, handlelength=2.0
@@ -3708,7 +3985,7 @@ def plot_deposition_pieces(
     for _ in range(2):  # the label sizes in dex depend on the top of the axis
         dex_in = (y_top - np.log10(floor)) / (axs[0].get_position().height * figsize[1])  # dex per inch
         out, y_top_new = [], np.log10(top)
-        for b, idx, d, s_lo, s_hi, xl in panels:
+        for b, idx, d, s_lo, s_hi, xl, _cap in panels:
             in_x = b.get_position().width * figsize[0] / (xl[1] - xl[0])  # inches per cMpc
             place, boxes = [], []
             for i in idx:
@@ -3730,8 +4007,11 @@ def plot_deposition_pieces(
             out.append((place, y_ar))
             y_top_new = max(y_top_new, y_ar.max(), max((bx[3] for bx in boxes), default=-np.inf))
         y_top = y_top_new + 0.25
+    y_top += 0.3  # room for the reference arrow
     axs[0].set_ylim(floor, 10**y_top)
-    for (b, idx, d, s_lo, s_hi, _xl), (place, y_ar) in zip(panels, out):
+    for (b, idx, d, s_lo, s_hi, _xl, cap), (place, y_ar) in zip(panels, out):
+        for i_cap, dd, ya in zip(idx[cap], d[cap], y_ar[cap]):  # cut at the edge: an open circle at the tip
+            b.plot([s_all[i_cap] + dd], [10**ya], "o", mfc="none", mec=FG, ms=8, mew=1.6, zorder=9)
         for (i, how, y_), dd, ya in zip(place, d, y_ar):
             cc = col(c_all[i])
             b.annotate(
@@ -3769,7 +4049,9 @@ def plot_deposition_pieces(
         c_p, s_p, l_p = c_all[idx], s_all[idx], l_all[idx]
         brk = np.nonzero(np.diff(c_p))[0]
         b.vlines(s_p[brk] + 0.5 * l_p[brk], floor, y_cut, color=FG, lw=2.2, zorder=2)
-    return fig, tuple(axs), D["info"]
+    _velocity_key_2d(axs[1], v_key, kpc)
+    info = dict(D["info"], arrow_scale=kpc, key_kms=v_key, n_capped=n_capped)
+    return fig, tuple(axs), info
 
 
 def plot_deposition_rings(
@@ -3783,8 +4065,8 @@ def plot_deposition_rings(
     half_range_kms: float = 300.0,
     species: str = "HI",
     line_label: str = r"Ly$\alpha$",
-    arrow_kms: float = 100.0,
-    arrow_cMpc: float = 0.1,
+    arrow_kms=None,
+    arrow_cMpc=None,
     tau_clip=None,
     tau_min: float = 1e-3,
     figsize=(22, 21),
@@ -3792,7 +4074,8 @@ def plot_deposition_rings(
     """Rows (c)-(e) of the deposition figures of notebook 07: the pieces of ``plot_deposition_pieces`` on the periodic
     rings of s and of v_dagger, and their optical depths.
 
-    parts, bundle, half_range_cMpc, arrow_kms, arrow_cMpc : as ``plot_deposition_cells`` (the same pieces, colours and
+    parts, bundle, half_range_cMpc, arrow_kms, arrow_cMpc : as ``plot_deposition_cells`` (the same pieces, colours,
+    arrow scale (a reference arrow at the top right of (c); an arrow beyond the window is cut at its edge) and
     labels as ``plot_deposition_pieces``); v : (N_v,) a velocity grid over one period [0, P) [km/s]; tau_pieces :
     (N_p, N_v) every piece's tau on it with ``velocity_period=True`` (``compute_optical_depth(pieces, v, line,
     per_piece=True, velocity_period=True)``, in the order of the absorbers); period : P [km/s]; half_range_kms : the
@@ -3826,7 +4109,7 @@ def plot_deposition_rings(
     )
     floor, top = D["floor"], D["top"]
     green = PALETTE["green"]
-    kpc = arrow_cMpc / arrow_kms
+    kpc, v_key = _deposition_arrows(D, parts["cells"], species, arrow_kms, arrow_cMpc, parallel=True)
     v = np.asarray(v, dtype=float)
     tw = np.asarray(tau_pieces, dtype=float)
     fig = plt.figure(figsize=figsize)
@@ -3875,7 +4158,9 @@ def plot_deposition_rings(
     ring_s.frame(c_, R0)
     labs = ring_s.piece_labels(c_, blocks(c_, ring_s, su, l_all, L))
     th0 = 2 * np.pi * su[shown] / L
-    th1 = 2 * np.pi * (su[shown] + u_all[shown] * kpc) / L  # v_par from the centre of each piece, scale of (b)
+    th1_full = 2 * np.pi * (su[shown] + u_all[shown] * kpc) / L  # v_par from the centre of each piece, scale of (b)
+    th1 = np.clip(th1_full, ring_s.lo, ring_s.hi)  # every arrow inside the window: cut at its edge
+    cut = th1 != th1_full
     y0 = r_n(n_all[shown]) + 0.06
     lev = _arrow_levels(
         th0,
@@ -3886,9 +4171,26 @@ def plot_deposition_rings(
         boxes=[(t - h, t + h, r0, r1) for t, h, r0, r1 in labs.values()],
     )
     r_ar = y0 + 0.085 * lev
-    for i, t0_, t1_, ra in zip(shown, th0, th1, r_ar):
+    for i, t0_, t1_, ra, cu in zip(shown, th0, th1, r_ar, cut):
         ring_s.arrow(c_, t0_, t1_, ra, color=col(c_all[i]))
         c_.plot(*ring_s.xy(t0_, ra), "o", color=col(c_all[i]), markersize=4.5, markeredgecolor=FG, zorder=7)
+        if cu:  # cut at the edge of the window: an open circle at the tip
+            c_.plot(*ring_s.xy(t1_, ra), "o", mfc="none", mec=FG, ms=8, mew=1.6, zorder=9)
+    t_end = ring_s.hi - 0.04 * (ring_s.hi - ring_s.lo)  # the reference arrow, at the top right of the window
+    t_key, r_key = t_end - 2 * np.pi * v_key * kpc / L, r_out - 0.18
+    ring_s.arrow(c_, t_key, t_end, r_key, color=FG)
+    c_.text(
+        *ring_s.xy(t_key - 0.01 * (ring_s.hi - ring_s.lo), r_key),
+        f"{v_key:g} km/s",
+        ha="right",
+        va="center",
+        zorder=12,
+        rotation=-np.degrees(t_key - ring_s.mid),
+        rotation_mode="anchor",
+        fontsize=FONT_MIN["annotation"],
+        color=FG,
+        bbox=dict(boxstyle="round,pad=0.25", facecolor=BG, edgecolor=DIM, alpha=0.9),
+    )
     ring_s.ray(c_, 0.0, color=green, lw=3.5)
     ring_s.ticks(c_, L, 1.0 if D["hr"] >= 1.0 else 0.25, "cMpc")
     ring_s.rticks(c_, r_n(tick_n), n_lab, r"$n_{\rm com}$ [cm$^{-3}$]")
@@ -3968,7 +4270,7 @@ def plot_deposition_rings(
     _full_ring(keys["e"], ring_v, P, "km/s", ins_e, r"$\tau$ on the whole ring")
     handles = [
         Patch(facecolor=PALETTE["grey"], alpha=0.6, edgecolor=FG, label="a piece of (b), in the colour of its cell"),
-        _velocity_arrow_handle(arrow_kms, arrow_cMpc),
+        _velocity_arrow_handle(v_key, kpc, extra=" (top right of c)" + ("; o: cut at the edge" if np.any(cut) else "")),
         Line2D([], [], color=green, lw=3.5, label=r"seam $s = 0 \equiv L$ (the box faces)"),
         Line2D([], [], color=FG, lw=2.0, ls=":", label=r"seam $v_\dagger = 0 \equiv P$"),
         Line2D(
@@ -3992,6 +4294,9 @@ def plot_deposition_rings(
     info = dict(
         D["info"],
         window_deg={"s": float(np.degrees(th_s)), "v": float(np.degrees(th_v))},
+        arrow_scale=kpc,
+        key_kms=v_key,
+        n_capped=int(np.count_nonzero(cut)),
         tau_window_max=float(tot[win].max()),
         v_c_range=(float(np.nanmin(vu[shown] - 0.5 * W_all[shown])), float(np.nanmax(vu[shown] + 0.5 * W_all[shown]))),
     )

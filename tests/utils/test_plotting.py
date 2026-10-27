@@ -6,6 +6,7 @@ matplotlib.use("Agg")
 import jax.numpy as jnp  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+import pytest  # noqa: E402
 
 from skewerjax.core import Cosmology, LineBundle, SkewerBundle, phys  # noqa: E402
 from skewerjax.simulations import PowerLawGRF  # noqa: E402
@@ -165,6 +166,57 @@ def test_gas_cells_along_a_skewer():
         fig.canvas.draw()
         assert axs.shape == (n_sp, 3) and 0 < info["n_crossed"] <= info["n_selected"] == len(near)
         assert np.isclose(info["path_length"], 2.5)
+        assert np.isfinite(info["arrow_scale"]) and info["arrow_scale"] > 0 and _arrows_outside(fig) <= 1e-9
+        assert pl.round_speed(info["key_kms"]) == info["key_kms"]
+    fig, _, info = pl.plot_gas_cells(vor, near, pts, arrow_scale=2e-3, view=(60.0, 10.0))  # the override, another view
+    assert info["arrow_scale"] == 2e-3 and _arrows_outside(fig) <= 1e-9
+
+
+def _arrows_outside(fig) -> float:
+    """The largest distance of a drawn 3D arrow (quiver segments) beyond its panel's limits, in units of the span."""
+    worst = 0.0
+    for ax in fig.axes:
+        if not hasattr(ax, "get_zlim"):
+            continue
+        lim = np.array([ax.get_xlim(), ax.get_ylim(), ax.get_zlim()])
+        for c in ax.collections:
+            seg = getattr(c, "_segments3d", None)
+            if seg is not None and len(seg):
+                p = np.asarray(seg, dtype=float).reshape(-1, 3)
+                worst = max(worst, float((np.maximum(lim[:, 0] - p, p - lim[:, 1]) / (lim[:, 1] - lim[:, 0])).max()))
+    return worst
+
+
+def test_velocity_arrow_scale_and_fit():
+    """velocity_arrow_scale: the 90th-percentile speed is 0.8 median cell sizes long (at least 6 % of the span), robust to
+    an outlier, finite for any input, the override kept; round_speed: 1, 2 or 5 x 10^n; _fit_arrows: every tip inside
+    the limits, which grow by at most 10 % of the span per side."""
+    rng = np.random.default_rng(3)
+    v = rng.normal(0, 100, (500, 3))
+    h = rng.uniform(0.1, 0.3, 500)
+    sc = pl.velocity_arrow_scale(v, h)
+    assert np.isclose(sc * np.percentile(np.linalg.norm(v, axis=1), 90), 0.8 * np.median(h))
+    v_out = v.copy()
+    v_out[0] = 1e5  # one outlier barely changes the scale (a percentile, not the maximum)
+    assert abs(pl.velocity_arrow_scale(v_out, h) / sc - 1) < 0.02
+    assert np.isclose(pl.velocity_arrow_scale(v, h, span=100.0) * np.percentile(np.linalg.norm(v, axis=1), 90), 6.0)
+    for bad in (np.zeros((4, 3)), np.full((4, 3), np.nan), np.zeros((0, 3))):
+        x = pl.velocity_arrow_scale(bad, np.full(len(bad), 0.2))
+        assert np.isfinite(x) and x > 0
+    assert pl.velocity_arrow_scale(v, h, scale=0.003) == 0.003
+    with pytest.raises(ValueError):
+        pl.velocity_arrow_scale(v, h, scale=-1.0)
+    assert [pl.round_speed(x) for x in (130.0, 170.0, 0.03, 4.0, 7.5e3)] == [100.0, 200.0, 0.02, 5.0, 1e4]
+    assert pl.round_speed(0.6, below=True) == 0.5 and pl.round_speed(0.0) == 1.0
+    assert pl.velocity_key_speed(v) in {50.0, 100.0, 200.0}
+    starts = rng.uniform(0, 1, (200, 3))
+    arrows = rng.normal(0, 0.5, (200, 3))
+    fit, capped, lo, hi = pl._fit_arrows(starts, arrows, np.zeros(3), np.ones(3))
+    tips = starts + fit
+    assert np.all(tips >= lo - 1e-12) and np.all(tips <= hi + 1e-12) and capped.any()
+    assert np.all(lo >= -0.1 - 1e-12) and np.all(hi <= 1.1 + 1e-12)
+    assert np.allclose(fit[~capped], arrows[~capped])  # only the capped arrows are shortened, along their direction
+    assert np.allclose(np.cross(fit[capped], arrows[capped]), 0.0, atol=1e-12)
 
 
 def test_deposition_figures_on_voronoi_cells():
@@ -212,7 +264,11 @@ def test_deposition_figures_on_voronoi_cells():
         fig, axs, info = f()
         fig.canvas.draw()
         assert not pl.check_fonts(fig)
+        assert np.isfinite(info["arrow_scale"]) and info["arrow_scale"] > 0 and _arrows_outside(fig) <= 1e-9
         infos.append(info)
+    assert (
+        infos[1]["arrow_scale"] == infos[2]["arrow_scale"] and infos[1]["key_kms"] == infos[2]["key_kms"]
+    )  # (b), (c): one scale
     assert all(i["piece_labels"] == info["piece_labels"] and i["seam_piece"] == info["seam_piece"] for i in infos)
     assert set(axs) == {"c", "d", "e"} and all(n > 1 for n in info["n_cells"].values())
     assert np.allclose(info["window_deg"]["s"], 360 * 0.6 / box) and np.allclose(

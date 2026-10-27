@@ -3,6 +3,26 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — readable velocity arrows in every figure (2026-10-26)
+
+Presentation only: no result changes.
+
+### Changed
+- One rule for the velocity arrows of `plot_gas_cells` (04, 05) and the deposition figures (07):
+  `utils.plotting.velocity_arrow_scale` sets the length per km/s from the velocities a figure draws (the
+  90th-percentile speed is 0.8 x the median size of the cells shown, and at least 6 % of the panel's largest span),
+  one scale per figure (`plot_deposition_pieces` and `plot_deposition_rings` share one from the v_par they draw;
+  `plot_deposition_cells` its own from |v|). The override stays (`arrow_scale=` / `arrow_kms=` + `arrow_cMpc=`); the
+  scale goes to `info["arrow_scale"]`.
+- Every arrow stays inside its panel (`_fit_arrows`): the limits grow by up to 10 % of the span per side, and an
+  arrow still too long is cut at the edge and ends with an open circle (said in the legend / title).
+- A reference arrow of a round speed (`round_speed`, `velocity_key_speed`: the median speed rounded to 1, 2 or
+  5 x 10^n km/s) replaces the "arrows: ... km/s per ... cMpc" text: in 3D panels inside the scene
+  (`_velocity_key_3d`: along the axis most parallel to the screen, at the clearest upper corner of the box in
+  projection, so the projection shortens it like the arrows; its label past the tip or beside it, wherever clearest;
+  "lengths in projection" in the title or the legend), in
+  2D panels in a small box (`_velocity_key_2d`, and on the ring of (c)).
+
 ## Unreleased — repository reorganisation: one test suite, packaging, tooling (2026-10-26)
 
 No result changes, except the one intended: `voigt="convolution"` is no longer a mode of the line profiles and of tau.
