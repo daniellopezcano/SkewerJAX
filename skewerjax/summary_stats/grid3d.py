@@ -5,7 +5,7 @@ One realisation delta on an (N_x, N_y, N_z) grid of a box of sides L, the line o
     P_hat(k)  = |delta_k|^2 / V = (dV / N) |FFT(delta)|^2            (``simulations.PowerLawGRF``'s normalisation)
     xi_hat(r) = (1/N) sum_x delta(x) delta(x + r) = irfftn(P_hat) / dV  (Wiener-Khinchin; the exact discrete pair)
 
-(``two_point``'s conventions with d = 3; r runs over the minimum-image separations of the grid). Both are averaged in
+(``fourier``'s conventions with d = 3; r runs over the minimum-image separations of the grid). Both are averaged in
 bins: P over the modes of a bin (each rfft mode counted with its half-space multiplicity), xi over the separation
 vectors of a bin, in three ways each:
 
@@ -31,29 +31,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from skewerjax.core.stats.two_point import bin_index, binned_mean
+from skewerjax.summary_stats.binning import bin_index, binned_mean, hybrid_k_edges, occupied_edges
 
 MU_WEDGES = (0.0, 0.5, 0.8, 0.95, 1.0)  # mu = r_par / r: the wedges of DESI DR2 Lya BAO (arXiv:2503.14739, Fig. 3)
 GRID_KEYS = ("P_iso", "P_map", "P_mu", "xi_iso", "xi_map", "xi_mu")
-
-
-def hybrid_k_edges(k_fund, k_max, n_lin: int = 12, n_log: int = 18):
-    """k bin edges: one mode per bin up to (n_lin + 1/2) k_fund (edges at (j + 1/2) k_fund), then n_log log bins."""
-    lin = (np.arange(n_lin + 1) + 0.5) * k_fund
-    lin = lin[lin < k_max]
-    return np.concatenate([lin[:-1], np.geomspace(lin[-1], k_max, n_log + 1)])
-
-
-def occupied_edges(values, edges):
-    """The bin edges with every empty bin merged into the next one, so that each bin holds at least one of ``values``
-    (a log bin narrower than the spacing of the discrete modes along an axis would be empty: a blank row or column)."""
-    v = np.unique(np.asarray(values, dtype=float))
-    out = [edges[0]]
-    for hi in edges[1:]:
-        if np.any((v >= out[-1]) & (v < hi)):
-            out.append(hi)
-    out[-1] = edges[-1]  # trailing empty bins join the last occupied one
-    return np.asarray(out)
 
 
 def _rfft_weights(n_last: int) -> np.ndarray:

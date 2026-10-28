@@ -15,9 +15,7 @@ from skewerjax.core import (
     SkewerBundle,
     cell_pieces,
     cells_from_values,
-    equivalent_width_kms,
     line_elements,
-    overflux_terms,
     path_geometry,
     phys,
     plane_points,
@@ -28,9 +26,9 @@ from skewerjax.core import skewers as skw
 from skewerjax.core import spectral as sp_
 from skewerjax.core import voigt as V
 from skewerjax.core.line_profiles import line_profiles, voigt_line_profiles, voigt_width_kms, voigt_widths_GHz
-from skewerjax.core.stats import contaminants as cm
-from skewerjax.core.stats import two_point as tp
 from skewerjax.simulations import PowerLawGRF, interpolate_periodic
+from skewerjax.summary_stats import binning, equivalent_width_kms, fourier, overflux_terms
+from skewerjax.summary_stats import contaminants as cm
 
 TOL = 1e-12
 CASES = []  # (kind, name, fn -> (got, eager)), filled below
@@ -342,11 +340,11 @@ check(
 )
 jit_check("equivalent_width_kms", lambda t: equivalent_width_kms(t, 2.0), tau_b)
 vmap_check("equivalent_width_kms (skewers)", lambda t: equivalent_width_kms(t, 2.0), (jnp.moveaxis(tau_b, 1, 0),))
-jit_check("xi_from_power", lambda P: tp.xi_from_power(P, 64, 2.0), jnp.asarray(rng.normal(size=(4, 33))))
-vmap_check("xi_from_power (skewers)", lambda P: tp.xi_from_power(P, 64, 2.0), (jnp.asarray(rng.normal(size=(4, 33))),))
+jit_check("xi_from_power", lambda P: fourier.xi_from_power(P, 64, 2.0), jnp.asarray(rng.normal(size=(4, 33))))
+vmap_check("xi_from_power (skewers)", lambda P: fourier.xi_from_power(P, 64, 2.0), (jnp.asarray(rng.normal(size=(4, 33))),))
 jit_check(
     "binned_mean",
-    lambda v, i, w: tp.binned_mean(v, i, w, 5),
+    lambda v, i, w: binning.binned_mean(v, i, w, 5),
     jnp.asarray(rng.normal(size=50)),
     jnp.asarray(rng.integers(-1, 5, 50)),
     jnp.ones(50),

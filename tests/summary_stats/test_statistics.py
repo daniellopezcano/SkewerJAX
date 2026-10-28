@@ -10,8 +10,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from skewerjax.core import DeltaFieldBuilder
-from skewerjax.core.stats import (
+from skewerjax.simulations import PowerLawGRF
+from skewerjax.summary_stats import (
+    DeltaFieldBuilder,
     OverfluxStatistics1D,
     OverfluxStatistics3D,
     fit_ma_model_profiled,
@@ -19,7 +20,6 @@ from skewerjax.core.stats import (
     mcdonald_factor,
     xi_from_power,
 )
-from skewerjax.simulations import PowerLawGRF
 from skewerjax.utils.plotting import hybrid_k_edges, pk_sigma
 
 
@@ -163,7 +163,7 @@ def test_grid_statistics_conventions():
     """``GridStatistics3D``: xi is the brute-force periodic correlation (the FFT pair and the minimum-image binning), the
     rfft half-space weights give the mean over every full-grid mode of a bin, and the expectation of xi at r = 0 is the
     variance of the field."""
-    from skewerjax.core.stats import GridStatistics3D
+    from skewerjax.summary_stats import GridStatistics3D
 
     n, L = 6, 6.0
     g = PowerLawGRF(A_s=1.0, k_0=1.0, n_s=-1.0, L=(L,) * 3, N=(n,) * 3)
@@ -176,7 +176,7 @@ def test_grid_statistics_conventions():
     kk = 2 * np.pi * np.fft.fftfreq(n, L / n)
     kmod = np.sqrt(sum(k**2 for k in np.meshgrid(kk, kk, kk, indexing="ij")))
     P_full = np.abs(np.fft.fftn(d)) ** 2 * (L / n) ** 3 / n**3
-    from skewerjax.core.stats.two_point import bin_index
+    from skewerjax.summary_stats.binning import bin_index
 
     j = bin_index(kmod.ravel(), gs.k_edges).reshape(kmod.shape)
     ok = (kmod > 0) & (j >= 0)
@@ -192,7 +192,7 @@ def test_grid_statistics_conventions():
 def test_grid_statistics_recover_an_isotropic_field(n_real):
     """An isotropic GRF (power law + BAO, as the toy boxes of notebook 08): the mean over many realisations of P and xi,
     isotropic, in the (par, perp) plane and in wedges of mu, agrees with ``theory`` within the error of the mean."""
-    from skewerjax.core.stats import GRID_KEYS, GridStatistics3D, ensemble_mean
+    from skewerjax.summary_stats import GRID_KEYS, GridStatistics3D, ensemble_mean
 
     g = PowerLawGRF(A_s=0.02, k_0=2.0, n_s=-1.25, L=(12.0,) * 3, N=(16,) * 3, A_bao=3e-4, r_bao=4.0, sigma_bao=0.8, los_axis=1)
     gs = GridStatistics3D(g.shape, g.L, los_axis=1)
@@ -208,8 +208,8 @@ def test_grid_statistics_recover_an_isotropic_field(n_real):
 def test_grid_xi_covariance():
     """``GridStatistics3D.xi_iso_covariance``: equal to the brute-force sum 2 sum_k P(k)^2 c_a(k) c_b(k) / V^2 (c_a the
     mean of cos(k.r) over the separations of bin a) on a small anisotropic grid, and to the scatter of many draws."""
-    from skewerjax.core.stats import GridStatistics3D
-    from skewerjax.core.stats.two_point import bin_index
+    from skewerjax.summary_stats import GridStatistics3D
+    from skewerjax.summary_stats.binning import bin_index
 
     n, L = (6, 8, 5), (6.0, 8.0, 7.0)
     g = PowerLawGRF(1.0, 1.0, -1.0, L=L, N=n, A_bao=0.05, r_bao=2.0, sigma_bao=0.6, los_axis=1)
@@ -231,7 +231,7 @@ def test_grid_xi_covariance():
 def test_grid_xi_multipoles():
     """``GridStatistics3D(multipoles=True)``: the Legendre fit returns xi_0, xi_2, xi_4 of xi = sum_l c_l L_l(mu) exactly
     in every |r| bin that spans enough values of mu (NaN in the others), on a lattice coarse across the line of sight."""
-    from skewerjax.core.stats import GridStatistics3D
+    from skewerjax.summary_stats import GridStatistics3D
 
     gs = GridStatistics3D((4, 32, 4), (32.0, 32.0, 32.0), los_axis=1, r_edges=np.arange(0.0, 17.0, 2.0), multipoles=True)
     off = [d * np.where(np.arange(n) <= n // 2, np.arange(n), np.arange(n) - n) for n, d in zip(gs.shape, gs.dx)]
@@ -249,7 +249,7 @@ def test_grid_xi_multipoles():
 def test_summary_and_ensemble():
     """``OverfluxStatistics1D.summary``: the terms and the orders add up to the total; ``ensemble_1d`` of identical
     records has no scatter."""
-    from skewerjax.core.stats import ensemble_1d
+    from skewerjax.summary_stats import ensemble_1d
 
     grf = PowerLawGRF(0.1, 1.0, -0.5, L=200.0, N=256)
     d = jax.vmap(grf.sample)(jax.random.split(jax.random.PRNGKey(2), 20))

@@ -123,7 +123,7 @@ def test_toy_box_figures():
     b = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3)
     fig, axs, info = pl.plot_toy_fields(b.fields(0), b.box_cMpc, arrow_every=4)
     fig.canvas.draw()
-    assert axs.shape == (3, 2) and info["arrow_scale"] > 0
+    assert axs.shape == (2, 2) and info["arrow_scale"] > 0, "density and velocity rows (no temperature)"
     with tempfile.TemporaryDirectory() as tmp:
         res = field_statistics(b, tmp, log=None)
         folder = run_skewers(b, tmp, SkewerRun(stride=(4, 4), points_per_cell=80, n_pix=64, batch=8), log=None)
@@ -135,25 +135,37 @@ def test_toy_box_figures():
     for f in (pl.plot_kpar_kperp_maps, pl.plot_rpar_rperp_maps, pl.plot_xi_mu_wedges):
         fig, axs, chi2 = f(res)
         fig.canvas.draw()
+        if f is not pl.plot_xi_mu_wedges:
+            assert axs[0].get_shared_y_axes().joined(axs[0], axs[1]), "expected and measured panels share their y axis"
+        if f is pl.plot_rpar_rperp_maps:  # the wedge boundaries of plot_xi_mu_wedges, one ray per inner edge
+            rays = [ln for ln in axs[1].lines if ln.get_linestyle() == "-." and len(ln.get_xdata()) == 2]
+            assert len(rays) == len(pl.MU_WEDGES) - 2
     assert len(chi2) == len(pl.MU_WEDGES) - 1
     assert not hasattr(pl, "plot_pk_mu_wedges")
     sk = run["skewers"][0]
     ix, iz = sk["columns"][0]
     fl = b.fields(0)
     n = {sp: fl["n"][sp][ix, :, iz] for sp in ("HI", "SiIII")}
-    T = {sp: fl["T"][ix, :, iz] for sp in ("HI", "SiIII")}
-    fig, axs = pl.plot_toy_skewer(b.box_cMpc, n, T, sk["v"], sk["tau"][:, 0])
+    fig, axs = pl.plot_toy_skewer(b.box_cMpc, n, sk["v"], sk["tau"][:, 0])
     fig.canvas.draw()
-    assert axs[0].get_xlabel().startswith("position") and axs[2].get_xlabel() == pl.LABELS["v_ref"]
-    fig, axs = pl.plot_overflux_3d(run["flux3d"], run["axes3d"], r_bao=200.0)
+    assert len(axs) == 4 and axs[0].get_xlabel().startswith("position") and axs[2].get_xlabel() == pl.LABELS["v_ref"]
+    u = float(run["skewers"][0]["period"]) / b.box_cMpc  # km/s per cMpc
+    fig, axs = pl.plot_overflux_3d(
+        run["flux3d"], run["axes3d"], kms_per_cMpc=u, r_bao=200.0, k_mu_full=0.01, r_mu_full=(50.0, 400.0)
+    )
     fig.canvas.draw()
-    assert set(axs) == {"P", "ratio", "xi"} and "km" in axs["xi"].get_xlabel()
-    fig, axs, chi2 = pl.plot_xi_mu_wedges(dict(run["flux3d"]["total"], axes=run["axes3d"]), unit="km/s")
+    assert set(axs) == {"P", "xi"} and "km" in axs["xi"].get_xlabel()
+    assert "cMpc" in axs["P"].child_axes[0].get_xlabel() and "cMpc" in axs["xi"].child_axes[0].get_xlabel()
+    tot = dict(run["flux3d"]["total"], axes=run["axes3d"])
+    fig, ax = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=200.0)
     fig.canvas.draw()
-    assert len(chi2) == len(pl.MU_WEDGES) - 1 and "km" in axs[1].get_xlabel()
+    assert len(ax.child_axes) == 2 and "km" in ax.get_xlabel()
+    fig, axs, chi2 = pl.plot_xi_mu_wedges(tot, unit="km/s", kms_per_cMpc=u)
+    fig.canvas.draw()
+    assert len(chi2) == len(pl.MU_WEDGES) - 1 and "km" in axs[1].get_xlabel() and "cMpc" in axs[0].child_axes[0].get_xlabel()
     fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1_Z22)
     fig.canvas.draw()
-    assert len(ax.get_legend().get_texts()) == 4  # three overfluxes and the reference
+    assert len(fig.legends[0].get_texts()) == 5  # three overfluxes, the boxes and the reference (below the axes)
     ens = {"flux contrast": run["flux"]}
     dv = [0.0, float(LineBundle(["HI-LyA", "SiIII-1206"]).delta_v[1])]
     for kind in ("P", "xi"):
@@ -161,10 +173,28 @@ def test_toy_box_figures():
         fig.canvas.draw()
         fig, axs = pl.plot_terms_compared(ens, kind)
         fig.canvas.draw()
-        assert axs.shape[0] == 1
-    assert axs.shape[1] == 4, "xi: orders 0, 2, 3, 4 (order 1 vanishes)"
+        assert axs.shape == (3, 1), f"{kind}: one row per order 2, 3, 4 (order 1 vanishes, order 0 not shown)"
+    xi_lines = [c for c in pl.plot_orders_compared(ens, "xi")[1][0, 0].lines if c.get_marker() == "o"]
+    assert xi_lines, "xi1D: points with error bars too"
     line = [c for c in pl.plot_orders_compared(ens, "P")[1][0, 0].lines if c.get_marker() == "o"][0]
     assert line.get_linestyle() == "-", "the points of every series are joined by a thin line"
+
+
+def test_comoving_axis():
+    """comoving_axis: v = aH x and k_v = k_x / (aH) on the secondary axes (notebook 08, Part C)."""
+    u = 80.0  # km/s per cMpc
+    fig, (a, b) = plt.subplots(1, 2)
+    a.set_xlim(0.0, 800.0)
+    b.set(xscale="log", xlim=(1e-3, 1e-1))
+    ra, kb = pl.comoving_axis(a, u, "r"), pl.comoving_axis(b, u, "k")
+    ry = pl.comoving_axis(a, u, "r", side="right", label="y [cMpc]")
+    fig.canvas.draw()
+    np.testing.assert_allclose(ra.get_xlim(), (0.0, 10.0))  # 800 km/s = 10 cMpc
+    np.testing.assert_allclose(kb.get_xlim(), (0.08, 8.0))  # 0.001 s/km = 0.08 cMpc^-1
+    assert ra.get_xlabel() == pl._units("cMpc")["r"] and ry.get_ylabel() == "y [cMpc]" and "log" in kb.get_xscale()
+    with pytest.raises(ValueError):
+        pl.comoving_axis(a, u, "v")
+    plt.close(fig)
 
 
 def test_gas_cells_along_a_skewer():
@@ -344,14 +374,13 @@ def test_quickstart_and_tutorial_figures():
     import jax
 
     from skewerjax.core import (
-        DeltaFieldBuilder,
         bundle_frame,
         cell_pieces,
         cells_from_values,
         compute_optical_depth,
         tau_by_path_bins,
     )
-    from skewerjax.core.stats import OverfluxStatistics1D, fit_mcdonald_a
+    from skewerjax.summary_stats import DeltaFieldBuilder, OverfluxStatistics1D, fit_mcdonald_a
 
     box = 4.0
     rng = np.random.default_rng(2)

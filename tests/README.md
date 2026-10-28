@@ -4,7 +4,8 @@ One pytest suite, laid out like the package and the pipeline (reader → cells �
 
 | folder | covers |
 |---|---|
-| `core/` | constants and lines, cosmology a(x), skewers, cells, selection (in memory and streamed), deposition, pieces, spectral frames, Voigt, the optical depth (`test_optical_depth.py`: periodicity, frames, closed forms, precision, sharding, GPU), JAX transformations, statistics, input checks (`test_validation.py`) and diagnostics |
+| `core/` | constants and lines, cosmology a(x), skewers, cells, selection (in memory and streamed), deposition, pieces, spectral frames, Voigt, the optical depth (`test_optical_depth.py`: periodicity, frames, closed forms, precision, sharding, GPU), JAX transformations (of the whole package), input checks (`test_validation.py`) and diagnostics |
+| `summary_stats/` | the overflux and its statistics: P1D / ξ1D / P3D recovery, the decomposition by order and pair, contamination fits, the 3D grid statistics (`test_statistics.py`) |
 | `simulations/` | the GRF and its toy cells, gas physics, the TNG50-4 snapshot (reader, selections, field extraction, τ) |
 | `utils/` | the figure functions |
 | `comparison/` | the benchmark utilities, the comparison with fake_spectra |

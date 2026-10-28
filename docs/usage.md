@@ -13,8 +13,11 @@ flowchart LR
         L --> LP["line_profiles: Voigt φ of the gas"]
         LS --> T["compute_optical_depth → optical_depth_from_pieces / _sharded"]
         LP --> T
-        T --> O[DeltaFieldBuilder] --> ST[OverfluxStatistics1D / 3D]
     end
+    subgraph SS["summary_stats"]
+        O[DeltaFieldBuilder] --> ST["OverfluxStatistics1D / 3D, GridStatistics3D"]
+    end
+    T --> O
     subgraph B["simulations (field sources)"]
         G["PowerLawGRF → grf_cells (the grid cells)"]
         R[ArepoHDF5Reader] --> SC["snapshot_cells (a region) / SimulationSkewers.to_cells (near skewers)"]
@@ -27,8 +30,8 @@ flowchart LR
     MT --> SC
 ```
 
-Dependencies run one way only: `comparison` uses `simulations`, `simulations` uses `core`, and nothing in `core`
-imports the other subpackages. `simulations` holds every source of gas cells: the toy fields and the snapshots. `skewerjax.utils.plotting` is outside them.
+Dependencies run one way only: `comparison` uses `simulations`, `simulations` uses `summary_stats` and `core`,
+`summary_stats` uses `core` only, and nothing in `core` imports the other subpackages. `simulations` holds every source of gas cells: the toy fields and the snapshots. `skewerjax.utils.plotting` is outside them.
 
 ## Conventions
 
@@ -76,10 +79,21 @@ imports the other subpackages. `simulations` holds every source of gas cells: th
 | debugging | `check_skewers(cells, bundle, lines)`, `enable_logging()`, `return_info=True` | see "Debugging and input checks" |
 | τ (layers) | `select_cells` → `voronoi_segments` / `grid_segments` / `tophat_segments` → `absorbers_from_components` → `absorber_pieces` (all in `cell_pieces`) → `Pieces` → `optical_depth_from_pieces` → `optical_depth_kernel` | `resolution_report(pieces, lines)`; `voronoi_segments(..., backend="jax")`; `tau_absorbers`, `tau_by_path_bins` |
 | frames | `compute_optical_depth(..., line_frame="reference")`, `wrap_to_ref_line`, `velocities_in_line_frames`, `line_wavelength_grid_A` | |
-| overflux | `DeltaFieldBuilder(tau, labels=...).build()` | every line subset and the exact decomposition of the total |
-| statistics | `OverfluxStatistics1D(ov, dv).compute_p1d().compute_xi1d()` (`.summary()`: one record of NumPy arrays), `ensemble_1d(summaries)` (mean, error of the mean, every realisation), `OverfluxStatistics3D` | pairs, orders, binning (`bin_p1d`, `bin_p3d_kperp`) |
-| 3D fields on their grid | `GridStatistics3D(shape, L, los_axis=1)`: `.measure(delta)`, `.theory(P_on_modes)` (the exact expectation, binned alike), `.xi_iso_covariance(P_on_modes)` (the exact Gaussian covariance of the isotropic ξ bins), `.axes()`; `ensemble_mean(records, GRID_KEYS)` | P and ξ isotropic, in the (∥, ⊥) plane and in wedges of μ (`MU_WEDGES`, DESI DR2); bin edges (`hybrid_k_edges`, `occupied_edges`) |
-| metal models | `fit_mcdonald_a`, `fit_ma_model_profiled` | |
+
+## `skewerjax.summary_stats`
+
+The overflux and its statistics (imports `core` only). Modules: `overflux`, `orders` (the order-by-order
+decomposition), `stats_1d`, `stats_3d`, `grid3d`, `fourier` and `binning` (shared conventions and binning),
+`contaminants`; every entry point below is also importable from `skewerjax.summary_stats`.
+
+| task | entry point | main options |
+|---|---|---|
+| overflux | `DeltaFieldBuilder(tau, labels=...).build()` (`overflux`), `overflux_terms`, `equivalent_width_kms` | every line subset and the exact decomposition of the total |
+| order by order | `orders`: `ZERO_ORDER_KEY` (the order-0 term), `subset_orders`, `order_sum` | |
+| 1D statistics | `OverfluxStatistics1D(ov, dv).compute_p1d().compute_xi1d()` (`.summary()`: one record of NumPy arrays), `ensemble_1d(summaries)` (mean, error of the mean, every realisation), `p1d_from_tau` (`stats_1d`) | pairs, orders, binning (`bin_p1d`) |
+| 3D statistics by term | `OverfluxStatistics3D(ov, dv, d_perp)` (`stats_3d`) | pairs, orders, binning (`bin_p3d_kperp`) |
+| 3D fields on their grid | `GridStatistics3D(shape, L, los_axis=1)` (`grid3d`): `.measure(delta)`, `.theory(P_on_modes)` (the exact expectation, binned alike), `.xi_iso_covariance(P_on_modes)` (the exact Gaussian covariance of the isotropic ξ bins), `.axes()`; `ensemble_mean(records, GRID_KEYS)` (`binning`) | P and ξ isotropic, in the (∥, ⊥) plane and in wedges of μ (`MU_WEDGES`, DESI DR2); bin edges (`hybrid_k_edges`, `occupied_edges`, `binning`); `multipoles=True` |
+| metal models | `fit_mcdonald_a`, `fit_ma_model_profiled`, `mcdonald_factor`, `ma_factor` (`contaminants`) | |
 
 ## `skewerjax.simulations`
 
@@ -299,9 +313,12 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,
   the toy boxes of 08 (from `simulations.field_statistics` and `load_skewer_run`): `plot_toy_fields` (A2),
   `plot_isotropic_recovery(res, xi_view="r2")`, `plot_kpar_kperp_maps`, `plot_rpar_rperp_maps`,
-  `plot_xi_mu_wedges` (DESI DR2 Fig. 3: r²ξ in wedges of μ, `MU_WEDGES`, `MU_COLORS`; `unit="km/s"` and no expectation for
-  the overflux), `plot_toy_skewer` (B2), `plot_overflux_3d` (C1), `plot_p1d_reference` (C3: k P1D / π as Fig. 1 of
-  Chaves-Montero et al., with `utils.reference_data.P1D_DESI_DR1_Z22`),
+  `plot_xi_mu_wedges` (DESI DR2 Fig. 3: r²ξ in wedges of μ, `MU_WEDGES`, `MU_COLORS`; `unit="km/s"`, no expectation (the
+  monopole as the reference) and `kms_per_cMpc` for the overflux), `plot_toy_skewer` (B2), `plot_overflux_3d` (C1: P and
+  r²ξ over every mode and pair of the lattice, the ranges without every direction shaded), `plot_overflux_rpar_rperp`
+  (C2), `plot_p1d_reference` (D1: k P1D / π as Fig. 1 of Chaves-Montero et al., with
+  `utils.reference_data.P1D_DESI_DR1_Z22`), `comoving_axis(ax, kms_per_cMpc, "r" | "k")` (a cMpc or cMpc⁻¹ axis on a
+  velocity axis, v = aH x),
   `plot_orders_superimposed`, `plot_terms_by_order` (an `ensemble_1d` with errors, or one `OverfluxStatistics1D`),
   `plot_orders_compared`, `plot_terms_compared` (one or several ensembles, identical layouts), `plot_nH_T_fractions`, `plot_gas_cells` (the standard
   view of a `core.Cells` along one skewer, `plot_gas_cells(cells, select_cells(cells, bundle.spatial_points), bundle)`:

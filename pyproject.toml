@@ -93,7 +93,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]                   # the re-exports of the package (__all__ is built from dir())
 "skewerjax/comparison/**" = ["UP", "B007"]    # out of scope of the tidying: imports only (the fake_spectra comparison)
-"skewerjax/core/stats/**" = ["UP"]            # out of scope of the tidying: imports only (the summary statistics)
+"skewerjax/summary_stats/**" = ["UP"]         # out of scope of the tidying: imports only (the summary statistics)
 "tests/**" = ["E402"]                          # imports after the JAX setup (conftest, helpers)
 "scripts/**" = ["E402"]
 

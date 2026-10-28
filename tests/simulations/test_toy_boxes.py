@@ -64,7 +64,10 @@ def test_skewer_setup():
     np.testing.assert_allclose(d["d_perp_kms"], np.array(SETUP.stride) * BOXES.dx * d["period_kms"] / BOXES.box_cMpc)
     gs = SETUP.grid3d(BOXES, d["period_kms"])
     assert gs.shape == (4, SETUP.n_pix, 4) and np.allclose(gs.L, d["period_kms"]) and gs.los_axis == 1
-    assert gs.k_edges[-1] == pytest.approx(np.pi / d["d_perp_kms"][0])  # the transverse Nyquist frequency
+    k_corner = np.sqrt((np.pi / d["dv_kms"]) ** 2 + np.sum((np.pi / d["d_perp_kms"]) ** 2))  # every mode of the lattice
+    assert gs.k_edges[-1] == pytest.approx(k_corner) and np.nanmax(gs.k_iso) <= k_corner
+    assert gs.n_modes["P_iso"].sum() == pytest.approx(np.prod(gs.shape) - 1)  # every mode but k = 0 in a |k| bin
+    assert gs.r_edges[-1] >= np.sqrt(3.0) * d["period_kms"] / 2 and gs.n_lags["xi_iso"].sum() == np.prod(gs.shape)  # every lag
     assert not SkewerRun(stride=(3, 4)).periodic(BOXES)
     with pytest.raises(ValueError, match="multiple of both strides"):
         SkewerRun(stride=(3, 4)).grid3d(BOXES, d["period_kms"])
@@ -128,7 +131,7 @@ def _resumable_and_cached(tmp_path):
     for k, v in BOXES.bin_edges().items():
         np.testing.assert_array_equal(res["axes"][k], v)
     edges = np.geomspace(0.5, 6.0, 9)  # other |k| bins: the cache does not hold them, so they are computed
-    from skewerjax.core.stats import GridStatistics3D
+    from skewerjax.summary_stats import GridStatistics3D
 
     other = field_statistics(BOXES, tmp_path, grid=GridStatistics3D((16,) * 3, 8.0, los_axis=1, k_edges=edges), log=None)
     np.testing.assert_array_equal(other["axes"]["k_edges"], edges)

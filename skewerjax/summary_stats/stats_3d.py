@@ -3,25 +3,65 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from itertools import product
+from typing import Callable, Hashable, Sequence
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
-from skewerjax.core.stats.two_point import (
-    ZERO_ORDER_KEY,
-    LazyPairs,
-    bin_index,
-    binned_mean,
-    lag_axis,
-    p3d_kernel,
-    p3d_order_spectra,
-    rfft_multiplicity,
-    subset_orders,
-    xi3d_from_power,
-)
+from skewerjax.summary_stats.binning import bin_index, binned_mean
+from skewerjax.summary_stats.fourier import lag_axis, rfft_multiplicity, xi3d_from_power
+from skewerjax.summary_stats.orders import ZERO_ORDER_KEY, p3d_order_spectra, subset_orders
 
 logger = logging.getLogger(__name__)
+
+
+class LazyPairs(Mapping):
+    """Read-only mapping {(a, b): array} evaluated on access (optionally cached)."""
+
+    def __init__(self, keys: Sequence[Hashable], fn: Callable, cache: bool = False):
+        self._keys = list(keys)
+        self._set = set(self._keys)
+        self._fn = fn
+        self._cache = {} if cache else None
+
+    def __getitem__(self, key):
+        if key not in self._set:
+            raise KeyError(key)
+        if self._cache is None:
+            return self._fn(key)
+        if key not in self._cache:
+            self._cache[key] = self._fn(key)
+        return self._cache[key]
+
+    def __iter__(self):
+        return iter(self._keys)
+
+    def __len__(self):
+        return len(self._keys)
+
+    def __repr__(self):
+        return f"LazyPairs({len(self._keys)} pairs)"
+
+
+# ---------------------------------------------------------------------------
+# 3D kernel: one (Nx, Ny, Nz) field per term, rfftn over all three axes
+# ---------------------------------------------------------------------------
+@jax.jit
+def p3d_kernel(total, terms, w, c):
+    """rfftn of the total, raw terms, weighted terms and the order-0 term.
+
+    total : (Nx, Ny, Nz); terms : (n, Nx, Ny, Nz); w, c : (Nx, Ny) per-skewer weights.
+    Returns F_tot (Nx, Ny, K), F_raw (n, ...), F_w (n+1, ...) with index 0 = order-0 term.
+    """
+    rf = lambda x: jnp.fft.rfftn(x, axes=(-3, -2, -1))
+    f_tot = rf(total)
+    f_raw = rf(terms)
+    f_c = rf(jnp.broadcast_to(-c[:, :, None], total.shape))
+    f_w = jnp.concatenate([f_c[None], rf(w[None, :, :, None] * terms)], axis=0)
+    return f_tot, f_raw, f_w
 
 
 class OverfluxStatistics3D:

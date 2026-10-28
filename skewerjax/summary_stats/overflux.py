@@ -3,7 +3,7 @@
 Review notes, Sec. Overflux (Eqs. delta_j, F_total_product_lines_delta, overflux_product_expansion_general):
 per sample (skewer) s, delta_j = F_j / <F_j>_s - 1, the subset products delta_A = prod_{j in A} delta_j, and
 C_s = sum_{|A| >= 2} <delta_A>_s, so that the total overflux delta_tot = prod_j F_j / <prod_j F_j> - 1 decomposes
-exactly into the subset terms (``core.stats.two_point``).
+exactly into the subset terms (``summary_stats.orders``).
 """
 
 from __future__ import annotations

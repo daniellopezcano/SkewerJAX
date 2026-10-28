@@ -15,10 +15,10 @@ from typing import Optional, Sequence
 import numpy as np
 
 from skewerjax.comparison.emulation import MatchedIntegration, matched_tau
-from skewerjax.core.overflux import equivalent_width_kms
-from skewerjax.core.stats.p1d import p1d_from_tau
 from skewerjax.simulations import gas_physics as gp
 from skewerjax.simulations.snapshot_skewers import ExtractionOptions, SimulationSkewers
+from skewerjax.summary_stats.overflux import equivalent_width_kms
+from skewerjax.summary_stats.stats_1d import p1d_from_tau
 
 FAKE_SPECTRA_EXTRACTION = ExtractionOptions(
     deposition="tophat",

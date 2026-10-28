@@ -54,7 +54,8 @@ flowchart LR
     SIM -. "fake_spectra, external (09, 10)" .-> T
 ```
 
-Dependencies run one way only. `core` imports nothing from the other subpackages. `simulations` holds every source of
+Dependencies run one way only. `core` imports nothing from the other subpackages; `summary_stats` (the overflux and
+its statistics) imports `core` only. `simulations` holds every source of
 gas cells (the toy fields and the snapshots), and the boundary between `simulations` and `core` is `core.Cells`; `core.Pieces`, the constant-property pieces of
 every skewer, is what the τ sum runs over. `docs/usage.md` lists the entry points of each
 subpackage.
@@ -234,16 +235,18 @@ git-ignored). The numbers were measured before the revision checkpoint of 2026-1
 ```
 skewerjax/            the package
   core/               lines, constants, cosmology, skewers, gas cells, selection, deposition, absorbers (cells -> pieces),
-                      Voigt, line profiles, spectral frames, optical depth (incl. sharding), overflux, closed forms,
+                      Voigt, line profiles, spectral frames, optical depth (incl. sharding), closed forms,
                       input checks (validation) and diagnostics (check_skewers)
-    stats/            P1D/xi1D, P3D/xi3D, shared two-point kernels, metal-contamination models
+  summary_stats/      the overflux (overflux), the order-by-order decomposition (orders), P1D/xi1D (stats_1d),
+                      P3D/xi3D by term (stats_3d), P and xi of 3D grids: isotropic, (par, perp), mu wedges (grid3d),
+                      shared conventions and binning (fourier, binning), metal-contamination models (contaminants)
   simulations/        the sources of gas cells: toy fields (PowerLawGRF, grf_cells) and snapshots (readers, gas physics,
                       streamed selection, snapshot_cells, SimulationSkewers, maps)
     cloudy_tables/    CLOUDY ionisation tables (git submodule sbird/cloudy_tables)
   comparison/         fake_spectra emulation, matched options and effect chain, fake_spectra driver, benchmark
   utils/              plotting (style, figures), paths (data, cache and benchmark folders)
 notebooks/            00-10 tutorials (committed with outputs cleared)
-tests/                one pytest suite: core/, simulations/, utils/, comparison/, regression/ (+ data/); README.md
+tests/                one pytest suite: core/, summary_stats/, simulations/, utils/, comparison/, regression/ (+ data/); README.md
 benchmarks/
   results/            the benchmark summary read by notebook 10 (committed)
   raw/                the per-run records (git-ignored)
@@ -261,10 +264,10 @@ docs/                 installation.md, usage.md
 - fake_spectra: S. Bird, *FSFE: Fake Spectra Flux Extractor*, Astrophysics Source Code Library, ascl:1710.012 (2017).
   SkewerJAX's comparison subpackage runs it and reproduces its scheme.
 - P. McDonald et al., *The Lyα Forest Power Spectrum from the Sloan Digital Sky Survey*, ApJS 163, 80 (2006),
-  doi:10.1086/444361. The Si III cross-term model (`core.stats.mcdonald_factor`).
+  doi:10.1086/444361. The Si III cross-term model (`summary_stats.mcdonald_factor`).
 - K. Ma, J. S. Bolton, V. Iršič, P. Gaikwad, E. Puchwein, *An improved model for the effect of correlated Si III
   absorption on the one-dimensional Lyman-α forest power spectrum*, MNRAS 546, staf2262 (2026),
-  doi:10.1093/mnras/staf2262 (`core.stats.ma_factor`).
+  doi:10.1093/mnras/staf2262 (`summary_stats.ma_factor`).
 - N. G. Karaçaylı et al., *A framework to measure the properties of intergalactic metal systems with two-point flux
   statistics*, MNRAS 522, 5980 (2023), doi:10.1093/mnras/stad1363.
 - Built on JAX, diffrax (the a(x) integration) and ExoJAX (the Voigt profile). Simulation data: IllustrisTNG (TNG50).

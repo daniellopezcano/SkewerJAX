@@ -22,8 +22,8 @@ from skewerjax.comparison import (
 from skewerjax.comparison import FAKE_SPECTRA_EXTRACTION as EF
 from skewerjax.comparison import FAKE_SPECTRA_INTEGRATION as IF
 from skewerjax.core import LineBundle
-from skewerjax.core.stats import p1d_from_tau
 from skewerjax.simulations import HI, ArepoHDF5Reader, ExtractionOptions, Ion, SimulationSkewers
+from skewerjax.summary_stats import p1d_from_tau
 from skewerjax.utils.paths import snapshot_dir
 
 TNG = snapshot_dir("TNG50-4")

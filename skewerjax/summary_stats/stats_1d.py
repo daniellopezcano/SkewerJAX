@@ -3,25 +3,65 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 from itertools import product
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
-from skewerjax.core.stats.two_point import (
-    ZERO_ORDER_KEY,
-    bin_index,
-    binned_mean,
-    ensemble_mean,
-    lag_axis,
-    order_sum,
-    p1d_kernel,
-    rfft_multiplicity,
-    subset_orders,
-    xi_from_power,
-)
+from skewerjax.summary_stats.binning import bin_index, binned_mean, ensemble_mean
+from skewerjax.summary_stats.fourier import lag_axis, rfft_multiplicity, xi_from_power
+from skewerjax.summary_stats.orders import ZERO_ORDER_KEY, order_sum, subset_orders
+from skewerjax.summary_stats.overflux import DeltaFieldBuilder
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 1D kernel: many skewers, FFT along the last axis, chunked over skewers
+# ---------------------------------------------------------------------------
+@partial(jax.jit, static_argnames=("chunk",))
+def p1d_kernel(total, terms, w, c, pref, chunk: int):
+    """Sample-averaged spectra of all subset terms along the LoS.
+
+    Parameters
+    ----------
+    total : (B, N) real; terms : (n, B, N) real (raw subset fields delta_A);
+    w, c : (B,) per-sample weights 1/(1+C_s) and offsets C_s/(1+C_s); pref = dv / N.
+
+    Returns
+    -------
+    P_raw : (n, n, K) complex, mean_s pref F_a F_b^* of the raw terms
+    P_w   : (n+1, n+1, K) complex, same for the weighted terms, index 0 = order-0 term -c_s
+    P_tot : (B, K) real, per-sample pref |F_tot|^2
+    """
+    B, N = total.shape
+    n = terms.shape[0]
+    K = N // 2 + 1
+    n_chunks = -(-B // chunk)
+    pad = n_chunks * chunk - B
+    total = jnp.pad(total, ((0, pad), (0, 0))).reshape(n_chunks, chunk, N)
+    terms = jnp.pad(terms, ((0, 0), (0, pad), (0, 0))).reshape(n, n_chunks, chunk, N)
+    terms = jnp.moveaxis(terms, 1, 0)
+    w = jnp.pad(w, (0, pad)).reshape(n_chunks, chunk)
+    c = jnp.pad(c, (0, pad)).reshape(n_chunks, chunk)
+    cdt = jnp.result_type(total.dtype, jnp.complex64)
+
+    def body(carry, xs):
+        s_raw, s_w = carry
+        t, tm, ww, cc = xs
+        f_tot = jnp.fft.rfft(t, axis=-1)
+        f_raw = jnp.fft.rfft(tm, axis=-1)  # (n, chunk, K)
+        f_c = jnp.zeros((1, chunk, K), cdt).at[0, :, 0].set(-cc * N)  # rfft of -c_s
+        f_w = jnp.concatenate([f_c, ww[None, :, None] * f_raw], axis=0)  # (n+1, chunk, K)
+        s_raw = s_raw + jnp.einsum("asf,bsf->abf", f_raw, f_raw.conj())
+        s_w = s_w + jnp.einsum("asf,bsf->abf", f_w, f_w.conj())
+        return (s_raw, s_w), pref * jnp.abs(f_tot) ** 2
+
+    init = (jnp.zeros((n, n, K), cdt), jnp.zeros((n + 1, n + 1, K), cdt))
+    (s_raw, s_w), p_tot = jax.lax.scan(body, init, (total, terms, w, c))
+    return pref * s_raw / B, pref * s_w / B, p_tot.reshape(-1, K)[:B]
 
 
 class OverfluxStatistics1D:
@@ -251,7 +291,7 @@ def ensemble_1d(summaries) -> dict:
 
     The realisations are the independent samples: the skewers of one box share its modes, so the scatter between boxes,
     not between skewers, sets the error. Returns the axes and labels of the first summary and, for every statistic of
-    ``ENSEMBLE_KEYS``, its mean, error of the mean and values per realisation (``two_point.ensemble_mean``).
+    ``ENSEMBLE_KEYS``, its mean, error of the mean and values per realisation (``binning.ensemble_mean``).
     """
     summaries = list(summaries)
     if not summaries:
@@ -270,7 +310,5 @@ def p1d_from_tau(tau, dv: float):
 
     tau : (N_sk, N_v); dv : pixel width [km/s]. Returns (k [s/km], P [km/s]) as NumPy arrays.
     """
-    from skewerjax.core.overflux import DeltaFieldBuilder
-
     st = OverfluxStatistics1D(DeltaFieldBuilder(np.asarray(tau)[None]).build(), dv).compute_p1d()
     return np.asarray(st.k)[1:], np.asarray(st.Pk_total)[1:]

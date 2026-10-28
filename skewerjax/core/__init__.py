@@ -1,7 +1,6 @@
-"""Block A, the core backbone: lines, cosmology, skewers, gas cells, the route cells -> pieces, line profiles, tau, F and
-statistics.
+"""Block A, the core backbone: lines, cosmology, skewers, gas cells, the route cells -> pieces, line profiles, tau and F.
 
-Self-contained (imports nothing from ``skewerjax.simulations`` or ``skewerjax.comparison``). The gas of every source
+Self-contained (imports nothing from ``skewerjax.summary_stats``, ``skewerjax.simulations`` or ``skewerjax.comparison``). The gas of every source
 (the toy fields and the snapshots of ``skewerjax.simulations``) is one container, ``Cells`` (Voronoi cells); one route
 takes it to tau: ``select_cells`` -> deposition (``voronoi_segments`` / ``grid_segments`` / ``tophat_segments``) ->
 ``cell_pieces`` (``Pieces``) -> ``compute_optical_depth``, with the profiles of ``line_profiles``. Every numerical
@@ -10,7 +9,7 @@ function of the tau sum is written in ``jax.numpy`` and works under ``jit`` and 
 deposition) runs on the host.
 """
 
-from skewerjax.core import analytic, stats
+from skewerjax.core import analytic
 from skewerjax.core.absorbers import (
     Absorbers,
     ExactFrame,
@@ -52,7 +51,6 @@ from skewerjax.core.optical_depth import (
     resolution_report,
     wrap_to_ref_line,
 )
-from skewerjax.core.overflux import DeltaFieldBuilder, equivalent_width_kms, overflux_terms
 from skewerjax.core.selection import select_cells
 from skewerjax.core.skewers import (
     SkewerBundle,

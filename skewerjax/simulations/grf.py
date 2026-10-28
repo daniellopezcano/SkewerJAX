@@ -102,7 +102,7 @@ class PowerLawGRF:
     stays zero.
 
     Positions are x_j = j L / N (j = 0..N-1), and wavenumbers are angular,
-    k = 2 pi fftfreq(N, d=L/N) [1 / length units], as in ``core.stats.p1d``.
+    k = 2 pi fftfreq(N, d=L/N) [1 / length units], as in ``summary_stats.stats_1d``.
 
     FFT and normalisation (review notes, Eqs. P1D_delta_tilde_sample,
     P1D_sample_definition and xi1D_from_P1D_ensemble, generalised to d dimensions with
@@ -116,7 +116,7 @@ class PowerLawGRF:
 
         P_hat(k) = |delta_k|^2 / V = (dV / N_pix) |FFT(delta)|^2,
 
-    (the d-dimensional version of the ``dv / N_v`` prefactor in ``core.stats.p1d``). The
+    (the d-dimensional version of the ``dv / N_v`` prefactor in ``summary_stats.stats_1d``). The
     sampler gives <P_hat(k)> = P(k) for every k != 0, and the real-space variance is
 
         sigma^2 = xi(0) = (1 / V) sum_{k != 0} P(k)   (discrete form of

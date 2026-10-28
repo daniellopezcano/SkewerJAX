@@ -3,6 +3,35 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — `skewerjax.summary_stats`; notebook 08: Part C in 3D only, standardised figures (2026-10-28)
+
+### Changed
+- The overflux and its statistics moved out of `core` into a sibling package, `skewerjax.summary_stats` (imports `core`
+  only; `core` imports neither it nor `simulations`), split into `overflux` (was `core/overflux.py`), `orders` (the
+  order-by-order decomposition: `ZERO_ORDER_KEY`, `subset_orders`, `order_sum`, `p3d_order_spectra`), `stats_1d` (was
+  `core/stats/p1d.py`, + `p1d_kernel`), `stats_3d` (was `core/stats/p3d.py`, + `p3d_kernel`, `LazyPairs`), `grid3d`,
+  `fourier` (`lag_axis`, `rfft_multiplicity`, `xi_from_power`, `xi3d_from_power`), `binning` (`bin_index`,
+  `binned_mean`, `ensemble_mean`, `hybrid_k_edges`, `occupied_edges`) and `contaminants`; the code is moved verbatim.
+  No compatibility shims: `skewerjax.core.stats`, `skewerjax.core.overflux` and the `core` re-exports of
+  `DeltaFieldBuilder`, `overflux_terms`, `equivalent_width_kms` are gone; import from `skewerjax.summary_stats`.
+  `tests/core/test_statistics.py` moved to `tests/summary_stats/`.
+- `SkewerRun.grid3d`: the |k| bins run over every mode of the lattice (to the corner of its mode grid, not the
+  transverse Nyquist frequency) and the isotropic |r| bins over every separation (to sqrt(3) period / 2);
+  `CACHE_VERSION` 4.
+- Figures: `plot_rpar_rperp_maps` shows r²ξ on a linear diverging scale with iso-r²ξ contours and the μ-wedge rays,
+  sharing the y axis (as `plot_kpar_kperp_maps` now); `plot_overflux_3d` is the counterpart of
+  `plot_isotropic_recovery` (every box faint, r²ξ of all pairs in |r| bins, no ratio panel, the ranges without every
+  direction shaded, cMpc top axes); `plot_xi_mu_wedges` draws every realisation faint, the monopole as the reference
+  line of the overflux and an optional cMpc top axis; `plot_toy_fields` and `plot_toy_skewer` without the temperature;
+  the 1D figures show ξ1D as points with error bars and every box faint; `plot_terms_compared` stacks one row per order
+  and leaves order 0 out.
+- Notebook 08: the order-by-order concepts and the P1D next to DESI moved to Part D; Part C holds the 3D statistics
+  only, with the new (r∥, r⊥) map of the total overflux (C2).
+
+### Added
+- `utils.plotting.comoving_axis` (a cMpc / cMpc⁻¹ secondary axis on a velocity axis, v = aH x),
+  `plot_overflux_rpar_rperp`.
+
 ## Unreleased — notebook 08: Part A findings, 3D statistics of the overfluxes, no overdensity (2026-10-27)
 
 ### Added

@@ -9,7 +9,7 @@ statistics of many realisations, streamed (generate, measure, discard) and cache
       n_HI = n_bar_HI (1 + delta),   n_SiIII = r n_HI,   T = T0 (1 + delta)^(gamma - 1),
       v_k = i a H f (k / k^2) delta_k  (linear theory; notebook 04).
 
-* ``field_statistics``: P and xi of every realisation on its grid (``core.stats.GridStatistics3D``) against their exact
+* ``field_statistics``: P and xi of every realisation on its grid (``summary_stats.GridStatistics3D``) against their exact
   expectations (with and without the BAO wiggle) and the exact Gaussian covariance of the isotropic xi bins, cached in
   one file (read back when it holds this configuration, computed otherwise); ``xi_subset_offsets`` the offset of the
   mean xi from its expectation for disjoint subsets of the realisations.
@@ -19,7 +19,7 @@ statistics of many realisations, streamed (generate, measure, discard) and cache
   and the 3D statistics of the overflux of each line and of the total on the lattice of skewers, in velocity units
   (``SkewerRun.grid3d``); one file per realisation, so a run is resumable and several processes can share it (a
   realisation is claimed with a lock file), or recomputed from scratch (``overwrite=True``). ``load_skewer_run``
-  averages them (``core.stats.ensemble_1d``, ``ensemble_mean``).
+  averages them (``summary_stats.ensemble_1d``, ``ensemble_mean``).
 
 Caches are keyed by ``ToyBoxes.tag`` (every field of the configuration, ``CACHE_VERSION`` and the float precision) and,
 for the skewers, by the ``SkewerRun`` set-up: a cache of another configuration is never read.
@@ -41,12 +41,19 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from skewerjax.core import Cosmology, DeltaFieldBuilder, LineBundle, SkewerBundle, compute_optical_depth, phys
+from skewerjax.core import Cosmology, LineBundle, SkewerBundle, compute_optical_depth, phys
 from skewerjax.core.absorbers import cell_pieces
-from skewerjax.core.stats import GRID_KEYS, GridStatistics3D, OverfluxStatistics1D, ensemble_1d, ensemble_mean
-from skewerjax.core.stats.grid3d import hybrid_k_edges
 from skewerjax.simulations.grf import PowerLawGRF
 from skewerjax.simulations.toy_cells import grf_cells
+from skewerjax.summary_stats import (
+    GRID_KEYS,
+    DeltaFieldBuilder,
+    GridStatistics3D,
+    OverfluxStatistics1D,
+    ensemble_1d,
+    ensemble_mean,
+    hybrid_k_edges,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +61,8 @@ LINE_IDS = ("HI-LyA", "SiIII-1206")  # line 1, line 2 of the term labels "1", "2
 TERM_LABELS = ("1", "2")
 OVERFLUX_FIELDS = (*LINE_IDS, "total")  # the overfluxes of the 3D statistics: each line and the total
 OVERFLUX_KEYS = (*GRID_KEYS, "xi_ell")  # their statistics: those of the fields and the multipoles of xi
-CACHE_VERSION = 3  # bump when the cached results of a configuration change (2: the BAO envelope; 3: covariance, 3D overflux)
+CACHE_VERSION = 4  # bump when the cached results of a configuration change (2: the BAO envelope; 3: covariance, 3D overflux;
+# 4: the full |k| and |r| range of the 3D overflux statistics)
 
 
 def bao_k_edges(k_f: float, k_max: float, k_w: float) -> np.ndarray:
@@ -424,27 +432,37 @@ class SkewerRun:
         """The 3D statistics of the overflux on the lattice of skewers (``GridStatistics3D``), in velocity units: grid
         (n_x, n_pix, n_z), line of sight along axis 1, sides (n_x s_x dx u, period, n_z s_z dx u) = period, with u =
         period / L [km/s per cMpc] the conversion of the line of sight (``derived``) applied to the transverse comoving
-        separations. Bins [s/km], [km/s]: |k| (and the mu wedges) as ``bao_k_edges`` up to the transverse Nyquist
-        frequency pi / (s dx u), beyond which the transverse modes alias; |r| and the mu wedges in bins of 3 cells, 3 dx
-        u, up to max(period / 2, (r_bao + 4 sigma_bao) u), with the multipoles l = 0, 2, 4 of xi in the same bins (the
-        lattice is coarse across the line of sight, so the plain |r| average mixes the anisotropy of xi into it); the
-        (r_par, r_perp) plane up to period / 2, r_perp in bins of the transverse spacing."""
+        separations. Bins [s/km], [km/s]:
+
+        * |k| (and the mu wedges) as ``bao_k_edges`` over every mode of the lattice, up to the corner of its mode grid,
+          sqrt((pi / dv)^2 + (pi / (s_x dx u))^2 + (pi / (s_z dx u))^2). The bins have every direction (full mu coverage)
+          only up to the transverse Nyquist frequency pi / (s dx u) of the coarser stride: beyond it the transverse
+          modes stop, and a bin holds only the directions closer to the line of sight;
+        * |r| in bins of 3 cells, 3 dx u, over every separation of the lattice, up to the corner of its minimum-image
+          lags, sqrt(3) period / 2 (every direction only between the transverse spacing, below which the lattice holds
+          line-of-sight separations only, and period / 2);
+        * the mu wedges in the same |r| bins up to max(period / 2, (r_bao + 4 sigma_bao) u), with the multipoles l = 0,
+          2, 4 of xi in the same bins (the lattice is coarse across the line of sight, so the plain |r| average mixes the
+          anisotropy of xi into it);
+        * the (r_par, r_perp) plane up to period / 2, r_perp in bins of the transverse spacing."""
         if not self.periodic(boxes):
             raise ValueError(f"the 3D statistics need n_cells = {boxes.n_cells} to be a multiple of both strides {self.stride}.")
         u = float(period) / float(boxes.box_cMpc)
         n_x, n_z = boxes.n_cells // self.stride[0], boxes.n_cells // self.stride[1]
         d_perp = np.array(self.stride, dtype=float) * boxes.dx * u
-        k = bao_k_edges(2 * np.pi / period, float(np.pi / d_perp.max()), 3.0 / (boxes.sigma_bao * u))
+        k_corner = float(np.sqrt((np.pi * self.n_pix / period) ** 2 + np.sum((np.pi / d_perp) ** 2)))
+        k = bao_k_edges(2 * np.pi / period, k_corner, 3.0 / (boxes.sigma_bao * u))
         dr, half = 3 * boxes.dx * u, 0.5 * period
         top = max(half, min((boxes.r_bao + 4 * boxes.sigma_bao) * u, np.sqrt(3.0) * half))
         r = np.arange(0.0, top + 1e-9 * top, dr)
+        r_all = np.arange(0.0, np.sqrt(3.0) * half + dr, dr)  # past the corner sqrt(3) period / 2 of the lags
         return GridStatistics3D(
             (n_x, self.n_pix, n_z),
             (n_x * d_perp[0], float(period), n_z * d_perp[1]),
             los_axis=1,
             k_edges=k,
             k_mu_edges=k,
-            r_edges=r,
+            r_edges=r_all,
             r_mu_edges=r,
             rpar_edges=np.arange(0.0, half + 1e-9 * half, dr),
             rperp_edges=np.arange(0.0, half + 1e-9 * half, float(d_perp.min())),
