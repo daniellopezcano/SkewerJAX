@@ -78,20 +78,28 @@ class PowerLawGRF:
       D = 1 / (1 + (k mu sigma)^2) (``"lorentzian"``, an exponential pairwise-velocity distribution) or
       exp(-(k mu sigma)^2) (``"gaussian"``); 0 < D <= 1. ``sigma_fog`` must be >= 0.
     * BAO-like feature (``A_bao``, ``r_bao``, ``sigma_bao`` [length], all three or none): a Gaussian bump in the
-      correlation function, xi_BAO(r) = A_bao [g(r - r_bao) + g(r + r_bao)], g(u) = exp(-u^2 / (2 sigma_bao^2)) (the
-      mirror term is the even extension; it is below A_bao exp(-r_bao^2 / 2 sigma_bao^2) for r >= 0), added to P(k)
-      through its exact d-dimensional Fourier transform P_BAO(k) = int d^d r xi_BAO(|r|) e^{-i k.r}:
+      correlation function, xi_w(r) = A_bao [g(r - r_bao) + g(r + r_bao)], g(u) = exp(-u^2 / (2 sigma_bao^2)) (the
+      mirror term is the even extension; it is below A_bao exp(-r_bao^2 / 2 sigma_bao^2) for r >= 0), whose exact
+      d-dimensional Fourier transform A_bao W(k) oscillates in sign, carried by its envelope E(k) >= |W(k)|:
 
-          1D: P_BAO = 2 A_bao G(k) cos(k r_bao),
-          2D: P_BAO = 2 pi A_bao int_0^inf r [g(r - r_bao) + g(r + r_bao)] J_0(k r) dr   (Gauss-Legendre, 256 nodes on
-              r_bao +- 10 sigma_bao, and J_0 from Abramowitz & Stegun 9.4.1 / 9.4.3, |error| < 5e-8),
-          3D: P_BAO = 4 pi A_bao G(k) [sigma_bao^2 cos(k r_bao) + r_bao sin(k r_bao) / k],
+          P_BAO(k) = A_bao [E(k) + W(k)] = A_bao E(k) [1 + f(k)],   f = W / E,  |f| <= 1,
 
-      with G(k) = sigma_bao sqrt(2 pi) exp(-k^2 sigma_bao^2 / 2).
+          1D: W = 2 G cos(k r_bao),                                  E = 2 G,
+          2D: W = 2 pi int_0^inf r [g(r - r_bao) + g(r + r_bao)] J_0(k r) dr,   E = the same with J_0(k r) -> m(k r),
+          3D: W = 4 pi G [sigma_bao^2 cos(k r_bao) + r_bao sin(k r_bao) / k],     E = 4 pi G [sigma_bao^2 + r_bao / k],
 
-    A Gaussian field needs P >= 0 at every mode. K and D are never negative, so the condition is P_pl + P_BAO >= 0;
-    it is checked at construction on a dense k grid that covers every mode of the box (and at every mode in 1D and
-    2D), and a ``ValueError`` names the k where it fails. The k = 0 mode stays zero.
+      with G(k) = sigma_bao sqrt(2 pi) exp(-k^2 sigma_bao^2 / 2) and, in 2D, m(x) = min(1, sqrt(2 / (pi x))) >= |J_0(x)|
+      (Sonin-Polya: the maxima of sqrt(x) |J_0(x)| rise towards sqrt(2 / pi)); Gauss-Legendre, 256 nodes on
+      r_bao +- 10 sigma_bao, J_0 from Abramowitz & Stegun 9.4.1 / 9.4.3, |error| < 5e-8. So P_BAO >= 0 for every
+      A_bao >= 0, by construction: the wiggle f multiplies its own envelope, and the smooth spectrum P_pl + A_bao E
+      carries them. In xi the term is the bump plus the inverse transform of A_bao E, a positive-definite function
+      peaked at r = 0 (3D: 2 A_bao exp(-r^2 / 2 sigma_bao^2) + 4 A_bao r_bao F(r / (sqrt(2) sigma_bao)) / (sqrt(pi) r),
+      F the Dawson function: ~ 2 sqrt(2 / pi) A_bao r_bao sigma_bao / r^2 for r >> sigma_bao, a fraction ~ 1.6
+      sigma_bao / r_bao of the bump at r_bao; 1D: 2 A_bao g(r)). A bare bump, P_pl + A_bao W, would need
+      A_bao |W| <= P_pl wherever P_pl is small, which caps A_bao; the envelope lifts that cap.
+
+    A Gaussian field needs P >= 0 at every mode: P_pl > 0, P_BAO >= 0, and K and D are never negative. The k = 0 mode
+    stays zero.
 
     Positions are x_j = j L / N (j = 0..N-1), and wavenumbers are angular,
     k = 2 pi fftfreq(N, d=L/N) [1 / length units], as in ``core.stats.p1d``.
@@ -131,7 +139,8 @@ class PowerLawGRF:
     k_min, k_max, N_k : float or tuple, float or tuple, int or tuple
         Grid mode (b).
     beta, sigma_fog, fog : the Kaiser and Fingers-of-God terms (None: off).
-    A_bao, r_bao, sigma_bao : the BAO bump [field^2], [length], [length] (None: off).
+    A_bao, r_bao, sigma_bao : the BAO bump: its height in xi (>= 0) [field^2], position and width [length]
+        (None: off).
     los_axis : the grid axis of the line of sight (default: the last one).
 
     Notes
@@ -235,8 +244,8 @@ class PowerLawGRF:
             raise ValueError(f"sigma_bao must be > 0, got {sigma_bao}.")
         if concrete(r_bao) and float(r_bao) < 0.0:
             raise ValueError(f"r_bao must be >= 0, got {r_bao}.")
-        if self.A_bao is not None and all(concrete(x) for x in (A_s, k_0, n_s) + bao):
-            self._check_positive()
+        if concrete(A_bao) and float(A_bao) < 0.0:
+            raise ValueError(f"A_bao must be >= 0 (the height of the bump in xi), got {A_bao}.")
 
     # -- pytree -------------------------------------------------------------
     _OPTIONAL = ("beta", "sigma_fog", "A_bao", "r_bao", "sigma_bao")
@@ -332,19 +341,22 @@ class PowerLawGRF:
         return k_vec, jnp.sqrt(sum(k**2 for k in k_vec))
 
     # -- spectrum -----------------------------------------------------------
-    def power(self, k, mu=None):
+    def power(self, k, mu=None, bao: str = "total"):
         """P(k, mu) for k > 0, and 0 at k = 0 [length^d] (class docstring).
 
         Without the optional terms, P(k) = A_s (k / k_0)^(n_s - 1). ``mu`` = |k_par| / |k| (broadcastable to k) is
-        needed when a Kaiser or Fingers-of-God term is on, except in 1D where mu = 1. Uses the double-``where`` pattern,
-        so no inf / NaN appears for n_s < 1, in the value or in its gradient.
+        needed when a Kaiser or Fingers-of-God term is on, except in 1D where mu = 1. ``bao``: "total" (the spectrum
+        of ``sample``) or "envelope", the no-wiggle spectrum P_pl + A_bao E, whose xi lacks only the bump (``bao_power``).
+        Uses the double-``where`` pattern, so no inf / NaN appears for n_s < 1, in the value or in its gradient.
         """
+        if bao not in ("total", "envelope"):
+            raise ValueError(f"bao must be 'total' or 'envelope', got {bao!r}.")
         k = jnp.asarray(k)
         pos = k > 0
         k_safe = jnp.where(pos, k, self.k_0)
         p = self.A_s * (k_safe / self.k_0) ** (self.n_s - 1.0)
         if self.A_bao is not None:
-            p = p + self.bao_power(k_safe)
+            p = p + self.bao_power(k_safe, bao)
         if self.anisotropic:
             if self.ndim == 1:
                 mu = 1.0
@@ -362,12 +374,13 @@ class PowerLawGRF:
         """mu = |k_par| / |k| on a ``k_grid`` (k_par along ``los_axis``; 0 at k = 0)."""
         return jnp.abs(k_vec[self.los_axis]) / jnp.where(k_mod > 0, k_mod, 1.0)
 
-    def power_grid(self, real: bool = True):
-        """P of every mode of the FFT grid (``k_grid(real)`` layout): what ``sample`` and ``variance`` use."""
+    def power_grid(self, real: bool = True, bao: str = "total"):
+        """P of every mode of the FFT grid (``k_grid(real)`` layout): what ``sample`` and ``variance`` use (``bao``:
+        ``power``)."""
         k_vec, k_mod = self.k_grid(real=real)
         if not self.anisotropic:
-            return self.power(k_mod)
-        return self.power(k_mod, self.mu_grid(k_vec, k_mod))
+            return self.power(k_mod, bao=bao)
+        return self.power(k_mod, self.mu_grid(k_vec, k_mod), bao=bao)
 
     def power_at(self, *k_components):
         """P at wavevectors given by their components along the d grid axes (broadcastable arrays [1 / length]):
@@ -393,38 +406,34 @@ class PowerLawGRF:
             mu, wt = np.cos(0.25 * np.pi * (t + 1.0)), 0.5 * w
         return jnp.sum(wt * self.power(k[..., None], mu), axis=-1)
 
-    def bao_power(self, k):
-        """P_BAO(k) [length^d], the exact Fourier transform of the Gaussian bump in xi (class docstring); k > 0."""
+    def bao_power(self, k, part: str = "total"):
+        """P_BAO(k) [length^d] for k > 0 (class docstring): ``part`` "total" = A_bao (E + W) >= 0, "wiggle" = A_bao W
+        (the exact transform of the bump in xi), "envelope" = A_bao E (the smooth part)."""
         k = jnp.asarray(k)
         A, r0, sg = self.A_bao, self.r_bao, self.sigma_bao
         G = sg * jnp.sqrt(2.0 * jnp.pi) * jnp.exp(-0.5 * (k * sg) ** 2)
         if self.ndim == 1:
-            return 2.0 * A * G * jnp.cos(k * r0)
-        if self.ndim == 3:
-            return 4.0 * jnp.pi * A * G * (sg**2 * jnp.cos(k * r0) + r0 * jnp.sin(k * r0) / k)
-        t, w = np.polynomial.legendre.leggauss(256)  # 2D: the Hankel transform, by quadrature
-        lo = jnp.maximum(0.0, r0 - 10.0 * sg)
-        hi = r0 + 10.0 * sg
-        r = lo + 0.5 * (hi - lo) * (t + 1.0)
-        wr = 0.5 * (hi - lo) * w
-        f = wr * r * (jnp.exp(-0.5 * ((r - r0) / sg) ** 2) + jnp.exp(-0.5 * ((r + r0) / sg) ** 2))
-        return 2.0 * jnp.pi * A * jnp.sum(f * bessel_j0(k[..., None] * r), axis=-1)
-
-    def _check_positive(self):
-        """P_pl + P_BAO >= 0 on a dense k grid covering every mode (and at every mode in 1D and 2D); ValueError if not."""
-        kmin = min(self.k_min)
-        kmax = float(np.sqrt(sum(k**2 for k in self.k_max)))
-        k = np.unique(np.concatenate([np.geomspace(0.5 * kmin, 1.01 * kmax, 4000), np.linspace(0.5 * kmin, 1.01 * kmax, 4000)]))
-        if self.ndim <= 2:
-            k = np.unique(np.concatenate([k, np.asarray(self.k_grid(real=True)[1]).ravel()]))
-            k = k[k > 0]
-        iso = np.asarray(self.A_s * (k / self.k_0) ** (self.n_s - 1.0) + self.bao_power(jnp.asarray(k)))
-        if iso.min() < 0.0:
-            j = int(np.argmin(iso))
-            raise ValueError(
-                f"PowerLawGRF: P(k) < 0 at k = {k[j]:.4g} (P_pl + P_BAO = {iso[j]:.3g}): not a valid Gaussian field. "
-                f"Lower A_bao (= {self.A_bao}) or widen sigma_bao."
-            )
+            W, E = 2.0 * G * jnp.cos(k * r0), 2.0 * G
+        elif self.ndim == 3:
+            W = 4.0 * jnp.pi * G * (sg**2 * jnp.cos(k * r0) + r0 * jnp.sin(k * r0) / k)
+            E = 4.0 * jnp.pi * G * (sg**2 + r0 / k)
+        else:
+            t, w = np.polynomial.legendre.leggauss(256)  # 2D: the Hankel transform, by quadrature
+            lo = jnp.maximum(0.0, r0 - 10.0 * sg)
+            hi = r0 + 10.0 * sg
+            r = lo + 0.5 * (hi - lo) * (t + 1.0)
+            wr = 0.5 * (hi - lo) * w
+            f = 2.0 * jnp.pi * wr * r * (jnp.exp(-0.5 * ((r - r0) / sg) ** 2) + jnp.exp(-0.5 * ((r + r0) / sg) ** 2))
+            kr = k[..., None] * r
+            W = jnp.sum(f * bessel_j0(kr), axis=-1)
+            E = jnp.sum(f * jnp.minimum(1.0, jnp.sqrt(2.0 / (jnp.pi * jnp.maximum(kr, 1e-300)))), axis=-1)
+        if part == "wiggle":
+            return A * W
+        if part == "envelope":
+            return A * E
+        if part != "total":
+            raise ValueError(f"part must be 'total', 'wiggle' or 'envelope', got {part!r}.")
+        return A * jnp.maximum(E + W, 0.0)  # E >= |W| analytically; the floor only absorbs rounding
 
     def variance(self):
         """Expected real-space variance sigma^2 = (1/V) sum_{k != 0} P(k) on this grid."""

@@ -77,7 +77,8 @@ imports the other subpackages. `simulations` holds every source of gas cells: th
 | τ (layers) | `select_cells` → `voronoi_segments` / `grid_segments` / `tophat_segments` → `absorbers_from_components` → `absorber_pieces` (all in `cell_pieces`) → `Pieces` → `optical_depth_from_pieces` → `optical_depth_kernel` | `resolution_report(pieces, lines)`; `voronoi_segments(..., backend="jax")`; `tau_absorbers`, `tau_by_path_bins` |
 | frames | `compute_optical_depth(..., line_frame="reference")`, `wrap_to_ref_line`, `velocities_in_line_frames`, `line_wavelength_grid_A` | |
 | overflux | `DeltaFieldBuilder(tau, labels=...).build()` | every line subset and the exact decomposition of the total |
-| statistics | `OverfluxStatistics1D(ov, dv).compute_p1d().compute_xi1d()`, `OverfluxStatistics3D` | pairs, orders, binning (`bin_p1d`, `bin_p3d_kperp`) |
+| statistics | `OverfluxStatistics1D(ov, dv).compute_p1d().compute_xi1d()` (`.summary()`: one record of NumPy arrays), `ensemble_1d(summaries)` (mean, error of the mean, every realisation), `OverfluxStatistics3D` | pairs, orders, binning (`bin_p1d`, `bin_p3d_kperp`) |
+| 3D fields on their grid | `GridStatistics3D(shape, L, los_axis=1)`: `.measure(delta)`, `.theory(P_on_modes)` (the exact expectation, binned alike), `.xi_iso_covariance(P_on_modes)` (the exact Gaussian covariance of the isotropic ξ bins), `.axes()`; `ensemble_mean(records, GRID_KEYS)` | P and ξ isotropic, in the (∥, ⊥) plane and in wedges of μ (`MU_WEDGES`, DESI DR2); bin edges (`hybrid_k_edges`, `occupied_edges`) |
 | metal models | `fit_mcdonald_a`, `fit_ma_model_profiled` | |
 
 ## `skewerjax.simulations`
@@ -86,8 +87,9 @@ imports the other subpackages. `simulations` holds every source of gas cells: th
 
 | task | entry point | main options |
 |---|---|---|
-| Gaussian random field | `PowerLawGRF(A_s, k_0, n_s, L=..., N=...)` (or `k_min`, `k_max`, `N_k`); `sample(key)`, `power(k, mu)`, `power_at(*k_components)`, `power_monopole(k)`, `variance()` | optional, off by default: `beta` (Kaiser (1 + beta mu^2)^2), `sigma_fog`, `fog` (`"lorentzian"`, `"gaussian"`), `A_bao`, `r_bao`, `sigma_bao` (a Gaussian bump in xi, exact transform in 1D/2D/3D); `los_axis` (default: the last axis); P >= 0 is checked at construction |
+| Gaussian random field | `PowerLawGRF(A_s, k_0, n_s, L=..., N=...)` (or `k_min`, `k_max`, `N_k`); `sample(key)`, `power(k, mu, bao="total" | "envelope")`, `power_grid(bao=...)` ("envelope": the no-wiggle spectrum), `power_at(*k_components)`, `power_monopole(k)`, `variance()` | optional, off by default: `beta` (Kaiser (1 + beta mu^2)^2), `sigma_fog`, `fog` (`"lorentzian"`, `"gaussian"`), `A_bao`, `r_bao`, `sigma_bao` (a Gaussian bump in xi; its exact transform in 1D/2D/3D rides on its envelope, P_BAO = A_bao E (1 + f) with \|f\| <= 1, so P >= 0 for every A_bao >= 0; `bao_power(k, part)`); `los_axis` (default: the last axis) |
 | toy gas cells | `grf_cells(delta, grf, n_bar, ...)` | the cells of the grid (cubes centred on the nodes); `temperature` / `velocity` (and `turbulence`, `collisional`) as scalars, arrays on the grid or functions of the nodes |
+| toy boxes (08) | `ToyBoxes(box_cMpc)`: realisation i from the seed `base_seed + i` (`fields(i)`, `cells(i)`, never stored); `field_statistics(boxes, cache_dir)` (cached, computed if missing; with the no-wiggle expectation and the covariance of ξ), `xi_chi2(res)`, `xi_subset_offsets(res)`; `SkewerRun(stride, points_per_cell, n_pix, batch)` (`.derived(boxes)`: skewers per box, period, dv, u = period / L, transverse spacing; `.grid3d(boxes, period)`); `run_skewers(boxes, cache_dir, SkewerRun(), overwrite=...)` → `load_skewer_run(folder)`; `skewer_box(boxes, i, setup)` | power law + BAO, isotropic, `sigma_delta`; n_SiIII = r n_HI, T = T0 (1 + δ)^(γ−1), linear velocities; skewers along y through the cell centres (`stride`, `points_per_cell`, `n_pix`); the flux contrast on the Lyα axis by term and order; the 3D statistics and P1D of the Lyα, Si III and total overflux on the lattice of skewers, in velocity units; one file per realisation (resumable, shared by several processes: `scripts/runs/toy_boxes.py`; `overwrite=True` recomputes), in `utils.paths.CACHE_DIR`, keyed by every parameter (`ToyBoxes.tag`, `CACHE_VERSION`) |
 
 **Snapshots.**
 
@@ -295,9 +297,13 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
 - Tutorial figures: `plot_toy_box` (00), `plot_slab_and_skewer`, `plot_cell_crossings`, `plot_voigt_of_piece`,
   `plot_tau_stretches`, `plot_wrap_tiles`, `plot_overflux_p1d_xi` (00b), `plot_grf_draws` (04), `plot_line_table`,
   `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,
-  `plot_isotropic_recovery` (+ `correlation_binned`), `plot_kpar_kperp_maps`, `plot_pk_mu_wedges` (`MU_WEDGES`, + `power_kmu`,
-  `field_power_modes`, `input_power_modes`, `binned_power`, `power_map_kpar_kperp`; k_par along `grf.los_axis`, and the
-  input of an anisotropic `PowerLawGRF` evaluated at every mode), `plot_nH_T_fractions`, `plot_gas_cells` (the standard
+  the toy boxes of 08 (from `simulations.field_statistics` and `load_skewer_run`): `plot_toy_fields` (A2),
+  `plot_isotropic_recovery(res, xi_view="r2")`, `plot_kpar_kperp_maps`, `plot_rpar_rperp_maps`,
+  `plot_xi_mu_wedges` (DESI DR2 Fig. 3: r²ξ in wedges of μ, `MU_WEDGES`, `MU_COLORS`; `unit="km/s"` and no expectation for
+  the overflux), `plot_toy_skewer` (B2), `plot_overflux_3d` (C1), `plot_p1d_reference` (C3: k P1D / π as Fig. 1 of
+  Chaves-Montero et al., with `utils.reference_data.P1D_DESI_DR1_Z22`),
+  `plot_orders_superimposed`, `plot_terms_by_order` (an `ensemble_1d` with errors, or one `OverfluxStatistics1D`),
+  `plot_orders_compared`, `plot_terms_compared` (one or several ensembles, identical layouts), `plot_nH_T_fractions`, `plot_gas_cells` (the standard
   view of a `core.Cells` along one skewer, `plot_gas_cells(cells, select_cells(cells, bundle.spatial_points), bundle)`:
   the cells it crosses in 3D (cubes, or Voronoi polyhedra), one row per species: density, temperature, peculiar
   velocity with one arrow per cell, scaled by `velocity_arrow_scale` with a reference arrow in the 3D scene; 04 and 05),
@@ -311,8 +317,5 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   "wavelength", "wrapped"}: (fig, ax)`; "global": each line's own window relabelled at v − Δv_j;
   `tau_scale={line: k}` draws a weak line as exp(−k τ), display only; `wrapped=` adds "wrapped", what
   `wrap_to_ref_line` does to a periodic spectrum),
-  `plot_effect_fluxes`, `plot_skewer_anatomy`, `plot_terms_by_order`,
-  `plot_p1d_input_vs_measured` (+ `grf_p1d_along_axis`), `plot_cylinder(..., progress=p)` (one frame per call),
-  `plot_slab`, `plot_tau_buildup`, `plot_orders_superimposed`, `plot_pk_recovery`, the benchmark figures `plot_bench_*`.
-- `skewerjax.utils.tutorial`: the expected spectra of a GRF along skewers (`p1d_expected`, `p3d_expected_on_skewer_grid`,
-  `binned_input_power`).
+  `plot_effect_fluxes`, `plot_skewer_anatomy`, `plot_cylinder(..., progress=p)` (one frame per call),
+  `plot_slab`, `plot_tau_buildup`, the benchmark figures `plot_bench_*`.

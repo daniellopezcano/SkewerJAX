@@ -58,14 +58,6 @@ def test_line_table_and_skewer_figures():
     pl.plot_skewer_anatomy(sb, 0)[0].canvas.draw()
 
 
-def test_grf_projection_and_p1d_figure():
-    g = PowerLawGRF(A_s=1.0, k_0=1.0, n_s=-1.0, L=(10.0,) * 3, N=(8,) * 3)
-    k = 2 * np.pi * np.arange(1, 5) / 10.0
-    P, sig = pl.grf_p1d_along_axis(g, k, axis=1, return_sigma=True)
-    assert np.all(P > 0) and np.all(sig > 0) and np.all(sig <= P)
-    pl.plot_p1d_input_vs_measured(k, {"x": (P * 1.1, sig, "C0", {})}, P)[0].canvas.draw()
-
-
 def test_cylinder():
     v = np.linspace(0, 100, 64)
     s = np.linspace(0, 10, 40)
@@ -99,8 +91,6 @@ def test_palette_fonts_and_backend():
 
 
 def test_fifth_pass_figures():
-    import jax
-
     from skewerjax.core import LineBundle as LB
 
     t = np.linspace(0, 1, 12)
@@ -110,20 +100,6 @@ def test_fifth_pass_figures():
     assert pl.plot_skewer_geometry_3d(ax, pts, highlight=5) is None  # scale_factors optional
     pl.plot_skewer_geometry_3d(ax, pts, scale_factors=1 - 0.01 * t)
     fig.canvas.draw()
-    g1 = PowerLawGRF(A_s=1.0, k_0=1.0, n_s=-0.5, L=20.0, N=64)
-    g2 = PowerLawGRF(A_s=1.0, k_0=1.0, n_s=-1.0, L=(10.0, 10.0), N=(16, 16))
-    d1 = np.asarray(jax.vmap(g1.sample)(jax.random.split(jax.random.PRNGKey(0), 8)))
-    d2 = np.asarray(jax.vmap(g2.sample)(jax.random.split(jax.random.PRNGKey(1), 8)))
-    fig, axs, out = pl.plot_isotropic_recovery({"1D": (g1, d1), "2D": (g2, d2)})
-    fig.canvas.draw()
-    assert {"chi2_dof", "xi_chi2_dof"} <= set(out["2D"])
-    r, xi, err, n, xin, cov = pl.correlation_binned(d2, g2.L, np.linspace(0, 2.5, 6), g2)
-    assert np.isclose(xin[0], float(g2.variance()), rtol=1e-10), "input xi(0) = sigma^2"
-    fig, axs, chi2 = pl.plot_kpar_kperp_maps({"2D": (g2, d2)})
-    fig.canvas.draw()
-    fig, axs, chi2w = pl.plot_pk_mu_wedges({"2D": (g2, d2)})
-    fig.canvas.draw()
-    assert len(chi2w["2D"]) == len(pl.MU_WEDGES) - 1
     lines = LB(["HI-LyA", "SiIII-1206"], ref_line_id="HI-LyA")
     v = np.linspace(0, 400, 200)
     F = np.exp(-np.exp(-(((v - 200) / 10) ** 2)))[None] * np.ones((2, 1))
@@ -134,16 +110,61 @@ def test_fifth_pass_figures():
         pl.plot_dag(("lines", "cosmology", "skewers"))[0].canvas.draw()
 
 
-def test_xi_covariance_is_the_scatter_of_the_draws():
-    """The exact Gaussian covariance of the binned xi (``correlation_binned``) against the scatter of many draws."""
-    import jax
+def test_toy_box_figures():
+    """The figures of notebook 08 on a small toy box: the fields (A2), the 3D statistics of the realisations against
+    their expectation (A3), one skewer (B2), the 3D statistics and P1D of the overfluxes in velocity units (C) and the
+    1D statistics of the flux contrast by order and term (D)."""
+    import tempfile
 
-    g = PowerLawGRF(A_s=1.0, k_0=1.0, n_s=-1.0, L=50.0, N=128)
-    d = np.asarray(jax.vmap(g.sample)(jax.random.split(jax.random.PRNGKey(5), 3000)))
-    edges = np.linspace(0.0, 12.5, 7)
-    per = np.stack([pl.correlation_binned(d[i : i + 1], g.L, edges)[1] for i in range(d.shape[0])])
-    cov1 = pl.correlation_binned(d[:1], g.L, edges, g)[5]
-    np.testing.assert_allclose(per.std(0, ddof=1), np.sqrt(np.diag(cov1)), rtol=0.1)
+    from skewerjax.core import LineBundle
+    from skewerjax.simulations import SkewerRun, ToyBoxes, field_statistics, load_skewer_run, run_skewers
+    from skewerjax.utils.reference_data import P1D_DESI_DR1_Z22
+
+    b = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3)
+    fig, axs, info = pl.plot_toy_fields(b.fields(0), b.box_cMpc, arrow_every=4)
+    fig.canvas.draw()
+    assert axs.shape == (3, 2) and info["arrow_scale"] > 0
+    with tempfile.TemporaryDirectory() as tmp:
+        res = field_statistics(b, tmp, log=None)
+        folder = run_skewers(b, tmp, SkewerRun(stride=(4, 4), points_per_cell=80, n_pix=64, batch=8), log=None)
+        run = load_skewer_run(folder)
+    for view in ("r2", "symlog"):
+        fig, axs, out = pl.plot_isotropic_recovery(res, xi_view=view, r_bao=2.0)
+        fig.canvas.draw()
+    assert {"P_chi2_dof", "xi_chi2_dof", "xi_mean_pull"} <= set(out)
+    for f in (pl.plot_kpar_kperp_maps, pl.plot_rpar_rperp_maps, pl.plot_xi_mu_wedges):
+        fig, axs, chi2 = f(res)
+        fig.canvas.draw()
+    assert len(chi2) == len(pl.MU_WEDGES) - 1
+    assert not hasattr(pl, "plot_pk_mu_wedges")
+    sk = run["skewers"][0]
+    ix, iz = sk["columns"][0]
+    fl = b.fields(0)
+    n = {sp: fl["n"][sp][ix, :, iz] for sp in ("HI", "SiIII")}
+    T = {sp: fl["T"][ix, :, iz] for sp in ("HI", "SiIII")}
+    fig, axs = pl.plot_toy_skewer(b.box_cMpc, n, T, sk["v"], sk["tau"][:, 0])
+    fig.canvas.draw()
+    assert axs[0].get_xlabel().startswith("position") and axs[2].get_xlabel() == pl.LABELS["v_ref"]
+    fig, axs = pl.plot_overflux_3d(run["flux3d"], run["axes3d"], r_bao=200.0)
+    fig.canvas.draw()
+    assert set(axs) == {"P", "ratio", "xi"} and "km" in axs["xi"].get_xlabel()
+    fig, axs, chi2 = pl.plot_xi_mu_wedges(dict(run["flux3d"]["total"], axes=run["axes3d"]), unit="km/s")
+    fig.canvas.draw()
+    assert len(chi2) == len(pl.MU_WEDGES) - 1 and "km" in axs[1].get_xlabel()
+    fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1_Z22)
+    fig.canvas.draw()
+    assert len(ax.get_legend().get_texts()) == 4  # three overfluxes and the reference
+    ens = {"flux contrast": run["flux"]}
+    dv = [0.0, float(LineBundle(["HI-LyA", "SiIII-1206"]).delta_v[1])]
+    for kind in ("P", "xi"):
+        fig, axs = pl.plot_orders_compared(ens, kind, delta_v_list=dv)
+        fig.canvas.draw()
+        fig, axs = pl.plot_terms_compared(ens, kind)
+        fig.canvas.draw()
+        assert axs.shape[0] == 1
+    assert axs.shape[1] == 4, "xi: orders 0, 2, 3, 4 (order 1 vanishes)"
+    line = [c for c in pl.plot_orders_compared(ens, "P")[1][0, 0].lines if c.get_marker() == "o"][0]
+    assert line.get_linestyle() == "-", "the points of every series are joined by a thin line"
 
 
 def test_gas_cells_along_a_skewer():

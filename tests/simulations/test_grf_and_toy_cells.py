@@ -1,9 +1,9 @@
 """Toy fields (notebook 04): ``PowerLawGRF`` (the two grid modes and their checks, reproducible zero-mean draws whose
 periodogram averages to P(k), the optional Kaiser / Fingers-of-God / BAO terms), ``grf_cells`` (n = n_bar (1 + delta)
 with no transform on the grid cells: generators at the nodes, exact volumes, one realisation shared by several species,
-per-cell T and v, the positivity warning, the input checks), and ``interpolate_periodic``. The expected spectra of a GRF along skewers:
-``tests/utils/test_tutorial.py``; the statistics of many draws (P(k), xi(r), wedges): ``tests/core/test_statistics.py``,
-notebook 08 §4."""
+per-cell T and v, the positivity warning, the input checks), and ``interpolate_periodic``. The toy boxes of notebook 08
+(``ToyBoxes``, ``run_skewers``): ``tests/simulations/test_toy_boxes.py``; the statistics of many draws (P(k), xi(r), the
+planes and the wedges): ``tests/core/test_statistics.py``."""
 
 import warnings
 
@@ -98,7 +98,8 @@ def test_interpolate_periodic():
 
 
 def test_grf_optional_terms():
-    """Kaiser, Fingers of God and BAO terms: exact transforms, positivity check, mu along los_axis, theory helpers."""
+    """Kaiser, Fingers of God and BAO terms: the exact transform of the bump (the wiggle), its envelope (P_BAO >= 0 for
+    every A_bao), mu along los_axis, theory helpers."""
     from scipy import integrate, special
 
     A, r0, sg = 0.02, 10.0, 1.5
@@ -112,12 +113,28 @@ def test_grf_optional_terms():
         g = PowerLawGRF(1e3, 1.0, -0.5, L=(200.0,) * d if d > 1 else 200.0, N=N, A_bao=A, r_bao=r0, sigma_bao=sg)
         for k in (0.05, 0.7, 2.0):
             ref = integrate.quad(kern[d], 0, r0 + 30 * sg, args=(k,), limit=2000, points=[r0])[0]
-            assert abs(float(g.bao_power(k)) - ref) < 1e-6 * abs(4 * np.pi * A * r0**2 * sg), (d, k)
-    try:
-        PowerLawGRF(1e-3, 1.0, -0.5, L=200.0, N=512, A_bao=1.0, r_bao=20.0, sigma_bao=2.0)
-        raise AssertionError("P < 0 must raise")
-    except ValueError as e:
-        assert "P(k) < 0" in str(e)
+            assert abs(float(g.bao_power(k, "wiggle")) - ref) < 1e-6 * abs(4 * np.pi * A * r0**2 * sg), (d, k)
+        k = jax.numpy.asarray(np.geomspace(1e-3, 20.0, 20000))
+        W, E, tot = (np.asarray(g.bao_power(k, p)) for p in ("wiggle", "envelope", "total"))
+        assert np.all(np.abs(W) <= E * (1 + 1e-12)) and np.all(tot >= 0), d  # |f| = |W| / E <= 1
+        np.testing.assert_allclose(tot, W + E, rtol=1e-12, atol=1e-12 * E.max())
+    # 3D: the envelope's xi is 2 A g(r) + 4 A r0 F(r / sqrt(2) sg) / (sqrt(pi) r), F the Dawson function
+    for r in (0.5, 10.0):
+        f = lambda q: q**2 * np.sinc(q * r / np.pi) * float(g.bao_power(q, "envelope")) / (2 * np.pi**2)
+        num = integrate.quad(f, 1e-12, 40 / sg, limit=4000)[0]
+        ana = 2 * A * np.exp(-(r**2) / (2 * sg**2)) + 4 * A * r0 * special.dawsn(r / (np.sqrt(2) * sg)) / (np.sqrt(np.pi) * r)
+        assert abs(num - ana) < 1e-8 * ana, (r, num, ana)
+    # a bump far above the power law is a valid field (P >= 0 at every mode); a negative height is not
+    g = PowerLawGRF(1e-3, 1.0, -0.5, L=200.0, N=512, A_bao=1.0, r_bao=20.0, sigma_bao=2.0)
+    assert np.all(np.asarray(g.power_grid()) >= 0) and float(g.variance()) > 0
+    # the no-wiggle spectrum (bao="envelope") differs from the full one by the wiggle alone
+    km = np.asarray(g.k_grid()[1])
+    wig = np.where(km > 0, np.asarray(g.bao_power(np.where(km > 0, km, 1.0), "wiggle")), 0.0)
+    np.testing.assert_allclose(np.asarray(g.power_grid()) - np.asarray(g.power_grid(bao="envelope")), wig, atol=1e-12 * wig.max())
+    with pytest.raises(ValueError, match="bao must be"):
+        g.power(1.0, bao="wiggle")
+    with pytest.raises(ValueError, match="A_bao must be >= 0"):
+        PowerLawGRF(1e-3, 1.0, -0.5, L=200.0, N=512, A_bao=-1e-3, r_bao=20.0, sigma_bao=2.0)
     g = PowerLawGRF(2.0, 1.0, -1.0, L=(30.0,) * 3, N=(12,) * 3, beta=0.5, sigma_fog=2.0, los_axis=1)
     np.testing.assert_allclose(
         float(g.power(0.7, 0.6)), 2.0 * 0.7**-2 * (1 + 0.5 * 0.36) ** 2 / (1 + (0.7 * 0.6 * 2.0) ** 2), rtol=1e-14

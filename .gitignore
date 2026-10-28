@@ -39,6 +39,7 @@ sjx_cache*.h5
 fs_cache*/
 fs_work/
 figures_output/
+cache/
 
 # --- benchmarks: the raw per-run records are local; the summary in benchmarks/results/ is committed
 benchmarks/raw/

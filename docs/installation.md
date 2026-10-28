@@ -111,7 +111,13 @@ environment variable:
 export SKEWERJAX_DATA=/path/to/folder/with/TNG50-4   # DATA_DIR: holds TNG50-4/ (and TNG50-3/, TNG50-2/ for the benchmark)
 export SKEWERJAX_BENCHMARK_RAW=/path/to/raw          # BENCHMARK_RAW_DIR: per-configuration benchmark records
 export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the summary notebook 10 reads
+export SKEWERJAX_CACHE=/path/to/cache                # CACHE_DIR: slow results, e.g. the toy boxes of notebook 08
 ```
+
+`CACHE_DIR` defaults to `cache/` in the repository (git-ignored); notebook 08 keeps its toy-box statistics in
+`cache/toy_boxes`, keyed by the configuration: the field statistics are read back when present and computed otherwise,
+and the skewers are always recomputed (`python scripts/runs/toy_boxes.py` runs them resumably, several processes at
+once).
 
 `DATA_DIR` defaults to `/home/STORAGE` (read only). The benchmark folders default to `benchmarks/raw` (one record per
 configuration in `benchmarks/raw/fake_spectra`, git-ignored) and `benchmarks/results`

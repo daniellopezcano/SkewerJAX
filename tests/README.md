@@ -6,7 +6,7 @@ One pytest suite, laid out like the package and the pipeline (reader → cells �
 |---|---|
 | `core/` | constants and lines, cosmology a(x), skewers, cells, selection (in memory and streamed), deposition, pieces, spectral frames, Voigt, the optical depth (`test_optical_depth.py`: periodicity, frames, closed forms, precision, sharding, GPU), JAX transformations, statistics, input checks (`test_validation.py`) and diagnostics |
 | `simulations/` | the GRF and its toy cells, gas physics, the TNG50-4 snapshot (reader, selections, field extraction, τ) |
-| `utils/` | the figure functions and the tutorial expectations |
+| `utils/` | the figure functions |
 | `comparison/` | the benchmark utilities, the comparison with fake_spectra |
 | `regression/` | every result against reference arrays (`data/*.npz`, built by `outputs.py`) |
 

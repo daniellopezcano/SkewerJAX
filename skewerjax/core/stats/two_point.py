@@ -117,6 +117,23 @@ def binned_mean(values, idx, weights, n_bins: int):
     return jnp.where(W > 0, S / jnp.where(W > 0, W, 1.0), jnp.nan), W
 
 
+def ensemble_mean(records, keys) -> dict:
+    """Mean over independent realisations of the arrays ``keys`` of a list of records (dicts of arrays).
+
+    Returns, per key: ``<key>`` (the mean), ``<key>_err`` (the error of the mean, std / sqrt(n) with ddof = 1; NaN for one
+    realisation) and ``<key>_each`` (n, ...) the values of every realisation; and n_real.
+    """
+    records = list(records)
+    n = len(records)
+    out = {"n_real": n}
+    for key in keys:
+        each = np.stack([np.asarray(r[key]) for r in records])
+        out[key + "_each"] = each
+        out[key] = each.mean(0)
+        out[key + "_err"] = each.std(0, ddof=1) / np.sqrt(n) if n > 1 else np.full(each.shape[1:], np.nan)
+    return out
+
+
 class LazyPairs(Mapping):
     """Read-only mapping {(a, b): array} evaluated on access (optionally cached)."""
 

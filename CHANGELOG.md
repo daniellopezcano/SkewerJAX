@@ -3,6 +3,97 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — notebook 08: Part A findings, 3D statistics of the overfluxes, no overdensity (2026-10-27)
+
+### Added
+- `GridStatistics3D.xi_iso_covariance(P_on_modes)`: the exact Gaussian covariance of the isotropic ξ bins of one
+  realisation, C_ab = 2 Σ_k P² c_a c_b / V² (one convolution per bin). `field_statistics` stores it (`cov_xi_iso`) with
+  the no-wiggle expectation `theory_nw`; `xi_chi2` (χ² of the mean with the full covariance and with its diagonal,
+  eigenvector shares, χ² of each realisation) and `xi_subset_offsets` (the offset for disjoint subsets of realisations).
+- `PowerLawGRF.power(k, mu, bao=...)`, `power_grid(bao=...)`: `"envelope"` gives the no-wiggle spectrum
+  P_pl + A_bao E (default `"total"`, unchanged).
+- `SkewerRun`: every argument documented (what it controls, result or cost), `periodic(boxes)`, `derived(boxes)`
+  (skewers per box and in all, points per skewer, the period, dv, the piece width, u = period / L and aH at both ends,
+  the transverse spacing in cMpc and km/s), `grid3d(boxes, period)` (the lattice of skewers as a `GridStatistics3D` in
+  velocity units); `toy_boxes.bao_k_edges`, `OVERFLUX_FIELDS`.
+- `skewer_box` / `run_skewers` / `load_skewer_run`: the 3D statistics (`flux3d`, `axes3d`) and P1D (`p1d`) of the Lyα,
+  Si III and total overflux, δ = F / ⟨F⟩_box − 1, on the lattice of skewers, k in s/km and r in km/s (transverse
+  separations converted with u = period / L).
+- `utils.reference_data.P1D_DESI_DR1_Z22` (Fig. 1 of Chaves-Montero et al., DESI DR1, z = 2.2);
+  `plot_overflux_3d`, `plot_p1d_reference`; `plot_xi_mu_wedges(unit=...)` also without an expectation (each wedge
+  against the isotropic ξ).
+
+### Changed
+- Notebook 08: Part A explains the offset of r²ξ (cosmic variance: full-covariance χ², subsets) and the direction
+  dependence of the BAO ring and of the ξ wedges (the images of the periodic box near L / 2, not the generator); the
+  `SkewerRun` configuration moved to Part B with a table of its arguments and the derived quantities; new Part C (3D
+  statistics of the overfluxes, P1D next to DESI DR1); the former Part C is Part D, without the overdensity.
+- Every error-bar series of 08's figures is joined by a thin line of its colour (`_MEAN`, `_with_errors`).
+- `CACHE_VERSION` 3 (the field cache holds the covariance; the skewer files the 3D statistics and no overdensity).
+
+### Removed
+- `plot_pk_mu_wedges` (used by 08 only); `DeltaFieldBuilder.from_fields` and `toy_boxes.density_on_axis` (the
+  overdensity analogue of Part C, used nowhere else); the overdensity summary of `skewer_box` (`density`, `n_axis`).
+
+## Unreleased — a BAO term valid at every strength; notebook 08 always recomputes its skewers (2026-10-27)
+
+### Changed
+- `PowerLawGRF` BAO term: the Gaussian bump in ξ (height `A_bao`) now enters P on its envelope,
+  P_BAO = A_bao E(k) [1 + f(k)] with f = W / E, |f| ≤ 1 (W the exact transform of the bump; E = 2G in 1D,
+  4πG(σ² + r₀/k) in 3D, the Hankel quadrature with |J₀(x)| → min(1, √(2/πx)) in 2D), so P ≥ 0 for every
+  A_bao ≥ 0. Before, P_BAO = A_bao W alone made P < 0 for A_bao above a few 10⁻³ A_s (notebook 08's
+  `bao_ratio` ≥ 0.002 with σ_BAO = 2 cMpc): the construction-time check `_check_positive` raised. In ξ the term is the
+  same bump plus the transform of A_bao E, peaked at r = 0 (a fraction ≈ 1.6 σ_BAO / r_BAO of the bump at r_BAO).
+  `bao_power(k, part="total" | "wiggle" | "envelope")`; `A_bao < 0` raises. Intended change of results: the
+  regression arrays `grf_aniso.*` and `grf_bao2d` of `tests/regression/data/modules_toy.npz` were regenerated (only
+  those).
+- `simulations.toy_boxes`: `ToyBoxes.tag` (the cache key) includes `CACHE_VERSION` (2: the new BAO term) and the float
+  precision; `field_statistics` bins with `ToyBoxes.bin_edges` (|k| finely over the BAO wiggles, ξ out to
+  r_BAO + 4σ_BAO) and reads its cache only with the same bins, else computes it;
+  `run_skewers(overwrite=True)` empties the folder of the configuration and recomputes.
+- Notebook 08: no configuration value in the text (symbols and parameter names; one cell prints the values; titles
+  and printed text from the configuration objects); Part B always computes its skewers (the `RUN` switch and the
+  cache-only path are gone); Part A computes its statistics when the cache does not hold them. Notebook 04: the BAO definition above, no configuration value in the text.
+
+## Unreleased — notebook 08 rebuilt bottom-up on 96 toy boxes (2026-10-27)
+
+### Added
+- `simulations.toy_boxes`: `ToyBoxes` (periodic 3D boxes of a power-law + BAO spectrum, isotropic, normalised to
+  `sigma_delta`; realisation i regenerated from the seed `base_seed + i`, never stored; the gas: n_HI = n̄ (1 + δ),
+  n_SiIII = r n_HI, T = T0 (1 + δ)^(γ−1), linear-theory velocities; a negative density raises, nothing is clipped),
+  `field_statistics` (P and ξ of every realisation on its grid, streamed and cached), `SkewerRun`, `skewer_box`,
+  `run_skewers` (skewers along y through the cell columns, τ of Lyα and Si III periodic on the Lyα axis, the 1D
+  statistics of the flux contrast and of the overdensity by term and order; one file per realisation, resumable,
+  shared by several processes through lock files), `load_skewer_run`, `density_on_axis`, `hubble_velocity`.
+- `core.stats.grid3d`: `GridStatistics3D` (P and ξ of a periodic 3D field binned isotropically, in the (∥, ⊥) plane
+  and in wedges of μ, with their exact expectations `theory`), `MU_WEDGES` (the DESI DR2 wedges), `hybrid_k_edges`
+  and `occupied_edges` (moved from `utils.plotting`, which re-exports the first).
+- `OverfluxStatistics1D.summary()`, `core.stats.ensemble_1d`, `two_point.ensemble_mean` (mean, error of the mean and
+  every realisation); `DeltaFieldBuilder.from_fields` (positive fields in place of the transmissions: the density
+  analogue of the overflux).
+- `utils.paths.CACHE_DIR` (`$SKEWERJAX_CACHE`, default `cache/`, git-ignored); `scripts/runs/toy_boxes.py`.
+- Figures: `plot_toy_fields`, `plot_rpar_rperp_maps`, `plot_xi_mu_wedges` (DESI DR2 Fig. 3), `plot_toy_skewer`,
+  `plot_orders_compared`, `plot_terms_compared`.
+- Tests: `tests/simulations/test_toy_boxes.py`; in `tests/core/test_statistics.py` the grid statistics (brute-force
+  correlation, half-space weights, recovery of an isotropic field), `summary` / `ensemble_1d` / `from_fields`; the
+  figure smoke test `test_toy_box_figures`.
+
+### Changed
+- Notebook 08: concepts, then Part A (toy fields and their 3D statistics), Part B (skewers), Part C (1D statistics
+  by term and order of the overdensity and of the flux contrast, over 96 boxes), from the cache (`RUN = False`).
+- `plot_isotropic_recovery`, `plot_kpar_kperp_maps`, `plot_pk_mu_wedges` take the ensemble of `field_statistics`
+  (mean, error of the mean, every realisation, exact expectation) instead of the draws; `plot_orders_superimposed` and
+  `plot_terms_by_order` take an `ensemble_1d` (with error bars) or one `OverfluxStatistics1D`.
+
+### Removed
+- Notebook 08's sections "The flux of two lines on one axis", "Recovering a known spectrum: a systematic study" and
+  "The statistics of the toy fields" (superseded by Parts A–C).
+- `utils.tutorial` (`p1d_expected`, `p3d_expected_on_skewer_grid`, `binned_input_power`, `cell_window`,
+  `linear_interp_window`, `fold`) and `tests/utils/test_tutorial.py`; from `utils.plotting`: `plot_p1d_input_vs_measured`,
+  `grf_p1d_along_axis`, `binned_power`, `plot_pk_recovery`, `logbin`, `correlation_binned`, `chi2_cov`, `power_kmu`,
+  `power_map_kpar_kperp`, `field_power_modes`, `input_power_modes`, `_bin_modes`, `_wrapped_offsets`,
+  `_occupied_edges`; the tests `test_grf_projection_and_p1d_figure`, `test_xi_covariance_is_the_scatter_of_the_draws`.
+
 ## Unreleased — readable velocity arrows in every figure (2026-10-26)
 
 Presentation only: no result changes.

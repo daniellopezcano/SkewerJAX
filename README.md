@@ -156,7 +156,7 @@ flowchart LR
 | `05_simulation_outputs` | from a TNG50-4 snapshot to gas cells: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, and a region of the snapshot as `core.Cells` without skewers (`snapshot_cells`: H I and Si III on the Voronoi cells along one skewer, in 3D), the container of the toy fields |
 | `06_voigt_and_line_profiles` | the Voigt function (ExoJAX, FFT convolution, SciPy's Faddeeva function; Gaussian and Lorentzian limits) and the line profiles of gas elements (`core.line_profiles`) |
 | `07_deposition_and_optical_depth` | the τ integral as a sum over pieces; from cells to τ step by step on one TNG50-4 skewer through the box centre (selection → deposition into pieces → τ, with the package's own route): the cells in 3D, the pieces, and the same pieces on the ring of s, on the ring of v (periodicity as an option, `velocity_period`) and as their dτ; line-centred frames, the global axis, the observed wavelength and `wrap_to_ref_line` for Lyα and Si III on the same skewer |
-| `08_summary_statistics` | δ_F of several lines, P1D/ξ1D by order and term (the two-line terms), and a systematic study of a GRF density n = n̄(1 + δ): 3D fields, 1D overdensities (discrete projection, window of the cells), 1D overfluxes (bias, thermal kernel, line offset), P3D and ξ3D, each against its expectation; the statistics of `PowerLawGRF` draws (the recovered P(k), and ξ(r) with its exact covariance; the (k∥, k⊥) plane; P(k) in μ wedges) |
+| `08_summary_statistics` | bottom-up on toy boxes (`ToyBoxes`: periodic boxes, power law + BAO, isotropic; regenerated from their seeds, statistics streamed and cached; skewers recomputed every run): A, the fields and their P and ξ (isotropic, (∥, ⊥) planes, μ wedges as DESI DR2) against the exact expectation, with the exact covariance of ξ; B, skewers through every box (`SkewerRun`), one from the gas to the flux contrast; C, the 3D P and ξ of the Lyα, Si III and total overflux on the lattice of skewers in velocity units, ξ in μ wedges, and P1D next to DESI DR1; D, P1D and ξ1D of the flux contrast by term and order |
 | `09_comparison_fake_spectra_results` | what the two codes compute on the same TNG50-4 skewer (the gas, τ and above all the flux): the matched mode against fake_spectra, the differences one switch at a time, their root causes and the effect chain |
 | `10_comparison_fake_spectra_performance` | speed and memory against fake_spectra: scaling with the number of skewers (1–1024) and the simulation size (TNG50-4, -3, -2), CPU and GPU, the time per stage, host and GPU memory, threads and one core (reads the results file of `scripts/benchmarks/benchmark_fake_spectra.py`, presets `quick` and `full`; `RUN_BENCHMARKS = True` re-runs it) |
 
@@ -241,7 +241,7 @@ skewerjax/            the package
                       streamed selection, snapshot_cells, SimulationSkewers, maps)
     cloudy_tables/    CLOUDY ionisation tables (git submodule sbird/cloudy_tables)
   comparison/         fake_spectra emulation, matched options and effect chain, fake_spectra driver, benchmark
-  utils/              plotting (style, figures), paths (data and benchmark folders), tutorial (GRF expectations)
+  utils/              plotting (style, figures), paths (data, cache and benchmark folders)
 notebooks/            00-10 tutorials (committed with outputs cleared)
 tests/                one pytest suite: core/, simulations/, utils/, comparison/, regression/ (+ data/); README.md
 benchmarks/

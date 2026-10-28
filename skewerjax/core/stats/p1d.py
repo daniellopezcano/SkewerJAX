@@ -12,6 +12,7 @@ from skewerjax.core.stats.two_point import (
     ZERO_ORDER_KEY,
     bin_index,
     binned_mean,
+    ensemble_mean,
     lag_axis,
     order_sum,
     p1d_kernel,
@@ -214,6 +215,54 @@ class OverfluxStatistics1D:
         P_b, n_b = binned_mean(Pk, idx, w, len(k_edges) - 1)
         k_b, _ = binned_mean(self.k, idx, w, len(k_edges) - 1)
         return P_b, k_b, k_edges, n_b
+
+    # ------------------------------------------------------------------ summary
+    def summary(self) -> dict:
+        """The statistics of this set of skewers as plain NumPy arrays (one record of an ensemble, ``ensemble_1d``).
+
+        Returns dict(k (N_k,) [s/km], lags (N_v,) [km/s, centred], P_total (N_k,), P_order (n_orders, N_k), P_terms
+        (n_pairs, N_k), xi_total (N_v,), xi_order (n_orders, N_v), xi_terms (n_pairs, N_v), pairs (n_pairs, 2) str (the
+        term pairs (A, B), ``ZERO_ORDER_KEY`` for the order-0 term), pair_orders (n_pairs,), n_samples). The terms are
+        the weighted contributions ``*_total_from_terms_contributions`` (they add up to the orders and to the total).
+        """
+        self.compute_xi1d()
+        f = lambda x: np.asarray(x)
+        orders = sorted(self.Pk_total_by_order)
+        return dict(
+            k=f(self.k),
+            lags=f(self.lags),
+            P_total=f(self.Pk_total),
+            P_order=np.stack([f(self.Pk_total_by_order[n]) for n in orders]),
+            P_terms=np.stack([f(self.Pk_total_from_terms_contributions[p]) for p in self.term_pairs]),
+            xi_total=f(self.xi_total),
+            xi_order=np.stack([f(self.xi_total_by_order[n]) for n in orders]),
+            xi_terms=np.stack([f(self.xi_total_from_terms_contributions[p]) for p in self.term_pairs]),
+            pairs=np.array(self.term_pairs, dtype=str),
+            pair_orders=np.array([self.pair_orders[p] for p in self.term_pairs]),
+            n_samples=np.array(self.n_samples_kept),
+        )
+
+
+ENSEMBLE_KEYS = ("P_total", "P_order", "P_terms", "xi_total", "xi_order", "xi_terms")
+
+
+def ensemble_1d(summaries) -> dict:
+    """Mean and error of the mean of the ``OverfluxStatistics1D.summary`` of independent realisations (e.g. boxes).
+
+    The realisations are the independent samples: the skewers of one box share its modes, so the scatter between boxes,
+    not between skewers, sets the error. Returns the axes and labels of the first summary and, for every statistic of
+    ``ENSEMBLE_KEYS``, its mean, error of the mean and values per realisation (``two_point.ensemble_mean``).
+    """
+    summaries = list(summaries)
+    if not summaries:
+        raise ValueError("ensemble_1d needs at least one summary.")
+    first = summaries[0]
+    for s in summaries[1:]:
+        if s["k"].shape != first["k"].shape or not np.array_equal(s["pairs"], first["pairs"]):
+            raise ValueError("ensemble_1d: the summaries differ in their k grid or term pairs.")
+    out = {key: first[key] for key in ("k", "lags", "pairs", "pair_orders")}
+    out.update(ensemble_mean(summaries, ENSEMBLE_KEYS))
+    return out
 
 
 def p1d_from_tau(tau, dv: float):
