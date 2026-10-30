@@ -435,6 +435,60 @@ class PowerLawGRF:
             raise ValueError(f"part must be 'total', 'wiggle' or 'envelope', got {part!r}.")
         return A * jnp.maximum(E + W, 0.0)  # E >= |W| analytically; the floor only absorbs rounding
 
+    def correlation(self, r, *, nodes: int = 8, r_chunk: int = 16):
+        """The continuous correlation function of an isotropic 3D spectrum (the power law and the BAO term),
+
+            xi(r) = (2 pi^2)^-1 int_0^inf k^2 P(k) sin(kr) / (kr) dk = (2 pi^2 r)^-1 int_0^inf k P(k) sin(kr) dk,
+
+        for r > 0 [length] (NumPy, (N_r,)): the infinite-volume counterpart of ``power``, over every k (no k = 0 mode
+        removed, no Nyquist cube, no periodic images; ``summary_stats.GridStatistics3D.theory`` gives the grid's). A
+        numerical Hankel transform of the full spectrum, accurate to ~1e-7 of xi (tests: against the closed forms of the
+        power law and of the BAO term, class docstring):
+
+        * [0, k_a], k_a = min(K, pi / (2 r_max)): k = k_a t^p with p >= 2 / (n_s + 2), which removes the integrable
+          k^(n_s + 1) behaviour at k = 0; Gauss-Legendre, 32 panels of ``nodes`` nodes in t;
+        * [k_a, K]: Gauss-Legendre panels of width pi / (2 r_max) (four per oscillation of sin(kr)), ``nodes`` nodes
+          each, with K = max(9 / sigma_bao, 40 / r_min), beyond which the BAO term is below e^-40 of its peak;
+        * [K, inf): the power law alone, by repeated integration by parts: with f = k P_pl = A_s k_0^(1 - n_s) k^n_s and
+          f_n = d^n f / dk^n = n_s (n_s - 1) ... (n_s - n + 1) f / k^n, int_K^inf f sin(kr) dk = f cos(Kr) / r -
+          f_1 sin(Kr) / r^2 - f_2 cos(Kr) / r^3 + f_3 sin(Kr) / r^4 + O((4 / Kr)^4), a small tail.
+
+        Needs -2 < n_s < 0 (xi converges at both ends) and no Kaiser or Fingers-of-God term."""
+        if self.ndim != 3 or self.anisotropic:
+            raise ValueError("correlation() is the isotropic 3D transform: a 3D PowerLawGRF without Kaiser or FoG terms.")
+        n_s = float(self.n_s)
+        if not -2.0 < n_s < 0.0:
+            raise ValueError(f"xi(r) of a power law k^(n_s - 1) converges for -2 < n_s < 0, got n_s = {n_s}.")
+        r = np.atleast_1d(np.asarray(r, dtype=float))
+        if np.any(r <= 0):
+            raise ValueError("correlation() needs r > 0.")
+        A, k0 = float(self.A_s), float(self.k_0)
+        r_min, r_max = float(r.min()), float(r.max())
+        K = 40.0 / r_min if self.A_bao is None else max(9.0 / float(self.sigma_bao), 40.0 / r_min)
+        k_a = min(K, 0.5 * np.pi / r_max)
+        t, w = np.polynomial.legendre.leggauss(int(nodes))
+
+        def panels(a, b, n):  # Gauss-Legendre nodes and weights of n equal panels on [a, b]
+            e = np.linspace(a, b, int(n) + 1)
+            h = 0.5 * np.diff(e)
+            return ((e[:-1] + h)[:, None] + h[:, None] * t).ravel(), (h[:, None] * w).ravel()
+
+        p = max(4.0, np.ceil(2.0 / (n_s + 2.0)) + 1.0)
+        tt, wt = panels(0.0, 1.0, 32)
+        k1, w1 = k_a * tt**p, wt * p * k_a * tt ** (p - 1.0)
+        k2, w2 = panels(k_a, K, max(1, int(np.ceil((K - k_a) / (0.5 * np.pi / r_max)))))
+        k, wk = np.concatenate([k1, k2]), np.concatenate([w1, w2])
+        f = wk * k * np.asarray(self.power(jnp.asarray(k)), dtype=float)  # k P(k) dk, the full spectrum
+        out = np.empty_like(r)
+        for i in range(0, r.size, int(r_chunk)):
+            rc = r[i : i + int(r_chunk)]
+            out[i : i + rc.size] = np.sin(np.outer(rc, k)) @ f
+        fK = A * k0 ** (1.0 - n_s) * K**n_s  # the tail of the power law beyond K
+        d1, d2, d3 = n_s / K, n_s * (n_s - 1.0) / K**2, n_s * (n_s - 1.0) * (n_s - 2.0) / K**3
+        c, sn = np.cos(K * r), np.sin(K * r)
+        out += fK * (c / r - d1 * sn / r**2 - d2 * c / r**3 + d3 * sn / r**4)
+        return out / (2.0 * np.pi**2 * r)
+
     def variance(self):
         """Expected real-space variance sigma^2 = (1/V) sum_{k != 0} P(k) on this grid."""
         n_last = self.shape[-1]

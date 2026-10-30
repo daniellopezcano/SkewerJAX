@@ -2,8 +2,8 @@
 
 Toy fields: ``grf`` (``PowerLawGRF``, Gaussian random fields with optional anisotropy and BAO), ``toy_cells``
 (``grf_cells``: the realisation on the cells of its grid, cubes centred on the nodes) and ``toy_boxes`` (``ToyBoxes``: many
-realisations regenerated from their seeds, their gas, skewers through them and their statistics, streamed and cached;
-notebook 08).
+realisations regenerated from their seeds, their gas, skewers through them and their statistics, streamed and recomputed
+at every call; notebook 08).
 
 Snapshots: read hydro (or FGPA-painted N-body) snapshots and turn them into the gas cells of the core. Layers:
 ``readers`` (HDF5 I/O, NumPy) -> ``gas_cells`` (``GasCells``: the raw per-cell data of the snapshot) -> ``gas_physics``
@@ -27,11 +27,15 @@ from skewerjax.simulations.snapshot_skewers import ExtractionOptions, Integratio
 from skewerjax.simulations.toy_boxes import (
     SkewerRun,
     ToyBoxes,
+    bao_height,
     field_statistics,
     hubble_velocity,
-    load_skewer_run,
+    lattice_density_check,
+    lattice_density_theory,
     run_skewers,
     skewer_box,
+    skewer_statistics,
+    skewer_tau,
     xi_chi2,
     xi_subset_offsets,
 )

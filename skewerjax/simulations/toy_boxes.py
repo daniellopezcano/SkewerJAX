@@ -1,5 +1,6 @@
 """Toy boxes (notebook 08): periodic 3D Gaussian fields of known spectrum, their gas, skewers through them, and the
-statistics of many realisations, streamed (generate, measure, discard) and cached.
+statistics of many realisations, streamed (generate, measure, discard) and returned in memory: nothing is stored, every
+call recomputes.
 
 * ``ToyBoxes``: the configuration and realisation i, regenerated from its seed ``base_seed + i`` whenever it is needed
   (``fields``, ``cells``): the fields are never stored. The spectrum is a power law plus a BAO term (a Gaussian bump in
@@ -7,35 +8,28 @@ statistics of many realisations, streamed (generate, measure, discard) and cache
   ``sigma_delta``; the gas of every cell, both species being the same gas (one temperature, one velocity):
 
       n_HI = n_bar_HI (1 + delta),   n_SiIII = r n_HI,   T = T0 (1 + delta)^(gamma - 1),
-      v_k = i a H f (k / k^2) delta_k  (linear theory; notebook 04).
+      v = 0 (``velocity="zero"``, the default)  or  v_k = i a H f (k / k^2) delta_k (``"linear"``: linear theory, notebook 04).
 
 * ``field_statistics``: P and xi of every realisation on its grid (``summary_stats.GridStatistics3D``) against their exact
-  expectations (with and without the BAO wiggle) and the exact Gaussian covariance of the isotropic xi bins, cached in
-  one file (read back when it holds this configuration, computed otherwise); ``xi_subset_offsets`` the offset of the
-  mean xi from its expectation for disjoint subsets of the realisations.
+  expectations (with and without the BAO wiggle) and the exact Gaussian covariance of the isotropic xi bins;
+  ``xi_chi2`` and ``xi_subset_offsets`` the chi^2 and the offset of the mean xi from its expectation.
 * ``run_skewers``: per realisation, a regular sub-grid of skewers along y through the centres of the cell columns
-  (``SkewerRun``), tau of Lya and Si III (periodic, ``velocity_period=True``, both on the Lya axis,
-  ``line_frame="reference"``), the 1D statistics by term and order of the flux contrast (``OverfluxStatistics1D.summary``)
-  and the 3D statistics of the overflux of each line and of the total on the lattice of skewers, in velocity units
-  (``SkewerRun.grid3d``); one file per realisation, so a run is resumable and several processes can share it (a
-  realisation is claimed with a lock file), or recomputed from scratch (``overwrite=True``). ``load_skewer_run``
-  averages them (``summary_stats.ensemble_1d``, ``ensemble_mean``).
-
-Caches are keyed by ``ToyBoxes.tag`` (every field of the configuration, ``CACHE_VERSION`` and the float precision) and,
-for the skewers, by the ``SkewerRun`` set-up: a cache of another configuration is never read.
+  (``SkewerRun``) and tau of Lya and Si III (periodic, ``velocity_period=True``, both on the Lya axis,
+  ``line_frame="reference"``; ``skewer_tau``); then, with the ensemble mean transmission at each pixel over every skewer
+  of every realisation, delta = T / T_bar(v) - 1 (``summary_stats.overflux``), the 1D statistics by term and order
+  (``OverfluxStatistics1D.summary``) and the 3D statistics of the overflux of each line and of the total on the lattice
+  of skewers, in comoving units (``SkewerRun.grid3d``; ``skewer_statistics``), averaged over the realisations
+  (``summary_stats.ensemble_1d``, ``ensemble_mean``); and the density sampled on the same lattice through the same 3D
+  estimator, against its exact expectation (``lattice_density_theory``).
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
-import os
 import time
 import warnings
 from dataclasses import asdict, dataclass
 from functools import cached_property
-from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -53,6 +47,7 @@ from skewerjax.summary_stats import (
     ensemble_1d,
     ensemble_mean,
     hybrid_k_edges,
+    mean_transmissions,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,9 +55,8 @@ logger = logging.getLogger(__name__)
 LINE_IDS = ("HI-LyA", "SiIII-1206")  # line 1, line 2 of the term labels "1", "2", "12"
 TERM_LABELS = ("1", "2")
 OVERFLUX_FIELDS = (*LINE_IDS, "total")  # the overfluxes of the 3D statistics: each line and the total
-OVERFLUX_KEYS = (*GRID_KEYS, "xi_ell")  # their statistics: those of the fields and the multipoles of xi
-CACHE_VERSION = 4  # bump when the cached results of a configuration change (2: the BAO envelope; 3: covariance, 3D overflux;
-# 4: the full |k| and |r| range of the 3D overflux statistics)
+OVERFLUX_KEYS = GRID_KEYS  # their statistics: those of the fields
+VELOCITY_MODES = ("zero", "linear")  # ToyBoxes.velocity
 
 
 def bao_k_edges(k_f: float, k_max: float, k_w: float) -> np.ndarray:
@@ -90,9 +84,14 @@ class ToyBoxes:
     r_bao, sigma_bao [cMpc]): ``bao_ratio`` is the height of the BAO bump in xi in units of A_s [cMpc^-3], and P_BAO =
     A_bao E(k) [1 + f(k)] >= 0 (the bump's transform on its envelope, |f| <= 1), so every bao_ratio >= 0 is a valid
     spectrum; A_s is set by ``sigma_delta`` = sqrt(variance on the grid). Gas: the module
-    docstring, with n_bar_HI [comoving cm^-3], ``siiii_to_hi`` = r, T0 [K], ``gamma_minus_1``; the velocities of
-    linear theory with a H f [km/s per cMpc] at redshift ``z`` of a flat cosmology (H0 = ``phys.H0_km_s_mpc``,
-    ``Omega_m``), ``f_growth`` (notebook 04). Realisation i is ``grf().sample(jax.random.PRNGKey(base_seed + i))``.
+    docstring, with n_bar_HI [comoving cm^-3], ``siiii_to_hi`` = r, T0 [K], ``gamma_minus_1``. ``z`` and ``Omega_m``
+    (a flat cosmology, H0 = ``phys.H0_km_s_mpc``) set a(z) H(z), the Hubble flow of the skewers (their velocity axis).
+    Realisation i is ``grf().sample(jax.random.PRNGKey(base_seed + i))``.
+
+    velocity : "zero" (default) or "linear"
+        The peculiar velocities of the gas: "zero" sets them to 0 in every cell (the flux then follows the density
+        and the temperature only); "linear" uses linear theory, v_k = i a H f (k / k^2) delta_k [km/s] (notebook 04),
+        with the growth rate ``f_growth``, which matters for this option only.
     """
 
     box_cMpc: float
@@ -112,6 +111,11 @@ class ToyBoxes:
     z: float = 3.0
     Omega_m: float = 0.31
     f_growth: float = 1.0
+    velocity: str = "zero"
+
+    def __post_init__(self):
+        if self.velocity not in VELOCITY_MODES:
+            raise ValueError(f"velocity must be one of {VELOCITY_MODES}, got {self.velocity!r}.")
 
     # ------------------------------------------------------------------ the spectrum and the realisations
     @cached_property
@@ -147,23 +151,31 @@ class ToyBoxes:
         return float(self.box_cMpc) / self.n_cells
 
     @property
-    def aHf(self) -> float:
-        """a H(z) f [km/s per cMpc] (flat cosmology, H0 = phys.H0_km_s_mpc)."""
+    def aH(self) -> float:
+        """a H(z) [km/s per cMpc] (flat cosmology, H0 = phys.H0_km_s_mpc): the Hubble flow at the start of a skewer."""
         E = np.sqrt(self.Omega_m * (1 + self.z) ** 3 + 1 - self.Omega_m)
-        return phys.H0_km_s_mpc * E / (1 + self.z) * self.f_growth
+        return phys.H0_km_s_mpc * E / (1 + self.z)
+
+    @property
+    def aHf(self) -> float:
+        """a H(z) f [km/s per cMpc]: the factor of the linear-theory velocities (``velocity="linear"``)."""
+        return self.aH * self.f_growth
 
     def cosmology(self) -> Cosmology:
         return Cosmology(H0=phys.H0, Omega_r_0=0.0, Omega_m_0=self.Omega_m, Omega_k_0=0.0, Omega_lambda_0=1.0 - self.Omega_m)
 
     def fields(self, i: int) -> dict:
-        """The gas of realisation i on the grid (NumPy): delta, n {species: comoving cm^-3}, T [K], v (N, N, N, 3) [km/s].
-        Both species are the same gas: one T and one v."""
+        """The gas of realisation i on the grid (NumPy): delta, n {species: comoving cm^-3}, T [K], v (N, N, N, 3) [km/s]
+        (zeros, or linear theory: ``velocity``). Both species are the same gas: one T and one v."""
         g = self.grf()
         d = g.sample(self.key(i))
-        k_vec, k_mod = g.k_grid(real=True)
-        k2 = k_mod**2
-        fk = jnp.fft.rfftn(d)
-        v = jnp.stack([jnp.fft.irfftn(1j * self.aHf * kv / jnp.where(k2 > 0, k2, 1.0) * fk, s=g.shape) for kv in k_vec], -1)
+        if self.velocity == "linear":
+            k_vec, k_mod = g.k_grid(real=True)
+            k2 = k_mod**2
+            fk = jnp.fft.rfftn(d)
+            v = jnp.stack([jnp.fft.irfftn(1j * self.aHf * kv / jnp.where(k2 > 0, k2, 1.0) * fk, s=g.shape) for kv in k_vec], -1)
+        else:
+            v = np.zeros(g.shape + (3,), dtype=np.asarray(d).dtype)
         d = np.asarray(d)
         if d.min() <= -1.0:  # no clipping: a negative density has no temperature; lower sigma_delta instead
             raise ValueError(
@@ -182,12 +194,6 @@ class ToyBoxes:
         f = self.fields(i) if fields is None else fields
         n_bar = {"HI": self.n_bar_HI, "SiIII": self.siiii_to_hi * self.n_bar_HI}
         return grf_cells(f["delta"], self.grf(), n_bar, temperature=f["T"], velocity=f["v"])
-
-    def tag(self) -> str:
-        """A short hash of the configuration (every field), ``CACHE_VERSION`` and the float precision: the cache key of
-        its results."""
-        key = dict(asdict(self), cache_version=CACHE_VERSION, dtype=str(jnp.result_type(float)))
-        return hashlib.sha1(json.dumps(key, sort_keys=True).encode()).hexdigest()[:10]
 
     def bin_edges(self) -> dict:
         """The bins of ``field_statistics`` (``GridStatistics3D`` keywords) that resolve the BAO term: |k| one mode per
@@ -232,26 +238,20 @@ def hubble_velocity(bundle: SkewerBundle) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------- the fields: P and xi of every realisation
-def field_statistics(boxes: ToyBoxes, cache_dir, *, realisations=None, grid=None, run: bool = False, log=print) -> dict:
+def field_statistics(boxes: ToyBoxes, *, realisations=None, grid=None, log=print) -> dict:
     """P and xi of the realisations on their grid (``GridStatistics3D``, line of sight y, the bins of
-    ``ToyBoxes.bin_edges`` unless ``grid`` is given), streamed, cached in ``cache_dir/fields_<tag>.npz``: read back when
-    it holds these realisations with the same bins, computed and written otherwise, or always with ``run=True``.
+    ``ToyBoxes.bin_edges`` unless ``grid`` is given), streamed: each realisation is regenerated from its seed, measured
+    and discarded. Every call recomputes; nothing is stored.
 
-    Returns ``ensemble_mean`` over the realisations of every ``GRID_KEYS`` statistic (mean, ``_err``, ``_each``), the
-    expectation ``theory`` {key: array}, the no-wiggle expectation ``theory_nw`` (the same spectrum without the BAO
-    wiggle, ``PowerLawGRF.power_grid(bao="envelope")``: xi without the bump, so ``theory - theory_nw`` is the bump on
-    the grid), ``cov_xi_iso`` (the exact Gaussian covariance of the isotropic xi bins of one realisation,
+    Returns ``ensemble_mean`` over the realisations of every ``GRID_KEYS`` statistic (mean, ``_err``: the error of the
+    mean, std / sqrt(n) with ddof = 1, of each bin alone; ``_each``), the expectation ``theory`` {key: array}, the
+    no-wiggle expectation ``theory_nw`` (the same spectrum without the BAO wiggle,
+    ``PowerLawGRF.power_grid(bao="envelope")``: xi without the bump, so ``theory - theory_nw`` is the bump on the grid),
+    ``cov_xi_iso`` (the exact Gaussian covariance of the isotropic xi bins of one realisation,
     ``GridStatistics3D.xi_iso_covariance``), the bin ``axes`` (``GridStatistics3D.axes``), ``min_one_plus_delta`` per
     realisation, ``realisations``, ``time_s`` (the measurements) and ``time_cov_s`` (the covariance).
     """
     idx = np.arange(boxes.n_real) if realisations is None else np.asarray(realisations)
-    path = Path(cache_dir) / f"fields_{boxes.tag()}.npz"
-    if path.exists() and not run:
-        z = np.load(path, allow_pickle=False)
-        want = boxes.bin_edges() if grid is None else {k: v for k, v in grid.axes().items() if k.endswith("edges")}
-        same_bins = all(f"axis_{k}" in z and np.array_equal(z[f"axis_{k}"], v) for k, v in want.items())
-        if np.array_equal(z["realisations"], idx) and same_bins and "cov_xi_iso" in z:
-            return _field_result(z)
     gs = GridStatistics3D((boxes.n_cells,) * 3, boxes.box_cMpc, los_axis=1, **boxes.bin_edges()) if grid is None else grid
     g = boxes.grf()
     t0 = time.perf_counter()
@@ -263,44 +263,19 @@ def field_statistics(boxes: ToyBoxes, cache_dir, *, realisations=None, grid=None
         if log and (n + 1) % 16 == 0:
             log(f"field statistics: {n + 1}/{idx.size} realisations, {time.perf_counter() - t0:.0f} s")
     t_meas = time.perf_counter() - t0
-    out = {f"each_{k}": np.stack([r[k] for r in recs]) for k in GRID_KEYS}
-    out.update({f"theory_{k}": v for k, v in gs.theory(g.power_grid()).items()})
-    out.update({f"theory_nw_{k}": v for k, v in gs.theory(g.power_grid(bao="envelope")).items()})
+    res = ensemble_mean(recs, GRID_KEYS)
+    res["theory"] = gs.theory(g.power_grid())
+    res["theory_nw"] = gs.theory(g.power_grid(bao="envelope"))
     t0 = time.perf_counter()
-    out["cov_xi_iso"] = gs.xi_iso_covariance(g.power_grid())
-    out.update({f"axis_{k}": v for k, v in gs.axes().items()})
-    out.update(
+    res["cov_xi_iso"] = gs.xi_iso_covariance(g.power_grid())
+    res.update(
+        axes=gs.axes(),
         min_one_plus_delta=np.array(mins),
         realisations=idx,
-        time_s=np.array(t_meas),
-        time_cov_s=np.array(time.perf_counter() - t0),
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _save_npz(path, out)
-    return _field_result(out)
-
-
-def _field_result(z) -> dict:
-    keys = list(z.keys())
-    res = ensemble_mean([{k: z[f"each_{k}"][j] for k in GRID_KEYS} for j in range(len(z["realisations"]))], GRID_KEYS)
-    res["theory"] = {k: z[f"theory_{k}"] for k in GRID_KEYS}
-    res["theory_nw"] = {k: z[f"theory_nw_{k}"] for k in GRID_KEYS}
-    res["axes"] = {k[5:]: z[k] for k in keys if k.startswith("axis_")}
-    res.update(
-        cov_xi_iso=z["cov_xi_iso"],
-        min_one_plus_delta=z["min_one_plus_delta"],
-        realisations=z["realisations"],
-        time_s=float(z["time_s"]),
-        time_cov_s=float(z["time_cov_s"]),
+        time_s=t_meas,
+        time_cov_s=time.perf_counter() - t0,
     )
     return res
-
-
-def _save_npz(path: Path, arrays: dict):
-    """Write atomically (a temporary file, then a rename), so a reader never sees half a file."""
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp.npz")
-    np.savez(tmp, **arrays)
-    os.replace(tmp, path)
 
 
 def _xi_iso_offset(res):
@@ -390,12 +365,6 @@ class SkewerRun:
     n_pix: int = 2048
     batch: int = 256
 
-    def folder(self, boxes: ToyBoxes, cache_dir) -> Path:
-        """The cache folder of these skewers through these boxes: keyed by ``boxes.tag()``, the stride, the points per
-        cell and the pixels (``batch`` does not change the results)."""
-        tag = hashlib.sha1(json.dumps([boxes.tag(), asdict(self)["stride"], self.points_per_cell, self.n_pix]).encode())
-        return Path(cache_dir) / f"skewers_{boxes.tag()}_{tag.hexdigest()[:8]}"
-
     def periodic(self, boxes: ToyBoxes) -> bool:
         """True if the columns form a periodic lattice (N a multiple of both strides): the 3D statistics need it."""
         return boxes.n_cells % self.stride[0] == 0 and boxes.n_cells % self.stride[1] == 0
@@ -428,84 +397,140 @@ class SkewerRun:
             d_perp_kms=d_perp * u,
         )
 
-    def grid3d(self, boxes: ToyBoxes, period: float) -> GridStatistics3D:
-        """The 3D statistics of the overflux on the lattice of skewers (``GridStatistics3D``), in velocity units: grid
-        (n_x, n_pix, n_z), line of sight along axis 1, sides (n_x s_x dx u, period, n_z s_z dx u) = period, with u =
-        period / L [km/s per cMpc] the conversion of the line of sight (``derived``) applied to the transverse comoving
-        separations. Bins [s/km], [km/s]:
+    def grid3d(self, boxes: ToyBoxes, n_los: int | None = None) -> GridStatistics3D:
+        """The 3D statistics on the lattice of skewers (``GridStatistics3D``), in comoving units: grid (n_x, n_los, n_z)
+        (n_los = n_pix by default: the pixels of the overflux; ``n_cells`` for the density sampled at the cells of the
+        skewers, ``lattice_density_theory``), line of sight along axis 1, sides (n_x s_x dx, L, n_z s_z dx) = L. The line
+        of sight is a velocity, converted with the one factor u = period / L (``derived``): a pixel dv spans dv / u =
+        L / n_pix [cMpc], so |r|, |k| and mu combine both axes in comoving units. Bins [1/cMpc], [cMpc]:
 
-        * |k| (and the mu wedges) as ``bao_k_edges`` over every mode of the lattice, up to the corner of its mode grid,
-          sqrt((pi / dv)^2 + (pi / (s_x dx u))^2 + (pi / (s_z dx u))^2). The bins have every direction (full mu coverage)
-          only up to the transverse Nyquist frequency pi / (s dx u) of the coarser stride: beyond it the transverse
-          modes stop, and a bin holds only the directions closer to the line of sight;
-        * |r| in bins of 3 cells, 3 dx u, over every separation of the lattice, up to the corner of its minimum-image
-          lags, sqrt(3) period / 2 (every direction only between the transverse spacing, below which the lattice holds
-          line-of-sight separations only, and period / 2);
-        * the mu wedges in the same |r| bins up to max(period / 2, (r_bao + 4 sigma_bao) u), with the multipoles l = 0,
-          2, 4 of xi in the same bins (the lattice is coarse across the line of sight, so the plain |r| average mixes the
-          anisotropy of xi into it);
-        * the (r_par, r_perp) plane up to period / 2, r_perp in bins of the transverse spacing."""
+        * |k| (and the mu wedges) as ``bao_k_edges`` up to the smallest Nyquist frequency of the lattice, k_N =
+          min(pi n_los / L, pi / (s_x dx), pi / (s_z dx)): inside that sphere a |k| shell holds every direction, beyond it
+          the modes of the coarser axes stop and a shell only holds the directions closer to the finer axis;
+        * the (k_par, k_perp) plane in linear bins of the fundamental mode 2 pi / L, centred on its multiples, up to k_N
+          (a map with its origin at a corner);
+        * |r|, the mu wedges and the (r_par, r_perp) plane up to half the box, L / 2: xi of a periodic field is
+          periodic, xi(r + L) = xi(r), so the separations beyond L / 2 repeat (mirrored) those inside; |r| and r_par in
+          bins of 3 cells, 3 dx, r_perp in bins of the transverse spacing (the smaller one)."""
         if not self.periodic(boxes):
             raise ValueError(f"the 3D statistics need n_cells = {boxes.n_cells} to be a multiple of both strides {self.stride}.")
-        u = float(period) / float(boxes.box_cMpc)
+        L = float(boxes.box_cMpc)
+        n_los = self.n_pix if n_los is None else int(n_los)
         n_x, n_z = boxes.n_cells // self.stride[0], boxes.n_cells // self.stride[1]
-        d_perp = np.array(self.stride, dtype=float) * boxes.dx * u
-        k_corner = float(np.sqrt((np.pi * self.n_pix / period) ** 2 + np.sum((np.pi / d_perp) ** 2)))
-        k = bao_k_edges(2 * np.pi / period, k_corner, 3.0 / (boxes.sigma_bao * u))
-        dr, half = 3 * boxes.dx * u, 0.5 * period
-        top = max(half, min((boxes.r_bao + 4 * boxes.sigma_bao) * u, np.sqrt(3.0) * half))
-        r = np.arange(0.0, top + 1e-9 * top, dr)
-        r_all = np.arange(0.0, np.sqrt(3.0) * half + dr, dr)  # past the corner sqrt(3) period / 2 of the lags
+        d_perp = np.array(self.stride, dtype=float) * boxes.dx
+        k_nyq = float(min(np.pi * n_los / L, *(np.pi / d_perp)))
+        k = bao_k_edges(2 * np.pi / L, k_nyq, 3.0 / boxes.sigma_bao)
+        k_lin = (np.arange(0.5, k_nyq / (2 * np.pi / L), 1.0)) * (2 * np.pi / L)
+        half = 0.5 * L
+        r = np.arange(0.0, half + 1e-9 * half, 3 * boxes.dx)
         return GridStatistics3D(
-            (n_x, self.n_pix, n_z),
-            (n_x * d_perp[0], float(period), n_z * d_perp[1]),
+            (n_x, n_los, n_z),
+            (n_x * d_perp[0], L, n_z * d_perp[1]),
             los_axis=1,
             k_edges=k,
             k_mu_edges=k,
-            r_edges=r_all,
+            kpar_edges=k_lin,
+            kperp_edges=k_lin,
+            r_edges=r,
             r_mu_edges=r,
-            rpar_edges=np.arange(0.0, half + 1e-9 * half, dr),
+            rpar_edges=r,
             rperp_edges=np.arange(0.0, half + 1e-9 * half, float(d_perp.min())),
-            multipoles=True,
+        )
+
+    def limits(self, boxes: ToyBoxes) -> dict:
+        """The ranges of the 3D statistics of ``grid3d`` [1/cMpc], [cMpc]: k_nyquist (pi n_pix / L along the line of
+        sight, i.e. pi / dv in velocity units, pi / (s dx) across it per axis, and their minimum, the radius of the |k|
+        bins), k_fund = 2 pi / L, r_max = L / 2 and r_perp_min = the smaller transverse spacing."""
+        L = float(boxes.box_cMpc)
+        d_perp = np.array(self.stride, dtype=float) * boxes.dx
+        k_par, k_perp = np.pi * self.n_pix / L, np.pi / d_perp
+        return dict(
+            k_nyq_par=float(k_par),
+            k_nyq_perp=k_perp,
+            k_nyq=float(min(k_par, *k_perp)),
+            k_fund=2 * np.pi / L,
+            r_max=0.5 * L,
+            r_perp_min=float(d_perp.min()),
         )
 
 
-def _claim(path: Path) -> bool:
-    """Claim a realisation with a lock file holding the pid; a lock of a process that no longer runs is taken over."""
-    lock = path.with_suffix(".lock")
-    for _ in range(2):
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
-            return True
-        except FileExistsError:
-            try:
-                pid = int(lock.read_text() or 0)
-                os.kill(pid, 0)
-                return False  # another live process works on it
-            except (ProcessLookupError, ValueError):
-                lock.unlink(missing_ok=True)  # stale: take it over
-            except PermissionError:
-                return False
-    return False
+def _lattice_power(boxes: ToyBoxes, setup: SkewerRun, bao: str = "total"):
+    """(the grid of ``grid3d(boxes, n_los=n_cells)``, the aliased spectrum P_lat on its rfft modes): xi_lat = xi_grid at
+    the lattice separations and P_lat = dV_lat rfftn(xi_lat) (``lattice_density_theory``)."""
+    g = boxes.grf()
+    gs = setup.grid3d(boxes, n_los=boxes.n_cells)
+    xi_grid = np.fft.irfftn(np.asarray(g.power_grid(bao=bao)), s=g.shape) / g.cell_volume
+    xi_lat = xi_grid[:: setup.stride[0], :, :: setup.stride[1]]
+    return gs, np.fft.rfftn(xi_lat).real * gs.dV
 
 
-def skewer_box(boxes: ToyBoxes, i: int, setup: SkewerRun = SkewerRun(), *, columns=None, fields=None) -> dict:
-    """tau and the statistics of realisation i along the skewers of ``setup`` (one call of ``run_skewers``).
+def lattice_density_theory(boxes: ToyBoxes, setup: SkewerRun, *, bao: str = "total") -> dict:
+    """The exact expectation of the statistics of ``grid3d(boxes, n_los=n_cells)`` for the density overdensity sampled
+    on the lattice of skewers (every s_x-th column in x, every s_z-th in z, every cell along y): the lattice samples
+    xi_grid at its own separations, xi_lat(r) = xi_grid(r) (``ToyBoxes``: xi_grid = irfftn(P on the modes) / dV), so its
+    spectrum is the aliased P_lat = dV_lat rfftn(xi_lat), the input folded over the aliases of the transverse lattice,
+    binned like the measurement (``GridStatistics3D.theory``). ``bao``: "total" or "envelope" (no wiggle,
+    ``PowerLawGRF.power_grid``)."""
+    gs, P = _lattice_power(boxes, setup, bao)
+    return gs.theory(P)
 
-    tau (2, N_sk, n_pix) of Lya and Si III, periodic over one box, both on the Lya axis (Si III at v + delta_v). 1D: the
-    flux contrast of each line, delta_F = F / <F> - 1 (per-skewer means), its products and total (``DeltaFieldBuilder``)
-    and their ``OverfluxStatistics1D.summary``. 3D (the lattice of ``setup``, i.e. ``columns`` None, and
-    ``SkewerRun.periodic``): the overflux of each line and of the total against the mean of the box, delta = F /
-    <F>_box - 1 (``OVERFLUX_FIELDS``), its statistics on the lattice in velocity units (``SkewerRun.grid3d``,
-    ``GridStatistics3D.measure``) and its P1D, the mean over the skewers of (dv / n_pix) |rfft(delta)|^2 at k = 2 pi
-    rfftfreq(n_pix, dv) [s/km].
-    Returns dict(tau, columns, v, period, dv, flux (the 1D summary), flux3d {field: {OVERFLUX_KEYS: array}}, axes3d
-    (``GridStatistics3D.axes``), k1d, p1d (3, N_k) (None for the 3D entries without a lattice), mean_F (2,),
-    mean_F_total, resolution (n_batches, 2, 2): max W / b and column fraction above tolerance per batch and line,
-    warnings (list of str), time_s {fields, pieces, tau, stats}).
-    """
+
+def bao_height(r, r2xi, r_bao: float, sigma_bao: float, err=None) -> dict:
+    """The BAO peak of r^2 xi(r): its value in the bin nearest r_bao and its height above the straight line through the
+    bins nearest r_bao -+ 4 sigma_bao (the sidebands), with the error of that height from the errors ``err`` of the
+    three bins (independent errors assumed). Returns dict(r, value, height, height_err (NaN without ``err``))."""
+    r, y = np.asarray(r, dtype=float), np.asarray(r2xi, dtype=float)
+    j, lo, hi = (int(np.argmin(np.abs(r - x))) for x in (r_bao, r_bao - 4 * sigma_bao, r_bao + 4 * sigma_bao))
+    if hi == lo:  # the bins are too coarse to hold sidebands
+        return dict(r=float(r[j]), value=float(y[j]), height=np.nan, height_err=np.nan)
+    t = (r[j] - r[lo]) / (r[hi] - r[lo])
+    h = y[j] - (y[lo] + t * (y[hi] - y[lo]))
+    he = np.nan if err is None else float(np.sqrt(err[j] ** 2 + ((1 - t) * err[lo]) ** 2 + (t * err[hi]) ** 2))
+    return dict(r=float(r[j]), value=float(y[j]), height=float(h), height_err=he)
+
+
+def lattice_density_check(run: dict, boxes: ToyBoxes, setup: SkewerRun) -> dict:
+    """The check of the 3D estimator of Part C (notebook 08): the density sampled on the lattice of skewers, measured
+    with the same estimator by ``run_skewers`` (``density3d``), against its exact expectation (``lattice_density_theory``)
+    with exact Gaussian errors, valid for any number of realisations n: P(|k|) bin by bin, sigma = P sqrt(2 / (n_modes
+    n)) (n_modes counts +k and -k); xi(|r|) with the exact covariance of the bins / n (``GridStatistics3D.
+    xi_iso_covariance`` on the aliased spectrum), against the expectation with and without the BAO wiggle.
+
+    Returns dict(P_chi2, P_dof, xi_chi2, xi_chi2_nw (against the no-wiggle expectation), xi_dof, bao, bao_expected,
+    bao_nw (``bao_height`` of r^2 xi [cMpc^2], measured with the error from the covariance, expected, no wiggle),
+    n_real)."""
+    d = run["density3d"]
+    n = int(d["n_real"])
+    gs, P = _lattice_power(boxes, setup)
+    th, nw = gs.theory(P), lattice_density_theory(boxes, setup, bao="envelope")
+    n_modes = np.asarray(gs.n_modes["P_iso"], dtype=float)
+    sig = th["P_iso"] * np.sqrt(2.0 / (np.where(n_modes > 0, n_modes, np.nan) * n))
+    okP = np.isfinite(d["P_iso"]) & np.isfinite(sig)
+    r = gs.r_iso
+    C = gs.xi_iso_covariance(P) / n
+    ok = np.isfinite(d["xi_iso"]) & (r > 0) & np.all(np.isfinite(C), axis=1)
+    Ci = np.linalg.inv(C[np.ix_(ok, ok)])
+    chi = lambda m: float((d["xi_iso"] - m)[ok] @ Ci @ (d["xi_iso"] - m)[ok])
+    err = r**2 * np.sqrt(np.diag(C))
+    return dict(
+        P_chi2=float(np.sum(((d["P_iso"] - th["P_iso"])[okP] / sig[okP]) ** 2)),
+        P_dof=int(okP.sum()),
+        xi_chi2=chi(th["xi_iso"]),
+        xi_chi2_nw=chi(nw["xi_iso"]),
+        xi_dof=int(ok.sum()),
+        bao=bao_height(r, r**2 * d["xi_iso"], boxes.r_bao, boxes.sigma_bao, err),
+        bao_expected=bao_height(r, r**2 * th["xi_iso"], boxes.r_bao, boxes.sigma_bao),
+        bao_nw=bao_height(r, r**2 * nw["xi_iso"], boxes.r_bao, boxes.sigma_bao),
+        n_real=n,
+    )
+
+
+def skewer_tau(boxes: ToyBoxes, i: int, setup: SkewerRun = SkewerRun(), *, columns=None, fields=None) -> dict:
+    """tau (2, N_sk, n_pix) of Lya and Si III along the skewers of ``setup`` (or of ``columns``) through realisation i,
+    periodic over one box (``velocity_period=True``), both on the Lya axis (``line_frame="reference"``; Si III at
+    v + delta_v). Returns dict(tau, columns, v (n_pix,) [km/s], period, dv [km/s], resolution (n_batches, 2, 2): max W / b
+    and column fraction above tolerance per batch and line, warnings (list of str), density (the overdensity on the
+    lattice of skewers (n_x, n_cells, n_z), every cell along y; None for ``columns``), time_s {fields, pieces, tau})."""
     lines = LineBundle(list(LINE_IDS), ref_line_id=LINE_IDS[0])
     t = {"fields": time.perf_counter()}
     f = boxes.fields(i) if fields is None else fields
@@ -525,151 +550,159 @@ def skewer_box(boxes: ToyBoxes, i: int, setup: SkewerRun = SkewerRun(), *, colum
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             tau, info = compute_optical_depth(pieces, v, lines, velocity_period=True, line_frame="reference", return_info=True)
-        tau = np.asarray(tau)
         t["pieces"] += t1 - t0
         t["tau"] += time.perf_counter() - t1
-        taus.append(tau)
+        taus.append(np.asarray(tau))
         r = info["resolution"]
         res.append(np.stack([r["max_ratio"], r["column_fraction"]], -1))
         msgs += [str(w.message) for w in caught]
-    tau = np.concatenate(taus, axis=1)
-    t0 = time.perf_counter()
-    dv = period / setup.n_pix
-    flux = OverfluxStatistics1D(DeltaFieldBuilder(tau, labels=list(TERM_LABELS)).build(), dv).summary()
-    F = np.exp(-tau)
-    flux3d = axes3d = k1d = p1d = None
-    if lattice and setup.periodic(boxes):
-        f3 = np.concatenate([F, F.prod(0)[None]])  # (3, N_sk, n_pix): each line, then the total
-        delta = f3 / f3.mean(axis=(1, 2), keepdims=True) - 1.0
-        gs = setup.grid3d(boxes, period)
-        n_x, n_z = gs.shape[0], gs.shape[2]
-        on_grid = lambda d: d.reshape(n_x, n_z, setup.n_pix).transpose(0, 2, 1)  # columns are x-major: (x, y = los, z)
-        flux3d = {name: gs.measure(on_grid(d)) for name, d in zip(OVERFLUX_FIELDS, delta)}
-        axes3d = gs.axes()
-        k1d = 2 * np.pi * np.fft.rfftfreq(setup.n_pix, dv)
-        p1d = (dv / setup.n_pix) * np.mean(np.abs(np.fft.rfft(delta, axis=-1)) ** 2, axis=1)
-    t["stats"] = time.perf_counter() - t0
+    density = np.asarray(f["delta"])[:: setup.stride[0], :, :: setup.stride[1]] if lattice else None
     return dict(
-        tau=tau,
+        tau=np.concatenate(taus, axis=1),
         columns=cols,
         v=v,
         period=period,
-        dv=dv,
-        flux=flux,
-        flux3d=flux3d,
-        axes3d=axes3d,
-        k1d=k1d,
-        p1d=p1d,
-        mean_F=F.mean(axis=(1, 2)),
-        mean_F_total=float(F.prod(0).mean()),
+        dv=period / setup.n_pix,
         resolution=np.stack(res),
         warnings=sorted(set(msgs)),
+        density=density,
         time_s=t,
     )
 
 
-def run_skewers(
-    boxes: ToyBoxes,
-    cache_dir,
-    setup: SkewerRun = SkewerRun(),
-    *,
-    realisations=None,
-    keep=(0,),
-    overwrite: bool = False,
-    log=print,
-) -> Path:
-    """``skewer_box`` for every realisation (default all), one file each in ``setup.folder(boxes, cache_dir)``:
-    ``box_<i>.npz`` (the 1D summary, the 3D statistics and P1D of the overfluxes, the mean fluxes, the resolution check,
-    the warnings and the timings) and, for the realisations in ``keep``, ``skewers_<i>.npz`` (tau, the columns and the
-    axis: the figures). Realisations already done are skipped, and one claimed by another live process too (lock
-    files), so the run is resumable and several processes (e.g. CPU and GPU) can share it. ``overwrite=True`` first
-    deletes every result of the folder (``box_*.npz``, ``skewers_*.npz``), so the run recomputes the realisations from
-    scratch and the folder holds only them. The warnings of the optical depth (the resolution check) are stored and
-    issued again. Returns the folder."""
-    folder = setup.folder(boxes, cache_dir)
-    folder.mkdir(parents=True, exist_ok=True)
-    if overwrite:
-        for p in list(folder.glob("box_*.npz")) + list(folder.glob("skewers_*.npz")):
-            p.unlink()
-    (folder / "config.json").write_text(json.dumps(dict(boxes=asdict(boxes), setup=asdict(setup)), indent=1))
-    idx = np.arange(boxes.n_real) if realisations is None else np.asarray(realisations)
-    for i in idx:
-        path = folder / f"box_{int(i):03d}.npz"
-        if path.exists() or not _claim(path):
-            continue
-        try:
-            t0 = time.perf_counter()
-            r = skewer_box(boxes, int(i), setup)
-            out = {f"flux_{k}": v for k, v in r["flux"].items()}
-            if r["flux3d"] is not None:
-                for name, rec in r["flux3d"].items():
-                    out.update({f"f3d_{name}_{k}": v for k, v in rec.items()})
-                out.update({f"f3d_axis_{k}": v for k, v in r["axes3d"].items()})
-                out.update(k1d=r["k1d"], p1d=r["p1d"])
-            out.update(
-                mean_F=r["mean_F"],
-                mean_F_total=np.array(r["mean_F_total"]),
-                resolution=r["resolution"],
-                warnings=np.array(r["warnings"] or [""], dtype=str),
-                time_s=np.array([r["time_s"][k] for k in ("fields", "pieces", "tau", "stats")]),
-                device=np.array(jax.devices()[0].platform),
-                period=np.array(r["period"]),
-            )
-            if int(i) in set(int(k) for k in keep):
-                _save_npz(
-                    folder / f"skewers_{int(i):03d}.npz",
-                    dict(tau=r["tau"], columns=r["columns"], v=r["v"], period=np.array(r["period"])),
-                )
-            _save_npz(path, out)
-            for m in r["warnings"]:
-                warnings.warn(f"realisation {int(i)}: {m}", stacklevel=2)
-            if log:
-                log(
-                    f"realisation {int(i)}: {r['columns'].shape[0]} skewers in {time.perf_counter() - t0:.0f} s "
-                    f"({jax.devices()[0].platform}); <F> = {np.round(r['mean_F'], 3)}; max column fraction above "
-                    f"tolerance {r['resolution'][..., 1].max():.1e}"
-                )
-        finally:
-            path.with_suffix(".lock").unlink(missing_ok=True)
-    return folder
+def skewer_statistics(tau, boxes: ToyBoxes, setup: SkewerRun, period: float, *, mean_transmission=None, lattice=True) -> dict:
+    """The statistics of the skewers of one realisation (tau (2, N_sk, n_pix) of ``skewer_tau``), every overflux
+    normalised by the ensemble mean transmission at each pixel, delta = T / T_bar(v) - 1 (``summary_stats.overflux``):
+    ``mean_transmission`` (3, n_pix) = T_bar_Lya, T_bar_SiIII, T_bar_total over every skewer of every realisation of the
+    ensemble (``run_skewers``), or, if None, over these skewers alone.
 
-
-def load_skewer_run(folder, *, realisations=None) -> dict:
-    """The ensemble of a ``run_skewers`` folder: dict(flux (``ensemble_1d`` over the realisations), flux3d {field:
-    ``ensemble_mean`` of the ``OVERFLUX_KEYS`` statistics} for the ``OVERFLUX_FIELDS``, axes3d (the bins, velocity units),
-    p1d (``ensemble_mean`` of "p1d" (3, N_k), with "k" [s/km]) (flux3d, axes3d, p1d None without a lattice), mean_F
-    (n, 2), mean_F_total (n,), resolution (n, n_batches, 2, 2), warnings {i: [str]}, time_s (n, 4) [fields, pieces,
-    tau, stats], device (n,), realisations (n,), skewers {i: dict} of the kept realisations, config)."""
-    folder = Path(folder)
-    files = sorted(folder.glob("box_*.npz"))
-    if realisations is not None:
-        want = {int(i) for i in realisations}
-        files = [p for p in files if int(p.stem[4:]) in want]
-    if not files:
-        raise FileNotFoundError(f"no realisation in {folder}: run run_skewers first.")
-    zs = [dict(np.load(p, allow_pickle=False)) for p in files]
-    part = lambda z, pre: {k[len(pre) :]: v for k, v in z.items() if k.startswith(pre)}
-    kept = {int(p.stem[8:]): dict(np.load(p, allow_pickle=False)) for p in sorted(folder.glob("skewers_*.npz"))}
-    flux3d = axes3d = p1d = None
-    if all("p1d" in z for z in zs):
-        flux3d = {
-            name: ensemble_mean([{k: z[f"f3d_{name}_{k}"] for k in OVERFLUX_KEYS} for z in zs], OVERFLUX_KEYS)
-            for name in OVERFLUX_FIELDS
-        }
-        axes3d = part(zs[0], "f3d_axis_")
-        p1d = dict(ensemble_mean(zs, ("p1d",)), k=zs[0]["k1d"])
-    return dict(
-        flux=ensemble_1d([part(z, "flux_") for z in zs]),
-        flux3d=flux3d,
-        axes3d=axes3d,
-        p1d=p1d,
-        mean_F=np.stack([z["mean_F"] for z in zs]),
-        mean_F_total=np.array([float(z["mean_F_total"]) for z in zs]),
-        resolution=np.stack([z["resolution"] for z in zs]),
-        warnings={int(p.stem[4:]): [m for m in z["warnings"] if m] for p, z in zip(files, zs)},
-        time_s=np.stack([z["time_s"] for z in zs]),
-        device=np.array([str(z["device"]) for z in zs]),
-        realisations=np.array([int(p.stem[4:]) for p in files]),
-        skewers=kept,
-        config=json.loads((folder / "config.json").read_text()),
+    1D: the overflux of each line, its products and the total (``DeltaFieldBuilder``) and their
+    ``OverfluxStatistics1D.summary``. 3D (``lattice`` and ``SkewerRun.periodic``): the overflux of each line and of the
+    total (``OVERFLUX_FIELDS``), their statistics on the lattice in comoving units (``SkewerRun.grid3d``,
+    ``GridStatistics3D.measure``) and their P1D, the mean over the skewers of (dv / n_pix) |rfft(delta)|^2 at
+    k = 2 pi rfftfreq(n_pix, dv) [s/km]. Returns dict(flux (the 1D summary), flux3d {field: {OVERFLUX_KEYS: array}},
+    axes3d (``GridStatistics3D.axes``), k1d, p1d (3, N_k) (None for the 3D entries without a lattice), delta_sum (3,
+    n_pix): the sum over the skewers of each overflux, decomposition_error: max |[sum_A delta_A - C] / (1 + C) -
+    delta_tot| over every pixel, time_s)."""
+    t0 = time.perf_counter()
+    dv = float(period) / setup.n_pix
+    ov = DeltaFieldBuilder(tau, labels=list(TERM_LABELS), mean_transmission=mean_transmission).build()
+    flux = OverfluxStatistics1D(ov, dv).summary()
+    delta = np.stack([np.asarray(ov.delta_terms[k]) for k in TERM_LABELS] + [np.asarray(ov.total)])  # (3, N_sk, n_pix)
+    C = np.asarray(ov.C_per_pixel)
+    recon = (sum(np.asarray(v) for v in ov.delta_terms.values()) - C) / (1.0 + C)
+    out = dict(
+        flux=flux,
+        flux3d=None,
+        axes3d=None,
+        k1d=None,
+        p1d=None,
+        delta_sum=delta.sum(axis=1),
+        decomposition_error=float(np.max(np.abs(recon - delta[-1]))),
     )
+    if lattice and setup.periodic(boxes):
+        gs = setup.grid3d(boxes)
+        n_x, n_z = gs.shape[0], gs.shape[2]
+        on_grid = lambda d: d.reshape(n_x, n_z, setup.n_pix).transpose(0, 2, 1)  # columns are x-major: (x, y = los, z)
+        out.update(
+            flux3d={name: gs.measure(on_grid(d)) for name, d in zip(OVERFLUX_FIELDS, delta)},
+            axes3d=gs.axes(),
+            k1d=2 * np.pi * np.fft.rfftfreq(setup.n_pix, dv),
+            p1d=(dv / setup.n_pix) * np.mean(np.abs(np.fft.rfft(delta, axis=-1)) ** 2, axis=1),
+        )
+    out["time_s"] = time.perf_counter() - t0
+    return out
+
+
+def skewer_box(boxes: ToyBoxes, i: int, setup: SkewerRun = SkewerRun(), *, columns=None, fields=None) -> dict:
+    """``skewer_tau`` and ``skewer_statistics`` of realisation i alone: the ensemble of the normalisation is the skewers
+    of this realisation. Returns the entries of both (``time_s`` {fields, pieces, tau, stats}), mean_F (2,) and
+    mean_F_total, the mean transmission of each line and of their product over the box."""
+    r = skewer_tau(boxes, i, setup, columns=columns, fields=fields)
+    s = skewer_statistics(r["tau"], boxes, setup, r["period"], lattice=columns is None)
+    T = np.exp(-r["tau"])
+    r["time_s"]["stats"] = s.pop("time_s")
+    return dict(r, **s, mean_F=T.mean(axis=(1, 2)), mean_F_total=float(T.prod(0).mean()))
+
+
+def run_skewers(boxes: ToyBoxes, setup: SkewerRun = SkewerRun(), *, realisations=None, keep=(0,), log=print) -> dict:
+    """The skewers of every realisation (default all) and their statistics, in memory, in two passes:
+
+    1. each realisation is generated, tau computed along its skewers (``skewer_tau``), and its tau kept; the density on
+       the lattice of skewers is measured with the 3D estimator of the overflux (``SkewerRun.grid3d`` with n_los =
+       n_cells; the check of the estimator, against ``lattice_density_theory``);
+    2. the ensemble mean transmission at each pixel, T_bar(v), of each line and of the total over every skewer of every
+       realisation, normalises the overflux of every realisation (``skewer_statistics``), so <delta>_ens = 0 at every
+       pixel.
+
+    The tau of every realisation is held until the end (2 n_real N_sk n_pix floats). The warnings of the optical depth
+    (the resolution check) are issued again with the realisation. Every call recomputes; nothing is stored.
+
+    Returns dict(flux (``ensemble_1d`` over the realisations), flux3d {field: ``ensemble_mean`` of the ``OVERFLUX_KEYS``
+    statistics} for the ``OVERFLUX_FIELDS``, axes3d (the bins, comoving units), p1d (``ensemble_mean`` of "p1d" (3, N_k),
+    with "k" [s/km]), density3d (``ensemble_mean`` of the density's ``GRID_KEYS`` statistics on the lattice, with its
+    "axes" and the exact expectation "theory", ``lattice_density_theory``) (flux3d, axes3d, p1d, density3d None without a
+    lattice), mean_transmission (3, n_pix) (T_bar of Lya, Si III and the total at each pixel), mean_delta (3, n_pix) (the
+    ensemble mean of each overflux at each pixel: zero to rounding), decomposition_error (max over the realisations),
+    mean_F (n, 2), mean_F_total (n,), resolution (n, n_batches, 2, 2), warnings {i: [str]}, time_s (n, 4) [fields,
+    pieces, tau, stats], device (n,), realisations (n,), skewers {i: dict(tau, columns, v, period)} of the realisations in
+    ``keep`` (the figures), config (the two set-ups as dicts))."""
+    idx = np.arange(boxes.n_real) if realisations is None else np.asarray(realisations)
+    keep = {int(k) for k in keep}
+    taus, recs, dens, warns = [], [], [], {}
+    lattice = setup.periodic(boxes)
+    gs_rho = setup.grid3d(boxes, n_los=boxes.n_cells) if lattice else None
+    for i in idx:
+        t0 = time.perf_counter()
+        r = skewer_tau(boxes, int(i), setup)
+        taus.append(r.pop("tau"))
+        if lattice:
+            dens.append(gs_rho.measure(r["density"]))
+        r["density"] = None
+        recs.append(r)
+        warns[int(i)] = r["warnings"]
+        for m in r["warnings"]:
+            warnings.warn(f"realisation {int(i)}: {m}", stacklevel=2)
+        if log:
+            log(
+                f"realisation {int(i)}: {r['columns'].shape[0]} skewers in {time.perf_counter() - t0:.0f} s "
+                f"({jax.devices()[0].platform}); max column fraction above tolerance {r['resolution'][..., 1].max():.1e}"
+            )
+    period = recs[0]["period"]
+    T_bar = np.mean([np.asarray(mean_transmissions(np.exp(-t))) for t in taus], axis=0)  # equal skewers per realisation
+    stats = []
+    for r, t in zip(recs, taus):
+        s = skewer_statistics(t, boxes, setup, period, mean_transmission=T_bar, lattice=lattice)
+        r["time_s"]["stats"] = s.pop("time_s")
+        stats.append(s)
+    n_sk = taus[0].shape[1]
+    T = [np.exp(-t) for t in taus]
+    out = dict(
+        flux=ensemble_1d([s["flux"] for s in stats]),
+        flux3d=None,
+        axes3d=None,
+        p1d=None,
+        density3d=None,
+        mean_transmission=T_bar,
+        mean_delta=sum(s["delta_sum"] for s in stats) / (n_sk * len(stats)),
+        decomposition_error=max(s["decomposition_error"] for s in stats),
+        mean_F=np.stack([x.mean(axis=(1, 2)) for x in T]),
+        mean_F_total=np.array([float(x.prod(0).mean()) for x in T]),
+        resolution=np.stack([r["resolution"] for r in recs]),
+        warnings=warns,
+        time_s=np.array([[r["time_s"][k] for k in ("fields", "pieces", "tau", "stats")] for r in recs]),
+        device=np.array([jax.devices()[0].platform] * len(recs)),
+        realisations=idx,
+        skewers={
+            int(i): dict(tau=t, columns=r["columns"], v=r["v"], period=r["period"])
+            for i, r, t in zip(idx, recs, taus)
+            if int(i) in keep
+        },
+        config=dict(boxes=asdict(boxes), setup=asdict(setup)),
+    )
+    if lattice:
+        out["flux3d"] = {name: ensemble_mean([s["flux3d"][name] for s in stats], OVERFLUX_KEYS) for name in OVERFLUX_FIELDS}
+        out["axes3d"] = stats[0]["axes3d"]
+        out["p1d"] = dict(ensemble_mean(stats, ("p1d",)), k=stats[0]["k1d"])
+        out["density3d"] = dict(ensemble_mean(dens, GRID_KEYS), axes=gs_rho.axes(), theory=lattice_density_theory(boxes, setup))
+    return out

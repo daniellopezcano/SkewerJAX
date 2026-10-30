@@ -4,6 +4,10 @@
 Chaves-Montero et al., "Cosmological analysis of the DESI DR1 Lyman-alpha 1D power spectrum" (QMLE measurements of
 forests with SNR > 3 per pixel; ``.project_material/Chaves-Montero``, ``data_journal.tex``, Fig. ``p1d_qmle3``). The
 points were digitised from the figure (the lowest-redshift curve), so they carry its reading error and no error bars.
+
+``XI_LYA_LYA_AA_WEDGES``: a measured Lya(A) x Lya(A) correlation function in four wedges of mu (the edges of
+``summary_stats.MU_WEDGES``), r^2 xi against r in h^-1 Mpc units (r [h^-1 Mpc], r^2 xi [h^-2 Mpc^2]); the reference of
+08's C3, converted to cMpc by ``utils.plotting.plot_xi_mu_wedges(reference=)`` (r / h, r^2 xi / h^2).
 """
 
 from __future__ import annotations
@@ -46,3 +50,184 @@ P1D_DESI_DR1_Z22 = dict(
 )
 # fmt: on
 """DESI DR1 Lya P1D at z = 2.2 (module docstring): k [s/km], kP_pi = k P1D / pi, z, label, k_max_figure [s/km]."""
+
+
+# fmt: off
+XI_LYA_LYA_AA_WEDGES = dict(
+label=r"Ly$\alpha$(A)$\times$Ly$\alpha$(A), $\mu$ wedges",
+r=np.asarray(
+        [
+2.0, 6.0, 10.0, 14.0, 18.0, 22.0, 26.0, 30.0, 34.0, 38.0,
+42.0, 46.0, 50.0, 54.0, 58.0, 62.0, 66.0, 70.0, 74.0, 78.0,
+82.0, 86.0, 90.0, 94.0, 98.0, 102.0, 106.0, 110.0, 114.0, 118.0,
+122.0, 126.0, 130.0, 134.0, 138.0, 142.0, 146.0, 150.0, 154.0, 158.0,
+162.0, 166.0, 170.0, 174.0, 178.0, 182.0, 186.0, 190.0, 194.0, 198.0,
+        ]
+    ),
+wedges=(
+    dict(
+        mu_min=0.00,
+        mu_max=0.50,
+        r2xi=np.asarray(
+            [
+0.0400, 0.1974, 0.2977, 0.3524, 0.3798, 0.3957, 0.3889, 0.3775, 0.3570, 0.3250,
+0.3250, 0.2931, 0.2589, 0.2458, 0.2277, 0.2170, 0.2202, 0.1860, 0.1632, 0.1505,
+0.1062, 0.1084, 0.1335, 0.1472, 0.1814, 0.1746, 0.1609, 0.1358, 0.1198, 0.0902,
+0.1244, 0.0736, 0.0378, 0.0560, 0.0232, 0.0469, 0.0195, 0.0788, 0.0628, 0.0514,
+-0.0170, -0.0306, 0.0583, 0.0127, 0.0264, 0.0606, 0.0628, 0.0355, 0.0936, 0.0264,
+            ]
+        ),
+        sigma=np.asarray(
+            [
+0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0171, 0.0148, 0.0148,
+0.0148, 0.0148, 0.0148, 0.0143, 0.0141, 0.0140, 0.0148, 0.0148, 0.0148, 0.0138,
+0.0148, 0.0171, 0.0171, 0.0171, 0.0171, 0.0171, 0.0194, 0.0194, 0.0194, 0.0217,
+0.0217, 0.0233, 0.0239, 0.0239, 0.0254, 0.0239, 0.0262, 0.0262, 0.0285, 0.0285,
+0.0285, 0.0308, 0.0308, 0.0331, 0.0331, 0.0331, 0.0353, 0.0353, 0.0342, 0.0376,
+            ]
+        ),
+        sigma_is_upper_limit=np.asarray(
+            [
+True, True, True, True, True, True, True, False, True, True,
+True, True, True, True, True, True, True, True, True, True,
+True, False, False, False, False, False, False, False, False, False,
+False, False, False, False, False, False, False, False, False, False,
+False, False, False, False, False, False, False, False, False, False,
+            ], dtype=bool
+        ),
+        occluded=np.asarray(
+            [
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ], dtype=int
+        ),
+    ),
+    dict(
+        mu_min=0.50,
+        mu_max=0.80,
+        r2xi=np.asarray(
+            [
+np.nan, 0.1290, 0.1723, 0.1654, 0.1449, 0.1198, 0.0788, 0.0264, -0.0010, -0.0433,
+-0.0740, -0.0945, -0.1196, -0.1492, -0.1410, -0.1857, -0.1750, -0.1758, -0.2113, -0.2108,
+-0.2130, -0.1766, -0.1606, -0.0922, -0.0648, -0.0671, -0.0808, -0.0922, -0.0740, -0.0945,
+-0.1492, -0.1871, -0.1834, -0.2011, -0.1829, -0.1857, -0.1464, -0.1706, -0.2108, -0.1773,
+-0.1196, -0.1652, -0.1378, -0.0968, -0.0648, -0.0808, -0.0831, -0.0831, -0.0841, -0.0895,
+            ]
+        ),
+        sigma=np.asarray(
+            [
+np.nan, 0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0158,
+0.0148, 0.0148, 0.0148, 0.0148, 0.0139, 0.0148, 0.0155, 0.0156, 0.0153, 0.0148,
+0.0171, 0.0171, 0.0194, 0.0194, 0.0217, 0.0217, 0.0239, 0.0239, 0.0262, 0.0262,
+0.0262, 0.0276, 0.0285, 0.0303, 0.0313, 0.0331, 0.0336, 0.0344, 0.0353, 0.0369,
+0.0376, 0.0376, 0.0399, 0.0422, 0.0422, 0.0445, 0.0445, 0.0467, 0.0458, 0.0472,
+            ]
+        ),
+        sigma_is_upper_limit=np.asarray(
+            [
+False, True, True, True, True, True, True, True, True, True,
+True, True, True, True, True, True, True, True, True, True,
+False, False, False, False, False, False, False, False, False, False,
+False, False, False, False, False, False, False, False, False, False,
+False, False, False, False, False, False, False, False, False, False,
+            ], dtype=bool
+        ),
+        occluded=np.asarray(
+            [
+2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ], dtype=int
+        ),
+    ),
+    dict(
+        mu_min=0.80,
+        mu_max=0.95,
+        r2xi=np.asarray(
+            [
+np.nan, 0.0782, 0.0674, 0.0058, -0.0375, -0.0968, -0.1743, -0.2472, -0.3293, -0.3704,
+-0.4205, -0.4570, -0.4570, -0.4456, -0.4388, -0.4456, -0.4525, -0.4607, -0.4798, -0.4741,
+-0.4456, -0.4183, -0.3613, -0.3157, -0.2381, -0.2085, -0.1811, -0.1766, -0.2062, -0.2883,
+-0.3385, -0.3704, -0.3795, -0.3362, -0.3772, -0.3487, -0.3376, -0.2951, -0.3448, -0.2586,
+-0.2043, -0.2427, -0.3339, -0.2974, -0.2267, -0.1811, -0.1788, -0.1446, -0.0865, -0.0956,
+            ]
+        ),
+        sigma=np.asarray(
+            [
+np.nan, 0.0143, 0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0148,
+0.0148, 0.0148, 0.0148, 0.0148, 0.0148, 0.0171, 0.0171, 0.0185, 0.0194, 0.0205,
+0.0239, 0.0239, 0.0262, 0.0285, 0.0308, 0.0308, 0.0331, 0.0331, 0.0353, 0.0376,
+0.0376, 0.0399, 0.0422, 0.0445, 0.0445, 0.0456, 0.0482, 0.0490, 0.0495, 0.0399,
+0.0532, 0.0581, 0.0581, 0.0604, 0.0627, 0.0650, 0.0673, 0.0673, 0.0684, 0.0707,
+            ]
+        ),
+        sigma_is_upper_limit=np.asarray(
+            [
+False, True, True, True, True, True, True, True, True, True,
+True, True, True, True, True, False, False, False, False, False,
+False, False, False, False, False, False, False, False, False, False,
+False, False, False, False, False, False, False, False, False, False,
+False, False, False, False, False, False, False, False, False, False,
+            ], dtype=bool
+        ),
+        occluded=np.asarray(
+            [
+2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
+            ], dtype=int
+        ),
+    ),
+    dict(
+        mu_min=0.95,
+        mu_max=1.00,
+        r2xi=np.asarray(
+            [
+np.nan, 0.0586, -0.0078, -0.1013, -0.1424, -0.1629, -0.3920, -0.5551, -0.6850, -0.7648,
+-0.7956, -0.8249, -0.7805, -0.6950, -0.7025, -0.7161, -0.8096, -0.9290, -0.9525, -0.9381,
+-0.8515, -0.8526, -0.8203, -0.7101, -0.5528, -0.4023, -0.5003, -0.5915, -0.7853, -0.8651,
+-0.9062, -0.9373, -0.9262, -0.8181, -0.8278, -0.7625, -0.7397, -0.4684, -0.4496, -0.3157,
+-0.2142, -0.1362, -0.1013, -0.1257, -0.2267, 0.0754, 0.2635, 0.2635, 0.1155, 0.1193,
+            ]
+        ),
+        sigma=np.asarray(
+            [
+np.nan, 0.0106, 0.0148, 0.0148, 0.0148, 0.0148, 0.0137, 0.0148, 0.0148, 0.0171,
+0.0182, 0.0201, 0.0242, 0.0248, 0.0269, 0.0299, 0.0322, 0.0331, 0.0346, 0.0399,
+0.0399, 0.0433, 0.0483, 0.0490, 0.0513, 0.0559, 0.0581, 0.0581, 0.0627, 0.0673,
+0.0695, 0.0710, 0.0746, 0.0778, 0.0801, 0.0855, 0.0855, 0.0901, 0.0929, 0.0969,
+0.0980, 0.0702, 0.1060, 0.1067, 0.1129, 0.1117, 0.1197, 0.1243, 0.1241, 0.1271,
+            ]
+        ),
+        sigma_is_upper_limit=np.asarray(
+            [
+False, True, True, True, True, True, True, True, True, False,
+False, False, False, False, False, False, False, False, False, False,
+False, False, False, False, False, False, False, False, False, False,
+False, False, False, False, False, False, False, False, False, False,
+False, False, False, False, False, False, False, False, False, False,
+            ], dtype=bool
+        ),
+        occluded=np.asarray(
+            [
+2, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+1, 0, 0, 0, 1, 1, 0, 0, 1, 0,
+            ], dtype=int
+        ),
+    ),
+),
+r_max_figure=200.0,  # the right end of the r axis of the figure [h^-1 Mpc]
+)
+# fmt: on
+"""Lya(A)xLya(A) correlation-function wedges (module docstring): r [h^-1 Mpc]; per wedge mu_min, mu_max,
+r2xi = r^2 xi(r) [h^-2 Mpc^2], sigma (error-bar half-length), sigma_is_upper_limit, occluded (0/1/2); label, r_max_figure."""

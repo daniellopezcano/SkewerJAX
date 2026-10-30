@@ -112,68 +112,102 @@ def test_fifth_pass_figures():
 
 def test_toy_box_figures():
     """The figures of notebook 08 on a small toy box: the fields (A2), the 3D statistics of the realisations against
-    their expectation (A3), one skewer (B2), the 3D statistics and P1D of the overfluxes in velocity units (C) and the
-    1D statistics of the flux contrast by order and term (D)."""
-    import tempfile
+    their expectation and the continuum (A3), one skewer (B2), the 3D statistics of the overfluxes (C: maps in native
+    units, isotropic quantities in comoving units, the wedges with a reference) and the 1D statistics of the overflux by
+    order and term (D): no titles, the line of sight vertical in the maps."""
+    from dataclasses import replace
 
     from skewerjax.core import LineBundle
-    from skewerjax.simulations import SkewerRun, ToyBoxes, field_statistics, load_skewer_run, run_skewers
+    from skewerjax.simulations import SkewerRun, ToyBoxes, field_statistics, run_skewers
     from skewerjax.utils.reference_data import P1D_DESI_DR1_Z22
 
     b = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3)
-    fig, axs, info = pl.plot_toy_fields(b.fields(0), b.box_cMpc, arrow_every=4)
+    fig, axs, info = pl.plot_toy_fields(replace(b, velocity="linear").fields(0), b.box_cMpc, arrow_every=4)
     fig.canvas.draw()
     assert axs.shape == (2, 2) and info["arrow_scale"] > 0, "density and velocity rows (no temperature)"
-    with tempfile.TemporaryDirectory() as tmp:
-        res = field_statistics(b, tmp, log=None)
-        folder = run_skewers(b, tmp, SkewerRun(stride=(4, 4), points_per_cell=80, n_pix=64, batch=8), log=None)
-        run = load_skewer_run(folder)
+    fig, axs, info = pl.plot_toy_fields(b.fields(0), b.box_cMpc, arrow_every=4)  # zero velocities: no arrows
+    fig.canvas.draw()
+    assert info["arrow_scale"] == 0 and not any(ax.get_title() for ax in axs.ravel())
+    setup = SkewerRun(stride=(4, 4), points_per_cell=80, n_pix=64, batch=8)
+    res = field_statistics(b, log=None)
+    run = run_skewers(b, setup, log=None)
     for view in ("r2", "symlog"):
-        fig, axs, out = pl.plot_isotropic_recovery(res, xi_view=view, r_bao=2.0)
+        fig, axs, out = pl.plot_isotropic_recovery(res, xi_view=view, r_bao=2.0, grf=b.grf())
         fig.canvas.draw()
     assert {"P_chi2_dof", "xi_chi2_dof", "xi_mean_pull"} <= set(out)
+    assert "k\\,P" in axs[0, 0].get_ylabel() and len(axs[0, 0].lines) > len(res["P_iso_each"]) + 1, "k P, with the continuum"
     for f in (pl.plot_kpar_kperp_maps, pl.plot_rpar_rperp_maps, pl.plot_xi_mu_wedges):
-        fig, axs, chi2 = f(res)
+        fig, axs, chi2 = f(res) if f is pl.plot_xi_mu_wedges else f(res, n_sigma=2)
         fig.canvas.draw()
+        assert not fig._suptitle and not any(ax.get_title() for ax in axs), "no titles"
         if f is not pl.plot_xi_mu_wedges:
             assert axs[0].get_shared_y_axes().joined(axs[0], axs[1]), "expected and measured panels share their y axis"
+            assert "perp" in axs[0].get_xlabel() and "parallel" in axs[0].get_ylabel(), "perpendicular across, parallel up"
+        else:
+            assert len(fig.legends) == 2, "two legends: the wedges and the styles"
         if f is pl.plot_rpar_rperp_maps:  # the wedge boundaries of plot_xi_mu_wedges, one ray per inner edge
             rays = [ln for ln in axs[1].lines if ln.get_linestyle() == "-." and len(ln.get_xdata()) == 2]
-            assert len(rays) == len(pl.MU_WEDGES) - 2
+            assert len(rays) == len(pl.MU_WEDGES) - 2 and all(ln.get_color() == "white" for ln in rays)
+            assert len(axs[1].patches) == len(pl.MU_WEDGES) - 1, "one coloured sector per wedge"
     assert len(chi2) == len(pl.MU_WEDGES) - 1
     assert not hasattr(pl, "plot_pk_mu_wedges")
     sk = run["skewers"][0]
     ix, iz = sk["columns"][0]
     fl = b.fields(0)
     n = {sp: fl["n"][sp][ix, :, iz] for sp in ("HI", "SiIII")}
-    fig, axs = pl.plot_toy_skewer(b.box_cMpc, n, sk["v"], sk["tau"][:, 0])
-    fig.canvas.draw()
-    assert len(axs) == 4 and axs[0].get_xlabel().startswith("position") and axs[2].get_xlabel() == pl.LABELS["v_ref"]
-    u = float(run["skewers"][0]["period"]) / b.box_cMpc  # km/s per cMpc
-    fig, axs = pl.plot_overflux_3d(
-        run["flux3d"], run["axes3d"], kms_per_cMpc=u, r_bao=200.0, k_mu_full=0.01, r_mu_full=(50.0, 400.0)
+    fig, axs, info = pl.plot_toy_skewer(
+        b.box_cMpc, n, sk["v"], sk["tau"][:, 0], mean_transmission=run["mean_transmission"], points_per_cell=setup.points_per_cell
     )
     fig.canvas.draw()
-    assert set(axs) == {"P", "xi"} and "km" in axs["xi"].get_xlabel()
-    assert "cMpc" in axs["P"].child_axes[0].get_xlabel() and "cMpc" in axs["xi"].child_axes[0].get_xlabel()
+    assert len(axs) == 4 and axs[0].get_xlabel().startswith("position") and axs[2].get_xlabel() == pl.LABELS["v_ref"]
+    assert axs[2].get_ylabel() == pl.LABELS["transmission"] and "bar T" in axs[3].get_ylabel()
+    T = np.exp(-sk["tau"][:, 0])
+    np.testing.assert_allclose(axs[3].lines[0].get_ydata(), T[0] / run["mean_transmission"][0] - 1, rtol=1e-12)
+    assert info["points"] in ("panel", "inset") and info["pixels"] in ("panel", "inset")
+    fig, ax, info = pl.plot_skewer_slice(fl, b.box_cMpc, sk["columns"], highlight=(ix, iz))
+    fig.canvas.draw()
+    assert info["n_row"] == 4 and info["spacing_cMpc"] == pytest.approx(4 * b.dx)
+    u = float(run["skewers"][0]["period"]) / b.box_cMpc  # km/s per cMpc
+    fig, axs = pl.plot_overflux_3d(run["flux3d"], run["axes3d"], kms_per_cMpc=u, r_bao=2.0)
+    fig.canvas.draw()
+    assert set(axs) == {"P", "xi"} and "cMpc" in axs["xi"].get_xlabel() and not axs["P"].get_title()
+    assert "k\\,P" in axs["P"].get_ylabel() and "cMpc$^2$" in axs["xi"].get_ylabel(), "k P and r^2 xi in comoving units"
+    assert "km" in axs["P"].child_axes[0].get_xlabel() and "km" in axs["xi"].child_axes[0].get_xlabel()
     tot = dict(run["flux3d"]["total"], axes=run["axes3d"])
-    fig, ax = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=200.0)
+    period = float(run["skewers"][0]["period"])
+    fig, ax, drawn = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, n_sigma=1.5)
     fig.canvas.draw()
-    assert len(ax.child_axes) == 2 and "km" in ax.get_xlabel()
-    fig, axs, chi2 = pl.plot_xi_mu_wedges(tot, unit="km/s", kms_per_cMpc=u)
+    assert len(ax.child_axes) == 2 and "cMpc" in ax.get_xlabel() and "perp" in ax.get_xlabel() and not ax.get_title()
+    assert "km" in ax.get_ylabel() and "parallel" in ax.get_ylabel(), "native units: perp in cMpc across, par in km/s up"
+    top = u * run["axes3d"]["rpar_edges"][-1]  # the last r_par edge (<= half the box), in km/s
+    assert ax.get_xlim()[0] == 0 and ax.get_ylim()[0] == 0 and ax.get_ylim()[1] == pytest.approx(top) and top <= period / 2
+    marks = [100.0, 100.0 + 2.0 * u, abs(2.0 * u - 100.0)]
+    assert list(drawn.values()) == [m for m in marks if m <= top], "only the markers inside the map"
+    fig, ax = pl.plot_overflux_kpar_kperp(tot, kms_per_cMpc=u, n_sigma=1.5)
     fig.canvas.draw()
-    assert len(chi2) == len(pl.MU_WEDGES) - 1 and "km" in axs[1].get_xlabel() and "cMpc" in axs[0].child_axes[0].get_xlabel()
-    fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1_Z22)
+    assert "cMpc" in ax.get_xlabel() and "s km" in ax.get_ylabel() and ax.get_xlim()[0] == 0 and ax.get_ylim()[0] == 0
+    from skewerjax.utils.reference_data import XI_LYA_LYA_AA_WEDGES as XI_REF
+
+    fig, axs, chi2 = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, reference=XI_REF)
+    fig.canvas.draw()
+    assert chi2 is None and len(axs) == 1 and "cMpc" in axs[0].get_xlabel() and "km" in axs[0].child_axes[0].get_xlabel()
+    assert len(fig.legends) == 3, "the wedges, the styles and the reference"
+    ref_cols = [ln.get_markeredgecolor() for ln in fig.legends[2].legend_handles]
+    assert ref_cols == [pl.PALETTE[c] for c in pl.MU_COLORS], "the reference wedges in the colours of the matching wedges"
+    fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1_Z22, kms_per_cMpc=u)
     fig.canvas.draw()
     assert len(fig.legends[0].get_texts()) == 5  # three overfluxes, the boxes and the reference (below the axes)
+    assert "cMpc" in ax.child_axes[0].get_xlabel()
     ens = {"flux contrast": run["flux"]}
     dv = [0.0, float(LineBundle(["HI-LyA", "SiIII-1206"]).delta_v[1])]
     for kind in ("P", "xi"):
-        fig, axs = pl.plot_orders_compared(ens, kind, delta_v_list=dv)
+        fig, axs = pl.plot_orders_compared(ens, kind, delta_v_list=dv, kms_per_cMpc=u)
         fig.canvas.draw()
-        fig, axs = pl.plot_terms_compared(ens, kind)
+        assert not axs[0, 0].get_title() and "cMpc" in axs[0, 0].child_axes[0].get_xlabel()
+        fig, axs = pl.plot_terms_compared(ens, kind, kms_per_cMpc=u)
         fig.canvas.draw()
         assert axs.shape == (3, 1), f"{kind}: one row per order 2, 3, 4 (order 1 vanishes, order 0 not shown)"
+        assert not any(ax.get_title() for ax in axs.ravel())
     xi_lines = [c for c in pl.plot_orders_compared(ens, "xi")[1][0, 0].lines if c.get_marker() == "o"]
     assert xi_lines, "xi1D: points with error bars too"
     line = [c for c in pl.plot_orders_compared(ens, "P")[1][0, 0].lines if c.get_marker() == "o"][0]

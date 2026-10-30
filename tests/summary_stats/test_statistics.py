@@ -38,7 +38,7 @@ def statistics_checks(n_s_, n3):
     grf = PowerLawGRF(A_s, k_0, n_s, L=L, N=Npix)
     keys = jax.random.split(jax.random.PRNGKey(137), n_s_)
     delta = jax.vmap(grf.sample)(keys)
-    single = lambda d: SimpleNamespace(subset_keys=["a"], delta_terms={"a": d}, C_per_sample=jnp.zeros((d.shape[0], 1)), total=d)
+    single = lambda d: SimpleNamespace(subset_keys=["a"], delta_terms={"a": d}, C_per_pixel=jnp.zeros((1, d.shape[1])), total=d)
     edges = hybrid_k_edges(2 * np.pi / L, grf.k_max[0])
 
     def pulls(binned, expect):
@@ -256,9 +256,9 @@ def test_summary_and_ensemble():
     f = jnp.stack([1.0 + 0.3 * d, 0.2 * (1.0 + 0.3 * jnp.roll(d, 30, axis=-1))])
     assert np.all(np.asarray(f) > 0)
     a = DeltaFieldBuilder(-jnp.log(f), labels=["1", "2"]).build()
-    np.testing.assert_allclose(
+    np.testing.assert_allclose(  # every line against its mean over the samples at each pixel
         np.asarray(a.delta_terms["12"]),
-        np.asarray(f[0] / f[0].mean(1, keepdims=True) - 1) * np.asarray(f[1] / f[1].mean(1, keepdims=True) - 1),
+        np.asarray(f[0] / f[0].mean(0, keepdims=True) - 1) * np.asarray(f[1] / f[1].mean(0, keepdims=True) - 1),
         rtol=1e-10,
         atol=1e-14,
     )
@@ -269,3 +269,92 @@ def test_summary_and_ensemble():
         assert np.max(np.abs(s[f"{kind}_terms"].sum(0) - s[f"{kind}_total"])) < 1e-10 * sc
     e = ensemble_1d([s, s])
     assert e["n_real"] == 2 and np.allclose(e["P_total"], s["P_total"]) and np.all(e["xi_order_err"] == 0)
+
+
+def test_ensemble_normalisation():
+    """``DeltaFieldBuilder``: delta_j = T_j / T_bar_j(v) - 1 with the ensemble mean at each pixel (the mean over the
+    samples, or ``mean_transmission`` for an ensemble split over several arrays), so <delta>_ens = 0 at every pixel
+    exactly; the total uses T_bar = <prod_j T_j>_ens != prod_j T_bar_j; C(v) = T_bar / prod_j T_bar_j - 1 =
+    sum_{|A| >= 2} <delta_A>_ens; the decomposition delta_tot = [sum_A delta_A - C] / (1 + C) is exact at every pixel,
+    and the order-1 terms of P1D and xi1D vanish."""
+    from skewerjax.summary_stats import mean_transmissions
+
+    rng = np.random.default_rng(5)
+    N_s, N_v = 40, 64
+    trend = np.linspace(0.0, 0.3, N_v)  # a mean optical depth that grows along v
+    tau = np.stack([trend + 0.4 * rng.gamma(2.0, 0.5, (N_s, N_v)), 0.5 * trend + 0.2 * rng.gamma(2.0, 0.5, (N_s, N_v))])
+    tau[1] = 0.7 * tau[0] + 0.3 * tau[1]  # correlated lines
+    T = np.exp(-tau)
+    ov = DeltaFieldBuilder(tau, labels=["1", "2"]).build()
+    T_bar = np.asarray(mean_transmissions(jnp.asarray(T)))
+    np.testing.assert_allclose(np.asarray(ov.mean_transmission), T_bar, rtol=1e-14)
+    np.testing.assert_allclose(T_bar[-1], (T[0] * T[1]).mean(0), rtol=1e-14)
+    assert np.max(np.abs(T_bar[-1] / (T_bar[0] * T_bar[1]) - 1)) > 1e-3, "<T_1 T_2> != <T_1><T_2>"
+    for d in (ov.delta_terms["1"], ov.delta_terms["2"], ov.total):
+        assert np.max(np.abs(np.asarray(d).mean(0))) < 1e-15, "<delta>_ens = 0 at every pixel"
+    assert np.max(np.abs(np.asarray(ov.total).mean(1))) > 1e-2, "the mean along one sample is not zero"
+    C = np.asarray(ov.C_per_pixel)
+    np.testing.assert_allclose(C[0], np.asarray(ov.delta_terms["12"]).mean(0), rtol=1e-12, atol=1e-16)
+    recon = (sum(np.asarray(v) for v in ov.delta_terms.values()) - C) / (1 + C)
+    assert np.max(np.abs(recon - np.asarray(ov.total))) < 1e-15
+    st = OverfluxStatistics1D(ov, 2.0).compute_xi1d()
+    for tot, orders in ((st.Pk_total, st.Pk_total_by_order), (st.xi_total, st.xi_total_by_order)):
+        sc = float(np.max(np.abs(np.asarray(tot))))
+        assert np.max(np.abs(sum(np.asarray(v) for v in orders.values()) - np.asarray(tot))) < 1e-13 * sc
+        assert np.max(np.abs(np.asarray(orders[1]))) < 1e-13 * sc, "order 1 vanishes"
+    # an ensemble split in two: the same overflux with the mean of the whole ensemble
+    halves = [
+        DeltaFieldBuilder(tau[:, h], labels=["1", "2"], mean_transmission=T_bar).build() for h in (slice(0, 25), slice(25, None))
+    ]
+    np.testing.assert_allclose(
+        np.concatenate([np.asarray(h.total) for h in halves]), np.asarray(ov.total), rtol=1e-13, atol=1e-15
+    )
+    with pytest.raises(ValueError, match="mean_transmission"):
+        DeltaFieldBuilder(tau, mean_transmission=T_bar[:2])
+
+
+def test_grid_statistics_on_an_anisotropic_lattice():
+    """``GridStatistics3D`` on a lattice of skewers (a coarse transverse spacing, a fine one along the line of sight,
+    sides of different lengths): xi in the isotropic, (r_par, r_perp) and mu bins equals a direct pair sum over the
+    points' coordinates with minimum-image separations, without the k = 0 mode (the field minus its mean); P and xi are
+    one Fourier pair (Parseval: xi(0) = sum_{k != 0} P / V)."""
+    from skewerjax.summary_stats import GridStatistics3D
+    from skewerjax.summary_stats.binning import bin_index
+
+    shape, L = (4, 12, 3), np.array([8.0, 9.0, 7.5])
+    rng = np.random.default_rng(11)
+    d = 0.3 + rng.normal(size=shape)  # a non-zero mean: left out like the k = 0 mode
+    edges = np.array([0.0, 1.0, 2.1, 3.3, 4.6])
+    gs = GridStatistics3D(
+        shape, L, los_axis=1, r_edges=edges, r_mu_edges=edges, rpar_edges=edges, rperp_edges=np.array([0.0, 1.5, 3.0, 4.6])
+    )
+    m = gs.measure(d)
+    dx = L / np.asarray(shape)
+    pos = np.stack(np.meshgrid(*[np.arange(n) * h for n, h in zip(shape, dx)], indexing="ij"), -1).reshape(-1, 3)
+    val = (d - d.mean()).ravel()
+    sep = pos[None, :, :] - pos[:, None, :]
+    sep = (sep + L / 2) % L - L / 2  # minimum image (a separation of L / 2 is its own image)
+    prod = (val[:, None] * val[None, :]).ravel()
+    r = np.sqrt((sep**2).sum(-1)).ravel()
+    rpar, rperp = np.abs(sep[..., 1]).ravel(), np.hypot(sep[..., 0], sep[..., 2]).ravel()
+    mu = np.where(r > 0, rpar / np.where(r > 0, r, 1.0), 0.0)
+
+    def pair_mean(*idx_shape):
+        idx = np.ravel_multi_index([np.where(i >= 0, i, 0) for i, _ in idx_shape], [n for _, n in idx_shape])
+        ok = np.all([i >= 0 for i, _ in idx_shape], axis=0)
+        n = int(np.prod([n for _, n in idx_shape]))
+        c = np.bincount(idx[ok], minlength=n)
+        return (np.bincount(idx[ok], prod[ok], minlength=n) / np.where(c > 0, c, np.nan)).reshape([n for _, n in idx_shape])
+
+    nb = edges.size - 1
+    np.testing.assert_allclose(m["xi_iso"], pair_mean((bin_index(r, edges), nb)), rtol=1e-12)
+    np.testing.assert_allclose(
+        m["xi_map"], pair_mean((bin_index(rpar, edges), nb), (bin_index(rperp, gs.rperp_edges), 3)), rtol=1e-12
+    )
+    imu = np.where(r > 0, bin_index(mu, gs.mu_edges), -1)
+    np.testing.assert_allclose(
+        m["xi_mu"], pair_mean((imu, gs.mu_edges.size - 1), (bin_index(r, edges), nb)), rtol=1e-12, equal_nan=True
+    )
+    f2 = np.abs(np.fft.fftn(d)) ** 2
+    f2[0, 0, 0] = 0.0
+    assert np.mean(val**2) == pytest.approx((gs.dV / gs.N * f2).sum() / gs.V, rel=1e-12), "xi(0) = sum_k P / V, k != 0"

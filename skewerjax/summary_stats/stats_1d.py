@@ -28,12 +28,12 @@ def p1d_kernel(total, terms, w, c, pref, chunk: int):
     Parameters
     ----------
     total : (B, N) real; terms : (n, B, N) real (raw subset fields delta_A);
-    w, c : (B,) per-sample weights 1/(1+C_s) and offsets C_s/(1+C_s); pref = dv / N.
+    w, c : (N,) per-pixel weights 1/(1+C(v)) and offsets C(v)/(1+C(v)) (the same for every sample); pref = dv / N.
 
     Returns
     -------
     P_raw : (n, n, K) complex, mean_s pref F_a F_b^* of the raw terms
-    P_w   : (n+1, n+1, K) complex, same for the weighted terms, index 0 = order-0 term -c_s
+    P_w   : (n+1, n+1, K) complex, same for the weighted terms, index 0 = order-0 term -c(v)
     P_tot : (B, K) real, per-sample pref |F_tot|^2
     """
     B, N = total.shape
@@ -44,23 +44,23 @@ def p1d_kernel(total, terms, w, c, pref, chunk: int):
     total = jnp.pad(total, ((0, pad), (0, 0))).reshape(n_chunks, chunk, N)
     terms = jnp.pad(terms, ((0, 0), (0, pad), (0, 0))).reshape(n, n_chunks, chunk, N)
     terms = jnp.moveaxis(terms, 1, 0)
-    w = jnp.pad(w, (0, pad)).reshape(n_chunks, chunk)
-    c = jnp.pad(c, (0, pad)).reshape(n_chunks, chunk)
-    cdt = jnp.result_type(total.dtype, jnp.complex64)
+    live = jnp.pad(jnp.ones(B, total.dtype), (0, pad)).reshape(n_chunks, chunk)  # 0 for the padding samples
+    f_c = jnp.fft.rfft(-c)  # (K,): the order-0 term, the same for every sample
 
     def body(carry, xs):
         s_raw, s_w = carry
-        t, tm, ww, cc = xs
+        t, tm, m = xs
         f_tot = jnp.fft.rfft(t, axis=-1)
         f_raw = jnp.fft.rfft(tm, axis=-1)  # (n, chunk, K)
-        f_c = jnp.zeros((1, chunk, K), cdt).at[0, :, 0].set(-cc * N)  # rfft of -c_s
-        f_w = jnp.concatenate([f_c, ww[None, :, None] * f_raw], axis=0)  # (n+1, chunk, K)
+        f_0 = (m[:, None] * f_c[None, :])[None]  # (1, chunk, K)
+        f_w = jnp.concatenate([f_0, jnp.fft.rfft(w * tm, axis=-1)], axis=0)  # (n+1, chunk, K)
         s_raw = s_raw + jnp.einsum("asf,bsf->abf", f_raw, f_raw.conj())
         s_w = s_w + jnp.einsum("asf,bsf->abf", f_w, f_w.conj())
         return (s_raw, s_w), pref * jnp.abs(f_tot) ** 2
 
+    cdt = jnp.result_type(total.dtype, jnp.complex64)
     init = (jnp.zeros((n, n, K), cdt), jnp.zeros((n + 1, n + 1, K), cdt))
-    (s_raw, s_w), p_tot = jax.lax.scan(body, init, (total, terms, w, c))
+    (s_raw, s_w), p_tot = jax.lax.scan(body, init, (total, terms, live))
     return pref * s_raw / B, pref * s_w / B, p_tot.reshape(-1, K)[:B]
 
 
@@ -79,11 +79,12 @@ class OverfluxStatistics1D:
     Every statistic is the mean over the kept samples (skewers).
 
     Decomposition (review notes, Eq. total_overflux_expansion_general;
-    Eq. xi1D_ensemble_L2_decomposition)
+    Eq. xi1D_ensemble_L2_decomposition; ``summary_stats.orders``)
     ---------------------------------------------------------------------------
-    Per sample, delta_tot = sum_A w delta_A - c with w = 1/(1+C_s), c = C_s/(1+C_s) (exact
-    for ``DeltaFieldBuilder``). The weighted terms (A, B), including the order-0 term
-    ``ZERO_ORDER_KEY`` = -c, have order |A|+|B| and sum exactly to the total:
+    At every pixel, delta_tot = sum_A w delta_A - c with w = 1/(1+C(v)), c = C(v)/(1+C(v)) (exact
+    for ``DeltaFieldBuilder``, normalised by the ensemble mean at each pixel). The weighted terms
+    (A, B), including the order-0 term ``ZERO_ORDER_KEY`` = -c(v), have order |A|+|B| and sum
+    exactly to the total:
 
         Pk_total  = sum_n Pk_total_by_order[n] = Pk_total_from_terms   (all k, incl. k = 0)
         xi_total  = sum_n xi_total_by_order[n] = xi_total_from_terms   (all lags)
@@ -105,11 +106,11 @@ class OverfluxStatistics1D:
     Parameters
     ----------
     overflux : DeltaFieldBuilder (built)
-        Must expose subset_keys, delta_terms, C_per_sample, total.
+        Must expose subset_keys, delta_terms, C_per_pixel (1, N_v), total.
     dv : float
         Pixel width [km/s].
     c_norm_min : float
-        Samples with |(1 + C_s)^2| <= c_norm_min or non-finite values are removed.
+        |1 + C(v)| <= c_norm_min or a non-finite C(v) at any pixel raises; samples with non-finite values are removed.
     chunk_size : int
         Skewers per FFT batch (bounds memory to ~n_terms * chunk_size * N_v).
     """
@@ -120,18 +121,18 @@ class OverfluxStatistics1D:
         self.c_norm_min = float(c_norm_min)
         self.chunk_size = int(chunk_size)
 
-        for attr in ("subset_keys", "delta_terms", "C_per_sample", "total"):
+        for attr in ("subset_keys", "delta_terms", "C_per_pixel", "total"):
             if not hasattr(overflux, attr):
                 raise ValueError(f"`overflux` is missing required attribute '{attr}'.")
 
         total = jnp.asarray(overflux.total)
-        C_per_sample = jnp.asarray(overflux.C_per_sample).reshape(-1, 1)
-        C_norm = (1.0 + C_per_sample) ** 2
+        C_per_pixel = jnp.broadcast_to(jnp.asarray(overflux.C_per_pixel).reshape(1, -1), (1, total.shape[1]))
+        if not bool(jnp.all(jnp.isfinite(C_per_pixel)) & jnp.all(jnp.abs(1.0 + C_per_pixel) > self.c_norm_min)):
+            raise ValueError("The normalisation 1 + C(v) is not finite or vanishes at some pixel.")
         self.subset_keys = list(overflux.subset_keys)
         terms = jnp.stack([jnp.asarray(overflux.delta_terms[k]) for k in self.subset_keys])
 
-        valid_mask = jnp.all(jnp.isfinite(C_norm), axis=1) & jnp.all(jnp.abs(C_norm) > self.c_norm_min, axis=1)
-        valid_mask &= jnp.all(jnp.isfinite(total), axis=1) & jnp.all(jnp.isfinite(terms), axis=(0, 2))
+        valid_mask = jnp.all(jnp.isfinite(total), axis=1) & jnp.all(jnp.isfinite(terms), axis=(0, 2))
 
         self.valid_mask = valid_mask
         self.n_samples_initial = total.shape[0]
@@ -144,11 +145,10 @@ class OverfluxStatistics1D:
                 "Removed %d invalid samples out of %d during initialization.", self.n_samples_removed, self.n_samples_initial
             )
             keep = np.asarray(valid_mask)
-            total, C_per_sample, C_norm, terms = total[keep], C_per_sample[keep], C_norm[keep], terms[:, keep]
+            total, terms = total[keep], terms[:, keep]
 
         self.total = total
-        self.C_per_sample = C_per_sample
-        self.C_norm = C_norm
+        self.C_per_pixel = C_per_pixel
         self._terms = terms
         self.delta_terms = {k: terms[i] for i, k in enumerate(self.subset_keys)}
 
@@ -188,7 +188,7 @@ class OverfluxStatistics1D:
         """Compute all P1D statistics (one jitted, chunked pass over the skewers)."""
         if self.Pk_total is not None:
             return self
-        C = self.C_per_sample[:, 0]
+        C = self.C_per_pixel[0]
         w, c = 1.0 / (1.0 + C), C / (1.0 + C)
         P_raw, P_w, P_tot = p1d_kernel(
             self.total, self._terms, w, c, self.dv / self.N_v, min(self.chunk_size, self.n_samples_kept)
@@ -306,7 +306,8 @@ def ensemble_1d(summaries) -> dict:
 
 
 def p1d_from_tau(tau, dv: float):
-    """P1D of delta_F = F / <F> - 1 of one line over all skewers, without the k = 0 mode.
+    """P1D of the overflux delta = T / T_bar - 1 of one line (T_bar(v): the mean over the skewers at each pixel) over all
+    skewers, without the k = 0 mode.
 
     tau : (N_sk, N_v); dv : pixel width [km/s]. Returns (k [s/km], P [km/s]) as NumPy arrays.
     """

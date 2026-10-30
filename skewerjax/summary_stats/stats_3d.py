@@ -50,17 +50,18 @@ class LazyPairs(Mapping):
 # 3D kernel: one (Nx, Ny, Nz) field per term, rfftn over all three axes
 # ---------------------------------------------------------------------------
 @jax.jit
-def p3d_kernel(total, terms, w, c):
+def p3d_kernel(total, terms, w, c, live):
     """rfftn of the total, raw terms, weighted terms and the order-0 term.
 
-    total : (Nx, Ny, Nz); terms : (n, Nx, Ny, Nz); w, c : (Nx, Ny) per-skewer weights.
+    total : (Nx, Ny, Nz); terms : (n, Nx, Ny, Nz); w, c : (Nz,) per-pixel weights 1/(1+C(v)) and offsets C(v)/(1+C(v));
+    live : (Nx, Ny) 1 for the kept skewers, 0 for the zeroed ones.
     Returns F_tot (Nx, Ny, K), F_raw (n, ...), F_w (n+1, ...) with index 0 = order-0 term.
     """
     rf = lambda x: jnp.fft.rfftn(x, axes=(-3, -2, -1))
     f_tot = rf(total)
     f_raw = rf(terms)
-    f_c = rf(jnp.broadcast_to(-c[:, :, None], total.shape))
-    f_w = jnp.concatenate([f_c[None], rf(w[None, :, :, None] * terms)], axis=0)
+    f_c = rf(-live[:, :, None] * c[None, None, :])
+    f_w = jnp.concatenate([f_c[None], rf(w[None, None, None, :] * terms)], axis=0)
     return f_tot, f_raw, f_w
 
 
@@ -85,10 +86,10 @@ class OverfluxStatistics3D:
 
     Spectra use the rfft layout (Nx, Ny, N_pix//2 + 1), k_par >= 0.
 
-    Decomposition: as in ``OverfluxStatistics1D`` with per-skewer w = 1/(1+C_s) and
-    c = C_s/(1+C_s); the weighted terms (incl. the order-0 term ``ZERO_ORDER_KEY`` = -c,
-    which varies across skewers and so contributes on the k_par = 0 plane) sum exactly to
-    the total P3D and xi3D.
+    Decomposition: as in ``OverfluxStatistics1D`` with the per-pixel w = 1/(1+C(v)) and
+    c = C(v)/(1+C(v)) of the ensemble normalisation; the weighted terms (incl. the order-0 term
+    ``ZERO_ORDER_KEY`` = -c(v), the same on every skewer and so only on the k_perp = 0 line)
+    sum exactly to the total P3D and xi3D.
 
     Attributes after ``compute_p3d`` / ``compute_xi3d``
     -------------------------------------------------
@@ -106,7 +107,8 @@ class OverfluxStatistics3D:
     d_perp : float or (float, float)
         Transverse skewer spacing (dx, dy) [cMpc].
     c_norm_min : float
-        Invalid skewers are zeroed (not dropped) to keep the grid.
+        |1 + C(v)| <= c_norm_min at any pixel raises; skewers with non-finite values are zeroed (not dropped) to keep
+        the grid.
     grid_shape : (int, int) or None
         (Nx, Ny); None infers a square grid N_sk = N_xy^2.
     """
@@ -118,13 +120,14 @@ class OverfluxStatistics3D:
         self.d_perp = self.dx if self.dx == self.dy else (self.dx, self.dy)
         self.c_norm_min = float(c_norm_min)
 
-        for attr in ("subset_keys", "delta_terms", "C_per_sample", "total"):
+        for attr in ("subset_keys", "delta_terms", "C_per_pixel", "total"):
             if not hasattr(overflux, attr):
                 raise ValueError(f"`overflux` is missing required attribute '{attr}'.")
 
         total = jnp.asarray(overflux.total)
-        C_per_sample = jnp.asarray(overflux.C_per_sample).reshape(-1, 1)
-        C_norm = (1.0 + C_per_sample) ** 2
+        C_per_pixel = jnp.broadcast_to(jnp.asarray(overflux.C_per_pixel).reshape(1, -1), (1, total.shape[1]))
+        if not bool(jnp.all(jnp.isfinite(C_per_pixel)) & jnp.all(jnp.abs(1.0 + C_per_pixel) > self.c_norm_min)):
+            raise ValueError("The normalisation 1 + C(v) is not finite or vanishes at some pixel.")
         self.subset_keys = list(overflux.subset_keys)
         terms = jnp.stack([jnp.asarray(overflux.delta_terms[k]) for k in self.subset_keys])
 
@@ -148,8 +151,7 @@ class OverfluxStatistics3D:
         self.dV = self.dx * self.dy * self.dv
         self.N_vox = Nx * Ny * N_pix
 
-        valid_mask = jnp.all(jnp.isfinite(C_norm), axis=1) & jnp.all(jnp.abs(C_norm) > self.c_norm_min, axis=1)
-        valid_mask &= jnp.all(jnp.isfinite(total), axis=1) & jnp.all(jnp.isfinite(terms), axis=(0, 2))
+        valid_mask = jnp.all(jnp.isfinite(total), axis=1) & jnp.all(jnp.isfinite(terms), axis=(0, 2))
         self.valid_mask = valid_mask
         self.n_samples_initial = N_sk
         self.n_samples_kept = int(jnp.sum(valid_mask))
@@ -164,17 +166,14 @@ class OverfluxStatistics3D:
             )
             total = jnp.where(valid_mask[:, None], total, 0.0)
             terms = jnp.where(valid_mask[None, :, None], terms, 0.0)
-            C_per_sample = jnp.where(valid_mask[:, None], C_per_sample, 0.0)
-            C_norm = (1.0 + C_per_sample) ** 2
 
         self.total = total
-        self.C_per_sample = C_per_sample
-        self.C_norm = C_norm
+        self.C_per_pixel = C_per_pixel
         self._terms = terms
         self.delta_terms = {k: terms[i] for i, k in enumerate(self.subset_keys)}
-        C = C_per_sample[:, 0]
-        self._w = jnp.where(valid_mask, 1.0 / (1.0 + C), 0.0).reshape(Nx, Ny)
-        self._c = jnp.where(valid_mask, C / (1.0 + C), 0.0).reshape(Nx, Ny)
+        C = C_per_pixel[0]
+        self._w, self._c = 1.0 / (1.0 + C), C / (1.0 + C)
+        self._live = valid_mask.astype(total.dtype).reshape(Nx, Ny)
 
         self.ordered_pairs = list(product(self.subset_keys, repeat=2))
         orders = subset_orders(overflux, self.subset_keys)
@@ -226,7 +225,9 @@ class OverfluxStatistics3D:
         if self.Pk3d_total is not None:
             return self
         pref = self.dV / self.N_vox
-        f_tot, f_raw, f_w = p3d_kernel(self.total.reshape(self.shape), self._terms.reshape((-1,) + self.shape), self._w, self._c)
+        f_tot, f_raw, f_w = p3d_kernel(
+            self.total.reshape(self.shape), self._terms.reshape((-1,) + self.shape), self._w, self._c, self._live
+        )
         self._f_raw, self._f_w = f_raw, f_w
         self.Pk3d_total = pref * jnp.abs(f_tot) ** 2
 

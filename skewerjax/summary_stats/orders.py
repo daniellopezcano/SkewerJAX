@@ -1,16 +1,19 @@
 """The order-by-order decomposition of the total overflux into its subset terms.
 
 Decomposition (review notes, Eqs. total_overflux_expansion_general,
-overflux_denominator_expansion_general, Table overflux_subset_pairings_L2)
+overflux_denominator_expansion_general, Table overflux_subset_pairings_L2, with the ensemble mean at
+each pixel)
 ------------------------------------------------------------------------------
-With ``summary_stats.overflux.DeltaFieldBuilder`` normalising every sample s by its own spectral mean,
+With ``summary_stats.overflux.DeltaFieldBuilder`` normalising every line and the total by its ensemble
+mean transmission at each pixel v,
 
-    delta_tot,s = sum_A w_s delta_A,s - c_s,   w_s = 1/(1+C_s),  c_s = C_s/(1+C_s),
+    delta_tot(v) = sum_A w(v) delta_A(v) - c(v),   w = 1/(1+C),  c = C/(1+C),
 
-exactly, where A runs over all non-empty line subsets and C_s = sum_{|A|>=2} <delta_A,s>.
-The constant -c_s is the order-0 term (key ``ZERO_ORDER_KEY``). The term (A, B) has order
-|A| + |B|, and the sum of all weighted terms reproduces the total P and xi exactly, at
-every k (including k = 0) and every lag.
+exactly, where A runs over all non-empty line subsets and C(v) = sum_{|A|>=2} <delta_A>_ens(v)
+(= T_bar / prod_j T_bar_j - 1). The order-1 terms <delta_j>_ens vanish at every pixel because the
+normalisation is ensemble-wide. The constant-across-samples -c(v) is the order-0 term (key
+``ZERO_ORDER_KEY``). The term (A, B) has order |A| + |B|, and the sum of all weighted terms reproduces
+the total P and xi exactly, at every k (including k = 0) and every lag.
 """
 
 from __future__ import annotations

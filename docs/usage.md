@@ -88,11 +88,11 @@ decomposition), `stats_1d`, `stats_3d`, `grid3d`, `fourier` and `binning` (share
 
 | task | entry point | main options |
 |---|---|---|
-| overflux | `DeltaFieldBuilder(tau, labels=...).build()` (`overflux`), `overflux_terms`, `equivalent_width_kms` | every line subset and the exact decomposition of the total |
+| overflux | `DeltaFieldBuilder(tau, labels=..., mean_transmission=None).build()` (`overflux`), `overflux_terms`, `mean_transmissions`, `equivalent_width_kms` | δ = T / T̄(v) − 1 with T = e^−τ the transmission and T̄(v) its ensemble mean at each pixel (over the samples, or `mean_transmission` for an ensemble split over several arrays): ⟨δ⟩_ens = 0 at every pixel; every line subset and the exact decomposition of the total with C(v) = T̄ / Π T̄_j − 1 |
 | order by order | `orders`: `ZERO_ORDER_KEY` (the order-0 term), `subset_orders`, `order_sum` | |
 | 1D statistics | `OverfluxStatistics1D(ov, dv).compute_p1d().compute_xi1d()` (`.summary()`: one record of NumPy arrays), `ensemble_1d(summaries)` (mean, error of the mean, every realisation), `p1d_from_tau` (`stats_1d`) | pairs, orders, binning (`bin_p1d`) |
 | 3D statistics by term | `OverfluxStatistics3D(ov, dv, d_perp)` (`stats_3d`) | pairs, orders, binning (`bin_p3d_kperp`) |
-| 3D fields on their grid | `GridStatistics3D(shape, L, los_axis=1)` (`grid3d`): `.measure(delta)`, `.theory(P_on_modes)` (the exact expectation, binned alike), `.xi_iso_covariance(P_on_modes)` (the exact Gaussian covariance of the isotropic ξ bins), `.axes()`; `ensemble_mean(records, GRID_KEYS)` (`binning`) | P and ξ isotropic, in the (∥, ⊥) plane and in wedges of μ (`MU_WEDGES`, DESI DR2); bin edges (`hybrid_k_edges`, `occupied_edges`, `binning`); `multipoles=True` |
+| 3D fields on their grid | `GridStatistics3D(shape, L, los_axis=1)` (`grid3d`): `.measure(delta)`, `.theory(P_on_modes)` (the exact expectation, binned alike), `.xi_iso_covariance(P_on_modes)` (the exact Gaussian covariance of the isotropic ξ bins), `.axes()`; `ensemble_mean(records, GRID_KEYS)` (`binning`) | without the k = 0 mode (ξ of the field minus its box mean); P and ξ isotropic, in the (∥, ⊥) plane and in wedges of μ (`MU_WEDGES`, DESI DR2); bin edges (`hybrid_k_edges`, `occupied_edges`, `binning`); `multipoles=True` |
 | metal models | `fit_mcdonald_a`, `fit_ma_model_profiled`, `mcdonald_factor`, `ma_factor` (`contaminants`) | |
 
 ## `skewerjax.simulations`
@@ -101,9 +101,9 @@ decomposition), `stats_1d`, `stats_3d`, `grid3d`, `fourier` and `binning` (share
 
 | task | entry point | main options |
 |---|---|---|
-| Gaussian random field | `PowerLawGRF(A_s, k_0, n_s, L=..., N=...)` (or `k_min`, `k_max`, `N_k`); `sample(key)`, `power(k, mu, bao="total" | "envelope")`, `power_grid(bao=...)` ("envelope": the no-wiggle spectrum), `power_at(*k_components)`, `power_monopole(k)`, `variance()` | optional, off by default: `beta` (Kaiser (1 + beta mu^2)^2), `sigma_fog`, `fog` (`"lorentzian"`, `"gaussian"`), `A_bao`, `r_bao`, `sigma_bao` (a Gaussian bump in xi; its exact transform in 1D/2D/3D rides on its envelope, P_BAO = A_bao E (1 + f) with \|f\| <= 1, so P >= 0 for every A_bao >= 0; `bao_power(k, part)`); `los_axis` (default: the last axis) |
+| Gaussian random field | `PowerLawGRF(A_s, k_0, n_s, L=..., N=...)` (or `k_min`, `k_max`, `N_k`); `sample(key)`, `power(k, mu, bao="total" | "envelope")`, `power_grid(bao=...)` ("envelope": the no-wiggle spectrum), `power_at(*k_components)`, `power_monopole(k)`, `variance()`, `correlation(r)` (the continuous ξ(r) of an isotropic 3D spectrum, a numerical Hankel transform) | optional, off by default: `beta` (Kaiser (1 + beta mu^2)^2), `sigma_fog`, `fog` (`"lorentzian"`, `"gaussian"`), `A_bao`, `r_bao`, `sigma_bao` (a Gaussian bump in xi; its exact transform in 1D/2D/3D rides on its envelope, P_BAO = A_bao E (1 + f) with \|f\| <= 1, so P >= 0 for every A_bao >= 0; `bao_power(k, part)`); `los_axis` (default: the last axis) |
 | toy gas cells | `grf_cells(delta, grf, n_bar, ...)` | the cells of the grid (cubes centred on the nodes); `temperature` / `velocity` (and `turbulence`, `collisional`) as scalars, arrays on the grid or functions of the nodes |
-| toy boxes (08) | `ToyBoxes(box_cMpc)`: realisation i from the seed `base_seed + i` (`fields(i)`, `cells(i)`, never stored); `field_statistics(boxes, cache_dir)` (cached, computed if missing; with the no-wiggle expectation and the covariance of ξ), `xi_chi2(res)`, `xi_subset_offsets(res)`; `SkewerRun(stride, points_per_cell, n_pix, batch)` (`.derived(boxes)`: skewers per box, period, dv, u = period / L, transverse spacing; `.grid3d(boxes, period)`); `run_skewers(boxes, cache_dir, SkewerRun(), overwrite=...)` → `load_skewer_run(folder)`; `skewer_box(boxes, i, setup)` | power law + BAO, isotropic, `sigma_delta`; n_SiIII = r n_HI, T = T0 (1 + δ)^(γ−1), linear velocities; skewers along y through the cell centres (`stride`, `points_per_cell`, `n_pix`); the flux contrast on the Lyα axis by term and order; the 3D statistics and P1D of the Lyα, Si III and total overflux on the lattice of skewers, in velocity units; one file per realisation (resumable, shared by several processes: `scripts/runs/toy_boxes.py`; `overwrite=True` recomputes), in `utils.paths.CACHE_DIR`, keyed by every parameter (`ToyBoxes.tag`, `CACHE_VERSION`) |
+| toy boxes (08) | `ToyBoxes(box_cMpc, velocity="zero" \| "linear")`: realisation i from the seed `base_seed + i` (`fields(i)`, `cells(i)`, never stored); `field_statistics(boxes)` (with the no-wiggle expectation and the covariance of ξ), `xi_chi2(res)`, `xi_subset_offsets(res)`; `SkewerRun(stride, points_per_cell, n_pix, batch)` (`.derived(boxes)`: skewers per box, period, dv, u = period / L, transverse spacing; `.grid3d(boxes, n_los=None)`, `.limits(boxes)`, comoving); `run_skewers(boxes, SkewerRun())` (the ensemble, in memory, two passes: τ of every box, then the overflux against the ensemble mean transmission at each pixel); `skewer_tau`, `skewer_statistics`, `skewer_box(boxes, i, setup)`; `lattice_density_theory`, `lattice_density_check` (the density on the lattice through the 3D estimator), `bao_height` | power law + BAO, isotropic, `sigma_delta`; n_SiIII = r n_HI, T_gas = T0 (1 + δ)^(γ−1), zero velocities (default) or linear theory (`f_growth`); skewers along y through the cell centres (`stride`, `points_per_cell`, `n_pix`); the total overflux on the Lyα axis by term and order; the 3D statistics and P1D of the Lyα, Si III and total overflux on the lattice of skewers, in comoving units (the line of sight converted with u; \|k\| inside the smallest Nyquist frequency, \|r\| up to half the box); recomputed at every call, nothing stored |
 
 **Snapshots.**
 
@@ -311,16 +311,19 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
 - Tutorial figures: `plot_toy_box` (00), `plot_slab_and_skewer`, `plot_cell_crossings`, `plot_voigt_of_piece`,
   `plot_tau_stretches`, `plot_wrap_tiles`, `plot_overflux_p1d_xi` (00b), `plot_grf_draws` (04), `plot_line_table`,
   `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,
-  the toy boxes of 08 (from `simulations.field_statistics` and `load_skewer_run`): `plot_toy_fields` (A2),
+  the toy boxes of 08 (from `simulations.field_statistics` and `run_skewers`; no titles; maps with the line of sight
+  vertical, three iso-contour levels, the measured ones green with their ±1σ band, white μ-wedge rays with coloured
+  sectors): `plot_toy_fields` (A2),
   `plot_isotropic_recovery(res, xi_view="r2")`, `plot_kpar_kperp_maps`, `plot_rpar_rperp_maps`,
-  `plot_xi_mu_wedges` (DESI DR2 Fig. 3: r²ξ in wedges of μ, `MU_WEDGES`, `MU_COLORS`; `unit="km/s"`, no expectation (the
-  monopole as the reference) and `kms_per_cMpc` for the overflux), `plot_toy_skewer` (B2), `plot_overflux_3d` (C1: P and
-  r²ξ over every mode and pair of the lattice, the ranges without every direction shaded), `plot_overflux_rpar_rperp`
-  (C2), `plot_p1d_reference` (D1: k P1D / π as Fig. 1 of Chaves-Montero et al., with
-  `utils.reference_data.P1D_DESI_DR1_Z22`), `comoving_axis(ax, kms_per_cMpc, "r" | "k")` (a cMpc or cMpc⁻¹ axis on a
-  velocity axis, v = aH x),
+  `plot_xi_mu_wedges` (DESI DR2 Fig. 3: r²ξ in wedges of μ, `MU_WEDGES`, `MU_COLORS`, the expectation of each wedge dashed
+  in its colour, two legends; `unit="km/s"`, no expectation (the monopole as the reference) and `kms_per_cMpc` for the
+  overflux), `plot_skewer_slice` (B2: the skewers of one layer on the H I density), `plot_toy_skewer` (B2, with the
+  sampling grids), `plot_overflux_rpar_rperp` (C1, with the Si III–Lyα feature at r∥ = Δv), `plot_overflux_3d` (C2: P and
+  r²ξ inside the smallest Nyquist frequency and half the period), `plot_p1d_reference` (D1: k P1D / π as Fig. 1 of
+  Chaves-Montero et al., with `utils.reference_data.P1D_DESI_DR1_Z22`), `comoving_axis(ax, kms_per_cMpc, "r" | "k")` (a
+  cMpc or cMpc⁻¹ axis on a velocity axis, v = u x),
   `plot_orders_superimposed`, `plot_terms_by_order` (an `ensemble_1d` with errors, or one `OverfluxStatistics1D`),
-  `plot_orders_compared`, `plot_terms_compared` (one or several ensembles, identical layouts), `plot_nH_T_fractions`, `plot_gas_cells` (the standard
+  `plot_orders_compared`, `plot_terms_compared` (one or several ensembles, identical layouts, `kms_per_cMpc`: cMpc top axes), `plot_nH_T_fractions`, `plot_gas_cells` (the standard
   view of a `core.Cells` along one skewer, `plot_gas_cells(cells, select_cells(cells, bundle.spatial_points), bundle)`:
   the cells it crosses in 3D (cubes, or Voronoi polyhedra), one row per species: density, temperature, peculiar
   velocity with one arrow per cell, scaled by `velocity_arrow_scale` with a reference arrow in the 3D scene; 04 and 05),

@@ -3,9 +3,13 @@
 One realisation delta on an (N_x, N_y, N_z) grid of a box of sides L, the line of sight along ``los_axis``:
 
     P_hat(k)  = |delta_k|^2 / V = (dV / N) |FFT(delta)|^2            (``simulations.PowerLawGRF``'s normalisation)
-    xi_hat(r) = (1/N) sum_x delta(x) delta(x + r) = irfftn(P_hat) / dV  (Wiener-Khinchin; the exact discrete pair)
+    xi_hat(r) = (1/N) sum_x d(x) d(x + r) = irfftn(P_hat, k != 0) / dV,  d = delta - mean(delta)
 
-(``fourier``'s conventions with d = 3; r runs over the minimum-image separations of the grid). Both are averaged in
+(``fourier``'s conventions with d = 3; Wiener-Khinchin, the exact discrete pair over the modes k != 0; r runs over the
+minimum-image separations of the grid). The k = 0 mode, the mean of the field over the box, is left out of both: P never
+bins it, and xi is the correlation of the field minus its box mean, so P and xi are one Fourier pair on the same modes
+(a field of zero mean, such as a ``PowerLawGRF`` draw, is unchanged; an overflux normalised by an ensemble mean has a
+non-zero box mean, whose square would otherwise add a constant to xi). Both are averaged in
 bins: P over the modes of a bin (each rfft mode counted with its half-space multiplicity), xi over the separation
 vectors of a bin, in three ways each:
 
@@ -208,12 +212,12 @@ class GridStatistics3D:
         return out
 
     def measure(self, delta) -> dict:
-        """The binned P and xi of one realisation ``delta`` (``shape``): dict keyed by ``GRID_KEYS`` (P [cMpc^3], xi
-        dimensionless; NaN in empty bins). One rfftn and one irfftn."""
+        """The binned P and xi of one realisation ``delta`` (``shape``): dict keyed by ``GRID_KEYS`` (P [L^3], xi
+        dimensionless; NaN in empty bins), without the k = 0 mode (module docstring). One rfftn and one irfftn."""
         d = jnp.asarray(delta)
         if d.shape != self.shape:
             raise ValueError(f"delta must have the grid shape {self.shape}, got {d.shape}.")
-        f2 = jnp.abs(jnp.fft.rfftn(d)) ** 2
+        f2 = (jnp.abs(jnp.fft.rfftn(d)) ** 2).at[0, 0, 0].set(0.0)
         P = (self.dV / self.N) * f2
         xi = jnp.fft.irfftn(f2, s=self.shape) / self.N
         return self._bin(P, xi)

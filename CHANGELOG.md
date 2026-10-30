@@ -3,6 +3,70 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — the overflux against the ensemble mean transmission; the 3D estimator verified; Part C in native and comoving units (2026-10-29)
+
+### Changed
+- **Overflux normalisation** (`summary_stats.overflux`): δ = T / T̄(v) − 1, with T = e^−τ the transmission and T̄(v)
+  its ensemble mean at each pixel (over the samples, or `mean_transmission` for an ensemble split over several arrays),
+  for every line and for the total (T̄ = ⟨Π T_j⟩, not Π T̄_j); the mean of each sample is no longer used.
+  `C_per_sample` (N_s, 1) → `C_per_pixel` (1, N_pix) = T̄ / Π T̄_j − 1; the decomposition [Σ_A δ_A − C] / (1 + C) stays
+  exact. `OverfluxStatistics1D` / `3D` (and `p1d_kernel`, `p3d_kernel`) weight the terms per pixel.
+- Renames (`DeltaFieldBuilder`, `overflux_terms`): `fields` → `transmissions`, `keep_fields` → `keep_transmissions`,
+  `field_total` / `keep_field_total` → `transmission_total` / `keep_transmission_total`.
+- `GridStatistics3D.measure`: ξ leaves out the k = 0 mode (the field minus its box mean), like P, so P and ξ are one
+  Fourier pair on the same modes (no change for fields of zero mean).
+- `run_skewers`: two passes (τ of every box, then the overflux of every box against the ensemble mean over all boxes);
+  new outputs `mean_transmission`, `mean_delta`, `decomposition_error`, `density3d` (the density on the lattice through
+  the same estimator). `skewer_box` splits into `skewer_tau` and `skewer_statistics`.
+- `SkewerRun.grid3d(boxes, n_los=None)` and `.limits(boxes)` in comoving units (the line of sight converted with u);
+  linear (k∥, k⊥) bins of the fundamental mode; no multipoles (`OVERFLUX_KEYS = GRID_KEYS`).
+- Figures of 08: `plot_isotropic_recovery(grf=)` (k P, and the continuous P(k), ξ(r) as a thin grey line),
+  `plot_kpar_kperp_maps` (k P), `plot_rpar_rperp_maps(n_sigma=)`, `plot_overflux_rpar_rperp` (native axes: r⊥ in cMpc
+  across, r∥ in km/s up, reference axes; r²ξ in cMpc²; diamonds at Δv, Δv + u r_BAO, |u r_BAO − Δv| inside the map;
+  returns (fig, ax, markers)), `plot_overflux_3d` (k P and r²ξ in comoving units), `plot_xi_mu_wedges` (no monopole
+  without an expectation; `reference=`, `reference_h=`), `plot_toy_skewer(mean_transmission=)`; ξ1D panels up to half
+  the period.
+
+### Added
+- `PowerLawGRF.correlation(r)`: the continuous ξ(r) of an isotropic 3D spectrum (numerical Hankel transform, BAO
+  included; tested against the closed forms).
+- `summary_stats.mean_transmissions`; `simulations.lattice_density_theory`, `lattice_density_check`, `bao_height`;
+  `utils.plotting.plot_overflux_kpar_kperp`, `velocity_axis`; `LABELS["transmission"]`.
+
+## Unreleased — notebook 08 without caching; zero velocities; the toy model written out; figure conventions (2026-10-28)
+
+### Removed
+- Every cache of the toy boxes: `ToyBoxes.tag`, `CACHE_VERSION`, `SkewerRun.folder`, `load_skewer_run`, the lock
+  files and the npz files of `run_skewers`, the `cache_dir` / `run` / `overwrite` arguments, `utils.paths.CACHE_DIR`
+  (`$SKEWERJAX_CACHE`) and `scripts/runs/toy_boxes.py` (it only filled that cache). The `cache/toy_boxes` folder of
+  earlier runs is no longer read and can be deleted.
+
+### Changed
+- `field_statistics(boxes, *, realisations, grid, log)` and `run_skewers(boxes, setup, *, realisations, keep, log)`
+  compute and return their results in memory at every call (`run_skewers` returns what `load_skewer_run` returned:
+  flux, flux3d, axes3d, p1d, mean fluxes, resolution, warnings, timings, the τ of the kept realisations, config).
+- `SkewerRun.grid3d`: |k| bins only inside the sphere of the smallest Nyquist frequency of the lattice,
+  min(π/dv, π/(u s dx)), where every direction is available; |r|, wedge and (r∥, r⊥) bins up to half the period
+  (ξ of a periodic field repeats beyond it). New `SkewerRun.limits` (those ranges).
+- Figures of 08: no titles; maps with r⊥ / k⊥ across and r∥ / k∥ (line of sight) upwards, three iso-contour levels shared
+  by expectation and measurement, the measured ones green with a ±1σ band (the error of the mean), white dash-dot
+  μ-wedge rays with a coloured sector per wedge, the P map on the r²ξ colour map; `plot_xi_mu_wedges` narrower, the
+  expectation of each wedge dashed in its colour, two legends (wedges, styles); `plot_overflux_3d` without the coverage
+  shading and the symmetric-log axis (`k_mu_full`, `r_mu_full` removed); `plot_overflux_rpar_rperp(delta_v=)` marks
+  the Si III–Lyα feature at (r⊥, r∥) = (0, Δv) and the BAO echo around it; `plot_toy_skewer` draws the sampling grids
+  (points of the path, pixel centres; in a zoomed inset when too dense) and returns (fig, axs, info);
+  `plot_p1d_reference`, `plot_orders_compared`, `plot_terms_compared` narrower, without titles, with cMpc top axes
+  (`kms_per_cMpc`).
+- Notebook 08: one section with the toy model's formulas and a symbol → argument table; the expectation and the wedge
+  expectations derived step by step; the error bars stated; "Reading the figure" of A3 rewritten in plain language;
+  Part C reordered ((r⊥, r∥) map first) with a new opening on the velocity / distance convention; "total" for the
+  total overflux everywhere.
+
+### Added
+- `ToyBoxes(velocity="zero" | "linear")`: zero peculiar velocities (default) or linear theory (`f_growth` only matters
+  there); `ToyBoxes.aH`.
+- `utils.plotting.plot_skewer_slice` (where the skewers of one layer run, on the H I density).
+
 ## Unreleased — `skewerjax.summary_stats`; notebook 08: Part C in 3D only, standardised figures (2026-10-28)
 
 ### Changed
