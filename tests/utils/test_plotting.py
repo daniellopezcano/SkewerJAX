@@ -113,31 +113,61 @@ def test_fifth_pass_figures():
 def test_toy_box_figures():
     """The figures of notebook 08 on a small toy box: the fields (A2), the 3D statistics of the realisations against
     their expectation and the continuum (A3), one skewer (B2), the 3D statistics of the overfluxes (C: maps in native
-    units, isotropic quantities in comoving units, the wedges with a reference) and the 1D statistics of the overflux by
-    order and term (D): no titles, the line of sight vertical in the maps."""
+    units, isotropic quantities in comoving units, the echo curves, the wedges with their characteristic scales), the 1D
+    statistics of the overflux by order and term (D), and the density along the skewers through the same figures (E, F,
+    in comoving units, with their exact expectation): no titles, the line of sight vertical in the maps; the options
+    cmap, quantity, color_scale, levels and the axis scales."""
     from dataclasses import replace
 
     from skewerjax.core import LineBundle
     from skewerjax.simulations import SkewerRun, ToyBoxes, field_statistics, run_skewers
     from skewerjax.utils.reference_data import P1D_DESI_DR1_Z22
 
-    b = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3)
+    b = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3, bao_ratio=1e-3)
     fig, axs, info = pl.plot_toy_fields(replace(b, velocity="linear").fields(0), b.box_cMpc, arrow_every=4)
     fig.canvas.draw()
     assert axs.shape == (2, 2) and info["arrow_scale"] > 0, "density and velocity rows (no temperature)"
-    fig, axs, info = pl.plot_toy_fields(b.fields(0), b.box_cMpc, arrow_every=4)  # zero velocities: no arrows
+    fig, axs, info = pl.plot_toy_fields(
+        b.fields(0), b.box_cMpc, arrow_every=4, cmap="tol_iridescent"
+    )  # zero velocities: no arrows
     fig.canvas.draw()
     assert info["arrow_scale"] == 0 and not any(ax.get_title() for ax in axs.ravel())
     setup = SkewerRun(stride=(4, 4), points_per_cell=80, n_pix=64, batch=8)
     res = field_statistics(b, log=None)
     run = run_skewers(b, setup, log=None)
-    for view in ("r2", "symlog"):
-        fig, axs, out = pl.plot_isotropic_recovery(res, xi_view=view, r_bao=2.0, grf=b.grf())
+    for quantity, k_scale in (("xi", "linear"), ("r2xi", "log")):
+        fig, axs, out = pl.plot_isotropic_recovery(
+            res, quantity=quantity, r_bao=2.0, grf=b.grf(), k_scale=k_scale, k_marks={"$k_1$": 1.0, "$k_2$": 50.0}
+        )
         fig.canvas.draw()
-    assert {"P_chi2_dof", "xi_chi2_dof", "xi_mean_pull"} <= set(out)
-    assert "k\\,P" in axs[0, 0].get_ylabel() and len(axs[0, 0].lines) > len(res["P_iso_each"]) + 1, "k P, with the continuum"
-    for f in (pl.plot_kpar_kperp_maps, pl.plot_rpar_rperp_maps, pl.plot_xi_mu_wedges):
-        fig, axs, chi2 = f(res) if f is pl.plot_xi_mu_wedges else f(res, n_sigma=2)
+        assert axs[0, 0].get_xscale() == k_scale and axs[0, 1].get_yscale() == ("symlog" if quantity == "xi" else "linear")
+    assert {"P_chi2_dof", "xi_chi2_dof", "xi_mean_pull", "xi_curve_r"} <= set(out)
+    assert axs[0, 0].get_ylabel().startswith("$P(k)$") and len(axs[0, 0].lines) > len(res["P_iso_each"]) + 1, (
+        "P, with the continuum"
+    )
+    assert any(ln.get_color() == pl.PALETTE["purple"] for ln in axs[0, 0].lines), "the continuum in a visible colour"
+    texts = [t.get_text() for t in axs[0, 0].texts]
+    assert "$k_1$ " in texts and "$k_2$ " not in texts, "k_1 labelled; k_2 beyond the axis range not drawn"
+    assert any("k_{\\min}" in t for t in texts) and any("k_{\\max}" in t for t in texts), "the limits inside the grey bands"
+    assert not any("full-coverage" in t.get_text() for t in axs[0, 0].get_legend().get_texts()), "no legend entry for the bands"
+    assert axs[0, 0].get_yscale() == "log" and any("r_{\\rm BAO}" in t.get_text() for t in axs[0, 1].texts)
+    lim = res["limits"]
+    for ax, (lo, hi) in ((axs[0, 0], (lim["k_min"], lim["k_max"])), (axs[0, 1], (lim["r_min"], lim["r_max"]))):
+        spans = [p for p in ax.patches if isinstance(p, matplotlib.patches.Rectangle)]
+        edges = sorted(x for p in spans for x in (p.get_x(), p.get_x() + p.get_width()))
+        assert len(spans) == 2 and np.isclose(edges[1], lo) and np.isclose(edges[2], hi), "shaded outside the full coverage"
+    np.testing.assert_allclose(out["xi_curve_r"], (lim["r_min"], lim["r_max"]))
+    with pytest.raises(ValueError, match="other k_edges"):
+        pl.plot_isotropic_recovery(res, k_edges=res["axes"]["k_edges"][:-1])
+    with pytest.raises(ValueError, match="quantity"):
+        pl.plot_isotropic_recovery(res, quantity="r2")
+    opts = {
+        pl.plot_kpar_kperp_maps: dict(n_sigma=2, cmap="tol_iridescent", levels=[1e-3, 1e-2], k_marks={"$k_1$": 1.0}),
+        pl.plot_rpar_rperp_maps: dict(n_sigma=2, r_bao=2.0, quantity="xi", color_scale="symlog", cmap="tol_BuRd", levels=[0.01]),
+        pl.plot_xi_mu_wedges: dict(quantity="xi", y_scale="symlog", r_marks={"$a$": 1.0, "$b$": 100.0}),
+    }
+    for f, kw in opts.items():
+        fig, axs, chi2 = f(res, **kw)
         fig.canvas.draw()
         assert not fig._suptitle and not any(ax.get_title() for ax in axs), "no titles"
         if f is not pl.plot_xi_mu_wedges:
@@ -145,10 +175,16 @@ def test_toy_box_figures():
             assert "perp" in axs[0].get_xlabel() and "parallel" in axs[0].get_ylabel(), "perpendicular across, parallel up"
         else:
             assert len(fig.legends) == 2, "two legends: the wedges and the styles"
+            assert [t.get_text() for t in axs[0].texts] == ["$a$ "], "the marks inside the range only, labelled"
+        if f is pl.plot_kpar_kperp_maps:  # P on the grid's own k_par: one row per mode, centred on it
+            assert "P(k_" in fig.axes[-1].get_ylabel() and "k\\," not in fig.axes[-1].get_ylabel()
+            assert axs[0].get_ylim()[0] == pytest.approx(0.5 * lim["k_min"])
         if f is pl.plot_rpar_rperp_maps:  # the wedge boundaries of plot_xi_mu_wedges, one ray per inner edge
             rays = [ln for ln in axs[1].lines if ln.get_linestyle() == "-." and len(ln.get_xdata()) == 2]
             assert len(rays) == len(pl.MU_WEDGES) - 2 and all(ln.get_color() == "white" for ln in rays)
             assert len(axs[1].patches) == len(pl.MU_WEDGES) - 1, "one coloured sector per wedge"
+            assert len(fig.legends[0].get_texts()) == 3 and any("r_{\\rm BAO}" in t.get_text() for t in axs[1].texts)
+            assert isinstance(axs[1].collections[0].norm, matplotlib.colors.SymLogNorm) and "xi" in fig.axes[-1].get_ylabel()
     assert len(chi2) == len(pl.MU_WEDGES) - 1
     assert not hasattr(pl, "plot_pk_mu_wedges")
     sk = run["skewers"][0]
@@ -164,40 +200,85 @@ def test_toy_box_figures():
     T = np.exp(-sk["tau"][:, 0])
     np.testing.assert_allclose(axs[3].lines[0].get_ydata(), T[0] / run["mean_transmission"][0] - 1, rtol=1e-12)
     assert info["points"] in ("panel", "inset") and info["pixels"] in ("panel", "inset")
-    fig, ax, info = pl.plot_skewer_slice(fl, b.box_cMpc, sk["columns"], highlight=(ix, iz))
+    fig, ax, info = pl.plot_skewer_slice(fl, b.box_cMpc, sk["columns"], highlight=(ix, iz), cmap="tol_iridescent")
     fig.canvas.draw()
     assert info["n_row"] == 4 and info["spacing_cMpc"] == pytest.approx(4 * b.dx)
+    arrows = [a for a in fig.legends[0].findobj(matplotlib.patches.FancyArrowPatch)]
+    assert len(arrows) == 1, "the skewers' legend entry: a line with its arrowhead along it"
+    (x0, y0), (x1, y1) = arrows[0]._posA_posB
+    assert x1 > x0 and y1 == y0, "the arrow points along the (horizontal) line of the handle"
     u = float(run["skewers"][0]["period"]) / b.box_cMpc  # km/s per cMpc
-    fig, axs = pl.plot_overflux_3d(run["flux3d"], run["axes3d"], kms_per_cMpc=u, r_bao=2.0)
+    lim3 = dict(k_min=2 * np.pi / b.box_cMpc, k_max=np.pi / (4 * b.dx), r_min=4 * b.dx, r_max=b.box_cMpc / 2)
+    fig, axs = pl.plot_overflux_3d(
+        run["flux3d"], run["axes3d"], kms_per_cMpc=u, r_bao=2.0, r_marks={"$\\Delta$": 1.0}, limits=lim3
+    )
     fig.canvas.draw()
+    assert {"$r_{\\rm BAO}$ ", "$\\Delta$ "} <= {t.get_text() for t in axs["xi"].texts} and len(axs["P"].texts) == 2
     assert set(axs) == {"P", "xi"} and "cMpc" in axs["xi"].get_xlabel() and not axs["P"].get_title()
-    assert "k\\,P" in axs["P"].get_ylabel() and "cMpc$^2$" in axs["xi"].get_ylabel(), "k P and r^2 xi in comoving units"
+    assert axs["P"].get_ylabel().startswith("$P(k)$") and "cMpc$^2$" in axs["xi"].get_ylabel(), "P and r^2 xi in comoving units"
     assert "km" in axs["P"].child_axes[0].get_xlabel() and "km" in axs["xi"].child_axes[0].get_xlabel()
     tot = dict(run["flux3d"]["total"], axes=run["axes3d"])
     period = float(run["skewers"][0]["period"])
-    fig, ax, drawn = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, n_sigma=1.5)
+    fig, ax, drawn = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, n_sigma=1.5, cmap="tol_BuRd")
     fig.canvas.draw()
     assert len(ax.child_axes) == 2 and "cMpc" in ax.get_xlabel() and "perp" in ax.get_xlabel() and not ax.get_title()
+    assert all("reference" not in c.get_xlabel() + c.get_ylabel() for c in ax.child_axes), (
+        "no parenthetical on the reference axes"
+    )
     assert "km" in ax.get_ylabel() and "parallel" in ax.get_ylabel(), "native units: perp in cMpc across, par in km/s up"
-    top = u * run["axes3d"]["rpar_edges"][-1]  # the last r_par edge (<= half the box), in km/s
-    assert ax.get_xlim()[0] == 0 and ax.get_ylim()[0] == 0 and ax.get_ylim()[1] == pytest.approx(top) and top <= period / 2
-    marks = [100.0, 100.0 + 2.0 * u, abs(2.0 * u - 100.0)]
-    assert list(drawn.values()) == [m for m in marks if m <= top], "only the markers inside the map"
-    fig, ax = pl.plot_overflux_kpar_kperp(tot, kms_per_cMpc=u, n_sigma=1.5)
-    fig.canvas.draw()
-    assert "cMpc" in ax.get_xlabel() and "s km" in ax.get_ylabel() and ax.get_xlim()[0] == 0 and ax.get_ylim()[0] == 0
-    from skewerjax.utils.reference_data import XI_LYA_LYA_AA_WEDGES as XI_REF
-
-    fig, axs, chi2 = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, reference=XI_REF)
+    dv = period / setup.n_pix
+    top = u * run["axes3d"]["rpar"][-1]  # the last row, centred on half the period [km/s]
+    assert top == pytest.approx(period / 2)
+    np.testing.assert_allclose(ax.get_ylim(), (-dv / 2, period / 2 + dv / 2))
+    assert ax.get_xlim()[0] == 0, "one row per pixel separation j dv, j = 0 .. n_pix / 2, each centred on it"
+    np.testing.assert_allclose(u * run["axes3d"]["rpar"], dv * np.arange(setup.n_pix // 2 + 1), atol=1e-9)
+    # the echoes: r_par = |sqrt(r_bao^2 - r_perp^2) +- Delta|, folded with the period L, in km/s
+    d, L = 100.0 / u, b.box_cMpc
+    c = pl.echo_curves(2.0, d, L)
+    s_ = np.sqrt(2.0**2 - c["r_perp"] ** 2)
+    np.testing.assert_allclose(c["plus"], pl.fold_periodic(s_ + d, L)) and np.all(c["plus"] <= L / 2)
+    np.testing.assert_allclose(drawn["echo $-\\Delta$"]["r_par"], u * pl.fold_periodic(np.abs(s_ - d), L))
+    assert drawn["$\\Delta$"]["r_par"][0] == pytest.approx(100.0) and len(fig.legends[0].get_texts()) == 3
+    np.testing.assert_allclose(pl.fold_periodic([0.3, 0.7, 1.2, -0.2], 1.0), [0.3, 0.3, 0.2, 0.2])
+    sc = pl.echo_scales(40.0, 28.0, 150.0)
+    np.testing.assert_allclose(list(sc.values()), [40.0, 28.0, 12.0, 68.0, np.hypot(40.0, 28.0)])
+    assert pl.echo_scales(40.0, 50.0, 150.0)["$r_{\\rm BAO} + \\Delta$"] == pytest.approx(60.0), "folded beyond L / 2"
+    assert not hasattr(pl, "plot_overflux_kpar_kperp") and not hasattr(pl, "_reference_wedges")
+    fig, axs, chi2 = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, r_marks=pl.echo_scales(2.0, d, L))
     fig.canvas.draw()
     assert chi2 is None and len(axs) == 1 and "cMpc" in axs[0].get_xlabel() and "km" in axs[0].child_axes[0].get_xlabel()
-    assert len(fig.legends) == 3, "the wedges, the styles and the reference"
-    ref_cols = [ln.get_markeredgecolor() for ln in fig.legends[2].legend_handles]
-    assert ref_cols == [pl.PALETTE[c] for c in pl.MU_COLORS], "the reference wedges in the colours of the matching wedges"
+    assert len(fig.legends) == 2, "the wedges and the styles"
+    with pytest.raises(TypeError):
+        pl.plot_xi_mu_wedges(tot, reference={})
+    # the density along the skewers (E, F): comoving line of sight, km/s for reference, with its exact expectation
+    dens = dict(run["density3d"]["total"], axes=run["density_axes3d"])
+    fig, ax, _ = pl.plot_overflux_rpar_rperp(
+        dens, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, unit="cMpc", theory=run["density_theory"]
+    )
+    fig.canvas.draw()
+    assert "cMpc" in ax.get_ylabel() and any("km" in c.get_ylabel() for c in ax.child_axes)
+    assert len(fig.legends[0].get_texts()) == 4, "contours, band, expected contours, the diamond"
+    fig, axs = pl.plot_overflux_3d(run["density3d"], run["density_axes3d"], kms_per_cMpc=u, theory=run["density_theory"])
+    fig.canvas.draw()
+    assert any(ln.get_linestyle() == "--" for ln in axs["P"].lines), "the expectation, dashed"
+    fig, axs, chi2 = pl.plot_xi_mu_wedges(dict(dens, theory=run["density_theory"]), kms_per_cMpc=u)
+    assert len(axs) == 2 and len(chi2) == len(pl.MU_WEDGES) - 1
     fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1_Z22, kms_per_cMpc=u)
     fig.canvas.draw()
     assert len(fig.legends[0].get_texts()) == 5  # three overfluxes, the boxes and the reference (below the axes)
     assert "cMpc" in ax.child_axes[0].get_xlabel()
+    from skewerjax.simulations import DENSITY_FIELDS
+
+    fig, ax = pl.plot_p1d_reference(
+        run["density_p1d"], P1D_DESI_DR1_Z22, fields=DENSITY_FIELDS, unit="cMpc", kms_per_cMpc=u, k_max=3.0
+    )
+    fig.canvas.draw()
+    assert "cMpc" in ax.get_xlabel() and "km" in ax.child_axes[0].get_xlabel() and len(fig.legends[0].get_texts()) == 6
+    for kind in ("P", "xi"):
+        fig, axs = pl.plot_orders_compared({"density": run["density_flux"]}, kind, kms_per_cMpc=u, unit="cMpc")
+        assert "cMpc" in axs[1, 0].get_xlabel() and "km" in axs[0, 0].child_axes[0].get_xlabel()
+        fig, axs = pl.plot_terms_compared({"density": run["density_flux"]}, kind, kms_per_cMpc=u, unit="cMpc")
+        assert axs.shape == (1, 1), "the density: one order (2), its terms 1-1, 2-2, 1-2"
     ens = {"flux contrast": run["flux"]}
     dv = [0.0, float(LineBundle(["HI-LyA", "SiIII-1206"]).delta_v[1])]
     for kind in ("P", "xi"):

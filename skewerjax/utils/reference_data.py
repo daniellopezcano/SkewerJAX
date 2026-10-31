@@ -6,8 +6,8 @@ forests with SNR > 3 per pixel; ``.project_material/Chaves-Montero``, ``data_jou
 points were digitised from the figure (the lowest-redshift curve), so they carry its reading error and no error bars.
 
 ``XI_LYA_LYA_AA_WEDGES``: a measured Lya(A) x Lya(A) correlation function in four wedges of mu (the edges of
-``summary_stats.MU_WEDGES``), r^2 xi against r in h^-1 Mpc units (r [h^-1 Mpc], r^2 xi [h^-2 Mpc^2]); the reference of
-08's C3, converted to cMpc by ``utils.plotting.plot_xi_mu_wedges(reference=)`` (r / h, r^2 xi / h^2).
+``summary_stats.MU_WEDGES``), r^2 xi against r in h^-1 Mpc units (r [h^-1 Mpc], r^2 xi [h^-2 Mpc^2]); in comoving
+units, r / h [cMpc] and r^2 xi / h^2 [cMpc^2]. Not drawn by any figure function at present.
 """
 
 from __future__ import annotations

@@ -3,6 +3,75 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — global mean transmission; the simplest valid BAO model; Parts E and F of 08 (2026-10-30)
+
+### Changed
+- **Overflux normalisation** (`summary_stats.overflux`): `mean="global"` (new default) or `"per_pixel"` on
+  `mean_transmissions`, `overflux_terms`, `DeltaFieldBuilder`, `p1d_from_tau`, `skewer_statistics`, `skewer_box` and
+  `run_skewers`. A box (or snapshot) is one redshift, so T̄ is one number per line (and for the total) over every pixel
+  of every sample; ⟨δ⟩ = 0 over the ensemble, C = T̄ / Π T̄_j − 1 = ⟨δ_1 δ_2⟩ is one number and the decomposition stays
+  exact; the drift of the mean transmission along v (a(y) along the box) stays in δ, shared by every sample
+  (`"per_pixel"` removes it). `MEAN_MODES` new.
+- **BAO model** (`simulations.PowerLawGRF`): P = A_s (k/k_0)^(n_s−1) + A_bao W(k), W the exact transform of the Gaussian
+  bump in ξ (1D, 2D by quadrature, 3D); the envelope E(k), the wiggle f(k) and the Dawson term are gone. Validity: R_bao =
+  A_bao / A_s ≤ R_max = min over the grid modes with W < 0 of (k/k_0)^(n_s−1) / |W| (Bochner), `bao_ratio_max()`,
+  checked at construction (an error quoting R_max); `ToyBoxes.bao_ratio_max` and the same check. `power(k, mu, bao=True)`
+  and `power_grid(bao=True)` (was `bao="total" | "envelope"`; `bao=False` is the power law alone); `bao_power(k)` (was
+  `bao_power(k, part)`); `bao_window(k)` new; `correlation(r)` = power law + bump. `field_statistics`'s `theory_nw`
+  is the power law alone. Regression references `grf_aniso`, `grf_bao2d` (tests/regression/data/modules_toy.npz)
+  regenerated for this intended change.
+- `run_skewers`: also the density of H I, Si III and their sum at the points of the skewers (`on_points`, spacing dx /
+  points_per_cell, the periodic end point dropped) against its global mean, through the same 3D estimator (`density3d`
+  {`DENSITY_FIELDS`}, `density_axes3d`, `density_theory`, `density_scale`) and 1D statistics (`density_flux`,
+  `density_p1d` with its exact expectation); `mean_transmission_per_pixel`, `mean_delta_global`, `C`, `C_error`, `mean`;
+  `time_s` (n, 5). `skewer_tau`'s `density`: {species: n of the cells crossed}. `lattice_density_theory(bao=True,
+  points_per_cell=1, p1d=False)` (the lattice of points: ξ linear between the cells, exact; the k = 0 entry left out as
+  in the estimator); `lattice_density_check(run, boxes, setup, field="total")`. `SkewerRun.limits` adds k_min, k_max,
+  r_min.
+- Figures (`utils.plotting`), consistent options: `plot_isotropic_recovery(quantity="r2xi" | "xi", k_marks=, k_scale=,
+  r_scale=, y_scale=, linthresh=, linthresh_frac=, linscale=)` (was `xi_view`; the limits written inside the grey bands,
+  no legend entry for them; the continuous curves purple); `plot_kpar_kperp_maps(levels=, cmap=, k_marks=, kpar_scale=,
+  kperp_scale=)`; `plot_rpar_rperp_maps(levels=, quantity=, color_scale=, linthresh=, linthresh_frac=, linscale=,
+  cmap=)` (r_BAO labelled on the panels; no legend entries for it or the wedges); `plot_xi_mu_wedges(r_marks=,
+  quantity=, y_scale=, linthresh=, ...)`; `plot_overflux_3d(limits=, theory=, r_marks=, quantity=, k_scale=, r_scale=,
+  y_scale=, ...)`; `plot_overflux_rpar_rperp(levels=, quantity=, cmap=, unit=, theory=, box=)` (the echo branches of the
+  BAO ring, folded, instead of the two echo diamonds; returns the curves drawn); `plot_p1d_reference(unit=)` (and the
+  expectation in `p1d["theory"]`); `plot_orders_*`, `plot_terms_*(unit=)`; `plot_toy_fields(cmap=, velocity_cmap=)`,
+  `plot_skewer_slice(cmap=)` (a legend handle with the arrow along the line, `_ArrowHandler`), `plot_grf_draws(cmap=)`.
+  The reference axes of the maps lose their parenthetical labels. New: `fold_periodic`, `echo_scales`, `echo_curves`.
+
+### Removed
+- The envelope E(k), the wiggle f(k) and the Dawson term of the BAO model (`bao_power(k, part)`'s `part`, `power(bao=
+  "envelope")`); `plot_xi_mu_wedges(reference=, reference_h=)` and `_reference_wedges` (the data module
+  `utils.reference_data.XI_LYA_LYA_AA_WEDGES` stays).
+
+## Unreleased — closed-form ξ(r); P instead of kP; explicit bins; maps on the native grid and lattice (2026-10-29, evening)
+
+### Changed
+- `PowerLawGRF.correlation(r)`: the continuous ξ(r) in closed form (power law Γ(n_s + 1) sin(π(n_s + 1)/2), the bump,
+  the envelope with the Dawson function), valid for −2 < n_s < 0; outside it, one line and the numerical Hankel transform
+  over the grid's k range. The numerical transform is `correlation_hankel(r, k_range=None, k_tail=40)` (agreement 1.8e-13
+  with `k_tail=400`).
+- Binning of 08 explicit: `ToyBoxes.limits`, `k_edges(k_1=, k_2_factor=3, n_log=12)` (`bao_k_edges(..., k_1=, n_log=,
+  info=)`: the quarter bins end and the log bins start at the same k_2, on the k_f/4 grid), `r_edges` (width dx to L/2),
+  `bin_edges(k_edges, r_edges)`; `field_statistics(boxes, k_edges=, r_edges=)` (returns `limits`); every bin beyond the
+  full-coverage limits (π/dx, L/2; the smallest Nyquist frequency of a lattice) cut (`full_coverage`). The ξ bins no
+  longer extend to r_BAO + 4σ_BAO beyond L/2.
+- Maps on the native grid: the (k∥, k⊥) and (r∥, r⊥) rows are the grid's own modes and separations, one per row
+  (`native_edges`); `GridStatistics3D` row/column centres are the mode- or separation-weighted means (`rpar_map`,
+  `rperp_map` new), so the first r⊥ column [0, dr) is centred on 0.
+- `SkewerRun.grid3d(boxes, n_los, edges=, log=)`: r∥ one row per pixel separation, r⊥, |r| and |k| bins from `edges`;
+  `SkewerRun.limits` adds the lattice in native units (dv, 2π/v_per, π/dv, s dx) and `dr_iso`; `run_skewers(edges=)`
+  (`edges3d` in the result), `skewer_statistics(edges=)`, `lattice_density_theory(edges=)`.
+- Figures: `plot_isotropic_recovery` (P, shading outside the full coverage, the continuous curves over it, no
+  off-scale annotation, `k_edges=`, `r_edges=`), `plot_kpar_kperp_maps` (P, `kperp_edges=`, empty k⊥ bins grey),
+  `plot_rpar_rperp_maps(rperp_edges=)`, `plot_xi_mu_wedges(r_edges=)`, `plot_overflux_3d` (P; `k_edges=`, `r_edges=`),
+  `plot_overflux_rpar_rperp(rperp_edges=)` (one row per pixel separation, faint cell edges). The edges given to a figure
+  are checked against those of the measurement.
+
+### Removed
+- `utils.plotting.plot_overflux_kpar_kperp`.
+
 ## Unreleased — the overflux against the ensemble mean transmission; the 3D estimator verified; Part C in native and comoving units (2026-10-29)
 
 ### Changed

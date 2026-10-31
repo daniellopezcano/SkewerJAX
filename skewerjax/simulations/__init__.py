@@ -25,6 +25,7 @@ from skewerjax.simulations.selection import select_cells_near_paths
 from skewerjax.simulations.snapshot_cells import gas_to_cells, select_cells_in_region, snapshot_cells
 from skewerjax.simulations.snapshot_skewers import ExtractionOptions, IntegrationOptions, SimulationSkewers, cached
 from skewerjax.simulations.toy_boxes import (
+    DENSITY_FIELDS,
     SkewerRun,
     ToyBoxes,
     bao_height,
@@ -32,6 +33,7 @@ from skewerjax.simulations.toy_boxes import (
     hubble_velocity,
     lattice_density_check,
     lattice_density_theory,
+    on_points,
     run_skewers,
     skewer_box,
     skewer_statistics,

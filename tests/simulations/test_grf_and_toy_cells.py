@@ -98,8 +98,8 @@ def test_interpolate_periodic():
 
 
 def test_grf_optional_terms():
-    """Kaiser, Fingers of God and BAO terms: the exact transform of the bump (the wiggle), its envelope (P_BAO >= 0 for
-    every A_bao), mu along los_axis, theory helpers."""
+    """Kaiser, Fingers of God and BAO terms: the exact transform of the bump (W, in 1D, 2D and 3D), P = P_pl + A_bao W
+    (``bao=False``: the power law alone), mu along los_axis, theory helpers."""
     from scipy import integrate, special
 
     A, r0, sg = 0.02, 10.0, 1.5
@@ -113,28 +113,48 @@ def test_grf_optional_terms():
         g = PowerLawGRF(1e3, 1.0, -0.5, L=(200.0,) * d if d > 1 else 200.0, N=N, A_bao=A, r_bao=r0, sigma_bao=sg)
         for k in (0.05, 0.7, 2.0):
             ref = integrate.quad(kern[d], 0, r0 + 30 * sg, args=(k,), limit=2000, points=[r0])[0]
-            assert abs(float(g.bao_power(k, "wiggle")) - ref) < 1e-6 * abs(4 * np.pi * A * r0**2 * sg), (d, k)
-        k = jax.numpy.asarray(np.geomspace(1e-3, 20.0, 20000))
-        W, E, tot = (np.asarray(g.bao_power(k, p)) for p in ("wiggle", "envelope", "total"))
-        assert np.all(np.abs(W) <= E * (1 + 1e-12)) and np.all(tot >= 0), d  # |f| = |W| / E <= 1
-        np.testing.assert_allclose(tot, W + E, rtol=1e-12, atol=1e-12 * E.max())
-    # 3D: the envelope's xi is 2 A g(r) + 4 A r0 F(r / sqrt(2) sg) / (sqrt(pi) r), F the Dawson function
-    for r in (0.5, 10.0):
-        f = lambda q: q**2 * np.sinc(q * r / np.pi) * float(g.bao_power(q, "envelope")) / (2 * np.pi**2)
-        num = integrate.quad(f, 1e-12, 40 / sg, limit=4000)[0]
-        ana = 2 * A * np.exp(-(r**2) / (2 * sg**2)) + 4 * A * r0 * special.dawsn(r / (np.sqrt(2) * sg)) / (np.sqrt(np.pi) * r)
-        assert abs(num - ana) < 1e-8 * ana, (r, num, ana)
-    # a bump far above the power law is a valid field (P >= 0 at every mode); a negative height is not
-    g = PowerLawGRF(1e-3, 1.0, -0.5, L=200.0, N=512, A_bao=1.0, r_bao=20.0, sigma_bao=2.0)
-    assert np.all(np.asarray(g.power_grid()) >= 0) and float(g.variance()) > 0
-    # the no-wiggle spectrum (bao="envelope") differs from the full one by the wiggle alone
+            assert abs(float(g.bao_power(k)) - ref) < 1e-6 * abs(4 * np.pi * A * r0**2 * sg), (d, k)
+            assert float(g.bao_power(k)) == pytest.approx(A * float(g.bao_window(k)), rel=1e-14)
+    # the spectrum without the bump (bao=False) is the power law: the two differ by A_bao W alone
+    g = PowerLawGRF(1.0, 1.0, -0.5, L=200.0, N=512, A_bao=1e-3, r_bao=20.0, sigma_bao=2.0)
     km = np.asarray(g.k_grid()[1])
-    wig = np.where(km > 0, np.asarray(g.bao_power(np.where(km > 0, km, 1.0), "wiggle")), 0.0)
-    np.testing.assert_allclose(np.asarray(g.power_grid()) - np.asarray(g.power_grid(bao="envelope")), wig, atol=1e-12 * wig.max())
-    with pytest.raises(ValueError, match="bao must be"):
-        g.power(1.0, bao="wiggle")
+    wig = np.where(km > 0, np.asarray(g.bao_power(np.where(km > 0, km, 1.0))), 0.0)
+    np.testing.assert_allclose(
+        np.asarray(g.power_grid()) - np.asarray(g.power_grid(bao=False)), wig, atol=1e-12 * np.abs(wig).max()
+    )
     with pytest.raises(ValueError, match="A_bao must be >= 0"):
         PowerLawGRF(1e-3, 1.0, -0.5, L=200.0, N=512, A_bao=-1e-3, r_bao=20.0, sigma_bao=2.0)
+
+
+def test_bao_validity_bound():
+    """R_max = min over the grid modes with W < 0 of (k / k_0)^(n_s - 1) / |W|: at R_bao = R_max, P_pl + A_bao W >= 0 at
+    every mode of the grid (and touches 0 at one), in 1D, 2D and 3D, for any A_s; just above it, an error quoting R_max
+    (``PowerLawGRF`` and ``ToyBoxes``); the distinct |k| of the grid are those of the full grid of modes."""
+    from skewerjax.simulations.grf import _grid_k_moduli
+
+    for d, L, N in ((1, 100.0, 256), (2, (50.0, 80.0), (64, 96)), (3, (30.0,) * 3, (16,) * 3)):
+        base = dict(k_0=1.0, n_s=-0.5, L=L, N=N, r_bao=8.0, sigma_bao=0.8)
+        r_max = PowerLawGRF(1.0, **base, A_bao=1e-12).bao_ratio_max()  # independent of A_s and A_bao
+        for A_s in (1.0, 7.5):
+            g = PowerLawGRF(A_s, **base, A_bao=r_max * A_s)
+            km = np.asarray(g.k_grid(real=False)[1]).ravel()
+            km = km[km > 0]
+            p = A_s * (km / g.k_0) ** (g.n_s - 1) + np.asarray(g.bao_power(km))
+            scale = A_s * (km.min() / g.k_0) ** (g.n_s - 1)
+            assert p.min() >= -1e-12 * scale and p.min() < 1e-9 * scale, (d, A_s, p.min())
+            with pytest.raises(ValueError, match="R_max"):
+                PowerLawGRF(A_s, **base, A_bao=r_max * A_s * (1 + 1e-6))
+        np.testing.assert_allclose(np.unique(np.round(_grid_k_moduli(g.shape, g.L), 9)), np.unique(np.round(km, 9)), rtol=1e-11)
+    from skewerjax.simulations import ToyBoxes
+
+    b = ToyBoxes(box_cMpc=60.0, n_cells=16, r_bao=20.0, sigma_bao=2.0, bao_ratio=1e-4)
+    with pytest.raises(ValueError, match="R_max"):
+        ToyBoxes(box_cMpc=60.0, n_cells=16, r_bao=20.0, sigma_bao=2.0, bao_ratio=1.01 * b.bao_ratio_max)
+    assert b.grf().bao_ratio_max() == pytest.approx(b.bao_ratio_max)
+
+
+def test_grf_kaiser_fog():
+    """The Kaiser and Fingers-of-God factors, mu along ``los_axis``."""
     g = PowerLawGRF(2.0, 1.0, -1.0, L=(30.0,) * 3, N=(12,) * 3, beta=0.5, sigma_fog=2.0, los_axis=1)
     np.testing.assert_allclose(
         float(g.power(0.7, 0.6)), 2.0 * 0.7**-2 * (1 + 0.5 * 0.36) ** 2 / (1 + (0.7 * 0.6 * 2.0) ** 2), rtol=1e-14

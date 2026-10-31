@@ -72,8 +72,10 @@ class GridStatistics3D:
         do not span enough values of mu to separate them (relative condition number of the fit > 1e8).
 
     Attributes after construction: the bin centres (mode- or separation-weighted means) ``k_iso`` (n_k,), ``kpar``,
-    ``kperp`` (the centres of the map's rows and columns), ``k_mu`` (n_mu, n_kmu); ``r_iso``, ``rpar``, ``rperp``,
-    ``r_mu``; the counts ``n_modes`` / ``n_lags`` per binning (dicts keyed like ``GRID_KEYS``, the half-space weighted
+    ``kperp`` (the centres of the map's rows and columns: the weighted mean of k_par over the modes of each row, of
+    k_perp over those of each column; the middle of an empty one), ``kpar_map``, ``kperp_map`` (the centre of every cell
+    of the map), ``k_mu`` (n_mu, n_kmu); ``r_iso``, ``rpar``, ``rperp``, ``rpar_map``, ``rperp_map``, ``r_mu`` alike
+    (e.g. a column [0, dr) of r_perp on a lattice of spacing dr holds r_perp = 0 only: its centre is 0); the counts ``n_modes`` / ``n_lags`` per binning (dicts keyed like ``GRID_KEYS``, the half-space weighted
     number of modes for P, the number of separation vectors for xi).
     """
 
@@ -181,16 +183,25 @@ class GridStatistics3D:
             m, W = binned_mean(jnp.asarray(x), idx, wt, int(np.prod(shp)))
             return np.asarray(m).reshape(shp), np.asarray(W).reshape(shp)
 
+        def axis_centres(x, idx_map, wt, shp, edges, axis):  # the weighted mean of x over every row (axis 0) or column
+            m, W = centres(x, idx_map, wt, shp)
+            W = np.nan_to_num(W)
+            tot = W.sum(axis=1 - axis)
+            mean = np.nansum(np.nan_to_num(m) * W, axis=1 - axis) / np.where(tot > 0, tot, 1.0)
+            return np.where(tot > 0, mean, 0.5 * (edges[1:] + edges[:-1])), m  # empty: the middle of the bin
+
         self.k_iso, n_iso = centres(kmod, self._idx_k["iso"], self._w_modes, self._shape_k["iso"])
-        kpar_c, n_map = centres(kpar, self._idx_k["map"], self._w_modes, self._shape_k["map"])
-        kperp_c, _ = centres(kperp, self._idx_k["map"], self._w_modes, self._shape_k["map"])
-        self.kpar = np.sqrt(self.kpar_edges[1:] * self.kpar_edges[:-1])  # the geometric centres of the map's axes
-        self.kperp = np.sqrt(self.kperp_edges[1:] * self.kperp_edges[:-1])
-        self.kpar_map, self.kperp_map = kpar_c, kperp_c  # the mode-weighted centre of every cell of the map
+        _, n_map = centres(kpar, self._idx_k["map"], self._w_modes, self._shape_k["map"])
+        self.kpar, self.kpar_map = axis_centres(kpar, self._idx_k["map"], self._w_modes, self._shape_k["map"], self.kpar_edges, 0)
+        self.kperp, self.kperp_map = axis_centres(
+            kperp, self._idx_k["map"], self._w_modes, self._shape_k["map"], self.kperp_edges, 1
+        )
         self.k_mu, n_kmu = centres(kmod, self._idx_k["mu"], self._w_modes, self._shape_k["mu"])
         self.r_iso, c_iso = centres(rmod, self._idx_r["iso"], self._ones, self._shape_r["iso"])
-        self.rpar = 0.5 * (self.rpar_edges[1:] + self.rpar_edges[:-1])
-        self.rperp = 0.5 * (self.rperp_edges[1:] + self.rperp_edges[:-1])
+        self.rpar, self.rpar_map = axis_centres(rpar, self._idx_r["map"], self._ones, self._shape_r["map"], self.rpar_edges, 0)
+        self.rperp, self.rperp_map = axis_centres(
+            rperp, self._idx_r["map"], self._ones, self._shape_r["map"], self.rperp_edges, 1
+        )
         _, c_map = centres(rmod, self._idx_r["map"], self._ones, self._shape_r["map"])
         self.r_mu, c_mu = centres(rmod, self._idx_r["mu"], self._ones, self._shape_r["mu"])
         self.n_modes = {"P_iso": n_iso, "P_map": n_map, "P_mu": n_kmu}
@@ -267,7 +278,20 @@ class GridStatistics3D:
         """The bin edges and centres (NumPy), e.g. to store them with the measurements."""
         names = ("k_edges", "kpar_edges", "kperp_edges", "k_mu_edges", "r_edges", "rpar_edges", "rperp_edges")
         out = {n: getattr(self, n) for n in names + ("r_mu_edges", "mu_edges")}
-        for n in ("k_iso", "kpar", "kperp", "kpar_map", "kperp_map", "k_mu", "r_iso", "rpar", "rperp", "r_mu"):
+        for n in (
+            "k_iso",
+            "kpar",
+            "kperp",
+            "kpar_map",
+            "kperp_map",
+            "k_mu",
+            "r_iso",
+            "rpar",
+            "rperp",
+            "rpar_map",
+            "rperp_map",
+            "r_mu",
+        ):
             out[n] = getattr(self, n)
         out.update({"n_modes_" + k: v for k, v in self.n_modes.items()})
         out.update({"n_lags_" + k: v for k, v in self.n_lags.items()})

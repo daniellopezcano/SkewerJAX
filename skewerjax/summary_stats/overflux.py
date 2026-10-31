@@ -1,25 +1,36 @@
 """The transmission T = exp(-tau) and the overflux (flux-contrast) fields delta of single lines and line subsets.
 
 Terminology: T = e^{-tau} is the **transmission**; the flux is the observed F = F_0 T (continuum times transmission).
-With the continuum known, the overflux of DESI's continuum-fitting convention is
+Here the continuum is known (in effect F / F_0 = T), so the overflux of DESI's continuum-fitting convention is exactly
 
-    delta = F / (F_0 T_bar) - 1 = T / T_bar - 1,    T_bar(v) = <T>_ens,
+    delta = F / (F_0 T_bar) - 1 = T / T_bar - 1,
 
-the ensemble mean at each velocity pixel v over every sample (skewer) of the ensemble, so <delta>_ens = 0 holds exactly
-at every pixel (the mean along one skewer is not zero in general). Per line j, delta_j = T_j / T_bar_j - 1 with
-T_bar_j(v) = <T_j>_ens; for the total, T = prod_j T_j and T_bar = <prod_j T_j>_ens != prod_j T_bar_j. The subset
-products delta_A = prod_{j in A} delta_j and, at every pixel,
+with T_bar the mean transmission of the ensemble (``mean``, ``MEAN_MODES``):
 
-    C(v) = T_bar(v) / prod_j T_bar_j(v) - 1 = sum_{|A| >= 2} <delta_A>_ens(v)
+* "global" (default): one number per line (and for the total), the mean of T over every pixel of every sample of the
+  ensemble. A box (or a snapshot) is one redshift, so its mean transmission is one number; <delta> = 0 holds over the
+  whole ensemble, not at each pixel. Paths whose scale factor changes along them (a(y) along a box) keep the small
+  drift of the mean transmission along v in delta, as a smooth pattern shared by every sample.
+* "per_pixel": the mean over the samples at each velocity pixel v, T_bar(v); <delta> = 0 at every pixel, and that
+  drift is removed.
 
-give the exact decomposition (review notes, Sec. Overflux, Eqs. F_total_product_lines_delta,
-overflux_product_expansion_general, with the per-sample mean replaced by the ensemble mean at each pixel)
+Per line j, delta_j = T_j / T_bar_j - 1; for the total, T = prod_j T_j and T_bar = <prod_j T_j> != prod_j T_bar_j. The
+subset products delta_A = prod_{j in A} delta_j and
+
+    C = T_bar / prod_j T_bar_j - 1 = sum_{|A| >= 2} <delta_A>      (one number, or one per pixel with "per_pixel")
+
+give the exact decomposition, at every pixel of every sample (review notes, Sec. Overflux, Eqs.
+F_total_product_lines_delta, overflux_product_expansion_general, with the mean of each sample replaced by the mean of
+the ensemble)
 
     delta_tot = [sum_{A != {}} delta_A - C] / (1 + C)
 
-(``summary_stats.orders``). The order-1 terms <delta_j>_ens of the denominator <prod_j (1 + delta_j)>_ens vanish
-because each T_bar_j is the mean over the same ensemble. In observed spectra, continuum fitting also removes the mean and
-the slope of each forest; a known continuum does not.
+(``summary_stats.orders``). It follows from T = prod_j T_bar_j (1 + delta_j) and its mean, T_bar = prod_j T_bar_j
+(1 + sum_j <delta_j> + C): the order-1 terms <delta_j> vanish because each T_bar_j is the mean over the same ensemble
+(and the same pixels). In observed spectra the continuum F_0 of each quasar must be estimated: a change of its
+amplitude or slope is indistinguishable from a large-scale fluctuation of the transmission along that sightline, so
+even a correct continuum model absorbs those modes of delta (analyses correct for it with a projection); with a known
+continuum this does not arise.
 """
 
 from __future__ import annotations
@@ -32,29 +43,47 @@ import jax.numpy as jnp
 
 logger = logging.getLogger(__name__)
 
+MEAN_MODES = ("global", "per_pixel")  # the mean transmission of the overflux (module docstring)
 
-def mean_transmissions(transmissions: jnp.ndarray) -> jnp.ndarray:
-    """The ensemble mean at each pixel of every line and of the total: (N_lines + 1, N_pix), rows T_bar_j(v) = <T_j>
-    over the samples and, last, T_bar(v) = <prod_j T_j> (``transmissions`` (N_lines, N_samples, N_pix)). The means of
-    an ensemble split over several arrays (e.g. boxes) are the sample-weighted means of these."""
-    return jnp.concatenate([jnp.mean(transmissions, axis=1), jnp.mean(jnp.prod(transmissions, axis=0), axis=0)[None]])
+
+def _check_mean(mean: str) -> str:
+    if mean not in MEAN_MODES:
+        raise ValueError(f"mean must be one of {MEAN_MODES}, got {mean!r}.")
+    return mean
+
+
+def mean_transmissions(transmissions: jnp.ndarray, mean: str = "global") -> jnp.ndarray:
+    """The mean transmission of every line and of the total: (N_lines + 1, N_pix), rows T_bar_j = <T_j> and, last,
+    T_bar = <prod_j T_j> (``transmissions`` (N_lines, N_samples, N_pix)). ``mean`` (module docstring): "global" (default),
+    the mean over every pixel of every sample, the same value in every column; "per_pixel", the mean over the samples
+    at each pixel, T_bar(v). The means of an ensemble split over several arrays of equal shape (e.g. boxes) are the
+    means of these."""
+    m = jnp.concatenate([jnp.mean(transmissions, axis=1), jnp.mean(jnp.prod(transmissions, axis=0), axis=0)[None]])
+    if _check_mean(mean) == "global":
+        m = jnp.broadcast_to(jnp.mean(m, axis=1, keepdims=True), m.shape)
+    return m
 
 
 def overflux_terms(
-    transmissions: jnp.ndarray, labels: Sequence[str], key_joiner: str = "", mean_transmission: jnp.ndarray | None = None
+    transmissions: jnp.ndarray,
+    labels: Sequence[str],
+    key_joiner: str = "",
+    mean_transmission: jnp.ndarray | None = None,
+    mean: str = "global",
 ) -> dict:
-    """Overflux terms of transmissions (N_lines, N_samples, N_pix) (pure; jit with static ``labels``), normalised by the
-    ensemble mean at each pixel (module docstring).
+    """Overflux terms of transmissions (N_lines, N_samples, N_pix) (pure; jit with static ``labels`` and ``mean``),
+    normalised by the mean transmission of the ensemble (module docstring).
 
     mean_transmission : (N_lines + 1, N_pix), optional
-        T_bar_j(v) of every line and T_bar(v) of the total (``mean_transmissions``) when the ensemble is larger than
-        these samples (e.g. every box of a run); default: the mean over these samples.
+        T_bar_j of every line and T_bar of the total (``mean_transmissions``) when the ensemble is larger than these
+        samples (e.g. every box of a run); default: the mean over these samples, ``mean`` "global" or "per_pixel".
 
     Returns dict(delta_terms {key: (N_samples, N_pix)} for every non-empty line subset (single lines first, then subsets
     of 2, 3, ... lines; keys join the labels), total (N_samples, N_pix), C_per_pixel (1, N_pix) = T_bar / prod_j T_bar_j
-    - 1, mean_transmission (N_lines + 1, N_pix), transmission_total (N_samples, N_pix) = prod_j T_j).
+    - 1 (constant with ``mean="global"``), mean_transmission (N_lines + 1, N_pix), transmission_total (N_samples, N_pix)
+    = prod_j T_j).
     """
-    T_bar = mean_transmissions(transmissions) if mean_transmission is None else jnp.asarray(mean_transmission)
+    T_bar = mean_transmissions(transmissions, mean) if mean_transmission is None else jnp.asarray(mean_transmission)
     delta = {}
     for i, key in enumerate(labels):
         delta[key] = transmissions[i] / T_bar[i][None] - 1.0
@@ -72,17 +101,19 @@ def overflux_terms(
 
 class DeltaFieldBuilder:
     """Single-line and composite overflux fields of an optical-depth array (eager wrapper of ``overflux_terms``), each
-    normalised by its ensemble mean transmission at every pixel (module docstring).
+    normalised by the mean transmission of its line (or of the total) over the ensemble (module docstring).
 
     Parameters
     ----------
     optical_depth : (N_lines, N_samples, N_pix).
     labels : one label per line (default "1", "2", ...); key_joiner joins them into subset keys.
     dtype : of the computation (``float``: float64 under x64).
+    mean : "global" (default) or "per_pixel" (module docstring, ``MEAN_MODES``): the mean transmission, one number per
+        line over every pixel of every sample, or one per pixel.
     mean_transmission : (N_lines + 1, N_pix), optional
-        The ensemble means T_bar_j(v) and T_bar(v) (``mean_transmissions``) when the ensemble holds more samples than
-        ``optical_depth`` (e.g. every box of a run); default: the mean over the kept samples of ``optical_depth``. With
-        few samples, the mean of the samples is a noisy estimate of the ensemble mean.
+        The ensemble means T_bar_j and T_bar (``mean_transmissions``, either mode) when the ensemble holds more samples
+        than ``optical_depth`` (e.g. every box of a run); default: the mean over the kept samples of ``optical_depth``
+        (``mean``). With few samples, the mean of the samples is a noisy estimate of the ensemble mean.
     keep_transmissions, keep_transmission_total : keep T_j and prod_j T_j after ``build`` (released by default).
 
     Samples with NaN in tau or T are dropped before the means are taken (data-dependent shapes: this filtering is the
@@ -98,6 +129,7 @@ class DeltaFieldBuilder:
         key_joiner="",
         dtype=float,
         *,
+        mean: str = "global",
         mean_transmission=None,
         keep_transmissions=False,
         keep_transmission_total=False,
@@ -109,7 +141,7 @@ class DeltaFieldBuilder:
         self.labels = [str(i + 1) for i in range(self.N_lines)] if labels is None else list(labels)
         if len(self.labels) != self.N_lines:
             raise ValueError(f"`labels` must have length N_lines={self.N_lines}. Got {len(self.labels)}.")
-        self.key_joiner, self.dtype = key_joiner, dtype
+        self.key_joiner, self.dtype, self.mean = key_joiner, dtype, _check_mean(mean)
         self.keep_transmissions, self.keep_transmission_total = keep_transmissions, keep_transmission_total
         self.mean_transmission = None if mean_transmission is None else jnp.asarray(mean_transmission, dtype=dtype)
         if self.mean_transmission is not None and self.mean_transmission.shape != (self.N_lines + 1, self.N_points):
@@ -141,10 +173,10 @@ class DeltaFieldBuilder:
                 "This DeltaFieldBuilder has already been built and its temporary transmissions were released. "
                 "Create a new instance to rebuild."
             )
-        T_bar = mean_transmissions(self.transmissions) if self.mean_transmission is None else self.mean_transmission
+        T_bar = mean_transmissions(self.transmissions, self.mean) if self.mean_transmission is None else self.mean_transmission
         if bool(jnp.any(T_bar == 0.0)):
             raise ValueError("A mean transmission is zero at some pixel (of a line or of the total): delta is undefined there.")
-        out = overflux_terms(self.transmissions, self.labels, self.key_joiner, T_bar)
+        out = overflux_terms(self.transmissions, self.labels, self.key_joiner, T_bar, self.mean)
         for k, v in out["delta_terms"].items():
             if int(jnp.sum(jnp.isnan(v))):
                 logger.warning("NaNs detected in delta_terms[%r].", k)

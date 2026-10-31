@@ -82,7 +82,8 @@ class OverfluxStatistics1D:
     Eq. xi1D_ensemble_L2_decomposition; ``summary_stats.orders``)
     ---------------------------------------------------------------------------
     At every pixel, delta_tot = sum_A w delta_A - c with w = 1/(1+C(v)), c = C(v)/(1+C(v)) (exact
-    for ``DeltaFieldBuilder``, normalised by the ensemble mean at each pixel). The weighted terms
+    for ``DeltaFieldBuilder``, normalised by the mean transmission of the ensemble; C is one number with its default
+    ``mean="global"``, one per pixel with ``"per_pixel"``). The weighted terms
     (A, B), including the order-0 term ``ZERO_ORDER_KEY`` = -c(v), have order |A|+|B| and sum
     exactly to the total:
 
@@ -305,11 +306,11 @@ def ensemble_1d(summaries) -> dict:
     return out
 
 
-def p1d_from_tau(tau, dv: float):
-    """P1D of the overflux delta = T / T_bar - 1 of one line (T_bar(v): the mean over the skewers at each pixel) over all
-    skewers, without the k = 0 mode.
+def p1d_from_tau(tau, dv: float, mean: str = "global"):
+    """P1D of the overflux delta = T / T_bar - 1 of one line (T_bar: the mean over the skewers, ``mean`` "global" over
+    every pixel or "per_pixel" at each pixel, ``DeltaFieldBuilder``) over all skewers, without the k = 0 mode.
 
     tau : (N_sk, N_v); dv : pixel width [km/s]. Returns (k [s/km], P [km/s]) as NumPy arrays.
     """
-    st = OverfluxStatistics1D(DeltaFieldBuilder(np.asarray(tau)[None]).build(), dv).compute_p1d()
+    st = OverfluxStatistics1D(DeltaFieldBuilder(np.asarray(tau)[None], mean=mean).build(), dv).compute_p1d()
     return np.asarray(st.k)[1:], np.asarray(st.Pk_total)[1:]

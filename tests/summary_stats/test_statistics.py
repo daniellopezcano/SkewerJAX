@@ -212,7 +212,7 @@ def test_grid_xi_covariance():
     from skewerjax.summary_stats.binning import bin_index
 
     n, L = (6, 8, 5), (6.0, 8.0, 7.0)
-    g = PowerLawGRF(1.0, 1.0, -1.0, L=L, N=n, A_bao=0.05, r_bao=2.0, sigma_bao=0.6, los_axis=1)
+    g = PowerLawGRF(1.0, 1.0, -1.0, L=L, N=n, A_bao=0.02, r_bao=2.0, sigma_bao=0.6, los_axis=1)
     gs = GridStatistics3D(n, L, los_axis=1, r_edges=np.arange(0.0, 4.6, 0.9))
     C = gs.xi_iso_covariance(g.power_grid())
     dx = np.array(L) / np.array(n)
@@ -256,9 +256,9 @@ def test_summary_and_ensemble():
     f = jnp.stack([1.0 + 0.3 * d, 0.2 * (1.0 + 0.3 * jnp.roll(d, 30, axis=-1))])
     assert np.all(np.asarray(f) > 0)
     a = DeltaFieldBuilder(-jnp.log(f), labels=["1", "2"]).build()
-    np.testing.assert_allclose(  # every line against its mean over the samples at each pixel
+    np.testing.assert_allclose(  # every line against its mean over every pixel of every sample (mean="global")
         np.asarray(a.delta_terms["12"]),
-        np.asarray(f[0] / f[0].mean(0, keepdims=True) - 1) * np.asarray(f[1] / f[1].mean(0, keepdims=True) - 1),
+        np.asarray(f[0] / f[0].mean() - 1) * np.asarray(f[1] / f[1].mean() - 1),
         rtol=1e-10,
         atol=1e-14,
     )
@@ -271,12 +271,14 @@ def test_summary_and_ensemble():
     assert e["n_real"] == 2 and np.allclose(e["P_total"], s["P_total"]) and np.all(e["xi_order_err"] == 0)
 
 
-def test_ensemble_normalisation():
-    """``DeltaFieldBuilder``: delta_j = T_j / T_bar_j(v) - 1 with the ensemble mean at each pixel (the mean over the
-    samples, or ``mean_transmission`` for an ensemble split over several arrays), so <delta>_ens = 0 at every pixel
-    exactly; the total uses T_bar = <prod_j T_j>_ens != prod_j T_bar_j; C(v) = T_bar / prod_j T_bar_j - 1 =
-    sum_{|A| >= 2} <delta_A>_ens; the decomposition delta_tot = [sum_A delta_A - C] / (1 + C) is exact at every pixel,
-    and the order-1 terms of P1D and xi1D vanish."""
+@pytest.mark.parametrize("mean", ["global", "per_pixel"])
+def test_ensemble_normalisation(mean):
+    """``DeltaFieldBuilder``: delta_j = T_j / T_bar_j - 1 with the mean transmission of the ensemble, one number over every
+    pixel of every sample (``mean="global"``, the default) or one per pixel (``"per_pixel"``), from the samples or
+    ``mean_transmission`` (an ensemble split over several arrays), so <delta> = 0 over the ensemble (at every pixel with
+    "per_pixel"); the total uses T_bar = <prod_j T_j> != prod_j T_bar_j; C = T_bar / prod_j T_bar_j - 1 = sum_{|A| >= 2}
+    <delta_A>; the decomposition delta_tot = [sum_A delta_A - C] / (1 + C) is exact at every pixel, and the order-1
+    terms of P1D and xi1D vanish."""
     from skewerjax.summary_stats import mean_transmissions
 
     rng = np.random.default_rng(5)
@@ -285,16 +287,19 @@ def test_ensemble_normalisation():
     tau = np.stack([trend + 0.4 * rng.gamma(2.0, 0.5, (N_s, N_v)), 0.5 * trend + 0.2 * rng.gamma(2.0, 0.5, (N_s, N_v))])
     tau[1] = 0.7 * tau[0] + 0.3 * tau[1]  # correlated lines
     T = np.exp(-tau)
-    ov = DeltaFieldBuilder(tau, labels=["1", "2"]).build()
-    T_bar = np.asarray(mean_transmissions(jnp.asarray(T)))
+    ov = DeltaFieldBuilder(tau, labels=["1", "2"], mean=mean).build()
+    T_bar = np.asarray(mean_transmissions(jnp.asarray(T), mean))
     np.testing.assert_allclose(np.asarray(ov.mean_transmission), T_bar, rtol=1e-14)
-    np.testing.assert_allclose(T_bar[-1], (T[0] * T[1]).mean(0), rtol=1e-14)
+    axes = (0, 1) if mean == "global" else 0  # the axes of the mean: (samples, pixels) or samples
+    np.testing.assert_allclose(T_bar[-1], np.broadcast_to((T[0] * T[1]).mean(axes), (N_v,)), rtol=1e-14)
     assert np.max(np.abs(T_bar[-1] / (T_bar[0] * T_bar[1]) - 1)) > 1e-3, "<T_1 T_2> != <T_1><T_2>"
     for d in (ov.delta_terms["1"], ov.delta_terms["2"], ov.total):
-        assert np.max(np.abs(np.asarray(d).mean(0))) < 1e-15, "<delta>_ens = 0 at every pixel"
+        assert np.max(np.abs(np.asarray(d).mean(axes))) < 1e-15, "<delta> = 0 over the ensemble (or at every pixel)"
+    if mean == "global":
+        assert np.max(np.abs(np.asarray(ov.total).mean(0))) > 1e-2, "the drift along v stays, shared by every sample"
     assert np.max(np.abs(np.asarray(ov.total).mean(1))) > 1e-2, "the mean along one sample is not zero"
     C = np.asarray(ov.C_per_pixel)
-    np.testing.assert_allclose(C[0], np.asarray(ov.delta_terms["12"]).mean(0), rtol=1e-12, atol=1e-16)
+    np.testing.assert_allclose(C[0], np.broadcast_to(np.asarray(ov.delta_terms["12"]).mean(axes), (N_v,)), rtol=1e-12, atol=1e-16)
     recon = (sum(np.asarray(v) for v in ov.delta_terms.values()) - C) / (1 + C)
     assert np.max(np.abs(recon - np.asarray(ov.total))) < 1e-15
     st = OverfluxStatistics1D(ov, 2.0).compute_xi1d()
@@ -311,6 +316,8 @@ def test_ensemble_normalisation():
     )
     with pytest.raises(ValueError, match="mean_transmission"):
         DeltaFieldBuilder(tau, mean_transmission=T_bar[:2])
+    with pytest.raises(ValueError, match="mean must be"):
+        DeltaFieldBuilder(tau, mean="box")
 
 
 def test_grid_statistics_on_an_anisotropic_lattice():

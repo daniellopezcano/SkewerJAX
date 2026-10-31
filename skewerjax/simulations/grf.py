@@ -7,7 +7,7 @@ container (``core.Cells``) as a snapshot (``snapshot_skewers``).
 from __future__ import annotations
 
 import warnings
-from functools import partial
+from functools import lru_cache, partial
 
 import jax
 import jax.numpy as jnp
@@ -78,28 +78,25 @@ class PowerLawGRF:
       D = 1 / (1 + (k mu sigma)^2) (``"lorentzian"``, an exponential pairwise-velocity distribution) or
       exp(-(k mu sigma)^2) (``"gaussian"``); 0 < D <= 1. ``sigma_fog`` must be >= 0.
     * BAO-like feature (``A_bao``, ``r_bao``, ``sigma_bao`` [length], all three or none): a Gaussian bump in the
-      correlation function, xi_w(r) = A_bao [g(r - r_bao) + g(r + r_bao)], g(u) = exp(-u^2 / (2 sigma_bao^2)) (the
+      correlation function, xi_BAO(r) = A_bao [g(r - r_bao) + g(r + r_bao)], g(u) = exp(-u^2 / (2 sigma_bao^2)) (the
       mirror term is the even extension; it is below A_bao exp(-r_bao^2 / 2 sigma_bao^2) for r >= 0), whose exact
-      d-dimensional Fourier transform A_bao W(k) oscillates in sign, carried by its envelope E(k) >= |W(k)|:
+      d-dimensional Fourier transform is P_BAO(k) = A_bao W(k):
 
-          P_BAO(k) = A_bao [E(k) + W(k)] = A_bao E(k) [1 + f(k)],   f = W / E,  |f| <= 1,
+          1D: W = 2 G cos(k r_bao),
+          2D: W = 2 pi int_0^inf r [g(r - r_bao) + g(r + r_bao)] J_0(k r) dr,
+          3D: W = 4 pi G [sigma_bao^2 cos(k r_bao) + r_bao sin(k r_bao) / k],
 
-          1D: W = 2 G cos(k r_bao),                                  E = 2 G,
-          2D: W = 2 pi int_0^inf r [g(r - r_bao) + g(r + r_bao)] J_0(k r) dr,   E = the same with J_0(k r) -> m(k r),
-          3D: W = 4 pi G [sigma_bao^2 cos(k r_bao) + r_bao sin(k r_bao) / k],     E = 4 pi G [sigma_bao^2 + r_bao / k],
+      with G(k) = sigma_bao sqrt(2 pi) exp(-k^2 sigma_bao^2 / 2) (2D: Gauss-Legendre, 256 nodes on r_bao +- 10
+      sigma_bao, J_0 from Abramowitz & Stegun 9.4.1 / 9.4.3, |error| < 5e-8).
 
-      with G(k) = sigma_bao sqrt(2 pi) exp(-k^2 sigma_bao^2 / 2) and, in 2D, m(x) = min(1, sqrt(2 / (pi x))) >= |J_0(x)|
-      (Sonin-Polya: the maxima of sqrt(x) |J_0(x)| rise towards sqrt(2 / pi)); Gauss-Legendre, 256 nodes on
-      r_bao +- 10 sigma_bao, J_0 from Abramowitz & Stegun 9.4.1 / 9.4.3, |error| < 5e-8. So P_BAO >= 0 for every
-      A_bao >= 0, by construction: the wiggle f multiplies its own envelope, and the smooth spectrum P_pl + A_bao E
-      carries them. In xi the term is the bump plus the inverse transform of A_bao E, a positive-definite function
-      peaked at r = 0 (3D: 2 A_bao exp(-r^2 / 2 sigma_bao^2) + 4 A_bao r_bao F(r / (sqrt(2) sigma_bao)) / (sqrt(pi) r),
-      F the Dawson function: ~ 2 sqrt(2 / pi) A_bao r_bao sigma_bao / r^2 for r >> sigma_bao, a fraction ~ 1.6
-      sigma_bao / r_bao of the bump at r_bao; 1D: 2 A_bao g(r)). A bare bump, P_pl + A_bao W, would need
-      A_bao |W| <= P_pl wherever P_pl is small, which caps A_bao; the envelope lifts that cap.
+    Validity. A Gaussian field needs P >= 0 at every mode (Bochner's theorem; equivalently |xi(r)| <= xi(0)). K and D are
+    never negative, but W changes sign (a bump away from r = 0 alone is not a valid correlation function), so the power
+    law must exceed the troughs of A_bao W at every mode of the grid. With R_bao = A_bao / A_s,
 
-    A Gaussian field needs P >= 0 at every mode: P_pl > 0, P_BAO >= 0, and K and D are never negative. The k = 0 mode
-    stays zero.
+        R_bao <= R_max = min_{k in grid, W(k) < 0} (k / k_0)^(n_s - 1) / |W(k)|,
+
+    independent of A_s (so of the variance of the field), evaluated on the grid's own |k| (``bao_ratio_max``); a larger
+    ratio raises a ``ValueError`` quoting R_max (concrete inputs). The k = 0 mode stays zero.
 
     Positions are x_j = j L / N (j = 0..N-1), and wavenumbers are angular,
     k = 2 pi fftfreq(N, d=L/N) [1 / length units], as in ``summary_stats.stats_1d``.
@@ -246,6 +243,14 @@ class PowerLawGRF:
             raise ValueError(f"r_bao must be >= 0, got {r_bao}.")
         if concrete(A_bao) and float(A_bao) < 0.0:
             raise ValueError(f"A_bao must be >= 0 (the height of the bump in xi), got {A_bao}.")
+        if all(concrete(x) for x in (A_s, k_0, n_s, A_bao, r_bao, sigma_bao)) and float(A_bao) > 0.0:
+            r_max = self.bao_ratio_max()
+            if not float(A_bao) <= r_max * float(A_s) * (1.0 + 1e-12):
+                ratio = float(A_bao) / float(A_s) if float(A_s) > 0 else np.inf
+                raise ValueError(
+                    f"BAO term too strong for a valid field: R_bao = A_bao / A_s = {ratio:.6g} exceeds R_max = {r_max:.6g}, "
+                    f"the largest ratio with P(k) >= 0 at every mode of this grid (P_pl + A_bao W < 0 in the troughs of W)."
+                )
 
     # -- pytree -------------------------------------------------------------
     _OPTIONAL = ("beta", "sigma_fog", "A_bao", "r_bao", "sigma_bao")
@@ -341,22 +346,21 @@ class PowerLawGRF:
         return k_vec, jnp.sqrt(sum(k**2 for k in k_vec))
 
     # -- spectrum -----------------------------------------------------------
-    def power(self, k, mu=None, bao: str = "total"):
+    def power(self, k, mu=None, bao: bool = True):
         """P(k, mu) for k > 0, and 0 at k = 0 [length^d] (class docstring).
 
         Without the optional terms, P(k) = A_s (k / k_0)^(n_s - 1). ``mu`` = |k_par| / |k| (broadcastable to k) is
-        needed when a Kaiser or Fingers-of-God term is on, except in 1D where mu = 1. ``bao``: "total" (the spectrum
-        of ``sample``) or "envelope", the no-wiggle spectrum P_pl + A_bao E, whose xi lacks only the bump (``bao_power``).
-        Uses the double-``where`` pattern, so no inf / NaN appears for n_s < 1, in the value or in its gradient.
+        needed when a Kaiser or Fingers-of-God term is on, except in 1D where mu = 1. ``bao``: True (the spectrum of
+        ``sample``, P_pl + A_bao W) or False (the power law alone: the spectrum without the bump in xi). The sum is floored
+        at 0, which only absorbs rounding: R_bao <= R_max is checked at construction (``bao_ratio_max``). Uses the
+        double-``where`` pattern, so no inf / NaN appears for n_s < 1, in the value or in its gradient.
         """
-        if bao not in ("total", "envelope"):
-            raise ValueError(f"bao must be 'total' or 'envelope', got {bao!r}.")
         k = jnp.asarray(k)
         pos = k > 0
         k_safe = jnp.where(pos, k, self.k_0)
         p = self.A_s * (k_safe / self.k_0) ** (self.n_s - 1.0)
-        if self.A_bao is not None:
-            p = p + self.bao_power(k_safe, bao)
+        if self.A_bao is not None and bao:
+            p = jnp.maximum(p + self.bao_power(k_safe), 0.0)
         if self.anisotropic:
             if self.ndim == 1:
                 mu = 1.0
@@ -374,7 +378,7 @@ class PowerLawGRF:
         """mu = |k_par| / |k| on a ``k_grid`` (k_par along ``los_axis``; 0 at k = 0)."""
         return jnp.abs(k_vec[self.los_axis]) / jnp.where(k_mod > 0, k_mod, 1.0)
 
-    def power_grid(self, real: bool = True, bao: str = "total"):
+    def power_grid(self, real: bool = True, bao: bool = True):
         """P of every mode of the FFT grid (``k_grid(real)`` layout): what ``sample`` and ``variance`` use (``bao``:
         ``power``)."""
         k_vec, k_mod = self.k_grid(real=real)
@@ -406,66 +410,92 @@ class PowerLawGRF:
             mu, wt = np.cos(0.25 * np.pi * (t + 1.0)), 0.5 * w
         return jnp.sum(wt * self.power(k[..., None], mu), axis=-1)
 
-    def bao_power(self, k, part: str = "total"):
-        """P_BAO(k) [length^d] for k > 0 (class docstring): ``part`` "total" = A_bao (E + W) >= 0, "wiggle" = A_bao W
-        (the exact transform of the bump in xi), "envelope" = A_bao E (the smooth part)."""
-        k = jnp.asarray(k)
-        A, r0, sg = self.A_bao, self.r_bao, self.sigma_bao
-        G = sg * jnp.sqrt(2.0 * jnp.pi) * jnp.exp(-0.5 * (k * sg) ** 2)
-        if self.ndim == 1:
-            W, E = 2.0 * G * jnp.cos(k * r0), 2.0 * G
-        elif self.ndim == 3:
-            W = 4.0 * jnp.pi * G * (sg**2 * jnp.cos(k * r0) + r0 * jnp.sin(k * r0) / k)
-            E = 4.0 * jnp.pi * G * (sg**2 + r0 / k)
-        else:
-            t, w = np.polynomial.legendre.leggauss(256)  # 2D: the Hankel transform, by quadrature
-            lo = jnp.maximum(0.0, r0 - 10.0 * sg)
-            hi = r0 + 10.0 * sg
-            r = lo + 0.5 * (hi - lo) * (t + 1.0)
-            wr = 0.5 * (hi - lo) * w
-            f = 2.0 * jnp.pi * wr * r * (jnp.exp(-0.5 * ((r - r0) / sg) ** 2) + jnp.exp(-0.5 * ((r + r0) / sg) ** 2))
-            kr = k[..., None] * r
-            W = jnp.sum(f * bessel_j0(kr), axis=-1)
-            E = jnp.sum(f * jnp.minimum(1.0, jnp.sqrt(2.0 / (jnp.pi * jnp.maximum(kr, 1e-300)))), axis=-1)
-        if part == "wiggle":
-            return A * W
-        if part == "envelope":
-            return A * E
-        if part != "total":
-            raise ValueError(f"part must be 'total', 'wiggle' or 'envelope', got {part!r}.")
-        return A * jnp.maximum(E + W, 0.0)  # E >= |W| analytically; the floor only absorbs rounding
+    def bao_window(self, k):
+        """W(k) [length^d], the exact d-dimensional Fourier transform of the unit bump g(r - r_bao) + g(r + r_bao)
+        (class docstring), at k > 0: P_BAO = A_bao W. It changes sign, which bounds A_bao / A_s (``bao_ratio_max``)."""
+        return _bao_window(jnp.asarray(k), self.r_bao, self.sigma_bao, self.ndim)
 
-    def correlation(self, r, *, nodes: int = 8, r_chunk: int = 16):
-        """The continuous correlation function of an isotropic 3D spectrum (the power law and the BAO term),
+    def bao_power(self, k):
+        """P_BAO(k) = A_bao W(k) [length^d] for k > 0 (class docstring): the exact transform of the bump in xi."""
+        return self.A_bao * self.bao_window(k)
 
-            xi(r) = (2 pi^2)^-1 int_0^inf k^2 P(k) sin(kr) / (kr) dk = (2 pi^2 r)^-1 int_0^inf k P(k) sin(kr) dk,
+    def bao_ratio_max(self) -> float:
+        """R_max = min over the modes k != 0 of the grid with W(k) < 0 of (k / k_0)^(n_s - 1) / |W(k)| (class docstring):
+        the largest R_bao = A_bao / A_s with P(k) >= 0 at every mode (inf if W >= 0 at every mode). Independent of A_s;
+        evaluated on the distinct |k| of the grid (cached per grid and shape). Needs concrete k_0, n_s, r_bao, sigma_bao."""
+        if self.A_bao is None:
+            return np.inf
+        return _bao_ratio_max(self.shape, self.L, float(self.k_0), float(self.n_s), float(self.r_bao), float(self.sigma_bao))
 
-        for r > 0 [length] (NumPy, (N_r,)): the infinite-volume counterpart of ``power``, over every k (no k = 0 mode
-        removed, no Nyquist cube, no periodic images; ``summary_stats.GridStatistics3D.theory`` gives the grid's). A
-        numerical Hankel transform of the full spectrum, accurate to ~1e-7 of xi (tests: against the closed forms of the
-        power law and of the BAO term, class docstring):
+    def correlation(self, r, *, log=print):
+        """The continuous correlation function of the isotropic 3D spectrum (the power law and the BAO term), for r > 0
+        [length] (NumPy, (N_r,)): the infinite-volume counterpart of ``power``, over every k (no k = 0 mode removed, no
+        Nyquist cube, no periodic images; ``summary_stats.GridStatistics3D.theory`` gives the grid's). In closed form,
+        term by term of P = P_pl + A_bao W (class docstring; xi = (2 pi^2 r)^-1 int_0^inf k P(k) sin(kr) dk):
 
-        * [0, k_a], k_a = min(K, pi / (2 r_max)): k = k_a t^p with p >= 2 / (n_s + 2), which removes the integrable
-          k^(n_s + 1) behaviour at k = 0; Gauss-Legendre, 32 panels of ``nodes`` nodes in t;
-        * [k_a, K]: Gauss-Legendre panels of width pi / (2 r_max) (four per oscillation of sin(kr)), ``nodes`` nodes
-          each, with K = max(9 / sigma_bao, 40 / r_min), beyond which the BAO term is below e^-40 of its peak;
-        * [K, inf): the power law alone, by repeated integration by parts: with f = k P_pl = A_s k_0^(1 - n_s) k^n_s and
-          f_n = d^n f / dk^n = n_s (n_s - 1) ... (n_s - n + 1) f / k^n, int_K^inf f sin(kr) dk = f cos(Kr) / r -
-          f_1 sin(Kr) / r^2 - f_2 cos(Kr) / r^3 + f_3 sin(Kr) / r^4 + O((4 / Kr)^4), a small tail.
+            xi(r) = A_s k_0^(1 - n_s) Gamma(n_s + 1) sin(pi (n_s + 1) / 2) / (2 pi^2 r^(n_s + 2))      (power law)
+                  + A_bao [g(r - r_bao) + g(r + r_bao)]                                                (the bump)
 
-        Needs -2 < n_s < 0 (xi converges at both ends) and no Kaiser or Fingers-of-God term."""
+        with g(u) = exp(-u^2 / (2 sigma_bao^2)). The power law uses int_0^inf x^(mu - 1)
+        sin x dx = Gamma(mu) sin(pi mu / 2), which converges for -1 < mu = n_s + 1 < 1, i.e. -2 < n_s < 0 (the limit
+        pi / 2 at n_s = -1); the bump holds for every r_bao, sigma_bao > 0. Outside -2 < n_s < 0 the infinite-volume
+        xi of the power law diverges (at k -> 0 for n_s <= -2, at k -> inf for n_s >= 0): ``log`` reports it in one line
+        and the result is the numerical Hankel transform of P over the k range of the grid, from the fundamental mode
+        2 pi / L to the corner of the Nyquist cube sqrt(3) pi / dx (``correlation_hankel(k_range=...)``)."""
+        from scipy.special import gamma
+
         if self.ndim != 3 or self.anisotropic:
             raise ValueError("correlation() is the isotropic 3D transform: a 3D PowerLawGRF without Kaiser or FoG terms.")
-        n_s = float(self.n_s)
-        if not -2.0 < n_s < 0.0:
-            raise ValueError(f"xi(r) of a power law k^(n_s - 1) converges for -2 < n_s < 0, got n_s = {n_s}.")
         r = np.atleast_1d(np.asarray(r, dtype=float))
         if np.any(r <= 0):
             raise ValueError("correlation() needs r > 0.")
+        n_s = float(self.n_s)
+        if not -2.0 < n_s < 0.0:
+            k_range = (2 * np.pi / max(self.L), np.sqrt(3.0) * np.pi / min(self.dx))
+            if log:
+                log(
+                    f"correlation: n_s = {n_s:g} is outside -2 < n_s < 0, where the closed form (and the infinite-volume xi) "
+                    f"exists; numerical Hankel transform over the grid's k range {k_range[0]:.4g}-{k_range[1]:.4g} instead"
+                )
+            return self.correlation_hankel(r, k_range=k_range)
+        mu = n_s + 1.0
+        c = 0.5 * np.pi if abs(mu) < 1e-12 else float(gamma(mu) * np.sin(0.5 * np.pi * mu))  # Gamma(mu) sin(pi mu / 2)
+        out = float(self.A_s) * float(self.k_0) ** (1.0 - n_s) * c / (2.0 * np.pi**2 * r ** (n_s + 2.0))
+        if self.A_bao is not None:
+            A, r0, sg = float(self.A_bao), float(self.r_bao), float(self.sigma_bao)
+            g = lambda u: np.exp(-0.5 * (u / sg) ** 2)
+            out = out + A * (g(r - r0) + g(r + r0))  # the bump: the transform of A_bao W
+        return out
+
+    def correlation_hankel(self, r, *, k_range=None, k_tail: float = 40.0, nodes: int = 8, r_chunk: int = 16):
+        """The correlation function of the isotropic 3D spectrum by a numerical Hankel transform,
+
+            xi(r) = (2 pi^2)^-1 int k^2 P(k) sin(kr) / (kr) dk = (2 pi^2 r)^-1 int k P(k) sin(kr) dk,
+
+        for r > 0 [length] (NumPy, (N_r,)), of the full spectrum (the power law and the BAO term): the numerical check of
+        the closed form ``correlation`` (tests: agreement to ~1e-7 of xi).
+
+        * ``k_range`` None, over every k (needs -2 < n_s < 0):
+          [0, k_a], k_a = min(K, pi / (2 r_max)): k = k_a t^p with p >= 2 / (n_s + 2), which removes the integrable
+          k^(n_s + 1) behaviour at k = 0; Gauss-Legendre, 32 panels of ``nodes`` nodes in t;
+          [k_a, K]: Gauss-Legendre panels of width pi / (2 r_max) (four per oscillation of sin(kr)), ``nodes`` nodes
+          each, with K = max(9 / sigma_bao, ``k_tail`` / r_min), beyond which the BAO term is below e^-40 of its peak
+          (``k_tail`` = 400: ~1e-13, at ten times the cost);
+          [K, inf): the power law alone, by repeated integration by parts: with f = k P_pl = A_s k_0^(1 - n_s) k^n_s and
+          f_n = d^n f / dk^n = n_s (n_s - 1) ... (n_s - n + 1) f / k^n, int_K^inf f sin(kr) dk = f cos(Kr) / r -
+          f_1 sin(Kr) / r^2 - f_2 cos(Kr) / r^3 + f_3 sin(Kr) / r^4 + O((4 / Kr)^4), a small tail.
+        * ``k_range`` = (k_lo, k_hi) [1 / length]: the integral over that range only (any n_s), Gauss-Legendre panels of
+          width pi / (2 r_max), ``nodes`` nodes each (``correlation``'s fallback).
+
+        Needs a 3D spectrum without Kaiser or Fingers-of-God terms."""
+        if self.ndim != 3 or self.anisotropic:
+            raise ValueError("correlation_hankel() is the isotropic 3D transform: a 3D PowerLawGRF without Kaiser or FoG terms.")
+        n_s = float(self.n_s)
+        r = np.atleast_1d(np.asarray(r, dtype=float))
+        if np.any(r <= 0):
+            raise ValueError("correlation_hankel() needs r > 0.")
         A, k0 = float(self.A_s), float(self.k_0)
         r_min, r_max = float(r.min()), float(r.max())
-        K = 40.0 / r_min if self.A_bao is None else max(9.0 / float(self.sigma_bao), 40.0 / r_min)
-        k_a = min(K, 0.5 * np.pi / r_max)
         t, w = np.polynomial.legendre.leggauss(int(nodes))
 
         def panels(a, b, n):  # Gauss-Legendre nodes and weights of n equal panels on [a, b]
@@ -473,20 +503,29 @@ class PowerLawGRF:
             h = 0.5 * np.diff(e)
             return ((e[:-1] + h)[:, None] + h[:, None] * t).ravel(), (h[:, None] * w).ravel()
 
-        p = max(4.0, np.ceil(2.0 / (n_s + 2.0)) + 1.0)
-        tt, wt = panels(0.0, 1.0, 32)
-        k1, w1 = k_a * tt**p, wt * p * k_a * tt ** (p - 1.0)
-        k2, w2 = panels(k_a, K, max(1, int(np.ceil((K - k_a) / (0.5 * np.pi / r_max)))))
-        k, wk = np.concatenate([k1, k2]), np.concatenate([w1, w2])
+        if k_range is not None:
+            lo, hi = (float(x) for x in k_range)
+            k, wk = panels(lo, hi, max(1, int(np.ceil((hi - lo) / (0.5 * np.pi / r_max)))))
+        else:
+            if not -2.0 < n_s < 0.0:
+                raise ValueError(f"xi(r) of a power law k^(n_s - 1) converges for -2 < n_s < 0, got n_s = {n_s}.")
+            K = k_tail / r_min if self.A_bao is None else max(9.0 / float(self.sigma_bao), k_tail / r_min)
+            k_a = min(K, 0.5 * np.pi / r_max)
+            p = max(4.0, np.ceil(2.0 / (n_s + 2.0)) + 1.0)
+            tt, wt = panels(0.0, 1.0, 32)
+            k1, w1 = k_a * tt**p, wt * p * k_a * tt ** (p - 1.0)
+            k2, w2 = panels(k_a, K, max(1, int(np.ceil((K - k_a) / (0.5 * np.pi / r_max)))))
+            k, wk = np.concatenate([k1, k2]), np.concatenate([w1, w2])
         f = wk * k * np.asarray(self.power(jnp.asarray(k)), dtype=float)  # k P(k) dk, the full spectrum
         out = np.empty_like(r)
         for i in range(0, r.size, int(r_chunk)):
             rc = r[i : i + int(r_chunk)]
             out[i : i + rc.size] = np.sin(np.outer(rc, k)) @ f
-        fK = A * k0 ** (1.0 - n_s) * K**n_s  # the tail of the power law beyond K
-        d1, d2, d3 = n_s / K, n_s * (n_s - 1.0) / K**2, n_s * (n_s - 1.0) * (n_s - 2.0) / K**3
-        c, sn = np.cos(K * r), np.sin(K * r)
-        out += fK * (c / r - d1 * sn / r**2 - d2 * c / r**3 + d3 * sn / r**4)
+        if k_range is None:
+            fK = A * k0 ** (1.0 - n_s) * K**n_s  # the tail of the power law beyond K
+            d1, d2, d3 = n_s / K, n_s * (n_s - 1.0) / K**2, n_s * (n_s - 1.0) * (n_s - 2.0) / K**3
+            c, sn = np.cos(K * r), np.sin(K * r)
+            out += fK * (c / r - d1 * sn / r**2 - d2 * c / r**3 + d3 * sn / r**4)
         return out / (2.0 * np.pi**2 * r)
 
     def variance(self):
@@ -515,6 +554,43 @@ class PowerLawGRF:
             ``k_grid(real=True)``.
         """
         return _sample_power_law_grf(self, key, return_modes)
+
+
+def _bao_window(k, r0, sg, ndim: int):
+    """W(k) of ``PowerLawGRF.bao_window`` in ``ndim`` dimensions (jax.numpy; k > 0)."""
+    G = sg * jnp.sqrt(2.0 * jnp.pi) * jnp.exp(-0.5 * (k * sg) ** 2)
+    if ndim == 1:
+        return 2.0 * G * jnp.cos(k * r0)
+    if ndim == 3:
+        return 4.0 * jnp.pi * G * (sg**2 * jnp.cos(k * r0) + r0 * jnp.sin(k * r0) / k)
+    t, w = np.polynomial.legendre.leggauss(256)  # 2D: the Hankel transform, by quadrature
+    lo = jnp.maximum(0.0, r0 - 10.0 * sg)
+    hi = r0 + 10.0 * sg
+    r = lo + 0.5 * (hi - lo) * (t + 1.0)
+    wr = 0.5 * (hi - lo) * w
+    f = 2.0 * jnp.pi * wr * r * (jnp.exp(-0.5 * ((r - r0) / sg) ** 2) + jnp.exp(-0.5 * ((r + r0) / sg) ** 2))
+    return jnp.sum(f * bessel_j0(k[..., None] * r), axis=-1)
+
+
+def _grid_k_moduli(shape, L) -> np.ndarray:
+    """The distinct |k| > 0 of the modes of a periodic grid (``shape`` cells, sides ``L`` [length]), k_i = 2 pi m_i / L_i
+    with |m_i| <= N_i // 2 [1 / length], ascending (NumPy). Built axis by axis from the distinct partial sums of k_i^2,
+    so it never forms the full grid of modes."""
+    k2 = np.zeros(1)
+    for n, l in zip(shape, L):
+        k2 = np.unique(np.add.outer(k2, (2.0 * np.pi * np.arange(int(n) // 2 + 1) / float(l)) ** 2).ravel())
+    return np.sqrt(k2[k2 > 0])
+
+
+@lru_cache(maxsize=64)
+def _bao_ratio_max(shape, L, k_0: float, n_s: float, r_bao: float, sigma_bao: float) -> float:
+    """R_max of ``PowerLawGRF.bao_ratio_max`` on the grid (shape, L) (cached)."""
+    k = _grid_k_moduli(shape, L)
+    W = np.asarray(_bao_window(jnp.asarray(k), r_bao, sigma_bao, len(shape)), dtype=float)
+    neg = W < 0
+    if not neg.any():
+        return float(np.inf)
+    return float(np.min((k[neg] / k_0) ** (n_s - 1.0) / np.abs(W[neg])))
 
 
 @partial(jax.jit, static_argnames=("return_modes",))
