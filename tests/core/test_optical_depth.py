@@ -6,6 +6,7 @@
   and thermal lines to 1e-6 in F, radiation domination with thermal lines converging as N^-2, and the resolution check
   that flags unresolved natural lines (formerly ``scripts/validation/check_optical_depth_analytic.py``; the figure:
   ``scripts/figures/optical_depth_vs_analytic.py``; the cases: ``analytic_cases.py``);
+* the effective scale factor ``a_eff`` of the density conversion (None: a_p per piece; traced, differentiable);
 * the opt-in float32 kernel, the sharded tau (one and four CPU devices, bit for bit), jit of the pieces path;
 * on a GPU (``gpu`` marker): the same tau as on the CPU.
 """
@@ -147,6 +148,34 @@ def test_radiation_domination_thermal_converges_full():
     assert float(errs[-1].max()) <= 1e-2, errs
 
 
+# --------------------------------------------------------------------------- the density conversion a_eff
+def test_a_eff_density_conversion():
+    """``a_eff``: None is the per-piece a_p^-2 (the same tau as without the option, bit for bit); a scalar is a_eff^-2
+    for every piece, i.e. the densities rescaled by (a_p / a_eff)^2 with the line centres, widths and detuning untouched;
+    traced in the kernel (no recompilation per value) and differentiable, d tau / d a_eff = -2 tau / a_eff; a value that
+    is not a finite positive scalar raises."""
+    from dataclasses import replace
+
+    smp, v, lb = ramp_pieces()
+    t0 = np.asarray(compute_optical_depth(smp, v, lb, resolution_tolerance=None))
+    assert np.array_equal(np.asarray(compute_optical_depth(smp, v, lb, a_eff=None, resolution_tolerance=None)), t0)
+    a_eff = 0.27
+    scaled = replace(smp, number_density=smp.number_density * (smp.scale_factor[None] / a_eff) ** 2)
+    t_ref = np.asarray(compute_optical_depth(scaled, v, lb, resolution_tolerance=None))
+    t_a = np.asarray(compute_optical_depth(smp, v, lb, a_eff=a_eff, resolution_tolerance=None))
+    np.testing.assert_allclose(t_a, t_ref, rtol=1e-12, atol=1e-14 * t_ref.max())
+    assert np.max(np.abs(t_a - t0)) > 1e-3 * t0.max(), "the a_p of the pieces differ from a_eff"
+    n0 = optical_depth_from_pieces._cache_size()
+    for a in (0.25, 0.3, 0.35):
+        optical_depth_from_pieces(smp, v, lb, a_eff=a)
+    assert optical_depth_from_pieces._cache_size() - n0 <= 1, "a_eff is traced: one compilation for every value"
+    g = jax.grad(lambda a: jnp.sum(optical_depth_from_pieces(smp, v, lb, a_eff=a)))(a_eff)
+    np.testing.assert_allclose(float(g), -2.0 * t_a.sum() / a_eff, rtol=1e-10)
+    for bad in (-1.0, np.inf, np.ones(2)):
+        with pytest.raises(ValueError, match="a_eff"):
+            compute_optical_depth(smp, v, lb, a_eff=bad, resolution_tolerance=None)
+
+
 # --------------------------------------------------------------------------- precision, sharding, devices
 def test_float32_is_opt_in_and_close():
     smp, v, lb = ramp_pieces()
@@ -173,6 +202,8 @@ assert np.array_equal(np.asarray(optical_depth_sharded(smp, v, lb)), np.asarray(
 P = np.linspace(300.0, 360.0, 7)                                     # one period per skewer, sharded with the skewers
 assert np.array_equal(np.asarray(optical_depth_sharded(smp, v, lb, velocity_period=P)),
                       np.asarray(optical_depth_from_pieces(smp, v, lb, velocity_period=P)))
+assert np.array_equal(np.asarray(optical_depth_sharded(smp, v, lb, a_eff=0.3)),        # a_eff replicated on every device
+                      np.asarray(optical_depth_from_pieces(smp, v, lb, a_eff=0.3)))
 """
 
 

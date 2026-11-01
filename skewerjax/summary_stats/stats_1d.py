@@ -12,7 +12,7 @@ import numpy as np
 
 from skewerjax.summary_stats.binning import bin_index, binned_mean, ensemble_mean
 from skewerjax.summary_stats.fourier import lag_axis, rfft_multiplicity, xi_from_power
-from skewerjax.summary_stats.orders import ZERO_ORDER_KEY, order_sum, subset_orders
+from skewerjax.summary_stats.orders import ZERO_ORDER_KEY, _C_rows, order_sum, subset_orders
 from skewerjax.summary_stats.overflux import DeltaFieldBuilder
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,8 @@ def p1d_kernel(total, terms, w, c, pref, chunk: int):
     Parameters
     ----------
     total : (B, N) real; terms : (n, B, N) real (raw subset fields delta_A);
-    w, c : (N,) per-pixel weights 1/(1+C(v)) and offsets C(v)/(1+C(v)) (the same for every sample); pref = dv / N.
+    w, c : (1, N) per-pixel weights 1/(1+C(v)) and offsets C(v)/(1+C(v)) shared by every sample, or (B, N), one row
+        per sample (``mean="skewer"``); pref = dv / N.
 
     Returns
     -------
@@ -45,22 +46,30 @@ def p1d_kernel(total, terms, w, c, pref, chunk: int):
     terms = jnp.pad(terms, ((0, 0), (0, pad), (0, 0))).reshape(n, n_chunks, chunk, N)
     terms = jnp.moveaxis(terms, 1, 0)
     live = jnp.pad(jnp.ones(B, total.dtype), (0, pad)).reshape(n_chunks, chunk)  # 0 for the padding samples
-    f_c = jnp.fft.rfft(-c)  # (K,): the order-0 term, the same for every sample
+    shared = w.shape[0] == 1
+    if shared:  # the same weights for every sample: carried as (1, N) into every chunk
+        wc = jnp.zeros((n_chunks, 1, 1), total.dtype)
+    else:
+        w = jnp.pad(w, ((0, pad), (0, 0))).reshape(n_chunks, chunk, N)
+        c = jnp.pad(c, ((0, pad), (0, 0))).reshape(n_chunks, chunk, N)
+        wc = jnp.stack([w, c], axis=1)  # (n_chunks, 2, chunk, N)
+    f_c = jnp.fft.rfft(-c, axis=-1) if shared else None  # (1, K): the order-0 term shared by every sample
 
     def body(carry, xs):
         s_raw, s_w = carry
-        t, tm, m = xs
+        t, tm, m, x = xs
+        w_s, f_cs = (w, f_c) if shared else (x[0], jnp.fft.rfft(-x[1], axis=-1))  # (1 or chunk, N), (1 or chunk, K)
         f_tot = jnp.fft.rfft(t, axis=-1)
         f_raw = jnp.fft.rfft(tm, axis=-1)  # (n, chunk, K)
-        f_0 = (m[:, None] * f_c[None, :])[None]  # (1, chunk, K)
-        f_w = jnp.concatenate([f_0, jnp.fft.rfft(w * tm, axis=-1)], axis=0)  # (n+1, chunk, K)
+        f_0 = (m[:, None] * f_cs)[None]  # (1, chunk, K)
+        f_w = jnp.concatenate([f_0, jnp.fft.rfft(w_s * tm, axis=-1)], axis=0)  # (n+1, chunk, K)
         s_raw = s_raw + jnp.einsum("asf,bsf->abf", f_raw, f_raw.conj())
         s_w = s_w + jnp.einsum("asf,bsf->abf", f_w, f_w.conj())
         return (s_raw, s_w), pref * jnp.abs(f_tot) ** 2
 
     cdt = jnp.result_type(total.dtype, jnp.complex64)
     init = (jnp.zeros((n, n, K), cdt), jnp.zeros((n + 1, n + 1, K), cdt))
-    (s_raw, s_w), p_tot = jax.lax.scan(body, init, (total, terms, live))
+    (s_raw, s_w), p_tot = jax.lax.scan(body, init, (total, terms, live, wc))
     return pref * s_raw / B, pref * s_w / B, p_tot.reshape(-1, K)[:B]
 
 
@@ -82,8 +91,8 @@ class OverfluxStatistics1D:
     Eq. xi1D_ensemble_L2_decomposition; ``summary_stats.orders``)
     ---------------------------------------------------------------------------
     At every pixel, delta_tot = sum_A w delta_A - c with w = 1/(1+C(v)), c = C(v)/(1+C(v)) (exact
-    for ``DeltaFieldBuilder``, normalised by the mean transmission of the ensemble; C is one number with its default
-    ``mean="global"``, one per pixel with ``"per_pixel"``). The weighted terms
+    for ``DeltaFieldBuilder``, normalised by the mean transmission over the set of pixels of ``mean``; C is one per
+    pixel with the default ``mean="redshift"``, one number with "global" or "box", one per skewer with "skewer"). The weighted terms
     (A, B), including the order-0 term ``ZERO_ORDER_KEY`` = -c(v), have order |A|+|B| and sum
     exactly to the total:
 
@@ -107,7 +116,7 @@ class OverfluxStatistics1D:
     Parameters
     ----------
     overflux : DeltaFieldBuilder (built)
-        Must expose subset_keys, delta_terms, C_per_pixel (1, N_v), total.
+        Must expose subset_keys, delta_terms, C_per_pixel ((1, N_v), or (N_s, N_v) with one row per sample), total.
     dv : float
         Pixel width [km/s].
     c_norm_min : float
@@ -127,7 +136,7 @@ class OverfluxStatistics1D:
                 raise ValueError(f"`overflux` is missing required attribute '{attr}'.")
 
         total = jnp.asarray(overflux.total)
-        C_per_pixel = jnp.broadcast_to(jnp.asarray(overflux.C_per_pixel).reshape(1, -1), (1, total.shape[1]))
+        C_per_pixel = _C_rows(overflux.C_per_pixel, total.shape)
         if not bool(jnp.all(jnp.isfinite(C_per_pixel)) & jnp.all(jnp.abs(1.0 + C_per_pixel) > self.c_norm_min)):
             raise ValueError("The normalisation 1 + C(v) is not finite or vanishes at some pixel.")
         self.subset_keys = list(overflux.subset_keys)
@@ -147,6 +156,7 @@ class OverfluxStatistics1D:
             )
             keep = np.asarray(valid_mask)
             total, terms = total[keep], terms[:, keep]
+            C_per_pixel = C_per_pixel if C_per_pixel.shape[0] == 1 else C_per_pixel[keep]
 
         self.total = total
         self.C_per_pixel = C_per_pixel
@@ -189,7 +199,7 @@ class OverfluxStatistics1D:
         """Compute all P1D statistics (one jitted, chunked pass over the skewers)."""
         if self.Pk_total is not None:
             return self
-        C = self.C_per_pixel[0]
+        C = self.C_per_pixel
         w, c = 1.0 / (1.0 + C), C / (1.0 + C)
         P_raw, P_w, P_tot = p1d_kernel(
             self.total, self._terms, w, c, self.dv / self.N_v, min(self.chunk_size, self.n_samples_kept)
@@ -306,9 +316,10 @@ def ensemble_1d(summaries) -> dict:
     return out
 
 
-def p1d_from_tau(tau, dv: float, mean: str = "global"):
-    """P1D of the overflux delta = T / T_bar - 1 of one line (T_bar: the mean over the skewers, ``mean`` "global" over
-    every pixel or "per_pixel" at each pixel, ``DeltaFieldBuilder``) over all skewers, without the k = 0 mode.
+def p1d_from_tau(tau, dv: float, mean: str = "redshift"):
+    """P1D of the overflux delta = T / T_bar - 1 of one line (T_bar: the mean over the set of pixels of ``mean``,
+    ``DeltaFieldBuilder``: "redshift" at each pixel over the skewers, "global" / "box" over every pixel, "skewer" over
+    each skewer) over all skewers, without the k = 0 mode.
 
     tau : (N_sk, N_v); dv : pixel width [km/s]. Returns (k [s/km], P [km/s]) as NumPy arrays.
     """

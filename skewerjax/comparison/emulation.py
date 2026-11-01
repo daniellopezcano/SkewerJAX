@@ -333,6 +333,7 @@ def _per_cell_tau(sk, ion, line_bundle, v, ext, integ: MatchedIntegration, overr
                 tautail=integ.tautail,
                 detuning=integ.detuning,
                 n_scale=integ.normalisation,
+                a_eff=integ.a_eff,
             )[0]
         )
     return np.stack(out)

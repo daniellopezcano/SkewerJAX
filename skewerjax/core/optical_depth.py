@@ -9,7 +9,12 @@ evaluated as a sum over **pieces** p, fragments of the path within which the gas
     tau_j(v) = C_j f_j sum_p l_p n_com,p a_p^-2 phi_pj(v),
 
 with every quantity of a piece, its scale factor a_p included, evaluated at the piece's centroid (the midpoint rule
-on each piece). The gas is a set of Voronoi cells (``core.cells.Cells``, from a toy model or a simulation), constant
+on each piece). The factor a_p^-2 converts the comoving density and length to physical ones; the option ``a_eff``
+(``compute_optical_depth``) replaces it by one a_eff^-2 for every piece (a fixed comoving-to-physical conversion,
+e.g. a_eff = 1 / (1 + z) of a snapshot) and touches nothing else: the line centres v_c,p, the widths and the detuning
+keep the a(x) of the frame. Through the line centres the frame still sets the Jacobian of the column into velocity:
+a piece of length l_p spreads over a width (a H)_p l_p, so the tau per pixel of a uniform gas also scales as
+1 / (a H) along the path, whatever ``a_eff``. The gas is a set of Voronoi cells (``core.cells.Cells``, from a toy model or a simulation), constant
 inside every cell, and the pieces are the exact intersections of the path with the cells, cut also at the ends of
 the dual segments of the sampling points (``core.absorbers.cell_pieces``). So the column sum_p n_p l_p is exact; the
 profile has an error O((W_p / b_p)^2), W_p the variation of the line centre across the piece (the Hubble flow only:
@@ -68,6 +73,7 @@ def optical_depth_kernel(
     detuning: str = "exact",
     velocity_period=None,
     per_piece: bool = False,
+    a_eff=None,
 ):
     """tau = sum_p l_p C f n_p a_p^-2 phi_p(v) for the pieces of one skewer (Eq. tau_straight_los, as a sum over pieces).
 
@@ -80,6 +86,8 @@ def optical_depth_kernel(
     length_m : (N_p,) piece lengths [comoving m]
     velocity_period : None (no wrap) or the period [km/s] (a number, possibly traced) of the detuning's nearest image.
     per_piece : True returns every piece's contribution (N_lines, N_p, N_v) instead of the sum.
+    a_eff : None (default: a_p^-2 of each piece) or a scalar (possibly traced): a_eff^-2 for every piece in the
+        comoving-to-physical factor only (the line centres and the detuning keep ``scale_factor``).
 
     Returns
     -------
@@ -92,7 +100,8 @@ def optical_depth_kernel(
     n_l, n_p, n_v = nu.shape
     phi = voigt_line_profiles(nu.reshape(n_l * n_p, n_v), sigma.reshape(-1), gamma.reshape(-1), voigt).reshape(n_l, n_p, n_v)
     # dtau/dx [1/m] = C f phi n a^-2 (x comoving); 1e2 turns cm^2 cm^-3 m into a number
-    amp = phys.cross_section_prefactor * f_osc[:, None] * number_density * scale_factor[None, :] ** -2 * 1e2 * length_m[None, :]
+    a2 = scale_factor**-2 if a_eff is None else jnp.broadcast_to(jnp.asarray(a_eff, scale_factor.dtype) ** -2, scale_factor.shape)
+    amp = phys.cross_section_prefactor * f_osc[:, None] * number_density * a2[None, :] * 1e2 * length_m[None, :]
     if per_piece:
         return amp[..., None] * phi
     return jnp.einsum("lp,lpv->lv", amp, phi)
@@ -173,6 +182,7 @@ def optical_depth_from_pieces(
     batch_size: int | None = None,
     per_piece: bool = False,
     dtype: str | None = None,
+    a_eff=None,
 ) -> jnp.ndarray:
     """tau (N_lines, N_sk, N_v) of every skewer of ``pieces``: ``optical_depth_kernel`` mapped over skewers.
 
@@ -182,11 +192,12 @@ def optical_depth_from_pieces(
     inside the sequential map (None: one at a time, the lowest memory). per_piece : (N_lines, N_sk, N_p, N_v).
     dtype : None (default: the dtype of the inputs) or e.g. "float32": opt-in lower-precision kernel (2-3x faster on
         the CPU; max |dF| ~1e-3 on TNG50-4 skewers); the result is cast back to the input dtype.
+    a_eff : None or a scalar (traced: no recompilation per value; differentiable): ``optical_depth_kernel``.
     """
     out_dtype = pieces.temperature.dtype
     if dtype is not None:
-        pieces, velocities_kms, velocity_period = jax.tree_util.tree_map(
-            lambda x: x.astype(dtype), (pieces, velocities_kms, velocity_period)
+        pieces, velocities_kms, velocity_period, a_eff = jax.tree_util.tree_map(
+            lambda x: jnp.asarray(x).astype(dtype), (pieces, velocities_kms, velocity_period, a_eff)
         )
     lam, A21, mass, f_osc = (
         x if dtype is None else x.astype(dtype)
@@ -216,6 +227,7 @@ def optical_depth_from_pieces(
                 detuning=detuning,
                 velocity_period=P,
                 per_piece=per_piece,
+                a_eff=a_eff,
             )
             for v0 in range(0, n_v, nv)
         ]
@@ -252,6 +264,7 @@ def optical_depth_sharded(
     if len(devices) == 1:
         return optical_depth_from_pieces(pieces, velocities_kms, line_bundle, velocity_period=velocity_period, **kw)
     n_sk, n_dev = pieces.scale_factor.shape[0], len(devices)
+    a_eff = kw.pop("a_eff", None)
     pad = -n_sk % n_dev
     skewer_axis = lambda x: 0 if x.ndim <= 2 else 1  # (N_sk,), (N_sk, N_p) or (N_lines, N_sk, N_p)
     args = pieces if velocity_period is None else (pieces, jnp.asarray(velocity_period))
@@ -260,18 +273,18 @@ def optical_depth_sharded(
     )
     spec = jax.tree_util.tree_map(lambda x: PartitionSpec("sk") if x.ndim <= 2 else PartitionSpec(None, "sk"), padded)
 
-    def body(s, v, lb):
+    def body(s, v, lb, ae):
         p, P = (s, None) if velocity_period is None else s
-        return optical_depth_from_pieces(p, v, lb, velocity_period=P, **kw)
+        return optical_depth_from_pieces(p, v, lb, velocity_period=P, a_eff=ae, **kw)
 
     run = shard_map(
         body,
         mesh=Mesh(np.array(devices), ("sk",)),
-        in_specs=(spec, PartitionSpec(), PartitionSpec()),
+        in_specs=(spec, PartitionSpec(), PartitionSpec(), PartitionSpec()),
         out_specs=PartitionSpec(None, "sk"),
         check_rep=False,
     )
-    return jax.jit(run)(padded, velocities_kms, line_bundle)[:, :n_sk]
+    return jax.jit(run)(padded, velocities_kms, line_bundle, a_eff)[:, :n_sk]
 
 
 # --------------------------------------------------------------------------- resolution
@@ -380,6 +393,7 @@ def compute_optical_depth(
     per_piece: bool = False,
     dtype: str | None = None,
     devices=None,
+    a_eff=None,
     return_info: bool = False,
 ) -> jnp.ndarray:
     """tau (N_lines, N_sk, N_v) of every line along every skewer (F = exp(-tau)): the sum over the pieces of ``source``.
@@ -415,10 +429,15 @@ def compute_optical_depth(
     per_piece : True returns every piece's contribution (N_lines, N_sk, N_p, N_v).
     dtype : opt-in kernel precision, e.g. "float32" (``optical_depth_from_pieces``); None keeps the input precision.
     devices : None (one device, the default) or a list of devices to split the skewers over (``optical_depth_sharded``).
+    a_eff : None (default) or a scalar > 0, the effective scale factor of the comoving-to-physical density conversion:
+        None keeps a_p^-2 of every piece (tau_j = C_j f_j sum_p n_com,p l_p a_p^-2 phi_jp); a scalar uses a_eff^-2
+        for every piece (e.g. 1 / (1 + z), a fixed conversion). The line centres v_c,p, the widths, the lengths and
+        the detuning are untouched, so the Jacobian 1 / (a H) of the frame (module docstring) stays. Traced in the
+        kernel (no recompilation per value) and differentiable.
     return_info : also return dict(shape (N_lines, N_sk, N_p), n_v, line_frame, velocity_period (the (N_sk,) periods or
         None), resolution (``resolution_report``, None without the check), pieces_info (``cell_pieces``'s, bundle sources
         only), tau_max (N_lines, N_sk), tau_integral_kms (N_lines, N_sk) = sum_v tau dv over the grid, column_integral_kms
-        (N_lines, N_sk) = sum_p C f n_p a_p^-2 l_p lambda_j, its value from the pieces (every profile has unit area in
+        (N_lines, N_sk) = sum_p C f n_p a_p^-2 l_p lambda_j (a_eff^-2 with ``a_eff``), its value from the pieces (every profile has unit area in
         frequency; exact for the linear detuning, O(b / c) otherwise), window_fraction = their ratio (what the grid holds
         of the absorption: 1 on one period with ``velocity_period``, up to the cut at P/2), timings {pieces, checks, tau}
         [s] (tau waits for the result), time_s). Off by default: no cost.
@@ -446,6 +465,13 @@ def compute_optical_depth(
             f"got shape {v.shape}."
         )
     check_values("velocities_kms", v)
+    if a_eff is not None:
+        if jnp.ndim(a_eff) != 0:
+            raise ValueError(f"a_eff must be None or a scalar, got shape {jnp.shape(a_eff)}.")
+        if not is_traced(a_eff):
+            with jax.ensure_compile_time_eval():
+                if not bool(jnp.isfinite(a_eff) & (jnp.asarray(a_eff) > 0)):
+                    raise ValueError(f"a_eff must be a finite scale factor > 0, got {a_eff}.")
     if dtype is None:
         warn_if_float32("compute_optical_depth")
     if isinstance(source, Pieces):
@@ -501,6 +527,7 @@ def compute_optical_depth(
         batch_size=batch_size,
         per_piece=per_piece,
         dtype=dtype,
+        a_eff=a_eff,
     )
     logger.debug(
         "compute_optical_depth: %d lines x %d skewers x %d pieces, %d velocities (%s frame, velocity_period=%s, voigt %s, "
@@ -534,7 +561,7 @@ def compute_optical_depth(
         phys.cross_section_prefactor
         * np.asarray(line_bundle.f_osc)[:, None, None]
         * np.asarray(p.number_density)
-        * np.asarray(p.scale_factor)[None] ** -2.0
+        * (np.asarray(p.scale_factor)[None] ** -2.0 if a_eff is None else float(a_eff) ** -2.0)
         * 1e2
         * np.asarray(p.length_m)[None]
     )

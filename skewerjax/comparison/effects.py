@@ -189,9 +189,10 @@ def velocity_lag_kms(F1, F2, dv: float) -> float:
 
 
 def p1d_change(tau, tau_ref, dv: float, bands=((0.0, 0.1), (0.1, 1.0))) -> list:
-    """Median |P / P_ref - 1| of the P1D in k bands [s/km]."""
-    k, P = p1d_from_tau(tau, dv)
-    _, Pr = p1d_from_tau(tau_ref, dv)
+    """Median |P / P_ref - 1| of the P1D in k bands [s/km] (overflux against one global mean, as fake_spectra's
+    ``fluxstatistics.flux_power``)."""
+    k, P = p1d_from_tau(tau, dv, mean="global")
+    _, Pr = p1d_from_tau(tau_ref, dv, mean="global")
     return [float(np.median(np.abs(P / Pr - 1)[(k > lo) & (k <= hi)])) for lo, hi in bands]
 
 

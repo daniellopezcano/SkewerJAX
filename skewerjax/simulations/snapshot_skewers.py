@@ -78,12 +78,16 @@ class IntegrationOptions:
     normalisation : multiplies every density (matched mode: 8/7 or 7/8 of fake_spectra's chords).
     detuning : "exact" (nu = (c / lambda) expm1(-dv / c)) or "linear" (fake_spectra).
     dtype : None (the input precision, float64 under x64) or "float32": opt-in faster kernel.
+    a_eff : None (default: a_p^-2 of every piece) or a scalar, the effective scale factor of the comoving-to-physical
+        density conversion (``core.compute_optical_depth``; e.g. the snapshot's a, ``header.a``). Independent of
+        ``frame`` and ``detuning``: the line centres keep the frame's a(x).
     """
 
     frame: str = "exact"
     normalisation: float = 1.0
     detuning: str = "exact"
     dtype: str | None = None
+    a_eff: float | None = None
 
     def replace(self, **kw) -> IntegrationOptions:
         return replace(self, **kw)
@@ -474,7 +478,8 @@ class SimulationSkewers:
     ):
         """The deposited pieces of ``ion`` as ``core.Pieces`` for the lines of ``line_bundle`` (that species only), in
         the frame ``integ.frame``: what ``core.compute_optical_depth`` sums, e.g.
-        ``compute_optical_depth(sk.pieces(HI, lya), v, lya, velocity_period=True)``."""
+        ``compute_optical_depth(sk.pieces(HI, lya), v, lya, velocity_period=True, a_eff=integ.a_eff)`` (the pieces keep
+        a_p; ``integ.a_eff`` acts in the optical depth)."""
         fr = self.frame(integ.frame)
         T_scale = gp.FAKE_SPECTRA_B2_RATIO if ext.b_constants == "fake_spectra" else 1.0
         seg = self.segments("voronoi" if ext.deposition == "voronoi_crossings" else ext.deposition)
@@ -576,4 +581,5 @@ class SimulationSkewers:
             detuning=integ.detuning,
             check=check,
             dtype=integ.dtype,
+            a_eff=integ.a_eff,
         )[0]

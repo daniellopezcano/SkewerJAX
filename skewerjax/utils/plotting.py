@@ -933,8 +933,8 @@ def plot_toy_skewer(
     overdensities n / <n> - 1 (<.> along this skewer); (c) the transmission T = exp(-tau) of each line and the total
     T = prod_j T_j, on the Lya axis (every line evaluated there: Si III at v + delta_v, wrapped into the period); (d) the
     overfluxes delta = T / T_bar - 1 on the same axis, with T_bar = ``mean_transmission`` (n_lines + 1, N_pix), the mean
-    transmission of the ensemble of each line and of the total (``run_skewers``'s ``mean_transmission``: one number per
-    row with ``mean="global"``, T_bar(v) with ``"per_pixel"``).
+    transmission of the ensemble of each line and of the total (``run_skewers``'s ``mean_transmission``: T_bar(z) at each
+    pixel with the default ``mean="redshift"``, one number per row with ``"global"``).
 
     The grids, as very thin grey vertical lines: in (a) and (b) the points of the path, y_j = j L / (N p) with p =
     ``points_per_cell`` (None: not drawn), in (c) and (d) the pixel centres v, where tau is evaluated. When the lines of

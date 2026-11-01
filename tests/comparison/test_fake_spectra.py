@@ -147,8 +147,8 @@ def fake_spectra_checks(quick: bool):
         )
         Sn = SK["nset"]
         fsn = FS.run("nset_matched", "nset")
-        k, Pm = p1d_from_tau(matched_tau(Sn, HI, LYA, v, EF, IF), dv)
-        _, Pf = p1d_from_tau(fsn["tau"], dv)
+        k, Pm = p1d_from_tau(matched_tau(Sn, HI, LYA, v, EF, IF), dv, mean="global")  # fake_spectra's global mean flux
+        _, Pf = p1d_from_tau(fsn["tau"], dv, mean="global")
         check("16 skewers: matched P1D == fake_spectra's (k < 1 s/km, max |dP / P|)", np.abs(Pm / Pf - 1)[k < 1.0].max(), 1e-3)
     return checks
 

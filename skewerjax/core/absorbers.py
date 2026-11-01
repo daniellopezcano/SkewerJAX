@@ -410,7 +410,6 @@ def absorber_pieces(
     n_lines: int,
     *,
     skewers=None,
-    density_scaling: str = "comoving",
     T_scale: float = 1.0,
     n_scale: float = 1.0,
 ) -> Pieces:
@@ -418,8 +417,8 @@ def absorber_pieces(
 
     Every absorber is one piece: at its centroid s, with the frame's a(s), the velocity along the photon (the frame's
     injected velocity; photons travel towards decreasing s unless the frame says otherwise), T x ``T_scale``, the
-    comoving density n x ``n_scale`` (``density_scaling="fixed_column"``: n (a(s) / a_data)^2, fake_spectra's column at
-    the data epoch), its turbulence and collisional term, and its length. Its width in velocity is the frame's Hubble
+    comoving density n x ``n_scale``, its turbulence and collisional term, and its length (a fixed comoving-to-physical
+    conversion, e.g. fake_spectra's column at the data epoch a_data, is ``compute_optical_depth(a_eff=a_data)``). Its width in velocity is the frame's Hubble
     rate times its length (n, T and v_pec are constant inside a cell). ``T_scale`` and ``n_scale`` are matched-mode
     knobs (fake_spectra's b constants and 7/8 chords).
     """
@@ -428,12 +427,7 @@ def absorber_pieces(
     a = np.stack([frame.scale_factors(k, s[i]) for i, k in enumerate(ks)])
     u = np.stack([frame.velocity(k, s[i], vl[i]) for i, k in enumerate(ks)])
     W = np.stack([frame.hubble_rate(k, s[i]) for i, k in enumerate(ks)]) * l
-    if density_scaling == "comoving":
-        n_com = n * n_scale
-    else:
-        if ab.a_data is None:
-            raise ValueError("density_scaling='fixed_column' needs absorbers with a_data.")
-        n_com = n * n_scale * a**2 / ab.a_data**2
+    n_com = n * n_scale
     lines = lambda x: jnp.broadcast_to(jnp.asarray(x)[None], (n_lines,) + x.shape)
     opt = lambda x: np.zeros(T.shape) if x is None else np.asarray(x)[list(ks)]
     a_sk = getattr(frame, "a_dagger_per_skewer", None)
@@ -463,7 +457,7 @@ def tau_absorbers(
     frame,
     *,
     velocity_period=False,
-    density_scaling: str = "comoving",
+    a_eff: float | None = None,
     T_scale: float = 1.0,
     n_scale: float = 1.0,
     detuning: str = "exact",
@@ -488,7 +482,9 @@ def tau_absorbers(
     frame : ExactFrame or SnapshotFrame (sets a(s), the injected velocity and a_dagger).
     velocity_period : ``compute_optical_depth``'s option (default False: no wrap; True: each skewer periodic over
         its own velocity span; a number: that period [km/s]).
-    density_scaling, T_scale, n_scale : see ``absorber_pieces``.
+    a_eff : None (default: a_p^-2 of every piece) or a scalar, the effective scale factor of the comoving-to-physical
+        conversion (``core.compute_optical_depth``; e.g. a_eff = ``ab.a_data``, fake_spectra's column at the data epoch).
+    T_scale, n_scale : see ``absorber_pieces``.
     detuning : "exact" (default) or "linear" (matched mode).
     pixel_offsets, pixel_weights : sub-pixel offsets [km/s] and weights (sum 1) to average each pixel; None: centres.
     chunk : pieces per kernel call (``compute_optical_depth``'s ``piece_chunk``); v_chunk : velocities per call.
@@ -504,8 +500,6 @@ def tau_absorbers(
     """
     if ab.species not in tuple(line_bundle.species_keys) or len(tuple(line_bundle.species_keys)) != 1:
         raise ValueError(f"line_bundle must hold lines of {ab.species!r} only, got {tuple(line_bundle.species_keys)}.")
-    if density_scaling not in ("comoving", "fixed_column"):
-        raise ValueError(f"density_scaling must be 'comoving' or 'fixed_column', got {density_scaling!r}.")
     if check is not None:
         hwhm = float(np.min(np.asarray(line_bundle.lambda0_A) * np.asarray(line_bundle.A21_GHz) / (4.0 * np.pi))) * 1e-4
         sampling_check(ab, frame, T_scale=T_scale, tolerance=check, lorentz_hwhm_kms=hwhm)
@@ -526,11 +520,10 @@ def tau_absorbers(
         per_piece=per_absorber,
         dtype=None if per_absorber else dtype,
         devices=devices,
+        a_eff=a_eff,
     )
     for i, k in enumerate(ks):
-        pieces = absorber_pieces(
-            ab, frame, n_lines, skewers=[k], density_scaling=density_scaling, T_scale=T_scale, n_scale=n_scale
-        )
+        pieces = absorber_pieces(ab, frame, n_lines, skewers=[k], T_scale=T_scale, n_scale=n_scale)
         t = np.asarray(compute_optical_depth(pieces, v_all if v.ndim == 1 else jnp.asarray(v_all), line_bundle, **kw))[:, 0]
         if per_absorber:
             out[:, i] = (t.reshape(n_lines, M, n_v, off.size) * wts).sum(-1)
@@ -665,7 +658,6 @@ def cell_pieces(
     crossing_tolerance: float | None = 0.25,
     T_scale: float = 1.0,
     n_scale: float = 1.0,
-    density_scaling: str = "comoving",
     a_data: float | None = None,
     skewers=None,
     return_parts: bool = False,
@@ -690,7 +682,8 @@ def cell_pieces(
         (N_sk, N, 3) [cMpc] and a ``frame`` (``ExactFrame`` / ``SnapshotFrame``) instead.
     deposition, selection_backend, grid_fast_path : see ``deposit``; segments : a ``SegmentComponents`` already
         computed for ``points`` (its cell indices refer to ``cells``), used instead.
-    T_scale, n_scale, density_scaling, a_data : see ``absorber_pieces`` (matched-mode knobs; defaults change nothing).
+    T_scale, n_scale : see ``absorber_pieces`` (matched-mode knobs; defaults change nothing); a_data : the scale factor
+        of the data (kept on the ``Absorbers``).
     skewers : optional indices of the skewers to return.
     return_parts : also return dict(cells, segments, absorbers {species: Absorbers}, frame, crossings).
     return_info : also return dict(selection, deposition (``deposit``'s info; selection None when ``segments`` are
@@ -747,7 +740,7 @@ def cell_pieces(
     else:
         abs_ = {sp: absorbers_from_components(seg, pts, use, sp, mass[sp], a_data=a_data) for sp in species}
     t2 = time.perf_counter()
-    kw = dict(skewers=skewers, density_scaling=density_scaling, T_scale=T_scale, n_scale=n_scale)
+    kw = dict(skewers=skewers, T_scale=T_scale, n_scale=n_scale)
     per = {sp: absorber_pieces(abs_[sp], frame, 1, **kw) for sp in species}
     p0 = per[species[0]]
     n_l = line_bundle.n_lines

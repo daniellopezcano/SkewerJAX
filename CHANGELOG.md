@@ -3,6 +3,29 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — four normalisation modes of the transmission; the density conversion a_eff (2026-10-31)
+
+### Changed
+- **Overflux normalisation** (`summary_stats.overflux`): `mean` takes four values, `"redshift"` (new default
+  everywhere: T̄(z), the mean over the pixels at the same scale factor, the per-pixel ensemble mean on a shared grid,
+  checked by `check_shared_grid`, `ValueError` otherwise), `"global"`, `"box"` and `"skewer"` (one T̄ per sample).
+  `"per_pixel"` is removed (no alias; it is `"redshift"`). `mean_transmissions(T, mean, grid=)`,
+  `DeltaFieldBuilder(mean=, grid=)`; `C_per_pixel` is (1, N_pix) or (N_samples, N_pix) with `"skewer"`, and
+  `OverfluxStatistics1D/3D` weight each sample by its own C. `p1d_from_tau(mean="redshift")`.
+- `run_skewers(mean="redshift")`: the four modes over the ensemble ("box": each box's own mean); new `scale_factor`
+  (the pixel grid, checked across the boxes for "redshift"), `mean_delta_level`; `mean_transmission` (3, n_pix), (n, 3,
+  n_pix) for "box", (n, 3, N_sk) for "skewer"; `C_error` at the level of the mode. `skewer_tau` returns the pixel
+  `scale_factor`; `skewer_statistics(grid=)` returns `delta_skewer_mean`, `delta12_skewer_mean`, `C`,
+  `mean_transmission`.
+- **Density conversion** `a_eff` (None default: a_p^-2 of every piece, unchanged): `compute_optical_depth`,
+  `optical_depth_kernel`, `optical_depth_from_pieces`, `optical_depth_sharded` (traced, differentiable),
+  `tau_absorbers`, `IntegrationOptions.a_eff` (snapshot path and the per-cell matched path), `SkewerRun.a_eff` (toy
+  path). The line centres, widths and detuning are untouched, so the Jacobian 1/(aH) of the exact frame stays.
+- **Removed:** `density_scaling` (`"comoving"` | `"fixed_column"`) of `absorber_pieces`, `tau_absorbers` and
+  `cell_pieces`: `"fixed_column"` (n (a_p / a_data)^2) is `a_eff = a_data`; no call site used it.
+- `comparison.effects.p1d_change` and the fake_spectra P1D test use `mean="global"` (fake_spectra's
+  `fluxstatistics.flux_power`); notebooks 00 and 00_quickstart pass `mean="global"` (16 skewers).
+
 ## Unreleased — global mean transmission; the simplest valid BAO model; Parts E and F of 08 (2026-10-30)
 
 ### Changed

@@ -1,9 +1,9 @@
 """The toy boxes of notebook 08 (``simulations.toy_boxes``) on a small grid: realisations regenerated from their seeds,
 the gas (n_SiIII = r n_HI, T = T0 (1 + delta)^(gamma - 1), zero or linear-theory velocities, no clipping), the skewer
 set-up and its derived quantities, one realisation along its skewers (tau, the resolution check, the 1D statistics by
-order, the 3D statistics and P1D of the overfluxes in comoving units), the run over the realisations in memory with the
-global mean of the overflux (<delta> = 0 over the ensemble, C = <delta_1 delta_2>, the exact decomposition; or the mean
-at each pixel), the 3D estimator on the density sampled at the points of the skewers against its exact expectation (the
+order, the 3D statistics and P1D of the overfluxes in comoving units), the run over the realisations in memory in every mode of
+the mean transmission of the overflux (<delta> = 0 over the sets of the mode, C = <delta_1 delta_2>, the exact
+decomposition), the density conversion a_eff and the Jacobian of the exact frame on a uniform gas, the 3D estimator on the density sampled at the points of the skewers against its exact expectation (the
 BAO peak included), the continuous xi(r), and the chi^2 of xi with its exact covariance."""
 
 from dataclasses import replace
@@ -124,11 +124,11 @@ def test_one_box_along_its_skewers():
     s = r["flux"]
     assert np.max(np.abs(s["P_order"].sum(0) - s["P_total"])) < 1e-10 * np.max(np.abs(s["P_total"]))
     assert r["period"] == pytest.approx(SETUP.derived(BOXES)["period_kms"], rel=1e-12)
-    # 3D: the overflux of each line and of the total against the mean of the box's skewers (its own ensemble), one
-    # number per line (mean="global"); P1D obeys Parseval
+    # 3D: the overflux of each line and of the total against the mean of the box's skewers (its own ensemble), at each
+    # pixel (mean="redshift", the default: the skewers share one grid); P1D obeys Parseval
     assert set(r["flux3d"]) == set(OVERFLUX_FIELDS) and r["p1d"].shape == (3, SETUP.n_pix // 2 + 1)
     F = np.exp(-r["tau"])
-    delta = F.prod(0) / F.prod(0).mean() - 1
+    delta = F.prod(0) / F.prod(0).mean(axis=0) - 1
     np.testing.assert_allclose(r["delta_sum"][2], delta.sum(0), atol=1e-12)
     assert abs(delta.mean()) < 1e-14 and r["decomposition_error"] < 1e-14
     w = np.r_[1.0, np.full(SETUP.n_pix // 2 - 1, 2.0), 1.0]  # rfft modes -> full grid
@@ -170,34 +170,110 @@ def test_run_in_memory_and_field_statistics():
     np.testing.assert_array_equal(other["axes"]["k_edges"], edges)
 
 
-def test_ensemble_normalisation_of_the_overflux():
-    """``run_skewers``: every overflux is normalised by the mean transmission of the ensemble, one number per line and for
-    the total over every pixel of every skewer of every realisation (``mean="global"``), so <delta> = 0 holds over the
-    ensemble (not at each pixel: the drift of the mean along the skewers stays, shared by every skewer; nor along a
-    skewer), C = T_bar / prod_j T_bar_j - 1 = <delta_1 delta_2>, and the decomposition delta_tot = [sum_A delta_A - C] /
-    (1 + C) is exact; with ``mean="per_pixel"``, <delta> = 0 at every pixel."""
-    run = run_skewers(BOXES, SETUP, realisations=[0, 1, 2], keep=(0, 1, 2), log=None)
+@pytest.mark.parametrize("mean", ["redshift", "global", "box", "skewer"])
+def test_ensemble_normalisation_of_the_overflux(mean):
+    """``run_skewers`` in every mode of the mean transmission: T_bar over the pixels at the same redshift of every skewer
+    of every box ("redshift", the default: the per-pixel ensemble mean on the shared grid of the lattice), over every
+    pixel of every skewer of every box ("global"), of each box ("box") or along each skewer ("skewer"), so <delta> = 0
+    over the sets of the mode (``mean_delta_level``); C = T_bar / prod_j T_bar_j - 1 = <delta_1 delta_2> over the same
+    sets (``C_error``), the decomposition delta_tot = [sum_A delta_A - C] / (1 + C) is exact and order 1 vanishes; only
+    "redshift" removes the pattern shared by every skewer (``mean_delta``); mismatched redshift grids raise."""
+    run = run_skewers(BOXES, SETUP, realisations=[0, 1, 2], keep=(0, 1, 2), mean=mean, log=None)
     T = np.stack([np.exp(-run["skewers"][i]["tau"]) for i in range(3)], 1)  # (2, 3 boxes, N_sk, n_pix)
-    T_bar = np.concatenate([T.mean(axis=(1, 2, 3)), [T.prod(0).mean()]])
-    np.testing.assert_allclose(run["mean_transmission"], np.broadcast_to(T_bar[:, None], (3, SETUP.n_pix)), rtol=1e-13)
-    np.testing.assert_allclose(run["mean_transmission_per_pixel"][0], T[0].mean(axis=(0, 1)), rtol=1e-13)
-    assert np.max(np.abs(run["mean_delta_global"])) < 1e-14, "<delta> = 0 over the ensemble, for each line and the total"
-    delta_tot = T.prod(0) / T_bar[-1] - 1
-    assert abs(delta_tot.mean()) < 1e-14 and np.max(np.abs(delta_tot.mean(axis=2))) > 1e-3, "the mean along a skewer is not 0"
-    np.testing.assert_allclose(run["mean_delta"][2], delta_tot.mean(axis=(0, 1)), atol=1e-14)
-    assert np.max(np.abs(run["mean_delta"])) > 1e-4, "the drift along the skewers stays, shared by every skewer"
-    d1, d2 = T[0] / T_bar[0] - 1, T[1] / T_bar[1] - 1
-    assert run["C"] == pytest.approx(T_bar[2] / (T_bar[0] * T_bar[1]) - 1, rel=1e-12)
-    assert abs(run["C"] - np.mean(d1 * d2)) < 1e-14 and run["C_error"] < 1e-14, "C = <delta_1 delta_2>, the global mean"
-    assert run["decomposition_error"] < 1e-14
+    T = np.concatenate([T, T.prod(0)[None]])  # the lines and the total
+    axes = {"redshift": (1, 2), "global": (1, 2, 3), "box": (2, 3), "skewer": 3}[mean]
+    T_bar = np.broadcast_to(T.mean(axis=axes, keepdims=True), T.shape)  # the known means of the mode
+    used = np.asarray(run["mean_transmission"])
+    expect = {
+        "redshift": T_bar[:, 0, 0],
+        "global": T_bar[:, 0, 0],
+        "box": T_bar[:, :, 0].transpose(1, 0, 2),
+        "skewer": T_bar[..., 0].transpose(1, 0, 2),
+    }[mean]
+    np.testing.assert_allclose(used, expect, rtol=1e-13)
+    np.testing.assert_allclose(run["mean_transmission_per_pixel"], T.mean(axis=(1, 2)), rtol=1e-13)  # the diagnostic
+    np.testing.assert_allclose(run["scale_factor"], run["skewers"][0]["scale_factor"], rtol=0)
+    assert np.all(np.diff(run["scale_factor"]) < 0) and run["scale_factor"][0] < 1 / (1 + BOXES.z), "a decreases with v"
+    delta = T / T_bar - 1
+    np.testing.assert_allclose(run["mean_delta"], delta.mean(axis=(1, 2)), atol=1e-14)
+    assert np.max(run["mean_delta_level"]) < 1e-14, "<delta> = 0 over the sets of the mode"
+    assert np.max(np.abs(delta.mean(axis=axes))) < 1e-14
+    shared = np.max(np.abs(run["mean_delta"]))
+    assert (shared < 1e-14) if mean == "redshift" else (shared > 1e-4), "only 'redshift' removes the shared pattern"
+    assert run["C_error"] < 1e-14 and run["decomposition_error"] < 1e-14, "C = <delta_1 delta_2>, the decomposition exact"
+    C = T_bar[2] / (T_bar[0] * T_bar[1]) - 1
+    assert run["C"] == pytest.approx(C.mean(), rel=1e-10)
     e = run["flux"]
     for kind in ("P", "xi"):
         sc = np.max(np.abs(e[f"{kind}_total"]))
         assert np.max(np.abs(e[f"{kind}_order"].sum(0) - e[f"{kind}_total"])) < 1e-12 * sc
-        assert np.max(np.abs(e[f"{kind}_order"][1])) < 1e-12 * sc, "order 1 vanishes: the normalisation is ensemble-wide"
-    pp = run_skewers(BOXES, SETUP, realisations=[0, 1, 2], keep=(), mean="per_pixel", log=None)
-    np.testing.assert_allclose(pp["mean_transmission"], run["mean_transmission_per_pixel"], rtol=1e-14)
-    assert np.max(np.abs(pp["mean_delta"])) < 1e-14 and pp["C_error"] < 1e-14 and pp["decomposition_error"] < 1e-14
+        assert np.max(np.abs(e[f"{kind}_order"][1])) < 1e-12 * sc, "order 1 vanishes over the sets of the mode"
+
+
+def test_redshift_mean_needs_one_grid():
+    """``mean="redshift"`` groups the pixels by scale factor: realisations whose pixel grids differ beyond rounding raise
+    (here realisation 1 shifted by 1e-9 in a); the other modes do not need a shared grid."""
+    import skewerjax.simulations.toy_boxes as tb
+
+    orig = tb.skewer_tau
+
+    def shifted(boxes, i, setup, **kw):
+        r = orig(boxes, i, setup, **kw)
+        return dict(r, scale_factor=r["scale_factor"] * (1 + 1e-9)) if i == 1 else r
+
+    tb.skewer_tau = shifted
+    try:
+        with pytest.raises(ValueError, match="shared"):
+            run_skewers(BOXES, SETUP, realisations=[0, 1], keep=(), log=None)
+        assert run_skewers(BOXES, SETUP, realisations=[0, 1], keep=(), mean="global", log=None)["C_error"] < 1e-14
+    finally:
+        tb.skewer_tau = orig
+
+
+def test_a_eff_and_the_jacobian_of_the_exact_frame():
+    """A uniform gas in the exact frame of the toy skewers (z at y = 0, a(y) decreasing): tau per pixel follows
+    n a(y)^-2 / (a H(y)) (the comoving-to-physical factor and the Jacobian dy / dv of the line centres), about +6.4 % from
+    y = 0 to y = L at z = 3, L = 150 cMpc; with ``SkewerRun.a_eff`` only the Jacobian 1 / (a H(y)) remains, predicted
+    from a(y) of the bundle (about -1.8 %: a H grows with z), each to 1e-4; a_eff = None is the per-piece a_p."""
+    from skewerjax.core import phys
+    from skewerjax.simulations import hubble_velocity, skewer_tau
+
+    boxes = ToyBoxes(box_cMpc=150.0, n_cells=16, n_real=1, bao_ratio=0.0)
+    setup = SkewerRun(stride=(16, 16), points_per_cell=128, n_pix=64)  # W = 5.9 km/s << b = 15.7 km/s (Lya)
+    f = boxes.fields(0)
+    n_bar = {"HI": boxes.n_bar_HI, "SiIII": boxes.siiii_to_hi * boxes.n_bar_HI}
+    uniform = dict(
+        delta=np.zeros_like(f["delta"]),
+        n={sp: np.full_like(f["delta"], n) for sp, n in n_bar.items()},
+        T=np.full_like(f["T"], boxes.T0),
+        v=np.zeros_like(f["v"]),
+    )
+    col = np.array([[0, 0]])
+    sb = boxes.skewer_bundle(col, setup.points_per_cell)
+    vH = hubble_velocity(sb)
+    y = np.linspace(0.0, boxes.box_cMpc, vH.size)
+    a = np.asarray(sb.scale_factors[0, 0], dtype=np.float64)
+    assert a[0] == pytest.approx(1 / (1 + boxes.z), rel=1e-12) and a[-1] < a[0], "z at y = 0, a decreasing along y"
+    aH = np.gradient(vH, y)  # dv / dy [km/s per cMpc]
+    res, taus = {}, {}
+    for name, a_eff in (("None", None), ("a_eff", 1 / (1 + boxes.z))):
+        r = skewer_tau(boxes, 0, replace(setup, a_eff=a_eff), columns=col, fields=uniform)
+        tau = r["tau"][0, 0]  # Lya
+        y_pix = np.interp(r["v"], vH, y)
+        conv = np.interp(y_pix, y, a) ** -2 if a_eff is None else np.full_like(y_pix, a_eff**-2)
+        pred = conv / np.interp(y_pix, y, aH)
+        np.testing.assert_allclose(tau / tau.mean(), pred / pred.mean(), rtol=1e-4)
+        res[name] = tau[-1] / tau[0] - 1
+        taus[name] = tau
+    # a_eff = a(0): every pixel scaled by (a_p / a_eff)^2 against the per-piece conversion
+    np.testing.assert_allclose(taus["a_eff"] / taus["None"], (np.interp(y_pix, y, a) * (1 + boxes.z)) ** 2, rtol=1e-4)
+    full = (a[0] / a[-1]) ** 2 * aH[0] / aH[-1] - 1  # from y = 0 to L
+    jac = aH[0] / aH[-1] - 1
+    assert 0.06 < full < 0.07 and -0.02 < jac < -0.015, (full, jac)
+    span = r["v"][-1] - r["v"][0]  # the first to the last pixel centre: (n_pix - 1) / n_pix of the box
+    assert res["None"] == pytest.approx(full * span / r["period"], rel=0.05)
+    assert res["a_eff"] == pytest.approx(jac * span / r["period"], rel=0.05)
+    assert phys.c_kms * np.log(a[0] / a[-1]) == pytest.approx(r["period"], rel=1e-12)
 
 
 def test_lattice_estimator_recovers_the_density():

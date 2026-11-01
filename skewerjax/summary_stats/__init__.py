@@ -2,8 +2,9 @@
 statistics, total, term by term and order by order (imports ``skewerjax.core`` at most; nothing in ``core`` imports it).
 
 * ``overflux``: ``DeltaFieldBuilder`` (delta_j = T_j / T_bar_j - 1 with T = e^-tau the transmission and T_bar_j its
-  mean over the ensemble, ``mean="global"`` (one number) or ``"per_pixel"``, the subset products delta_A, the total and
-  its exact decomposition), ``overflux_terms``, ``mean_transmissions``, ``MEAN_MODES``, ``equivalent_width_kms``;
+  mean, ``mean`` = "redshift" (default, T_bar(z)), "global", "box" or "skewer", the subset products delta_A, the total
+  and its exact decomposition), ``overflux_terms``, ``mean_transmissions``, ``check_shared_grid``, ``MEAN_MODES``,
+  ``equivalent_width_kms``;
 * ``orders``: the order-by-order decomposition (the order-0 term ``ZERO_ORDER_KEY``, ``subset_orders``, ``order_sum``);
 * ``stats_1d``: P1D and xi1D of the overflux (``OverfluxStatistics1D``, ``ensemble_1d``, ``p1d_from_tau``);
 * ``stats_3d``: P3D and xi3D of the overflux on a grid of skewers, by term and order (``OverfluxStatistics3D``);
@@ -23,6 +24,7 @@ from skewerjax.summary_stats.orders import ZERO_ORDER_KEY, order_sum
 from skewerjax.summary_stats.overflux import (
     MEAN_MODES,
     DeltaFieldBuilder,
+    check_shared_grid,
     equivalent_width_kms,
     mean_transmissions,
     overflux_terms,
@@ -35,6 +37,7 @@ __all__ = [
     "overflux_terms",
     "mean_transmissions",
     "MEAN_MODES",
+    "check_shared_grid",
     "equivalent_width_kms",
     "OverfluxStatistics1D",
     "OverfluxStatistics3D",

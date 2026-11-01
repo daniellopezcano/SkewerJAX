@@ -255,7 +255,7 @@ def test_summary_and_ensemble():
     d = jax.vmap(grf.sample)(jax.random.split(jax.random.PRNGKey(2), 20))
     f = jnp.stack([1.0 + 0.3 * d, 0.2 * (1.0 + 0.3 * jnp.roll(d, 30, axis=-1))])
     assert np.all(np.asarray(f) > 0)
-    a = DeltaFieldBuilder(-jnp.log(f), labels=["1", "2"]).build()
+    a = DeltaFieldBuilder(-jnp.log(f), labels=["1", "2"], mean="global").build()
     np.testing.assert_allclose(  # every line against its mean over every pixel of every sample (mean="global")
         np.asarray(a.delta_terms["12"]),
         np.asarray(f[0] / f[0].mean() - 1) * np.asarray(f[1] / f[1].mean() - 1),
@@ -271,35 +271,51 @@ def test_summary_and_ensemble():
     assert e["n_real"] == 2 and np.allclose(e["P_total"], s["P_total"]) and np.all(e["xi_order_err"] == 0)
 
 
-@pytest.mark.parametrize("mean", ["global", "per_pixel"])
-def test_ensemble_normalisation(mean):
-    """``DeltaFieldBuilder``: delta_j = T_j / T_bar_j - 1 with the mean transmission of the ensemble, one number over every
-    pixel of every sample (``mean="global"``, the default) or one per pixel (``"per_pixel"``), from the samples or
-    ``mean_transmission`` (an ensemble split over several arrays), so <delta> = 0 over the ensemble (at every pixel with
-    "per_pixel"); the total uses T_bar = <prod_j T_j> != prod_j T_bar_j; C = T_bar / prod_j T_bar_j - 1 = sum_{|A| >= 2}
-    <delta_A>; the decomposition delta_tot = [sum_A delta_A - C] / (1 + C) is exact at every pixel, and the order-1
-    terms of P1D and xi1D vanish."""
-    from skewerjax.summary_stats import mean_transmissions
+# the axes of the set of pixels of each mean mode, on (samples, pixels)
+MEAN_AXES = {"redshift": 0, "global": (0, 1), "box": (0, 1), "skewer": 1}
 
+
+@pytest.mark.parametrize("mean", list(MEAN_AXES))
+def test_ensemble_normalisation(mean):
+    """``DeltaFieldBuilder`` in every ``MEAN_MODES`` mode, on synthetic transmissions with a mean that grows along v:
+    delta_j = T_j / T_bar_j - 1 with T_bar over the set of the mode (the samples at each pixel, "redshift"; every pixel
+    of every sample, "global" = "box" on one array; the pixels of each sample, "skewer"), from the samples or
+    ``mean_transmission`` (an ensemble split over several arrays), so <delta> = 0 over that set; "redshift" equals the
+    per-pixel ensemble mean on a shared grid, and mismatched grids raise; the total uses T_bar = <prod_j T_j> != prod_j
+    T_bar_j; C = T_bar / prod_j T_bar_j - 1 = <delta_1 delta_2> over the same set; the decomposition delta_tot =
+    [sum_A delta_A - C] / (1 + C) is exact at every pixel, and the order-1 terms of P1D and xi1D vanish."""
+    from skewerjax.summary_stats import MEAN_MODES, check_shared_grid, mean_transmissions
+
+    assert set(MEAN_MODES) == set(MEAN_AXES)
     rng = np.random.default_rng(5)
     N_s, N_v = 40, 64
     trend = np.linspace(0.0, 0.3, N_v)  # a mean optical depth that grows along v
     tau = np.stack([trend + 0.4 * rng.gamma(2.0, 0.5, (N_s, N_v)), 0.5 * trend + 0.2 * rng.gamma(2.0, 0.5, (N_s, N_v))])
     tau[1] = 0.7 * tau[0] + 0.3 * tau[1]  # correlated lines
+    tau += rng.normal(0.0, 0.2, (1, N_s, 1)) ** 2  # a different mean per sample
     T = np.exp(-tau)
-    ov = DeltaFieldBuilder(tau, labels=["1", "2"], mean=mean).build()
+    axes = MEAN_AXES[mean]
+    a_pix = 0.25 * np.exp(-np.arange(N_v) * 1e-3)  # the scale factor of the pixels, shared by every sample
+    ov = DeltaFieldBuilder(tau, labels=["1", "2"], mean=mean, grid=np.tile(a_pix, (N_s, 1))).build()
     T_bar = np.asarray(mean_transmissions(jnp.asarray(T), mean))
     np.testing.assert_allclose(np.asarray(ov.mean_transmission), T_bar, rtol=1e-14)
-    axes = (0, 1) if mean == "global" else 0  # the axes of the mean: (samples, pixels) or samples
-    np.testing.assert_allclose(T_bar[-1], np.broadcast_to((T[0] * T[1]).mean(axes), (N_v,)), rtol=1e-14)
+    known = np.broadcast_to(np.mean(T[0] * T[1], axis=axes, keepdims=True), (N_s, N_v))  # the known mean of the total
+    np.testing.assert_allclose(np.broadcast_to(T_bar[-1], (N_s, N_v)), known, rtol=1e-14)
+    if mean == "redshift":  # the per-pixel ensemble mean
+        np.testing.assert_allclose(T_bar[:2], T.mean(axis=1), rtol=1e-14)
     assert np.max(np.abs(T_bar[-1] / (T_bar[0] * T_bar[1]) - 1)) > 1e-3, "<T_1 T_2> != <T_1><T_2>"
     for d in (ov.delta_terms["1"], ov.delta_terms["2"], ov.total):
-        assert np.max(np.abs(np.asarray(d).mean(axes))) < 1e-15, "<delta> = 0 over the ensemble (or at every pixel)"
-    if mean == "global":
-        assert np.max(np.abs(np.asarray(ov.total).mean(0))) > 1e-2, "the drift along v stays, shared by every sample"
-    assert np.max(np.abs(np.asarray(ov.total).mean(1))) > 1e-2, "the mean along one sample is not zero"
+        assert np.max(np.abs(np.asarray(d).mean(axes))) < 1e-15, "<delta> = 0 over the set of the mode"
+    shared = np.max(np.abs(np.asarray(ov.total).mean(0)))  # the pattern shared by the samples
+    assert (shared < 1e-15) if mean == "redshift" else (shared > 1e-2), "only 'redshift' removes the drift along v"
+    along = np.max(np.abs(np.asarray(ov.total).mean(1)))  # the mean along one sample
+    assert (along < 1e-15) if mean == "skewer" else (along > 1e-2), "only 'skewer' removes the k_par = 0 mode"
     C = np.asarray(ov.C_per_pixel)
-    np.testing.assert_allclose(C[0], np.broadcast_to(np.asarray(ov.delta_terms["12"]).mean(axes), (N_v,)), rtol=1e-12, atol=1e-16)
+    assert C.shape == ((N_s, N_v) if mean == "skewer" else (1, N_v))
+    d12 = np.asarray(ov.delta_terms["12"])
+    np.testing.assert_allclose(
+        np.broadcast_to(C, (N_s, N_v)), np.broadcast_to(d12.mean(axes, keepdims=True), (N_s, N_v)), rtol=1e-12, atol=1e-16
+    )
     recon = (sum(np.asarray(v) for v in ov.delta_terms.values()) - C) / (1 + C)
     assert np.max(np.abs(recon - np.asarray(ov.total))) < 1e-15
     st = OverfluxStatistics1D(ov, 2.0).compute_xi1d()
@@ -307,9 +323,16 @@ def test_ensemble_normalisation(mean):
         sc = float(np.max(np.abs(np.asarray(tot))))
         assert np.max(np.abs(sum(np.asarray(v) for v in orders.values()) - np.asarray(tot))) < 1e-13 * sc
         assert np.max(np.abs(np.asarray(orders[1]))) < 1e-13 * sc, "order 1 vanishes"
+    st3 = OverfluxStatistics3D(ov, 2.0, 1.0, grid_shape=(5, 8)).compute_p3d()  # the samples as a 5 x 8 lattice
+    sc = float(np.max(np.asarray(st3.Pk3d_total)))
+    assert np.max(np.abs(np.asarray(st3.Pk3d_total_from_terms) - np.asarray(st3.Pk3d_total))) < 1e-12 * sc
+    assert np.max(np.abs(np.asarray(st3.Pk3d_total_by_order[1]))) < 1e-12 * sc, "order 1 vanishes in 3D"
     # an ensemble split in two: the same overflux with the mean of the whole ensemble
     halves = [
-        DeltaFieldBuilder(tau[:, h], labels=["1", "2"], mean_transmission=T_bar).build() for h in (slice(0, 25), slice(25, None))
+        DeltaFieldBuilder(
+            tau[:, h], labels=["1", "2"], mean=mean, mean_transmission=T_bar[:, h] if mean == "skewer" else T_bar
+        ).build()
+        for h in (slice(0, 25), slice(25, None))
     ]
     np.testing.assert_allclose(
         np.concatenate([np.asarray(h.total) for h in halves]), np.asarray(ov.total), rtol=1e-13, atol=1e-15
@@ -317,7 +340,14 @@ def test_ensemble_normalisation(mean):
     with pytest.raises(ValueError, match="mean_transmission"):
         DeltaFieldBuilder(tau, mean_transmission=T_bar[:2])
     with pytest.raises(ValueError, match="mean must be"):
-        DeltaFieldBuilder(tau, mean="box")
+        DeltaFieldBuilder(tau, mean="per_pixel")  # the old name, removed
+    bad = np.tile(a_pix, (N_s, 1))
+    bad[3] *= 1.0 + 1e-6  # one sample on another redshift grid
+    with pytest.raises(ValueError, match="shared"):
+        DeltaFieldBuilder(tau, mean="redshift", grid=bad)
+    with pytest.raises(ValueError, match="shared"):
+        mean_transmissions(jnp.asarray(T), "redshift", grid=bad)
+    np.testing.assert_array_equal(check_shared_grid(bad[:3] * (1 + 1e-14)), bad[0] * (1 + 1e-14))  # rounding passes
 
 
 def test_grid_statistics_on_an_anisotropic_lattice():

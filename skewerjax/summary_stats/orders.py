@@ -4,13 +4,15 @@ Decomposition (review notes, Eqs. total_overflux_expansion_general,
 overflux_denominator_expansion_general, Table overflux_subset_pairings_L2, with the mean of the ensemble)
 ------------------------------------------------------------------------------
 With ``summary_stats.overflux.DeltaFieldBuilder`` normalising every line and the total by its mean
-transmission over the ensemble (one number, ``mean="global"``, or one per pixel v, ``"per_pixel"``),
+transmission over the set of pixels of ``mean`` (per redshift, the default "redshift"; over everything, "global"; per
+box, "box"; per skewer, "skewer"),
 
     delta_tot(v) = sum_A w delta_A(v) - c,   w = 1/(1+C),  c = C/(1+C),
 
 exactly, where A runs over all non-empty line subsets and C = sum_{|A|>=2} <delta_A>_ens
-(= T_bar / prod_j T_bar_j - 1; a function of v with "per_pixel"). The order-1 terms <delta_j>_ens vanish (over the
-whole ensemble, or at every pixel) because the normalisation is ensemble-wide. The constant-across-samples -c is the
+(= T_bar / prod_j T_bar_j - 1; a function of v with "redshift", one number per skewer with "skewer"). The order-1
+terms <delta_j> vanish over the set of the mode (every pixel, the ensemble, a box, a skewer) because each mean is taken
+over that set. The -c (the same for every sample, except with "skewer") is the
 order-0 term (key
 ``ZERO_ORDER_KEY``). The term (A, B) has order |A| + |B|, and the sum of all weighted terms reproduces
 the total P and xi exactly, at every k (including k = 0) and every lag.
@@ -65,3 +67,13 @@ def p3d_order_spectra(f_w, order_ids, pref, n_orders: int):
             acc = acc + G[m] * jnp.conj(G[n_tot - m])
         out.append(pref * acc)
     return jnp.stack(out)
+
+
+def _C_rows(C, shape) -> jnp.ndarray:
+    """C (1, N_v) shared by the samples, or (N_s, N_v) one row per sample, of a built overflux of ``shape`` (N_s, N_v)."""
+    C = jnp.asarray(C)
+    C = C.reshape(1, -1) if C.ndim < 2 else C
+    rows = 1 if C.shape[0] == 1 else shape[0]
+    if C.shape[0] not in (1, shape[0]):
+        raise ValueError(f"C_per_pixel must have 1 or N_s = {shape[0]} rows, got {C.shape}.")
+    return jnp.broadcast_to(C, (rows, shape[1]))

@@ -13,7 +13,7 @@ import numpy as np
 
 from skewerjax.summary_stats.binning import bin_index, binned_mean
 from skewerjax.summary_stats.fourier import lag_axis, rfft_multiplicity, xi3d_from_power
-from skewerjax.summary_stats.orders import ZERO_ORDER_KEY, p3d_order_spectra, subset_orders
+from skewerjax.summary_stats.orders import ZERO_ORDER_KEY, _C_rows, p3d_order_spectra, subset_orders
 
 logger = logging.getLogger(__name__)
 
@@ -53,15 +53,16 @@ class LazyPairs(Mapping):
 def p3d_kernel(total, terms, w, c, live):
     """rfftn of the total, raw terms, weighted terms and the order-0 term.
 
-    total : (Nx, Ny, Nz); terms : (n, Nx, Ny, Nz); w, c : (Nz,) per-pixel weights 1/(1+C(v)) and offsets C(v)/(1+C(v));
+    total : (Nx, Ny, Nz); terms : (n, Nx, Ny, Nz); w, c : (1, 1, Nz) per-pixel weights 1/(1+C(v)) and offsets
+    C(v)/(1+C(v)) shared by every skewer, or (Nx, Ny, Nz), one row per skewer (``mean="skewer"``);
     live : (Nx, Ny) 1 for the kept skewers, 0 for the zeroed ones.
     Returns F_tot (Nx, Ny, K), F_raw (n, ...), F_w (n+1, ...) with index 0 = order-0 term.
     """
     rf = lambda x: jnp.fft.rfftn(x, axes=(-3, -2, -1))
     f_tot = rf(total)
     f_raw = rf(terms)
-    f_c = rf(-live[:, :, None] * c[None, None, :])
-    f_w = jnp.concatenate([f_c[None], rf(w[None, None, None, :] * terms)], axis=0)
+    f_c = rf(-live[:, :, None] * c)
+    f_w = jnp.concatenate([f_c[None], rf(w[None] * terms)], axis=0)
     return f_tot, f_raw, f_w
 
 
@@ -125,7 +126,7 @@ class OverfluxStatistics3D:
                 raise ValueError(f"`overflux` is missing required attribute '{attr}'.")
 
         total = jnp.asarray(overflux.total)
-        C_per_pixel = jnp.broadcast_to(jnp.asarray(overflux.C_per_pixel).reshape(1, -1), (1, total.shape[1]))
+        C_per_pixel = _C_rows(overflux.C_per_pixel, total.shape)
         if not bool(jnp.all(jnp.isfinite(C_per_pixel)) & jnp.all(jnp.abs(1.0 + C_per_pixel) > self.c_norm_min)):
             raise ValueError("The normalisation 1 + C(v) is not finite or vanishes at some pixel.")
         self.subset_keys = list(overflux.subset_keys)
@@ -171,7 +172,7 @@ class OverfluxStatistics3D:
         self.C_per_pixel = C_per_pixel
         self._terms = terms
         self.delta_terms = {k: terms[i] for i, k in enumerate(self.subset_keys)}
-        C = C_per_pixel[0]
+        C = C_per_pixel.reshape((1, 1, N_pix) if C_per_pixel.shape[0] == 1 else (Nx, Ny, N_pix))
         self._w, self._c = 1.0 / (1.0 + C), C / (1.0 + C)
         self._live = valid_mask.astype(total.dtype).reshape(Nx, Ny)
 
