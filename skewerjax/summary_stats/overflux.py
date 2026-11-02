@@ -18,7 +18,7 @@ pixels (each mode gives <delta> = 0 over its own set, and removes what is consta
 "redshift" groups the pixels by their scale factor: samples on a shared grid (every row of ``grid`` the same, as on
 the toy lattice, where all skewers share one v -> a grid) give T_bar(v) at each pixel; samples whose grids differ raise
 a ``ValueError`` (``check_shared_grid``). On one array of samples "global" and "box" are the same mean; an ensemble
-split over realisations (``ensemble_mean_transmissions``, notebook 08) distinguishes them, and ``overflux_check`` checks
+split over realisations (``ensemble_mean_transmissions``, notebook 09) distinguishes them, and ``overflux_check`` checks
 the normalisation over the sets of the mode.
 
 Per line j, delta_j = T_j / T_bar_j - 1; for the total, T = prod_j T_j and T_bar = <prod_j T_j> != prod_j T_bar_j. The

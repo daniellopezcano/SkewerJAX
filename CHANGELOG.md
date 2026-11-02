@@ -3,6 +3,19 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — notebook 08 split into 08 (toy fields) and 09 (skewers); later notebooks renumbered (2026-11-02)
+
+### Changed
+- Notebooks: `08_summary_statistics` split, its cells moved unchanged: `08_toy_field_statistics` (the concepts, the toy
+  model and Part A, the toy fields and their statistics) and the new `09_skewer_statistics` (a compact set-up that
+  regenerates the same boxes, then A the skewers, B the density on the skewers, C transmission and overflux with one
+  skewer and step (d), D the 3D and E the 1D statistics of the overfluxes; parts relabelled, cross-references updated).
+  `09_comparison_fake_spectra_results` → `10_comparison_fake_spectra_results`, `10_comparison_fake_spectra_performance`
+  → `11_comparison_fake_spectra_performance`.
+- References to the notebooks updated: README, docs, `plot_dag`'s `DAG_NOTEBOOKS` (overflux 09, statistics 08, 09,
+  fake_spectra 10, 11), the docstrings citing "notebook 08, Part X" (`simulations`, `summary_stats`, `utils/plotting`,
+  `utils/paths`, the benchmark script, tests), and the notebooks 00, 00_quickstart_step_by_step, 05, 07, 10, 11.
+
 ## Unreleased — the Hubble flow of the line centres; bin centres; legends; split maps (2026-11-02)
 
 ### Added

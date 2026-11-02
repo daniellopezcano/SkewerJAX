@@ -3,7 +3,7 @@
 Toy fields: ``grf`` (``PowerLawGRF``, Gaussian random fields with optional anisotropy and BAO), ``toy_cells``
 (``grf_cells``: the realisation on the cells of its grid, cubes centred on the nodes) and ``toy_boxes`` (``ToyBoxes``: many
 realisations regenerated from their seeds, their gas, skewers through them and their statistics, streamed and recomputed
-at every call; notebook 08).
+at every call; notebooks 08 and 09).
 
 Snapshots: read hydro (or FGPA-painted N-body) snapshots and turn them into the gas cells of the core. Layers:
 ``readers`` (HDF5 I/O, NumPy) -> ``gas_cells`` (``GasCells``: the raw per-cell data of the snapshot) -> ``gas_physics``

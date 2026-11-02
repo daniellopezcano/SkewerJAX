@@ -562,7 +562,7 @@ def pk_sigma(P_input, n_modes, n_real: int = 1):
     return np.asarray(P_input, dtype=float) * np.sqrt(2.0 / (np.where(n > 0, n, np.nan) * n_real))
 
 
-# --------------------------------------------------------------------------- 1D statistics by order and term (notebook 08)
+# --------------------------------------------------------------------------- 1D statistics by order and term (notebook 09)
 ORDER_COLORS = [PALETTE[k] for k in ("grey", "purple", "blue", "green", "yellow", "cyan", "red")]  # by order n (cycled)
 
 
@@ -577,7 +577,7 @@ def _as_ensemble(stats):
 
 def _labels_1d(unit: str) -> dict:
     """The axis labels of the 1D statistics along the line of sight: in velocity units (``unit="km/s"``, the overflux,
-    ``LABELS``) or in comoving units (``"cMpc"``, the density along the skewers, notebook 08, Part F)."""
+    ``LABELS``) or in comoving units (``"cMpc"``, the density along the skewers, notebook 09, Part B)."""
     _check_option("unit", unit, ("km/s", "cMpc"))
     if unit == "km/s":
         return dict(P=LABELS["P1D"], k=LABELS["k"], lag=LABELS["lag"])
@@ -845,7 +845,7 @@ def plot_orders_compared(
     ensembles: dict, kind: str = "P", *, kms_per_cMpc: float | None = None, unit: str = "km/s", figsize=None, **kw
 ):
     """``plot_orders_superimposed`` of one or several ensembles side by side, one column each, with identical layouts
-    (notebook 08, Part D: the flux contrast). ensembles : {title: ``ensemble_1d``} (the titles are drawn only for more
+    (notebook 09, Part E: the flux contrast). ensembles : {title: ``ensemble_1d``} (the titles are drawn only for more
     than one ensemble); kms_per_cMpc : a reference top axis in the other unit (``_comoving_1d``: k_x = u k_v or x = v / u);
     unit : "km/s" (the overflux) or "cMpc" (the density, Part F); kw: the options of ``plot_orders_superimposed``.
     Returns (fig, axs (2, n))."""
@@ -871,7 +871,7 @@ def plot_terms_compared(
     ensembles: dict, kind: str = "P", *, orders=None, kms_per_cMpc: float | None = None, unit: str = "km/s", figsize=None, **kw
 ):
     """``plot_terms_by_order`` of one or several ensembles, stacked: one row per order (sharing the x axis), one column
-    per ensemble, with identical layouts (notebook 08, Part D). ensembles : {title: ``ensemble_1d``}; orders : the
+    per ensemble, with identical layouts (notebook 09, Part E). ensembles : {title: ``ensemble_1d``}; orders : the
     orders shown (default: those with a non-zero contribution in the first ensemble, without order 0: in P1D it lives
     at k = 0 only, in xi1D it is a constant); kms_per_cMpc : a reference top axis in the other unit on the first row
     (``_comoving_1d``); unit : "km/s" (the overflux) or "cMpc" (the density, Part F). No titles for one ensemble. Returns
@@ -958,7 +958,7 @@ def plot_toy_skewer(
     zoom_pixels: int = 12,
     figsize=(22, 24),
 ):
-    """One skewer of a toy box, from the gas to the overflux (notebook 08, B2). Five rows:
+    """One skewer of a toy box, from the gas to the overflux (notebook 09, C1). Five rows:
 
     (a) n of each species against the comoving position y along the skewer (the cell values, as steps); (b) the
     overdensities n / <n> - 1 (<.> along this skewer); (c) the transmission T = exp(-tau) of each line and the total
@@ -1129,9 +1129,9 @@ DAG_NOTEBOOKS = {
     "profiles": "06",
     "deposition": "07",
     "tau": "07",
-    "overflux": "08",
-    "stats": "08",
-    "fake_spectra": "09, 10",
+    "overflux": "09",
+    "stats": "08, 09",
+    "fake_spectra": "10, 11",
 }
 _DAG_W, _DAG_H, _DAG_PAD = 0.80, 0.56, 0.02  # box width and height, and the pad of its rounded outline [data]
 # per edge: the lane of its route (``_dag_route``), and the x offset of its end from the centre of the target box
@@ -3169,11 +3169,11 @@ def plot_skewer_geometry_3d(ax, points, *, scale_factors=None, label_w=None, tan
     return None
 
 
-# --------------------------------------------------------------------------- toy boxes: the fields and their 3D statistics (08)
+# ----------------------------------------------------------------------- toy boxes: the fields and their 3D statistics (08, 09)
 MU_COLORS = ("blue", "cyan", "green", "red")  # one colour per wedge, in every panel (PALETTE keys)
 _EACH = dict(lw=0.8, alpha=0.12)  # one realisation, faint, in the background
 _MEAN = dict(fmt="o-", lw=1.0, ms=7, capsize=4, elinewidth=2.2, capthick=2.0, mew=1.5, zorder=6)  # the mean and its error, joined
-_MS_SMALL = 4.5  # the small markers of several series on one panel (shape and colour tell them apart; notebook 08, C2, D1)
+_MS_SMALL = 4.5  # the small markers of several series on one panel (shape and colour tell them apart; notebook 09, D2, E1)
 _BAND = dict(color=PALETTE["green"], alpha=0.28)  # the uncertainty band of a measured iso-contour
 _LEGEND_08 = FONT_MIN["legend"] + 2  # the custom legends of the wedge figures
 
@@ -3297,7 +3297,7 @@ def plot_skewer_slice(
     cmap=None,
     figsize=(12, 10.5),
 ):
-    """Where the skewers run (notebook 08, B2): the number density of ``species`` in the plane of the cell layer
+    """Where the skewers run (notebook 09, C1): the number density of ``species`` in the plane of the cell layer
     ``z_index`` of the third axis (as panel (a1) of ``plot_toy_fields``; ``cmap``, default ``CMAPS["density"]``), a plane
     that contains the line of sight (y) and the row of skewers with i_z = z_index; those skewers as thin black lines
     along y, each with ``n_arrows`` tiny arrows along its tangent (+y, the direction of the photons' path), and the
@@ -3410,8 +3410,8 @@ def fold_periodic(x, period: float):
 
 
 def echo_scales(r_bao: float, delta: float, box: float) -> dict:
-    """The characteristic separations of the cross term of two lines Delta apart along the line of sight (notebook 08,
-    Part C: Si III and Lya), in the units of the inputs, with every line-of-sight component folded into [0, box / 2]
+    """The characteristic separations of the cross term of two lines Delta apart along the line of sight (notebook 09,
+    Part D: Si III and Lya), in the units of the inputs, with every line-of-sight component folded into [0, box / 2]
     (``fold_periodic``): r_BAO; Delta; the BAO echo of the cross term at its ends on the line of sight (r_perp = 0:
     |r_BAO - Delta| and r_BAO + Delta) and across it (r_perp = r_BAO, r_par = Delta: sqrt(r_BAO^2 + Delta^2)). Returns
     {mathtext label: |r|}."""
@@ -4009,7 +4009,7 @@ def line_pair_label(line_ids=("HI-LyA", "SiIII-1206"), *, comoving: bool = False
 
 
 def comoving_axis(ax, kms_per_cMpc: float, kind: str = "r", *, side: str = "top", label: str | None = None):
-    """A secondary axis in comoving units on an axis in velocity units (notebook 08, Parts C and D), with one conversion
+    """A secondary axis in comoving units on an axis in velocity units (notebook 09, Parts D and E), with one conversion
     factor, v = u x and k_v = k_x / u: u = ``kms_per_cMpc`` [km/s per cMpc] (u = period / L = (1/L) int_0^L aH dy, the
     mean aH along a skewer, ``SkewerRun.derived``).
 
@@ -4033,7 +4033,7 @@ def velocity_axis(ax, kms_per_cMpc: float, kind: str = "r", *, side: str = "top"
 
 
 def wedge_echoes(r_bao: float, delta: float, mu_edges, box: float) -> dict:
-    """The BAO echoes of the cross term of two lines Delta apart along the line of sight (notebook 08, C1 and C3) in
+    """The BAO echoes of the cross term of two lines Delta apart along the line of sight (notebook 09, D1 and D3) in
     wedges of mu = r_par / r: the echo rings r_perp^2 + (r_par -+ Delta)^2 = r_bao^2 cross the direction mu at
 
         r^+-(mu) = sqrt(r_bao^2 - Delta^2 (1 - mu^2)) +- mu Delta,
@@ -4079,7 +4079,7 @@ def plot_xi_mu_wedges(
     """xi(r) in wedges of mu = r_par / r (``MU_WEDGES``) of many realisations, as DESI DR2 shows the Lya auto-correlation
     (arXiv:2503.14739, Fig. 3, top): r^2 xi(r) (``quantity="r2xi"``) or xi (``"xi"``) against r, one colour per wedge
     (``MU_COLORS``), every realisation as a faint line, the mean with the error of the mean as points joined by thin
-    lines (notebook 08, A3, C3, E3). With an expectation (``res["theory"]``: ``simulations.field_statistics``, or the
+    lines (notebook 08, A3; notebook 09, D3). With an expectation (``res["theory"]``: ``simulations.field_statistics``, or the
     density of ``run_skewers`` with its ``density_theory``): the expectation of each wedge as a dashed line in the
     wedge's colour and, below, (measured - expected) / error. Without (the overflux of ``run_skewers``, ``res`` = one
     entry of its ``flux3d`` with ``res["axes"]`` = its ``axes3d``): one panel, the measurement only. The wedges are
@@ -4245,7 +4245,7 @@ def plot_overflux_3d(
     figsize=(22, 9),
 ):
     """P(|k|) and r^2 xi(|r|) (``quantity="r2xi"``) or xi (``"xi"``) of the overflux of each line and of the total on
-    the lattice of skewers, in comoving units (notebook 08, C2; the line of sight converted with u = period / L,
+    the lattice of skewers, in comoving units (notebook 09, D2; the line of sight converted with u = period / L,
     ``SkewerRun.grid3d``), or of the density of each species and of their sum at the points of the skewers (E2): the
     lattice counterpart of ``plot_isotropic_recovery``, with its estimators (every mode of the lattice inside the sphere
     of its smallest Nyquist frequency in |k| bins, every pair of points up to half the box in |r| bins), its options and
@@ -4337,7 +4337,7 @@ def plot_overflux_3d(
 
 
 def _native_map_axes(ax, u: float, kind: str, x_max: float, y_max: float, y_min: float = 0.0, unit: str = "km/s"):
-    """The axes of the (perp, par) maps of the overflux and of the density (notebook 08, C1 and E1): perpendicular across
+    """The axes of the (perp, par) maps of the overflux and of the density (notebook 09, D1 and B1): perpendicular across
     in comoving units, parallel upwards in its native unit (``unit``: "km/s" for the overflux, "cMpc" for the density
     along the skewers), the origin at the bottom-left corner, equal comoving lengths (aspect), and the reference axes in
     km/s through u: the perpendicular on top, and the parallel on the right in the other unit. kind "r": cMpc and km/s;
@@ -4371,7 +4371,7 @@ def _native_map_axes(ax, u: float, kind: str, x_max: float, y_max: float, y_min:
 
 def echo_curves(r_bao: float, delta: float, box: float, *, n: int = 400) -> dict:
     """The BAO ring and its two echoes in the (r_perp, r_par) plane of the overflux of two lines Delta apart along the line
-    of sight (notebook 08, C1), comoving [the units of the inputs], for r_perp <= min(r_bao, box / 2). The cross term
+    of sight (notebook 09, D1), comoving [the units of the inputs], for r_perp <= min(r_bao, box / 2). The cross term
     copies the correlation shifted by -+ Delta along the line of sight; folded, r_par -> |r_par|, both copies lie on the
     ring re-centred on (0, Delta), r_perp^2 + (r_par - Delta)^2 = r_bao^2, with the two branches
 
@@ -4431,7 +4431,7 @@ def plot_overflux_rpar_rperp(
     figsize=(14, 12.5),
 ):
     """r^2 xi(r_perp, r_par) (``quantity="r2xi"``) or xi (``"xi"``) of one overflux on the exact lattice of skewers
-    (notebook 08, C1), or of the density at the points of the skewers (E1, ``unit="cMpc"``): the measured panel of
+    (notebook 09, D1), or of the density at the points of the skewers (B1, ``unit="cMpc"``): the measured panel of
     ``plot_rpar_rperp_maps``, with its options: a diverging colour scale centred on 0 (``cmap``, default
     ``CMAPS["diverging"]``; ``color_scale`` "linear" or "symlog" with ``linthresh``, ``linthresh_frac``, ``linscale``:
     ``_map_scale``, the same colour limits in both), contours at ``levels`` (default three) in green with the band where
@@ -4441,7 +4441,7 @@ def plot_overflux_rpar_rperp(
     no title. ``show``: "measured" (default) or "expected" (the map of ``theory``, with its dashed contours only: the
     expected panel of ``plot_rpar_rperp_maps``, which shares one ``norm`` and ``levels`` between the two); ``norm``: a
     colour norm to use instead of ``_map_scale``'s; ``legend``: the legend of ``_map_legend`` (default none: the curves
-    are labelled on the panel). The single-panel map of every (r_perp, r_par) figure of notebook 08.
+    are labelled on the panel). The single-panel map of every (r_perp, r_par) figure of notebook 09.
 
     Axes: r_perp across in cMpc and r_par upwards in its native unit (``unit``: km/s for the overflux, cMpc for the
     density), the origin at the bottom-left corner, equal comoving lengths; reference axes in km/s through u =
@@ -4566,7 +4566,7 @@ def plot_overflux_kpar_kperp(
     legend: bool = False,
     figsize=(14, 12.5),
 ):
-    """P(k_perp, k_par) of one overflux on the exact lattice of skewers (notebook 08, C1), or of the density at the
+    """P(k_perp, k_par) of one overflux on the exact lattice of skewers (notebook 09, D1), or of the density at the
     points of the skewers (E1, ``unit="cMpc"``): the measured panel of ``plot_kpar_kperp_maps``, derived from it as
     ``plot_overflux_rpar_rperp`` from ``plot_rpar_rperp_maps``, with its options: P (not k P) on a logarithmic colour
     scale (``cmap``, default ``CMAPS["diverging"]``; the limits of the expectation with ``theory``, else of the
@@ -4577,7 +4577,7 @@ def plot_overflux_kpar_kperp(
     vertical lines. No title. ``show``: "measured" (default) or "expected" (the map of ``theory`` with its dashed
     contours only: the expected panel of ``plot_kpar_kperp_maps``, which shares one ``norm`` and ``levels`` between the
     two); ``norm``: a colour norm instead of the default; ``legend``: the legend of ``_map_legend`` (default none). The
-    single-panel map of every (k_perp, k_par) figure of notebook 08.
+    single-panel map of every (k_perp, k_par) figure of notebook 09.
 
     Axes in native units: k_perp across in cMpc^-1 and k_par upwards in s/km (``unit="km/s"``, the overflux: k_par =
     k_x / u) or in cMpc^-1 (``"cMpc"``, the density along the skewers); reference axes through u = ``kms_per_cMpc``
@@ -4677,7 +4677,7 @@ def plot_p1d_reference(
     figsize=(12, 10),
 ):
     """k P1D(k) / pi against k, linear k and logarithmic P, the convention of Fig. 1 of the reference (Chaves-Montero et
-    al., DESI DR1 P1D; notebook 08, D1): the P1D of each overflux of the toy boxes (``run_skewers``'s ``p1d``, k in
+    al., DESI DR1 P1D; notebook 09, E1): the P1D of each overflux of the toy boxes (``run_skewers``'s ``p1d``, k in
     s/km, ``unit="km/s"``) or of each density along the skewers (``density_p1d``, k in cMpc^-1, ``unit="cMpc"``), binned
     in k: every box faint (``each``), the mean over the boxes with the error of the mean as small points joined by thin
     lines (one colour and one marker shape per field, open after the first; the total ``FG``); with ``p1d["theory"]``

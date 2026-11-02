@@ -1,7 +1,7 @@
 # Usage guide
 
 This guide is the reference companion of the notebooks. It lists the entry points of each subpackage, the conventions they
-share and the options that control speed and memory. The notebooks (`notebooks/00_quickstart`, `00_quickstart_step_by_step`, `01`–`10`) show
+share and the options that control speed and memory. The notebooks (`notebooks/00_quickstart`, `00_quickstart_step_by_step`, `01`–`11`) show
 the same tools at work, step by step.
 
 ```mermaid
@@ -273,7 +273,7 @@ the threads at N = 1, one or two timed runs, a cap and an estimate per point, an
 plus its estimate would exceed `--budget`, 1800 s) and `full` (N up to 1024 on the three snapshots, the threads at
 N = 16; it re-measures the quick points that hold fewer timed runs). Every record keeps its preset. The raw records go to
 `benchmarks/raw/fake_spectra` (git-ignored), and their summary to `benchmarks/results/fake_spectra_benchmark.json`
-(committed; with the runtime per preset and the list of launches), which `10_comparison_fake_spectra_performance` plots (`RUN_BENCHMARKS = True` re-runs the missing
+(committed; with the runtime per preset and the list of launches), which `11_comparison_fake_spectra_performance` plots (`RUN_BENCHMARKS = True` re-runs the missing
 configurations of its `PRESET`).
 
 ## Figures: `skewerjax.utils.plotting`

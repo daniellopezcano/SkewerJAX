@@ -1,4 +1,4 @@
-"""Toy boxes (notebook 08): periodic 3D Gaussian fields of known spectrum, their gas, skewers through them, and the
+"""Toy boxes (notebooks 08 and 09): periodic 3D Gaussian fields of known spectrum, their gas, skewers through them, and the
 statistics of many realisations, streamed (generate, measure, discard) and returned in memory: nothing is stored, every
 call recomputes.
 
@@ -15,7 +15,7 @@ call recomputes.
   full-coverage limits ``ToyBoxes.limits``), against their exact expectations (with and without the BAO wiggle) and the
   exact Gaussian covariance of the isotropic xi bins;
   ``xi_chi2`` and ``xi_subset_offsets`` the chi^2 and the offset of the mean xi from its expectation.
-* ``run_skewers``: a thin convenience wrapper of the explicit pipeline of notebook 08 (Part B), the same public
+* ``run_skewers``: a thin convenience wrapper of the explicit pipeline of notebook 09 (Parts A–C), the same public
   functions in the same order: per realisation, a regular sub-grid of skewers along y through the centres of the cell
   columns (``SkewerRun``; ``ToyBoxes.skewer_bundle``) and tau of Lya and Si III (``core.absorbers.cell_pieces``,
   ``core.compute_optical_depth``: periodic, ``velocity_period=True``, both on the Lya axis, ``line_frame="reference"``;
@@ -76,7 +76,7 @@ VELOCITY_MODES = ("zero", "linear")  # ToyBoxes.velocity
 
 @dataclass(frozen=True)
 class ToyBoxes:
-    """The toy boxes of notebook 08: ``n_real`` periodic cubes of side ``box_cMpc`` on ``n_cells``^3 grids.
+    """The toy boxes of notebooks 08 and 09: ``n_real`` periodic cubes of side ``box_cMpc`` on ``n_cells``^3 grids.
 
     Spectrum: P(k) = A_s (k / k_0)^(n_s - 1) + A_bao W(k), isotropic (``PowerLawGRF`` with A_bao = bao_ratio A_s,
     r_bao, sigma_bao [cMpc]): ``bao_ratio`` = R_bao is the height of the BAO bump in xi in units of A_s [cMpc^-3], and
@@ -762,7 +762,7 @@ def skewer_statistics(
     delta = T / T_bar - 1: ``mean_transmission`` (3, n_pix) or (3, N_sk, n_pix) = T_bar_Lya, T_bar_SiIII, T_bar_total
     of a larger ensemble (e.g. one realisation of ``ensemble_mean_transmissions``), or, if None, over these skewers
     alone (``mean``). ``grid`` (n_pix,), optional: the scale factor of the pixels, checked with ``mean="redshift"``.
-    The same public functions as ``run_skewers`` (and notebook 08), for one realisation.
+    The same public functions as ``run_skewers`` (and notebook 09), for one realisation.
 
     1D: P1D and xi1D of the overflux of each line and of the total, by one 1D FFT per skewer (``skewer_p1d``,
     ``skewer_xi1d``); with ``decompose``, the order-by-order decomposition (``decompose_1d``). 3D (``lattice`` and
@@ -849,7 +849,7 @@ class _LinearTerms:
         self.C_per_pixel = np.zeros((1, total.shape[-1]))
 
 
-DENSITY_FIELDS = ("HI", "SiIII", "total")  # the overdensities of Part E (notebook 08): each species and their sum
+DENSITY_FIELDS = ("HI", "SiIII", "total")  # the overdensities of Part B (notebook 09): each species and their sum
 
 
 def _density_statistics(cols: dict, means: dict, gs: GridStatistics3D, points_per_cell: int, L: float) -> dict:
@@ -882,7 +882,7 @@ def skewer_density_statistics(columns, points_per_cell: int, grid: GridStatistic
     (``on_points``: the end point dropped, spacing dx / points_per_cell, every cell holding points_per_cell points),
     against its global mean over every point of every skewer of every realisation, delta_X = n_X / <n_X> - 1, through
     the 3D estimator of the overflux on the lattice of the points (``grid``: ``lattice_grid`` with n_los = n_cells
-    points_per_cell) and the 1D statistics along the skewers (notebook 08, Part E). Arrays and geometry only.
+    points_per_cell) and the 1D statistics along the skewers (notebook 09, Part B). Arrays and geometry only.
 
     columns : [{species: (n_x, n_cells, n_z)}] per realisation, the number densities of the cells the lattice of
     skewers crosses (``skewer_tau``'s ``density``) [comoving cm^-3]; L : the box side [cMpc]; n_bar : {species: n_bar}
@@ -928,7 +928,7 @@ def run_skewers(
     log=print,
 ) -> dict:
     """The skewers of every realisation (default all) and their statistics, in memory: a thin convenience wrapper of the
-    explicit pipeline of notebook 08 (Part B), the same public functions in the same order.
+    explicit pipeline of notebook 09 (Parts A–C), the same public functions in the same order.
 
     1. Each realisation is generated, tau computed along its skewers (``skewer_tau``: ``ToyBoxes.cells``,
        ``ToyBoxes.skewer_bundle``, ``cell_pieces``, ``compute_optical_depth``), and its tau kept, with the number
@@ -952,7 +952,7 @@ def run_skewers(
        = ``lattice_grid`` with the bins ``edges``, ``measure_lattice``); the order-by-order decomposition only with
        ``decompose`` (``decompose_1d``). And the density of every species, sampled at the points of the skewers, against
        its global mean, through the same 3D estimator on the lattice of the points (``skewer_density_statistics``), with
-       its exact expectation (``lattice_density_theory``; notebook 08, Part E).
+       its exact expectation (``lattice_density_theory``; notebook 09, Part B).
 
     ``edges``: the bins of the 3D statistics (k_edges, r_edges, rperp_edges), for the overflux and the density alike
     (kept as ``edges3d``, for ``lattice_density_check``). The tau and the transmission of every realisation are held

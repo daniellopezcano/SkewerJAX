@@ -190,7 +190,7 @@ def test_grid_statistics_conventions():
 
 @pytest.mark.parametrize("n_real", [400])
 def test_grid_statistics_recover_an_isotropic_field(n_real):
-    """An isotropic GRF (power law + BAO, as the toy boxes of notebook 08): the mean over many realisations of P and xi,
+    """An isotropic GRF (power law + BAO, as the toy boxes of notebook 08, Part A): the mean over many realisations of P and xi,
     isotropic, in the (par, perp) plane and in wedges of mu, agrees with ``theory`` within the error of the mean."""
     from skewerjax.summary_stats import GRID_KEYS, GridStatistics3D, ensemble_mean
 

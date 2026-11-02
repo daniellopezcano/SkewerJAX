@@ -1,4 +1,4 @@
-"""The toy boxes of notebook 08 (``simulations.toy_boxes``) on a small grid: realisations regenerated from their seeds,
+"""The toy boxes of notebooks 08 and 09 (``simulations.toy_boxes``) on a small grid: realisations regenerated from their seeds,
 the gas (n_SiIII = r n_HI, T = T0 (1 + delta)^(gamma - 1), zero or linear-theory velocities, no clipping), the skewer
 set-up and its derived quantities, one realisation along its skewers (tau, the resolution check, the 1D statistics by
 order, the 3D statistics and P1D of the overfluxes in comoving units), the run over the realisations in memory in every mode of
@@ -424,7 +424,7 @@ def test_bins_of_the_fields():
 
 
 def test_explicit_pipeline_equals_run_skewers():
-    """The explicit pipeline of notebook 08 (Part B: SkewerBundle -> cells -> cell_pieces -> compute_optical_depth ->
+    """The explicit pipeline of notebook 09 (Parts A–C: SkewerBundle -> cells -> cell_pieces -> compute_optical_depth ->
     ensemble_mean_transmissions -> delta = T / T_bar - 1 -> skewer_p1d, skewer_xi1d, lattice_grid + measure_lattice,
     decompose_1d) gives exactly what the wrapper ``run_skewers`` returns, from arrays and geometry only."""
     import warnings

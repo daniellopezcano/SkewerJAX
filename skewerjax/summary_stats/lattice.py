@@ -1,4 +1,4 @@
-"""Two-point statistics of an ensemble of periodic skewers, from arrays and geometry only (notebook 08, Parts C and D):
+"""Two-point statistics of an ensemble of periodic skewers, from arrays and geometry only (notebook 09, Parts D and E):
 no box or set-up class enters, only the fields along the skewers, the pixel width, the lattice spacing and the bins.
 
 **1D, along each skewer** (review notes, P1D and xi1D sections; the conventions of ``stats_1d``): N pixels of width dv

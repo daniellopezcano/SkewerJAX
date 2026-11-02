@@ -112,12 +112,12 @@ def test_fifth_pass_figures():
 
 
 def test_toy_box_figures():
-    """The figures of notebook 08 on a small toy box: the fields (A2), the 3D statistics of the realisations against
-    their expectation and the continuum (A3), one skewer (B2), the 3D statistics of the overfluxes (C: maps in native
-    units, isotropic quantities in comoving units, the echo curves, the wedges with their characteristic scales), the 1D
-    statistics of the overflux by order and term (D), and the density along the skewers through the same figures (E, F,
-    in comoving units, with their exact expectation): no titles, the line of sight vertical in the maps; the options
-    cmap, quantity, color_scale, levels and the axis scales."""
+    """The figures of notebooks 08 and 09 on a small toy box: the fields (08 A2), the 3D statistics of the realisations
+    against their expectation and the continuum (08 A3), one skewer (09 C1), the 3D statistics of the overfluxes (09 D:
+    maps in native units, isotropic quantities in comoving units, the echo curves, the wedges with their characteristic
+    scales), the 1D statistics of the overflux by order and term (09 E), and the density along the skewers through the
+    same figures (09 B, in comoving units, with their exact expectation): no titles, the line of sight vertical in the
+    maps; the options cmap, quantity, color_scale, levels and the axis scales."""
     from dataclasses import replace
 
     from skewerjax.core import LineBundle
@@ -384,7 +384,7 @@ def test_toy_box_figures():
 
 
 def test_comoving_axis():
-    """comoving_axis: v = aH x and k_v = k_x / (aH) on the secondary axes (notebook 08, Part C)."""
+    """comoving_axis: v = aH x and k_v = k_x / (aH) on the secondary axes (notebook 09, Part D)."""
     u = 80.0  # km/s per cMpc
     fig, (a, b) = plt.subplots(1, 2)
     a.set_xlim(0.0, 800.0)
