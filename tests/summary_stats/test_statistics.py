@@ -395,3 +395,51 @@ def test_grid_statistics_on_an_anisotropic_lattice():
     f2 = np.abs(np.fft.fftn(d)) ** 2
     f2[0, 0, 0] = 0.0
     assert np.mean(val**2) == pytest.approx((gs.dV / gs.N * f2).sum() / gs.V, rel=1e-12), "xi(0) = sum_k P / V, k != 0"
+
+
+def test_skewer_and_lattice_statistics():
+    """``summary_stats.lattice``: P1D and xi1D by one 1D FFT per skewer, an exact Fourier pair (xi1D(0) the variance,
+    Parseval); on the lattice, P1D(k_par) = (1 / (L_x L_z)) sum_{k_perp} P3D(k_perp, k_par) exactly (the discrete form of
+    int d^2k_perp / (2 pi)^2 P3D), and ``measure_lattice`` = ``GridStatistics3D.measure`` of the x-major skewers."""
+    from skewerjax.summary_stats import lattice_grid, measure_lattice, on_lattice, skewer_p1d, skewer_xi1d
+    from skewerjax.summary_stats.grid3d import _rfft_weights
+
+    rng = np.random.default_rng(3)
+    n_x, n_z, n, dv = 4, 6, 32, 2.5
+    d = rng.normal(size=(n_x * n_z, n))
+    k, P = skewer_p1d(d, dv)
+    lags, xi = skewer_xi1d(d, dv)
+    np.testing.assert_allclose(k, 2 * np.pi * np.fft.rfftfreq(n, dv)) and np.testing.assert_allclose(
+        lags, dv * np.arange(n // 2 + 1)
+    )
+    np.testing.assert_allclose(xi[0], np.mean(d**2), rtol=1e-12)  # the variance
+    np.testing.assert_allclose(xi[3], np.mean(d * np.roll(d, -3, axis=1)), rtol=1e-12)  # one lag, every skewer
+    np.testing.assert_allclose(np.sum(_rfft_weights(n) * P) / (n * dv), np.mean(d**2), rtol=1e-12)  # Parseval
+    L, d_perp = n * dv, (1.5, 2.0)  # comoving sides: the line of sight L, across n d_perp
+    g = on_lattice(d, n_x, n_z)
+    assert g.shape == (n_x, n, n_z) and np.array_equal(g[1, :, 2], d[1 * n_z + 2])
+    F = np.fft.fftn(g)  # every mode: the lattice spectrum P3D = dV / N |F|^2 of this realisation
+    dV = d_perp[0] * dv * d_perp[1]
+    P3 = dV / g.size * np.abs(F) ** 2
+    P1 = P3.sum(axis=(0, 2))[: n // 2 + 1] / (n_x * d_perp[0] * n_z * d_perp[1])
+    np.testing.assert_allclose(P1, P, rtol=1e-12)
+    gs = lattice_grid(n_x, n_z, n, L, d_perp, k_edges=np.linspace(0.1, 0.9, 5))
+    assert gs.shape == (n_x, n, n_z) and np.allclose(gs.L, (n_x * 1.5, L, n_z * 2.0))
+    np.testing.assert_array_equal(measure_lattice(d, gs)["P_iso"], gs.measure(g)["P_iso"])
+
+
+def test_bin_centres():
+    """``bin_centres``: the arithmetic midpoint ("linear"), the geometric mean ("log", the midpoint where the lower edge
+    is 0), or the weighted centres of the measurement ("weighted", returned as given); a bad mode raises."""
+    from skewerjax.summary_stats import X_BIN_MODES, bin_centres
+
+    e = np.array([0.0, 1.0, 4.0, 16.0])
+    np.testing.assert_allclose(bin_centres(e, "linear"), [0.5, 2.5, 10.0])
+    np.testing.assert_allclose(bin_centres(e, "log"), [0.5, 2.0, 8.0])  # sqrt(1 x 4), sqrt(4 x 16); edge 0: linear
+    w = np.array([0.7, 2.2, 9.1])
+    np.testing.assert_array_equal(bin_centres(e, "weighted", w), w)
+    assert X_BIN_MODES == ("weighted", "linear", "log")
+    with pytest.raises(ValueError, match="x_bin"):
+        bin_centres(e, "middle")
+    with pytest.raises(ValueError, match="weighted"):
+        bin_centres(e, "weighted")

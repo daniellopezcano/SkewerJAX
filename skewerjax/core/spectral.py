@@ -91,13 +91,18 @@ def local_wavelength_from_observed_A(
     return wl * ratio * jnp.sqrt((1.0 + beta) / (1.0 - beta))
 
 
-def line_centre_velocity_kms(a_dagger: ArrayLike, scale_factor: ArrayLike, LoS_velocity: ArrayLike) -> jnp.ndarray:
+def line_centre_velocity_kms(
+    a_dagger: ArrayLike, scale_factor: ArrayLike, LoS_velocity: ArrayLike, hubble_kms: ArrayLike | None = None
+) -> jnp.ndarray:
     """v_c = c [ln(a_dagger / a) + (ln(1 - beta) - ln(1 + beta)) / 2]: where each point absorbs at line centre [km/s].
 
     a_dagger : scalar or (N_points,); scale_factor : (N_points,); LoS_velocity : (N_lines, N_points) [km/s].
-    Returns (N_lines, N_points).
+    hubble_kms : None (default) or (N_points,) [km/s]: the Hubble part V_H in place of c ln(a_dagger / a) (the
+    ``hubble_flow="linear"`` of ``compute_optical_depth``, (aH)_ref y). Returns (N_lines, N_points).
     """
     beta = jnp.asarray(LoS_velocity) / phys.c_kms
+    if hubble_kms is not None:
+        return jnp.asarray(hubble_kms)[None, :] + phys.c_kms * 0.5 * (jnp.log1p(-beta) - jnp.log1p(beta))
     ratio = jnp.asarray(a_dagger) / jnp.asarray(scale_factor)
     return phys.c_kms * (jnp.log(ratio)[None, :] + 0.5 * (jnp.log1p(-beta) - jnp.log1p(beta)))
 
@@ -110,6 +115,7 @@ def frequency_offset_GHz(
     LoS_velocity: ArrayLike,
     velocity_period: ArrayLike | None = None,
     detuning: str = "exact",
+    hubble_kms: ArrayLike | None = None,
 ) -> jnp.ndarray:
     """nu_j = c (1 / lambda' - 1 / lambda_j) [GHz] of every (line, piece, velocity), from the detuning dv = v - v_c.
 
@@ -117,6 +123,7 @@ def frequency_offset_GHz(
     dv / c, the first-order mapping of fake_spectra (Sec. approx_velocity_units; matched mode only).
     ``velocity_period`` [km/s] (a number, possibly traced) replaces dv by its nearest periodic image in [-P/2, P/2):
     the opt-in periodic spectrum of ``optical_depth.compute_optical_depth``; None (default) does not wrap.
+    ``hubble_kms`` (N_points,), optional: the Hubble part of the line centres (``line_centre_velocity_kms``).
 
     Shapes: velocities (N_v,) (one grid for every line) or (N_lines, N_v) (one grid per line, e.g. the reference
     line's grid in every line's frame), lambda0_A (N_lines,), a_dagger scalar or (N_points,), scale_factor (N_points,),
@@ -141,7 +148,7 @@ def frequency_offset_GHz(
         raise ValueError(f"velocities must be (N_v,) or (N_lines, N_v), got {velocities_kms.shape}.")
     if detuning not in ("exact", "linear"):
         raise ValueError(f"detuning must be 'exact' or 'linear', got {detuning!r}.")
-    v_c = line_centre_velocity_kms(a_dagger, scale_factor, LoS_velocity)
+    v_c = line_centre_velocity_kms(a_dagger, scale_factor, LoS_velocity, hubble_kms)
     v = velocities_kms[None, None, :] if velocities_kms.ndim == 1 else velocities_kms[:, None, :]
     delta = v - v_c[..., None]
     if velocity_period is not None:

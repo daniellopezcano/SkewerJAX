@@ -127,7 +127,7 @@ def check_skewers(
     ``summary`` line and its arrays; ``info`` the ``return_info`` of ``cell_pieces`` and the time of every check.
     """
     from skewerjax.core.absorbers import cell_pieces
-    from skewerjax.core.optical_depth import Pieces, compute_optical_depth, resolution_report
+    from skewerjax.core.optical_depth import compute_optical_depth, resolution_report
 
     t_start = time.perf_counter()
     rep = SkewerCheck()
@@ -216,12 +216,7 @@ def check_skewers(
         for k in range(pieces.shape[1]):
             n_px = int(np.ceil(span[k] / dv))
             v = (np.arange(n_px) + 0.5) * (span[k] / n_px)
-            one = Pieces(
-                **{
-                    f: (getattr(pieces, f)[k : k + 1] if getattr(pieces, f).ndim < 3 else getattr(pieces, f)[:, k : k + 1])
-                    for f in pieces.__dataclass_fields__
-                }
-            )
+            one = pieces.skewers(slice(k, k + 1))
             _, ti = compute_optical_depth(one, v, line_bundle, velocity_period=True, resolution_tolerance=None, return_info=True)
             frac[:, k] = ti["window_fraction"][:, 0]
         dev = float(np.max(np.abs(1.0 - frac)))

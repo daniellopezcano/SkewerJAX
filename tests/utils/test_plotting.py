@@ -4,6 +4,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import jax.numpy as jnp  # noqa: E402
+import matplotlib.legend  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
@@ -134,7 +135,7 @@ def test_toy_box_figures():
     assert info["arrow_scale"] == 0 and not any(ax.get_title() for ax in axs.ravel())
     setup = SkewerRun(stride=(4, 4), points_per_cell=80, n_pix=64, batch=8)
     res = field_statistics(b, log=None)
-    run = run_skewers(b, setup, log=None)
+    run = run_skewers(b, setup, decompose=True, log=None)
     for quantity, k_scale in (("xi", "linear"), ("r2xi", "log")):
         fig, axs, out = pl.plot_isotropic_recovery(
             res, quantity=quantity, r_bao=2.0, grf=b.grf(), k_scale=k_scale, k_marks={"$k_1$": 1.0, "$k_2$": 50.0}
@@ -142,6 +143,22 @@ def test_toy_box_figures():
         fig.canvas.draw()
         assert axs[0, 0].get_xscale() == k_scale and axs[0, 1].get_yscale() == ("symlog" if quantity == "xi" else "linear")
     assert {"P_chi2_dof", "xi_chi2_dof", "xi_mean_pull", "xi_curve_r"} <= set(out)
+    labels = [t.get_text() for t in axs[0, 0].get_legend().get_texts()]
+    assert labels == ["per realisation", "expectation", "analytic input", r"mean $\pm$ error"], labels
+    # x_bin: only the drawn x of the bins moves (default: the weighted centres of the measurement)
+    a_ = res["axes"]
+    for mode, xk in (
+        ("weighted", a_["k_iso"]),
+        ("linear", pl.bin_centres(a_["k_edges"], "linear")),
+        ("log", pl.bin_centres(a_["k_edges"], "log")),
+    ):
+        f2, ax2, _ = pl.plot_isotropic_recovery(res, x_bin=mode)
+        th = [ln for ln in ax2[0, 0].lines if ln.get_label() == "expectation"][0]
+        ok = np.isfinite(res["P_iso"]) & np.isfinite(res["theory"]["P_iso"])
+        np.testing.assert_allclose(th.get_xdata(), xk[ok]) and np.testing.assert_allclose(
+            th.get_ydata(), res["theory"]["P_iso"][ok]
+        )
+        plt.close(f2)
     assert axs[0, 0].get_ylabel().startswith("$P(k)$") and len(axs[0, 0].lines) > len(res["P_iso_each"]) + 1, (
         "P, with the continuum"
     )
@@ -167,24 +184,52 @@ def test_toy_box_figures():
         pl.plot_xi_mu_wedges: dict(quantity="xi", y_scale="symlog", r_marks={"$a$": 1.0, "$b$": 100.0}),
     }
     for f, kw in opts.items():
-        fig, axs, chi2 = f(res, **kw)
-        fig.canvas.draw()
-        assert not fig._suptitle and not any(ax.get_title() for ax in axs), "no titles"
-        if f is not pl.plot_xi_mu_wedges:
-            assert axs[0].get_shared_y_axes().joined(axs[0], axs[1]), "expected and measured panels share their y axis"
+        out, axs, chi2 = f(res, **kw)
+        figs = list(out) if f is not pl.plot_xi_mu_wedges else [out]
+        for fig in figs:
+            fig.canvas.draw()
+            assert not fig._suptitle and not fig.legends, "no titles, no figure-level legend"
+        assert not any(ax.get_title() for ax in axs), "no titles"
+        if f is not pl.plot_xi_mu_wedges:  # two figures, expected then measured, in the single-panel format
+            assert len(figs) == 2 and figs[0] is not figs[1] and len(axs) == 2
+            assert tuple(figs[0].get_size_inches()) == tuple(figs[1].get_size_inches()) == (14, 12.5)
             assert "perp" in axs[0].get_xlabel() and "parallel" in axs[0].get_ylabel(), "perpendicular across, parallel up"
+            n0, n1 = axs[0].collections[0].norm, axs[1].collections[0].norm
+            assert (n0.vmin, n0.vmax) == (n1.vmin, n1.vmax), "one colour norm for the pair"
+            texts = [[t.get_text() for t in ax.get_legend().get_texts()] for ax in axs]
+            assert texts[0][0].startswith("expected iso") and not any("measured" in t for t in texts[0])
+            assert texts[1][0].startswith("expected iso") and texts[1][1].startswith("measured iso") and "sigma" in texts[1][1]
+            leg = axs[1].get_legend()
+            assert leg.get_zorder() >= pl.LEGEND_ZORDER > max(c.get_zorder() for c in axs[1].get_children() if c is not leg)
+            assert leg.get_frame().get_alpha() == 1.0, "the legend on top, opaque"
         else:
-            assert len(fig.legends) == 2, "two legends: the wedges and the styles"
+            legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
+            assert len(legs) == 2, "two legends inside the panel: the wedges and the styles"
+            assert [t.get_text() for t in legs[1].get_texts()] == ["measured", "expected", "per realisation"]
+            assert legs[0].get_title().get_text() == "", "no title on the wedge legend"
             assert [t.get_text() for t in axs[0].texts] == ["$a$ "], "the marks inside the range only, labelled"
         if f is pl.plot_kpar_kperp_maps:  # P on the grid's own k_par: one row per mode, centred on it
-            assert "P(k_" in fig.axes[-1].get_ylabel() and "k\\," not in fig.axes[-1].get_ylabel()
+            assert "P(k_" in figs[0].axes[-1].get_ylabel() and "k\\," not in figs[0].axes[-1].get_ylabel()
             assert axs[0].get_ylim()[0] == pytest.approx(0.5 * lim["k_min"])
+            empty_cols = np.any(np.all(~np.isfinite(res["P_map"]), axis=0))
+            assert any("no mode" in t for t in texts[1]) == bool(empty_cols), "the empty-bin entry only when there is one"
+            assert len(axs[0].collections[0].get_array().compressed()) > 0 and not axs[0].get_legend().get_texts()[
+                0
+            ].get_text().startswith("measured")
         if f is pl.plot_rpar_rperp_maps:  # the wedge boundaries of plot_xi_mu_wedges, one ray per inner edge
             rays = [ln for ln in axs[1].lines if ln.get_linestyle() == "-." and len(ln.get_xdata()) == 2]
             assert len(rays) == len(pl.MU_WEDGES) - 2 and all(ln.get_color() == "white" for ln in rays)
             assert len(axs[1].patches) == len(pl.MU_WEDGES) - 1, "one coloured sector per wedge"
-            assert len(fig.legends[0].get_texts()) == 3 and any("r_{\\rm BAO}" in t.get_text() for t in axs[1].texts)
-            assert isinstance(axs[1].collections[0].norm, matplotlib.colors.SymLogNorm) and "xi" in fig.axes[-1].get_ylabel()
+            assert len(texts[1]) == 2 and any("r_{\\rm BAO}" in t.get_text() for t in axs[1].texts)
+            assert isinstance(axs[1].collections[0].norm, matplotlib.colors.SymLogNorm) and "xi" in figs[1].axes[-1].get_ylabel()
+        for fig in figs:
+            plt.close(fig)
+    # the empty-bin entry appears when a k_perp column holds no mode, and only then
+    sparse = pl.plot_kpar_kperp_maps(res, kperp_edges=None, kperp_scale="linear", kpar_scale="linear")
+    with_gap = dict(res, P_map=np.where(np.arange(res["P_map"].shape[1]) == 1, np.nan, res["P_map"]))
+    gap = pl.plot_kpar_kperp_maps(with_gap, kperp_scale="linear", kpar_scale="linear")
+    has = lambda o: any("no mode" in t.get_text() for t in o[1][1].get_legend().get_texts())
+    assert has(gap) and has(sparse) == bool(np.any(np.all(~np.isfinite(res["P_map"]), axis=0)))
     assert len(chi2) == len(pl.MU_WEDGES) - 1
     assert not hasattr(pl, "plot_pk_mu_wedges")
     sk = run["skewers"][0]
@@ -195,15 +240,18 @@ def test_toy_box_figures():
         b.box_cMpc, n, sk["v"], sk["tau"][:, 0], mean_transmission=run["mean_transmission"], points_per_cell=setup.points_per_cell
     )
     fig.canvas.draw()
-    assert len(axs) == 4 and axs[0].get_xlabel().startswith("position") and axs[2].get_xlabel() == pl.LABELS["v_ref"]
-    assert axs[2].get_ylabel() == pl.LABELS["transmission"] and "bar T" in axs[3].get_ylabel()
+    assert len(axs) == 5 and axs[0].get_xlabel().startswith("position") and axs[2].get_xlabel() == pl.LABELS["v_ref"]
+    assert axs[2].get_ylabel() == pl.LABELS["transmission"] and "bar T" in axs[3].get_ylabel() and "bar T" in axs[4].get_ylabel()
     T = np.exp(-sk["tau"][:, 0])
-    np.testing.assert_allclose(axs[3].lines[0].get_ydata(), T[0] / run["mean_transmission"][0] - 1, rtol=1e-12)
+    np.testing.assert_allclose(axs[3].lines[0].get_ydata(), run["mean_transmission"][0], rtol=1e-12)  # (d) T_bar, Lya
+    np.testing.assert_allclose(axs[3].lines[2].get_ydata(), run["mean_transmission"][2], rtol=1e-12)  # the total
+    np.testing.assert_allclose(axs[4].lines[0].get_ydata(), T[0] / run["mean_transmission"][0] - 1, rtol=1e-12)
     assert info["points"] in ("panel", "inset") and info["pixels"] in ("panel", "inset")
     fig, ax, info = pl.plot_skewer_slice(fl, b.box_cMpc, sk["columns"], highlight=(ix, iz), cmap="tol_iridescent")
     fig.canvas.draw()
     assert info["n_row"] == 4 and info["spacing_cMpc"] == pytest.approx(4 * b.dx)
-    arrows = [a for a in fig.legends[0].findobj(matplotlib.patches.FancyArrowPatch)]
+    assert not fig.legends and ax.get_legend() is not None, "the legend inside the panel"
+    arrows = [a for a in ax.get_legend().findobj(matplotlib.patches.FancyArrowPatch)]
     assert len(arrows) == 1, "the skewers' legend entry: a line with its arrowhead along it"
     (x0, y0), (x1, y1) = arrows[0]._posA_posB
     assert x1 > x0 and y1 == y0, "the arrow points along the (horizontal) line of the handle"
@@ -221,6 +269,11 @@ def test_toy_box_figures():
     period = float(run["skewers"][0]["period"])
     fig, ax, drawn = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, n_sigma=1.5, cmap="tol_BuRd")
     fig.canvas.draw()
+    assert not fig.legends and ax.get_legend() is None, "no legend: the curves and the diamond are labelled"
+    texts = [t.get_text() for t in ax.texts]
+    assert pl.line_pair_label(math=False) in texts, "the pair next to the diamond"
+    assert any(t.strip() == "echo " + pl.line_pair_label().replace("$\\Delta", "$+\\Delta") for t in texts), "G4 labels"
+    assert np.all(np.asarray(ax.collections[0].get_edgecolor())[..., 3] == 0) or ax.collections[0].get_linewidth()[0] == 0
     assert len(ax.child_axes) == 2 and "cMpc" in ax.get_xlabel() and "perp" in ax.get_xlabel() and not ax.get_title()
     assert all("reference" not in c.get_xlabel() + c.get_ylabel() for c in ax.child_axes), (
         "no parenthetical on the reference axes"
@@ -237,43 +290,66 @@ def test_toy_box_figures():
     c = pl.echo_curves(2.0, d, L)
     s_ = np.sqrt(2.0**2 - c["r_perp"] ** 2)
     np.testing.assert_allclose(c["plus"], pl.fold_periodic(s_ + d, L)) and np.all(c["plus"] <= L / 2)
-    np.testing.assert_allclose(drawn["echo $-\\Delta$"]["r_par"], u * pl.fold_periodic(np.abs(s_ - d), L))
-    assert drawn["$\\Delta$"]["r_par"][0] == pytest.approx(100.0) and len(fig.legends[0].get_texts()) == 3
+    np.testing.assert_allclose(drawn["echo -"]["r_par"], u * pl.fold_periodic(np.abs(s_ - d), L))
+    assert drawn["spot"]["r_par"][0] == pytest.approx(100.0) and set(drawn) == {"ring", "spot", "echo +", "echo -"}
     np.testing.assert_allclose(pl.fold_periodic([0.3, 0.7, 1.2, -0.2], 1.0), [0.3, 0.3, 0.2, 0.2])
     sc = pl.echo_scales(40.0, 28.0, 150.0)
     np.testing.assert_allclose(list(sc.values()), [40.0, 28.0, 12.0, 68.0, np.hypot(40.0, 28.0)])
     assert pl.echo_scales(40.0, 50.0, 150.0)["$r_{\\rm BAO} + \\Delta$"] == pytest.approx(60.0), "folded beyond L / 2"
-    assert not hasattr(pl, "plot_overflux_kpar_kperp") and not hasattr(pl, "_reference_wedges")
-    fig, axs, chi2 = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, r_marks=pl.echo_scales(2.0, d, L))
+    assert not hasattr(pl, "_reference_wedges")
+    # the k-space map: k_perp in cMpc^-1 across, k_par in s/km upwards (native units), reference axes through u, no legend
+    fig, ax, chi2k = pl.plot_overflux_kpar_kperp(tot, kms_per_cMpc=u, kperp_edges=run["axes3d"]["kperp_edges"])
+    fig.canvas.draw()
+    assert chi2k is None and not fig.legends and ax.get_legend() is None and len(ax.child_axes) == 2
+    assert "cMpc" in ax.get_xlabel() and "s km" in ax.get_ylabel() and "parallel" in ax.get_ylabel()
+    np.testing.assert_allclose(ax.get_ylim(), np.array(run["axes3d"]["kpar_edges"])[[0, -1]] / u)
+    assert "P(k_" in fig.axes[-1].get_ylabel() and "cMpc$^3$" in fig.axes[-1].get_ylabel(), "P, not k P"
+    # the wedges: r_BAO, the spot in the wedge of mu = 1 only, the echoes per wedge at its mean mu, every scale folded
+    fig, axs, chi2 = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, box=L)
     fig.canvas.draw()
     assert chi2 is None and len(axs) == 1 and "cMpc" in axs[0].get_xlabel() and "km" in axs[0].child_axes[0].get_xlabel()
-    assert len(fig.legends) == 2, "the wedges and the styles"
+    legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
+    assert not fig.legends and len(legs) == 2, "the wedges and the styles, inside the panel"
+    assert [t.get_text() for t in legs[1].get_texts()] == ["measured", "per realisation"]
+    ec = pl.wedge_echoes(2.0, 100.0 / u, pl.MU_WEDGES, L)
+    mu_ = np.asarray(ec["mu"])
+    root = np.sqrt(2.0**2 - (100.0 / u) ** 2 * (1 - mu_**2))
+    np.testing.assert_allclose(ec["plus"], pl.fold_periodic(root + mu_ * 100.0 / u, L))
+    assert ec["spot_wedge"] == len(pl.MU_WEDGES) - 2, "the spot in the wedge that holds mu = 1"
+    drawn_x = {round(t.get_position()[0], 9) for t in axs[0].texts}
+    assert round(ec["r_bao"], 9) in drawn_x and round(ec["delta"], 9) in drawn_x
+    spot = [ln for ln in axs[0].lines if ln.get_linestyle() == "--" and np.allclose(ln.get_xdata(), ec["delta"])]
+    assert len(spot) == 1 and spot[0].get_color() == pl.PALETTE[pl.MU_COLORS[ec["spot_wedge"]]]
     with pytest.raises(TypeError):
         pl.plot_xi_mu_wedges(tot, reference={})
     # the density along the skewers (E, F): comoving line of sight, km/s for reference, with its exact expectation
     dens = dict(run["density3d"]["total"], axes=run["density_axes3d"])
-    fig, ax, _ = pl.plot_overflux_rpar_rperp(
-        dens, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, unit="cMpc", theory=run["density_theory"]
-    )
+    fig, ax, drawn = pl.plot_overflux_rpar_rperp(dens, kms_per_cMpc=u, r_bao=2.0, unit="cMpc", theory=run["density_theory"])
     fig.canvas.draw()
     assert "cMpc" in ax.get_ylabel() and any("km" in c.get_ylabel() for c in ax.child_axes)
-    assert len(fig.legends[0].get_texts()) == 4, "contours, band, expected contours, the diamond"
+    assert set(drawn) == {"ring"} and not fig.legends, "the density: the ring alone, nothing of the metal lines"
+    fig, ax, chi2k = pl.plot_overflux_kpar_kperp(dens, kms_per_cMpc=u, unit="cMpc", theory=run["density_theory"])
+    fig.canvas.draw()
+    assert chi2k > 0 and "cMpc" in ax.get_ylabel() and any("s km" in c.get_ylabel() for c in ax.child_axes)
     fig, axs = pl.plot_overflux_3d(run["density3d"], run["density_axes3d"], kms_per_cMpc=u, theory=run["density_theory"])
     fig.canvas.draw()
     assert any(ln.get_linestyle() == "--" for ln in axs["P"].lines), "the expectation, dashed"
     fig, axs, chi2 = pl.plot_xi_mu_wedges(dict(dens, theory=run["density_theory"]), kms_per_cMpc=u)
     assert len(axs) == 2 and len(chi2) == len(pl.MU_WEDGES) - 1
-    fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1_Z22, kms_per_cMpc=u)
+    k_lim = (2 * np.pi / period, np.pi / (period / setup.n_pix))
+    fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1_Z22, kms_per_cMpc=u, k_limits=k_lim, k_max=1.2 * k_lim[1])
     fig.canvas.draw()
-    assert len(fig.legends[0].get_texts()) == 5  # three overfluxes, the boxes and the reference (below the axes)
-    assert "cMpc" in ax.child_axes[0].get_xlabel()
+    assert not fig.legends and len(ax.get_legend().get_texts()) == 5  # three overfluxes, the boxes and the reference
+    assert len(ax.child_axes) == 1 and "cMpc" in ax.child_axes[0].get_xlabel(), "one reference top axis"
+    spans = sorted((p.get_x(), p.get_x() + p.get_width()) for p in ax.patches if isinstance(p, matplotlib.patches.Rectangle))
+    assert np.isclose(spans[0][1], k_lim[0]) and np.isclose(spans[-1][0], k_lim[1]), "shaded below k_min, above k_max"
     from skewerjax.simulations import DENSITY_FIELDS
 
     fig, ax = pl.plot_p1d_reference(
         run["density_p1d"], P1D_DESI_DR1_Z22, fields=DENSITY_FIELDS, unit="cMpc", kms_per_cMpc=u, k_max=3.0
     )
     fig.canvas.draw()
-    assert "cMpc" in ax.get_xlabel() and "km" in ax.child_axes[0].get_xlabel() and len(fig.legends[0].get_texts()) == 6
+    assert "cMpc" in ax.get_xlabel() and "km" in ax.child_axes[0].get_xlabel() and len(ax.get_legend().get_texts()) == 6
     for kind in ("P", "xi"):
         fig, axs = pl.plot_orders_compared({"density": run["density_flux"]}, kind, kms_per_cMpc=u, unit="cMpc")
         assert "cMpc" in axs[1, 0].get_xlabel() and "km" in axs[0, 0].child_axes[0].get_xlabel()
@@ -288,11 +364,23 @@ def test_toy_box_figures():
         fig, axs = pl.plot_terms_compared(ens, kind, kms_per_cMpc=u)
         fig.canvas.draw()
         assert axs.shape == (3, 1), f"{kind}: one row per order 2, 3, 4 (order 1 vanishes, order 0 not shown)"
+        for ax in axs.ravel():  # the legend inside the panel
+            bb, la = ax.get_legend().get_window_extent(), ax.get_window_extent()
+            assert bb.x0 >= la.x0 - 1 and bb.x1 <= la.x1 + 1
         assert not any(ax.get_title() for ax in axs.ravel())
     xi_lines = [c for c in pl.plot_orders_compared(ens, "xi")[1][0, 0].lines if c.get_marker() == "o"]
     assert xi_lines, "xi1D: points with error bars too"
     line = [c for c in pl.plot_orders_compared(ens, "P")[1][0, 0].lines if c.get_marker() == "o"][0]
     assert line.get_linestyle() == "-", "the points of every series are joined by a thin line"
+    # explicit display bins: P1D in the bins of bao_k_edges along the line of sight, xi1D at every lag
+    from skewerjax.summary_stats import bao_k_edges
+
+    k_f = 2 * np.pi / period
+    e1 = bao_k_edges(k_f, np.pi / (period / setup.n_pix), 3.0 / u, n_log=4)
+    pts = [c for c in pl.plot_orders_compared(ens, "P", k_edges=e1)[1][0, 0].lines if c.get_marker() == "o"][0]
+    assert np.all(pts.get_xdata() >= e1[0]) and np.all(pts.get_xdata() <= e1[-1])
+    xs = [c for c in pl.plot_orders_compared(ens, "xi", lag_bin=1)[1][0, 0].lines if c.get_marker() == "o"][0]
+    np.testing.assert_allclose(np.diff(xs.get_xdata()), period / setup.n_pix), "every lag j dv"
 
 
 def test_comoving_axis():
@@ -304,6 +392,11 @@ def test_comoving_axis():
     ra, kb = pl.comoving_axis(a, u, "r"), pl.comoving_axis(b, u, "k")
     ry = pl.comoving_axis(a, u, "r", side="right", label="y [cMpc]")
     fig.canvas.draw()
+    # the secondary axes alone draw the ticks of their side (the style puts in-ticks on all four sides)
+    assert not any(t.tick2line.get_visible() for t in a.xaxis.get_major_ticks()), "no primary ticks on top"
+    assert not any(t.tick2line.get_visible() for t in a.yaxis.get_major_ticks()), "no primary ticks on the right"
+    assert all(t.tick1line.get_visible() for t in a.xaxis.get_major_ticks()), "the bottom ticks stay"
+    assert any(t.tick2line.get_visible() for t in ra.xaxis.get_major_ticks()), "the secondary axis has its own (on top)"
     np.testing.assert_allclose(ra.get_xlim(), (0.0, 10.0))  # 800 km/s = 10 cMpc
     np.testing.assert_allclose(kb.get_xlim(), (0.08, 8.0))  # 0.001 s/km = 0.08 cMpc^-1
     assert ra.get_xlabel() == pl._units("cMpc")["r"] and ry.get_ylabel() == "y [cMpc]" and "log" in kb.get_xscale()

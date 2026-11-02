@@ -3,6 +3,59 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — the Hubble flow of the line centres; bin centres; legends; split maps (2026-11-02)
+
+### Added
+- `compute_optical_depth(hubble_flow="exact" | "linear", aH_ref=None)` (and `optical_depth_from_pieces`, `_sharded`,
+  `optical_depth_kernel(hubble_kms=)`, `frequency_offset_GHz` / `line_centre_velocity_kms(hubble_kms=)`): "linear" puts
+  the line centres at V_H(0) + (aH)_ref y, fake_spectra's Hubble flow; the density factor, peculiar velocity, widths,
+  lengths and detuning are unchanged; the period of `velocity_period=True` and the resolution widths follow it.
+  `Pieces` gets optional `path_cMpc`, `path_length_cMpc`, `aH_first`, `vH_first` (filled by `cell_pieces`; frames:
+  `hubble_coordinate`, `path_length_of`, `first_hubble_rate`, `first_hubble_velocity`), `Pieces.skewers(sel)`;
+  `core.velocity_span(pieces | bundle | frame, hubble_flow, aH_ref)`, `HUBBLE_FLOWS`. `SkewerRun(hubble_flow=, aH_ref=)`,
+  `tau_absorbers(hubble_flow=, aH_ref=)`, `IntegrationOptions(hubble_flow=, aH_ref=)` (pass-through; out of the cache key
+  at their defaults). Default "exact": tau unchanged, bit for bit.
+- `summary_stats.bin_centres(edges, mode)`, `X_BIN_MODES`; `x_bin=` in `plot_isotropic_recovery`, `plot_overflux_3d`,
+  `plot_xi_mu_wedges`, `plot_orders_superimposed`, `plot_terms_by_order` (and the `_compared` wrappers),
+  `plot_p1d_reference` (default "weighted": unchanged).
+
+### Changed
+- `plot_kpar_kperp_maps`, `plot_rpar_rperp_maps` return two figures (expected, measured; `(figs, axs, chi2)`), built
+  on `plot_overflux_kpar_kperp` / `plot_overflux_rpar_rperp` (new `show=`, `norm=`, `legend=`; `kms_per_cMpc` optional),
+  one colour norm and one set of levels; their legend: the expected contours, one entry for the measured contours with
+  their band, the empty bins only when there are some.
+- Every legend through `plotting._legend`: the top layer (`LEGEND_ZORDER`), an opaque frame.
+  `plot_isotropic_recovery`'s legend: "per realisation", "expectation", "analytic input", "mean ± error".
+- `SkewerRun.derived` / `skewer_tau`: the period from `core.velocity_span` (rounding-level change of the "exact" period
+  of `derived`, which used the line centres of the points).
+- Notebook 08: `HUBBLE_FLOW = "exact"`; the PERIOD from `velocity_span`; a progress display in the τ loop; one markdown
+  cell per step (b)–(e); the Part A maps as figure pairs.
+
+## Unreleased — an explicit skewer pipeline; statistics from arrays; figures of notebook 08 (2026-11-01)
+
+### Added
+- `summary_stats.lattice` (arrays and geometry only): `skewer_p1d`, `skewer_xi1d` (one 1D FFT per skewer),
+  `lattice_grid`, `lattice_limits`, `on_lattice`, `measure_lattice` (the 3D statistics on the lattice of skewers).
+- `summary_stats.overflux`: `ensemble_mean_transmissions` (T̄ of an ensemble of boxes over the set of `mean`, a
+  broadcast view), `overflux_check`; `stats_1d.decompose_1d` (the opt-in order-by-order decomposition).
+- `simulations.skewer_density_statistics`; `utils.plotting`: `plot_overflux_kpar_kperp`, `wedge_echoes`,
+  `line_pair_label`.
+
+### Changed
+- `bao_k_edges` (now in `summary_stats.binning`, re-exported by `toy_boxes`) and `ToyBoxes.k_edges` take `dk_factor`
+  (default 0.25: the edges are unchanged); the info dict has `dk` and `n_step` (was `n_quarter`). `native_edges` and
+  `full_coverage` moved to `summary_stats.binning` too.
+- `run_skewers`, `skewer_statistics`, `skewer_box` compose the public functions above; the decomposition (`flux`) only
+  with `decompose=True` (default False); new `xi1d`. `lattice_density_theory(boxes, stride, ..., scale=)`
+  accepts a stride or a `SkewerRun`. `SkewerRun.grid3d` / `.limits` call `lattice_grid` / `lattice_limits`.
+- `compute_optical_depth`: a warning when `a_eff > 1`.
+- Figures (notebook 08): legends inside the panels (`plot_skewer_slice`, `plot_kpar_kperp_maps`, `plot_rpar_rperp_maps`,
+  `plot_xi_mu_wedges`, `plot_p1d_reference`, `plot_terms_by_order` default `legend="inside"`); a secondary axis alone
+  draws the ticks of its side (`_secondary`); small markers (`plot_overflux_3d`, `plot_p1d_reference`);
+  `plot_toy_skewer` a row (d) of T̄; `plot_overflux_rpar_rperp` without cell edges and legend, the pair labelled at the
+  diamond, `drawn` keys `ring`, `spot`, `echo +`, `echo -`; `plot_xi_mu_wedges(r_bao=, delta_v=, box=)`;
+  `plot_p1d_reference(k_edges=, k_limits=)`; `plot_orders_*` / `plot_terms_*` take `k_edges`.
+
 ## Unreleased — four normalisation modes of the transmission; the density conversion a_eff (2026-10-31)
 
 ### Changed

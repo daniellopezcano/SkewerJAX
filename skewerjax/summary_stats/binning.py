@@ -1,5 +1,6 @@
-"""Binning of the two-point statistics: bin indices, jitted weighted bin means, bin edges, and the mean over
-independent realisations."""
+"""Binning of the two-point statistics: bin indices, jitted weighted bin means, bin edges (``hybrid_k_edges``,
+``bao_k_edges``, ``native_edges``, ``occupied_edges``, ``full_coverage``), where a bin is drawn (``bin_centres``), and the
+mean over independent realisations."""
 
 from __future__ import annotations
 
@@ -58,6 +59,29 @@ def binned_mean(values, idx, weights, n_bins: int):
     return jnp.where(W > 0, S / jnp.where(W > 0, W, 1.0), jnp.nan), W
 
 
+X_BIN_MODES = ("weighted", "linear", "log")  # where a figure draws a bin: ``bin_centres``
+
+
+def bin_centres(edges, mode: str = "linear", weighted=None) -> np.ndarray:
+    """The x at which a bin of ``edges`` is drawn: "linear" the arithmetic midpoint (e_i + e_{i+1}) / 2, "log" the
+    geometric mean sqrt(e_i e_{i+1}) (the midpoint where the lower edge is <= 0, which has no log centre), "weighted" the
+    centres ``weighted`` given by the measurement (e.g. the mode- or separation-weighted mean |k| or |r| of
+    ``GridStatistics3D``, the mean of the modes or lags of a 1D bin; returned as they are, any shape). Only the drawn
+    position: the values of a bin do not depend on it."""
+    if mode not in X_BIN_MODES:
+        raise ValueError(f"x_bin must be one of {X_BIN_MODES}, got {mode!r}.")
+    if mode == "weighted":
+        if weighted is None:
+            raise ValueError('x_bin="weighted" needs the weighted centres of the measurement.')
+        return np.asarray(weighted, dtype=float)
+    e = np.asarray(edges, dtype=float)
+    lo, hi = e[:-1], e[1:]
+    mid = 0.5 * (lo + hi)
+    if mode == "linear":
+        return mid
+    return np.where(lo > 0, np.sqrt(np.clip(lo, 1e-300, None) * hi), mid)
+
+
 def ensemble_mean(records, keys) -> dict:
     """Mean over independent realisations of the arrays ``keys`` of a list of records (dicts of arrays).
 
@@ -92,3 +116,69 @@ def occupied_edges(values, edges):
             out.append(hi)
     out[-1] = edges[-1]  # trailing empty bins join the last occupied one
     return np.asarray(out)
+
+
+def bao_k_edges(
+    k_f: float,
+    k_max: float,
+    k_w: float,
+    *,
+    k_1: float | None = None,
+    dk_factor: float = 0.25,
+    n_log: int = 12,
+    info: bool = False,
+):
+    """|k| bin edges that resolve BAO wiggles of period ~2 k_f [same units as the inputs], in three ranges:
+
+    * one bin per mode up to k_1 (edges at (j + 1/2) k_f; default k_1 = 3.5 k_f, rounded to such an edge);
+    * bins of dk = ``dk_factor`` k_f (default k_f / 4) from k_1 to k_2, the end of the wiggles: k_w (e.g. 3 / sigma_bao)
+      rounded to the nearest multiple of dk above k_1, so that every such bin is a full step;
+    * ``n_log`` logarithmic bins from k_2 to k_max: the steps end and the log bins start at the same k_2.
+
+    When k_2 >= k_max, steps of dk up to k_max; when k_w <= k_1, no steps (k_2 = k_1); when k_max <= k_1, one mode per
+    bin up to k_max. On a 1D axis (modes at multiples of k_f only) a step dk < k_f holds at most one mode, so the occupied
+    bins are one per mode up to k_2. ``info``: also return dict(k_1, k_2, k_w, dk, n_mode, n_step, n_log) (the numbers of
+    bins in the three ranges)."""
+    if not dk_factor > 0:
+        raise ValueError(f"dk_factor must be > 0, got {dk_factor}.")
+    dk = float(dk_factor) * k_f
+    k_1 = 3.5 * k_f if k_1 is None else (np.floor(k_1 / k_f - 0.5) + 0.5) * k_f
+    if k_max <= k_1:
+        lin = np.arange(0.5, k_max / k_f, 1.0) * k_f
+        e = np.append(lin, k_max) if k_max - lin[-1] > 0.1 * k_f else lin
+        k_1 = k_2 = float(e[-1])
+        parts = (e, np.empty(0), np.empty(0))
+    else:
+        mode = np.arange(0.5, k_1 / k_f + 0.25, 1.0) * k_f
+        k_2 = k_1 + max(0, int(np.round((k_w - k_1) / dk))) * dk
+        if k_2 >= k_max:
+            q = np.arange(k_1 + dk, k_max - 0.4 * dk, dk)
+            parts = (mode, np.append(q, k_max), np.empty(0))
+            k_2 = float(k_max)
+        else:
+            q = np.arange(k_1 + dk, k_2 + 0.4 * dk, dk)
+            log_edges = np.geomspace(k_2, k_max, int(n_log) + 1)[1:]
+            parts = (mode, q, log_edges)
+    e = np.concatenate(parts)
+    if not info:
+        return e
+    n = dict(n_mode=parts[0].size - 1, n_step=parts[1].size, n_log=parts[2].size)
+    return e, dict(k_1=float(k_1), k_2=float(k_2), k_w=float(k_w), dk=dk, **n)
+
+
+def native_edges(spacing: float, n_max: int, start: int = 0) -> np.ndarray:
+    """The edges of one bin per grid value j spacing, j = ``start`` .. ``n_max``, each centred on its value:
+    (j -+ 1/2) spacing (the rows of the maps on a grid's own modes or separations)."""
+    return (np.arange(int(start), int(n_max) + 2) - 0.5) * float(spacing)
+
+
+def full_coverage(edges, hi: float, name: str = "bins", log=print) -> np.ndarray:
+    """``edges`` without the bins that extend beyond ``hi``, the end of the range where every direction is available
+    (|k| <= the smallest Nyquist frequency, |r| <= half the box); ``log`` reports a cut in one line."""
+    e = np.asarray(edges, dtype=float)
+    keep = e <= hi * (1 + 1e-9)
+    if keep.all():
+        return e
+    if log:
+        log(f"{name}: {int((~keep).sum())} edge(s) beyond the full-coverage limit {hi:.4g} cut (last edge {e[-1]:.4g})")
+    return e[keep]

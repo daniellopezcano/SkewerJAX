@@ -153,7 +153,8 @@ def test_a_eff_density_conversion():
     """``a_eff``: None is the per-piece a_p^-2 (the same tau as without the option, bit for bit); a scalar is a_eff^-2
     for every piece, i.e. the densities rescaled by (a_p / a_eff)^2 with the line centres, widths and detuning untouched;
     traced in the kernel (no recompilation per value) and differentiable, d tau / d a_eff = -2 tau / a_eff; a value that
-    is not a finite positive scalar raises."""
+    is not a finite positive scalar raises, a value > 1 warns."""
+    import warnings
     from dataclasses import replace
 
     smp, v, lb = ramp_pieces()
@@ -174,6 +175,11 @@ def test_a_eff_density_conversion():
     for bad in (-1.0, np.inf, np.ones(2)):
         with pytest.raises(ValueError, match="a_eff"):
             compute_optical_depth(smp, v, lb, a_eff=bad, resolution_tolerance=None)
+    with warnings.catch_warnings(record=True) as caught:  # 1 + z typed for 1 / (1 + z): a warning, not an error
+        warnings.simplefilter("always")
+        t4 = np.asarray(compute_optical_depth(smp, v, lb, a_eff=4.0, resolution_tolerance=None))
+    assert any("a_eff = 4 > 1" in str(w.message) for w in caught)
+    np.testing.assert_allclose(t4, t_a * (a_eff / 4.0) ** 2, rtol=1e-12)
 
 
 # --------------------------------------------------------------------------- precision, sharding, devices
@@ -232,3 +238,76 @@ def test_gpu_matches_cpu():
     on = lambda dev: np.asarray(optical_depth_from_pieces(jax.device_put(smp, dev), jax.device_put(v, dev), lb))
     t_cpu, t_gpu = on(cpu), on(gpu)
     assert np.max(np.abs(t_gpu - t_cpu)) <= 1e-10 * np.max(t_cpu)
+
+
+# --------------------------------------------------------------------------- the Hubble flow of the line centres
+def test_hubble_flow_option():
+    """``hubble_flow``: "exact" (default) is the current tau, bit for bit; "linear" puts the line centres at V_H(0) +
+    (aH)_ref y (the frame's aH at the first point by default; ``Pieces.path_cMpc``, ``aH_first``, ``vH_first``), which
+    departs from the exact c ln(a_dagger / a(y)) at second order only; aH_ref is traced (one compilation for every value)
+    and differentiable; the period of ``velocity_period=True`` is |(aH)_ref| L and the widths of the resolution check
+    |(aH)_ref| l_p, so the window fraction over one period stays 1; in a ``SnapshotFrame`` (its Hubble flow is in the
+    injected velocity) the two options give the same tau."""
+    import warnings
+    from dataclasses import replace
+
+    from skewerjax.core import SnapshotFrame, velocity_span
+
+    sb, f, pos, a = uniform()
+    p = cell_pieces(f, LYA, skewer_bundle=sb, a_dagger=0.302)
+    P = float(p.velocity_span_kms[0])
+    v = (np.arange(400) + 0.5) * P / 400
+    t0 = np.asarray(compute_optical_depth(p, v, LYA, velocity_period=True))
+    assert np.array_equal(t0, np.asarray(compute_optical_depth(p, v, LYA, velocity_period=True, hubble_flow="exact")))
+    # the path fields: y from the first point, aH and V_H there (a_dagger = a at the last point here: V_H(0) != 0)
+    s = np.asarray(p.path_cMpc)[0]
+    assert s.min() >= 0 and float(p.path_length_cMpc[0]) == pytest.approx(pos[0, -1, 0] - pos[0, 0, 0], rel=1e-12)
+    lna = np.log(a[0, 0])
+    aH0 = -phys.c_kms * np.gradient(lna[:3], pos[0, :3, 0], edge_order=2)[0]  # second order, one-sided
+    assert float(p.aH_first[0]) == pytest.approx(aH0, rel=1e-6) and float(p.vH_first[0]) == pytest.approx(
+        phys.c_kms * np.log(0.302 / 0.30), rel=1e-9
+    )
+    # a regular skewer, a log-linear in y and a_dagger at the first point: the period is |aH| L, the window holds the
+    # whole column, and the line centres differ from the exact ones at second order only
+    from skewerjax.core import SkewerBundle, cells_from_values
+
+    n_pt, L = 801, 2.0
+    xq = np.zeros((1, n_pt, 3))
+    xq[0, :, 0] = np.linspace(0.0, L, n_pt)
+    aq = np.exp(np.linspace(np.log(0.302), np.log(0.300), n_pt))[None, None]
+    sbq = SkewerBundle(spatial_points=jnp.asarray(xq), manual_scale_factors=jnp.asarray(aq), a0=0.302, ICs_defined_at_index=0)
+    cq = cells_from_values(xq[0], None, {"HI": np.full(n_pt, 1e-12)}, temperature=1e4, volumes=np.full(n_pt, (L / n_pt) ** 3))
+    q = cell_pieces(cq, LYA, skewer_bundle=sbq)
+    aHq = phys.c_kms * np.log(0.302 / 0.300) / L
+    assert float(q.aH_first[0]) == pytest.approx(aHq, rel=1e-9) and abs(float(q.vH_first[0])) < 1e-9
+    P_lin = float(velocity_span(q, "linear")[0])
+    assert P_lin == pytest.approx(aHq * L, rel=1e-9) and P_lin == pytest.approx(float(q.velocity_span_kms[0]), rel=1e-9)
+    vq = (np.arange(400) + 0.5) * P_lin / 400
+    te, info_e = compute_optical_depth(q, vq, LYA, velocity_period=True, return_info=True)
+    tl, info_l = compute_optical_depth(q, vq, LYA, hubble_flow="linear", velocity_period=True, return_info=True)
+    np.testing.assert_allclose(info_l["velocity_period"], P_lin, rtol=1e-12)
+    np.testing.assert_allclose(info_l["window_fraction"], 1.0, rtol=1e-4)  # one period holds the whole column
+    np.testing.assert_allclose(np.asarray(tl), np.asarray(te), rtol=1e-6), "a linear in y: the same line centres"
+    # the resolution check uses |aH_ref| l_p: a large (aH)_ref widens the pieces
+    for h, warned in ((aHq, False), (1e5 * aHq, True)):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            compute_optical_depth(q, vq, LYA, hubble_flow="linear", aH_ref=h, resolution_tolerance=0.25)
+        assert any("too wide" in str(w.message) for w in caught) == warned
+    aH0 = float(q.aH_first[0])
+    p = q
+    v = vq
+    with pytest.raises(ValueError, match="aH_ref"):
+        compute_optical_depth(p, v, LYA, aH_ref=aH0)  # exact has no aH_ref
+    with pytest.raises(ValueError, match="hubble_flow"):
+        compute_optical_depth(p, v, LYA, hubble_flow="quadratic")
+    with pytest.raises(ValueError, match="path"):
+        compute_optical_depth(replace(p, path_cMpc=None), v, LYA, hubble_flow="linear")
+    # SnapshotFrame: one a, the Hubble flow in the velocity: linear == exact, bit for bit
+    L = float(pos[0, -1, 0])
+    fr = SnapshotFrame(a_snap=0.3, velfac=80.0, path_length=np.array([L]))
+    ps = cell_pieces(f, LYA, skewer_bundle=sb, frame=fr)
+    vs = (np.arange(300) + 0.5) * 80.0 * L / 300
+    te = np.asarray(compute_optical_depth(ps, vs, LYA, velocity_period=True))
+    tl = np.asarray(compute_optical_depth(ps, vs, LYA, velocity_period=True, hubble_flow="linear"))
+    assert np.array_equal(te, tl) and float(velocity_span(ps, "linear")[0]) == pytest.approx(80.0 * L, rel=1e-12)

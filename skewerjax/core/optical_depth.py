@@ -14,7 +14,14 @@ on each piece). The factor a_p^-2 converts the comoving density and length to ph
 e.g. a_eff = 1 / (1 + z) of a snapshot) and touches nothing else: the line centres v_c,p, the widths and the detuning
 keep the a(x) of the frame. Through the line centres the frame still sets the Jacobian of the column into velocity:
 a piece of length l_p spreads over a width (a H)_p l_p, so the tau per pixel of a uniform gas also scales as
-1 / (a H) along the path, whatever ``a_eff``. The gas is a set of Voronoi cells (``core.cells.Cells``, from a toy model or a simulation), constant
+1 / (a H) along the path, whatever ``a_eff``. The option ``hubble_flow`` sets the Hubble part of the line centres,
+v_c,p = V_H(y_p) + v_pec,p with y_p the comoving path coordinate of the centroid from the first point of the skewer:
+"exact" (default) V_H(y) = c ln(a_dagger / a(y)) = V_H(0) + int_0^y aH dy', the frame's a(y); "linear" V_H(y) =
+V_H(0) + (aH)_ref y, its first order about the first point (V_H(0) = 0 when a_dagger is a at the first point, as for
+the toy boxes), fake_spectra's Hubble flow (``absorption.cpp`` L237: vel = velfac pos + pvel; ``spectra.py`` L227-L228: velfac =
+a H(z)), which makes the Jacobian constant. It changes nothing else (the density factor, the peculiar velocity, the
+widths, the lengths, the detuning), and the period of ``velocity_period=True`` and the piece widths of the resolution
+check follow it (``velocity_span``). The gas is a set of Voronoi cells (``core.cells.Cells``, from a toy model or a simulation), constant
 inside every cell, and the pieces are the exact intersections of the path with the cells, cut also at the ends of
 the dual segments of the sampling points (``core.absorbers.cell_pieces``). So the column sum_p n_p l_p is exact; the
 profile has an error O((W_p / b_p)^2), W_p the variation of the line centre across the piece (the Hubble flow only:
@@ -32,6 +39,7 @@ options):
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 import warnings
@@ -74,6 +82,7 @@ def optical_depth_kernel(
     velocity_period=None,
     per_piece: bool = False,
     a_eff=None,
+    hubble_kms=None,
 ):
     """tau = sum_p l_p C f n_p a_p^-2 phi_p(v) for the pieces of one skewer (Eq. tau_straight_los, as a sum over pieces).
 
@@ -88,6 +97,8 @@ def optical_depth_kernel(
     per_piece : True returns every piece's contribution (N_lines, N_p, N_v) instead of the sum.
     a_eff : None (default: a_p^-2 of each piece) or a scalar (possibly traced): a_eff^-2 for every piece in the
         comoving-to-physical factor only (the line centres and the detuning keep ``scale_factor``).
+    hubble_kms : None (default: the Hubble part of the line centres from the frame, c ln(a_dagger / a_p)) or (N_p,) the
+        Hubble part V_H of every piece [km/s] (``hubble_flow="linear"``: (aH)_ref y_p, possibly traced).
 
     Returns
     -------
@@ -95,7 +106,14 @@ def optical_depth_kernel(
     """
     sigma, gamma = voigt_widths_GHz(temperature, turbulence, collisional, lambda0_A, A21_GHz, mass_amu)
     nu = frequency_offset_GHz(
-        velocities_kms, lambda0_A, a_dagger, scale_factor, los_velocity, velocity_period=velocity_period, detuning=detuning
+        velocities_kms,
+        lambda0_A,
+        a_dagger,
+        scale_factor,
+        los_velocity,
+        velocity_period=velocity_period,
+        detuning=detuning,
+        hubble_kms=hubble_kms,
     )
     n_l, n_p, n_v = nu.shape
     phi = voigt_line_profiles(nu.reshape(n_l * n_p, n_v), sigma.reshape(-1), gamma.reshape(-1), voigt).reshape(n_l, n_p, n_v)
@@ -123,7 +141,19 @@ class Pieces:
     width_kms : (N_lines, N_sk, N_p) the variation of the line centre across the piece [km/s] (``resolution_report``);
     velocity_span_kms : (N_sk,) the line-centre span of the whole path without peculiar velocities [km/s], from its
         first point to its last one (c |ln(a_first / a_last)|): the period of ``velocity_period=True``.
-    JAX pytree (every field a leaf).
+
+    Optional, for ``hubble_flow="linear"`` (``compute_optical_depth``; filled by ``core.absorbers.cell_pieces``, None
+    otherwise):
+
+    path_cMpc : (N_sk, N_p) the comoving path coordinate y_p of every centroid from the first point of its skewer, along
+        which the frame's Hubble flow c ln(a_dagger / a) runs [cMpc] (0 for a frame that carries its Hubble flow in
+        ``los_velocity`` instead, ``SnapshotFrame``: the two options then coincide);
+    path_length_cMpc : (N_sk,) the comoving length of every path, first to last point [cMpc];
+    aH_first : (N_sk,) the frame's dV_H/dy = -c d ln a / dy at the first point [km/s per cMpc], the default (aH)_ref;
+    vH_first : (N_sk,) the frame's V_H at the first point, c ln(a_dagger / a_first) [km/s] (0 when a_dagger is the scale
+        factor of the first point, as for the toy boxes; 0 for ``SnapshotFrame``).
+
+    JAX pytree (every field a leaf; a None field has none).
     """
 
     a_dagger: jnp.ndarray
@@ -136,6 +166,10 @@ class Pieces:
     number_density: jnp.ndarray
     width_kms: jnp.ndarray
     velocity_span_kms: jnp.ndarray
+    path_cMpc: jnp.ndarray | None = None
+    path_length_cMpc: jnp.ndarray | None = None
+    aH_first: jnp.ndarray | None = None
+    vH_first: jnp.ndarray | None = None
 
     @property
     def shape(self) -> tuple:
@@ -165,11 +199,47 @@ class Pieces:
             number_density=r(self.number_density, True),
             width_kms=r(self.width_kms, True),
             velocity_span_kms=jnp.repeat(self.velocity_span_kms, n_rows),
+            path_cMpc=None if self.path_cMpc is None else r(self.path_cMpc, False),
+            path_length_cMpc=None if self.path_length_cMpc is None else jnp.repeat(self.path_length_cMpc, n_rows),
+            aH_first=None if self.aH_first is None else jnp.repeat(self.aH_first, n_rows),
+            vH_first=None if self.vH_first is None else jnp.repeat(self.vH_first, n_rows),
         )
+
+    def skewers(self, sel) -> Pieces:
+        """The pieces of the skewers ``sel`` (an index array or a slice)."""
+        pick = lambda x: None if x is None else (x[sel] if x.ndim < 3 else x[:, sel])
+        return Pieces(**{f: pick(getattr(self, f)) for f in self.__dataclass_fields__})
 
 
 # --------------------------------------------------------------------------- every skewer
-@partial(jax.jit, static_argnames=("voigt", "detuning", "v_chunk", "batch_size", "per_piece", "dtype"))
+HUBBLE_FLOWS = ("exact", "linear")  # the Hubble part of the line centres (module docstring)
+
+
+def _hubble_rates(pieces: Pieces, aH_ref):
+    """(N_sk,) (aH)_ref of every skewer of ``pieces`` [km/s per cMpc]: ``aH_ref`` (a scalar, possibly traced) or, if
+    None, the frame's ``Pieces.aH_first``."""
+    n_sk = pieces.scale_factor.shape[0]
+    if aH_ref is None:
+        if pieces.aH_first is None:
+            raise ValueError('hubble_flow="linear" needs Pieces.aH_first (core.absorbers.cell_pieces fills it) or aH_ref.')
+        return jnp.asarray(pieces.aH_first)
+    return jnp.broadcast_to(jnp.asarray(aH_ref, dtype=pieces.scale_factor.dtype), (n_sk,))
+
+
+def velocity_span(pieces: Pieces, hubble_flow: str = "exact", aH_ref=None) -> jnp.ndarray:
+    """(N_sk,) the line-centre span of every path without peculiar velocities [km/s], the period of
+    ``velocity_period=True``: "exact" c |ln(a_first / a_last)| (``Pieces.velocity_span_kms``); "linear" |(aH)_ref| L,
+    L = ``Pieces.path_length_cMpc``. ``core.absorbers.velocity_span`` gives it for a ``SkewerBundle`` or a frame too."""
+    if hubble_flow not in HUBBLE_FLOWS:
+        raise ValueError(f"hubble_flow must be one of {HUBBLE_FLOWS}, got {hubble_flow!r}.")
+    if hubble_flow == "exact":
+        return jnp.asarray(pieces.velocity_span_kms)
+    if pieces.path_length_cMpc is None:
+        raise ValueError('hubble_flow="linear" needs Pieces.path_length_cMpc (core.absorbers.cell_pieces fills it).')
+    return jnp.abs(_hubble_rates(pieces, aH_ref)) * jnp.asarray(pieces.path_length_cMpc)
+
+
+@partial(jax.jit, static_argnames=("voigt", "detuning", "v_chunk", "batch_size", "per_piece", "dtype", "hubble_flow"))
 def optical_depth_from_pieces(
     pieces: Pieces,
     velocities_kms,
@@ -183,6 +253,8 @@ def optical_depth_from_pieces(
     per_piece: bool = False,
     dtype: str | None = None,
     a_eff=None,
+    hubble_flow: str = "exact",
+    aH_ref=None,
 ) -> jnp.ndarray:
     """tau (N_lines, N_sk, N_v) of every skewer of ``pieces``: ``optical_depth_kernel`` mapped over skewers.
 
@@ -193,12 +265,21 @@ def optical_depth_from_pieces(
     dtype : None (default: the dtype of the inputs) or e.g. "float32": opt-in lower-precision kernel (2-3x faster on
         the CPU; max |dF| ~1e-3 on TNG50-4 skewers); the result is cast back to the input dtype.
     a_eff : None or a scalar (traced: no recompilation per value; differentiable): ``optical_depth_kernel``.
+    hubble_flow : "exact" (default) or "linear": V_H = (aH)_ref y_p with ``aH_ref`` (None: ``Pieces.aH_first`` of each
+        skewer; a scalar, traced and differentiable), y_p = ``Pieces.path_cMpc`` and V_H(0) = ``Pieces.vH_first`` (0 if
+        None) (module docstring).
     """
+    if hubble_flow not in HUBBLE_FLOWS:
+        raise ValueError(f"hubble_flow must be one of {HUBBLE_FLOWS}, got {hubble_flow!r}.")
     out_dtype = pieces.temperature.dtype
     if dtype is not None:
-        pieces, velocities_kms, velocity_period, a_eff = jax.tree_util.tree_map(
-            lambda x: jnp.asarray(x).astype(dtype), (pieces, velocities_kms, velocity_period, a_eff)
+        pieces, velocities_kms, velocity_period, a_eff, aH_ref = jax.tree_util.tree_map(
+            lambda x: jnp.asarray(x).astype(dtype), (pieces, velocities_kms, velocity_period, a_eff, aH_ref)
         )
+    linear = hubble_flow == "linear"
+    if linear and pieces.path_cMpc is None:
+        raise ValueError('hubble_flow="linear" needs Pieces.path_cMpc (core.absorbers.cell_pieces fills it).')
+    aH = _hubble_rates(pieces, aH_ref) if linear else None
     lam, A21, mass, f_osc = (
         x if dtype is None else x.astype(dtype)
         for x in (line_bundle.lambda0_A, line_bundle.A21_GHz, line_bundle.mass_amu, line_bundle.f_osc)
@@ -207,7 +288,8 @@ def optical_depth_from_pieces(
     nv = n_v if v_chunk is None else int(v_chunk)
 
     def one_skewer(s):
-        a_d, a, w, T, tb, co, lv, n, P = s
+        a_d, a, w, T, tb, co, lv, n, P, y, h, h0 = s
+        hub = None if y is None else h0 + h * y  # V_H = V_H(0) + (aH)_ref y_p ("linear"); None: c ln(a_dagger / a)
         chunks = [
             optical_depth_kernel(
                 velocities_kms[..., v0 : v0 + nv],
@@ -228,6 +310,7 @@ def optical_depth_from_pieces(
                 velocity_period=P,
                 per_piece=per_piece,
                 a_eff=a_eff,
+                hubble_kms=hub,
             )
             for v0 in range(0, n_v, nv)
         ]
@@ -244,6 +327,9 @@ def optical_depth_from_pieces(
         sk(pieces.los_velocity),
         sk(pieces.number_density),
         velocity_period,
+        pieces.path_cMpc if linear else None,
+        aH,
+        (jnp.zeros_like(aH) if pieces.vH_first is None else jnp.asarray(pieces.vH_first, dtype=aH.dtype)) if linear else None,
     )
     return jnp.moveaxis(jax.lax.map(one_skewer, xs, batch_size=batch_size), 0, 1).astype(out_dtype)
 
@@ -265,6 +351,7 @@ def optical_depth_sharded(
         return optical_depth_from_pieces(pieces, velocities_kms, line_bundle, velocity_period=velocity_period, **kw)
     n_sk, n_dev = pieces.scale_factor.shape[0], len(devices)
     a_eff = kw.pop("a_eff", None)
+    aH_ref = kw.pop("aH_ref", None)
     pad = -n_sk % n_dev
     skewer_axis = lambda x: 0 if x.ndim <= 2 else 1  # (N_sk,), (N_sk, N_p) or (N_lines, N_sk, N_p)
     args = pieces if velocity_period is None else (pieces, jnp.asarray(velocity_period))
@@ -273,18 +360,18 @@ def optical_depth_sharded(
     )
     spec = jax.tree_util.tree_map(lambda x: PartitionSpec("sk") if x.ndim <= 2 else PartitionSpec(None, "sk"), padded)
 
-    def body(s, v, lb, ae):
+    def body(s, v, lb, ae, ah):
         p, P = (s, None) if velocity_period is None else s
-        return optical_depth_from_pieces(p, v, lb, velocity_period=P, a_eff=ae, **kw)
+        return optical_depth_from_pieces(p, v, lb, velocity_period=P, a_eff=ae, aH_ref=ah, **kw)
 
     run = shard_map(
         body,
         mesh=Mesh(np.array(devices), ("sk",)),
-        in_specs=(spec, PartitionSpec(), PartitionSpec(), PartitionSpec()),
+        in_specs=(spec, PartitionSpec(), PartitionSpec(), PartitionSpec(), PartitionSpec()),
         out_specs=PartitionSpec(None, "sk"),
         check_rep=False,
     )
-    return jax.jit(run)(padded, velocities_kms, line_bundle, a_eff)[:, :n_sk]
+    return jax.jit(run)(padded, velocities_kms, line_bundle, a_eff, aH_ref)[:, :n_sk]
 
 
 # --------------------------------------------------------------------------- resolution
@@ -324,12 +411,13 @@ def resolution_report(pieces: Pieces, line_bundle, tolerance: float = 0.25) -> d
 
 
 # --------------------------------------------------------------------------- the entry point
-def _velocity_periods(velocity_period, pieces: Pieces) -> jnp.ndarray | None:
-    """(N_sk,) periods [km/s] of the option ``velocity_period``, or None (no wrap)."""
+def _velocity_periods(velocity_period, pieces: Pieces, hubble_flow: str = "exact", aH_ref=None) -> jnp.ndarray | None:
+    """(N_sk,) periods [km/s] of the option ``velocity_period``, or None (no wrap); True: ``velocity_span`` under
+    ``hubble_flow``."""
     if velocity_period is None or velocity_period is False:
         return None
     if velocity_period is True:
-        P = jnp.asarray(pieces.velocity_span_kms)
+        P = velocity_span(pieces, hubble_flow, aH_ref)
         what = "velocity_period=True: a skewer has no velocity span (a(first point) = a(last point)); give the period explicitly."
     else:
         P = jnp.broadcast_to(jnp.asarray(velocity_period, dtype=pieces.scale_factor.dtype), (pieces.scale_factor.shape[0],))
@@ -356,7 +444,8 @@ _PIECE_RANGES = (
 
 def check_pieces(pieces: Pieces, line_bundle=None) -> None:
     """Shapes and values of ``pieces`` (eager; skipped under tracing): consistent shapes (N_lines, N_sk, N_p), N_lines =
-    ``line_bundle.n_lines``, finite values, scale factors > 0 and lengths, temperatures, widths >= 0. ``ValueError``
+    ``line_bundle.n_lines``, finite values, scale factors > 0 and lengths, temperatures, widths >= 0 (and the optional
+    path fields, if given: path coordinates and lengths >= 0, aH_first finite). ``ValueError``
     names the field and the first bad entry."""
     n_l, n_sk, n_p = pieces.shape
     if line_bundle is not None and n_l != line_bundle.n_lines:
@@ -370,6 +459,16 @@ def check_pieces(pieces: Pieces, line_bundle=None) -> None:
     check_shape("Pieces.velocity_span_kms", pieces.velocity_span_kms, (n_sk,))
     for f, lo, strict in _PIECE_RANGES:
         check_values(f"Pieces.{f}", getattr(pieces, f), minimum=lo, strict=strict)
+    for f, shape, lo in (
+        ("path_cMpc", (n_sk, n_p), 0.0),
+        ("path_length_cMpc", (n_sk,), 0.0),
+        ("aH_first", (n_sk,), None),
+        ("vH_first", (n_sk,), None),
+    ):
+        x = getattr(pieces, f)
+        if x is not None:
+            check_shape(f"Pieces.{f}", x, shape)
+            check_values(f"Pieces.{f}", x, minimum=lo)
 
 
 def compute_optical_depth(
@@ -394,6 +493,8 @@ def compute_optical_depth(
     dtype: str | None = None,
     devices=None,
     a_eff=None,
+    hubble_flow: str = "exact",
+    aH_ref=None,
     return_info: bool = False,
 ) -> jnp.ndarray:
     """tau (N_lines, N_sk, N_v) of every line along every skewer (F = exp(-tau)): the sum over the pieces of ``source``.
@@ -433,7 +534,16 @@ def compute_optical_depth(
         None keeps a_p^-2 of every piece (tau_j = C_j f_j sum_p n_com,p l_p a_p^-2 phi_jp); a scalar uses a_eff^-2
         for every piece (e.g. 1 / (1 + z), a fixed conversion). The line centres v_c,p, the widths, the lengths and
         the detuning are untouched, so the Jacobian 1 / (a H) of the frame (module docstring) stays. Traced in the
-        kernel (no recompilation per value) and differentiable.
+        kernel (no recompilation per value) and differentiable. A value > 1 (a scale factor in the future, e.g. 1 + z
+        typed for 1 / (1 + z)) issues a warning.
+    hubble_flow : "exact" (default) or "linear": the Hubble part of the line centres (module docstring), V_H(y) =
+        c ln(a_dagger / a(y)) (the frame) or (aH)_ref y (fake_spectra). Only the line centres change; the density factor
+        (``a_eff``), the peculiar velocity, the widths, the lengths and the ``detuning`` do not. With "linear" the period
+        of ``velocity_period=True`` is |(aH)_ref| L and the piece widths of the resolution check |(aH)_ref| l_p
+        (``velocity_span``); needs the path fields of ``Pieces`` (``cell_pieces`` fills them).
+    aH_ref : None (default: the frame's aH at the first point of each skewer, ``Pieces.aH_first``; for the toy boxes
+        ``ToyBoxes.aH``) or a scalar [km/s per cMpc], "linear" only. Traced (no recompilation per value) and
+        differentiable.
     return_info : also return dict(shape (N_lines, N_sk, N_p), n_v, line_frame, velocity_period (the (N_sk,) periods or
         None), resolution (``resolution_report``, None without the check), pieces_info (``cell_pieces``'s, bundle sources
         only), tau_max (N_lines, N_sk), tau_integral_kms (N_lines, N_sk) = sum_v tau dv over the grid, column_integral_kms
@@ -452,6 +562,17 @@ def compute_optical_depth(
     check_profile_mode(voigt)
     if detuning not in ("exact", "linear"):
         raise ValueError(f"detuning must be 'exact' or 'linear', got {detuning!r}.")
+    if hubble_flow not in HUBBLE_FLOWS:
+        raise ValueError(f"hubble_flow must be one of {HUBBLE_FLOWS}, got {hubble_flow!r}.")
+    if aH_ref is not None:
+        if hubble_flow != "linear":
+            raise ValueError('aH_ref applies to hubble_flow="linear" only.')
+        if jnp.ndim(aH_ref) != 0:
+            raise ValueError(f"aH_ref must be None or a scalar, got shape {jnp.shape(aH_ref)}.")
+        if not is_traced(aH_ref):
+            with jax.ensure_compile_time_eval():
+                if not bool(jnp.isfinite(aH_ref) & (jnp.asarray(aH_ref) != 0)):
+                    raise ValueError(f"aH_ref must be a finite, non-zero rate [km/s per cMpc], got {aH_ref}.")
     for name, x in (("v_chunk", v_chunk), ("piece_chunk", piece_chunk), ("batch_size", batch_size)):
         check_positive_int(name, x)
     v = jnp.asarray(velocities_kms)
@@ -472,6 +593,12 @@ def compute_optical_depth(
             with jax.ensure_compile_time_eval():
                 if not bool(jnp.isfinite(a_eff) & (jnp.asarray(a_eff) > 0)):
                     raise ValueError(f"a_eff must be a finite scale factor > 0, got {a_eff}.")
+                if bool(jnp.asarray(a_eff) > 1):  # a scale factor of the past is < 1: most likely 1 + z for 1 / (1 + z)
+                    warnings.warn(
+                        f"a_eff = {float(a_eff):g} > 1: a scale factor above today's (a = 1); tau scales as a_eff^-2, "
+                        f"so it is {float(a_eff) ** 2:.3g} times smaller than with a_eff = 1. Did you mean 1 / (1 + z)?",
+                        stacklevel=2,
+                    )
     if dtype is None:
         warn_if_float32("compute_optical_depth")
     if isinstance(source, Pieces):
@@ -497,9 +624,17 @@ def compute_optical_depth(
             pieces, pieces_info = pieces
     t1 = time.perf_counter()
     check_pieces(pieces, line_bundle)
+    if hubble_flow == "linear":
+        for f in ("path_cMpc", "path_length_cMpc"):
+            if getattr(pieces, f) is None:
+                raise ValueError(f'hubble_flow="linear" needs Pieces.{f} (core.absorbers.cell_pieces fills it).')
     rep = None
     if resolution_tolerance is not None:
-        rep = resolution_report(pieces, line_bundle, resolution_tolerance)
+        checked = pieces
+        if hubble_flow == "linear":  # the line centre varies across a piece by |(aH)_ref| l_p
+            w = jnp.abs(_hubble_rates(pieces, aH_ref))[:, None] * jnp.asarray(pieces.length_m) / phys.Mpc_to_m
+            checked = dataclasses.replace(pieces, width_kms=jnp.broadcast_to(w[None], pieces.width_kms.shape))
+        rep = resolution_report(checked, line_bundle, resolution_tolerance)
         if not rep["ok"]:
             warnings.warn(
                 "compute_optical_depth: the pieces are too wide in velocity for the line widths: "
@@ -513,7 +648,7 @@ def compute_optical_depth(
             )
     if line_frame == "reference":
         v = v[None, :] + jnp.asarray(line_bundle.delta_v)[:, None]
-    P = _velocity_periods(velocity_period, pieces)
+    P = _velocity_periods(velocity_period, pieces, hubble_flow, aH_ref)
     n_sk, m = pieces.scale_factor.shape
     pieces_all = pieces
     if piece_chunk is not None:
@@ -528,6 +663,8 @@ def compute_optical_depth(
         per_piece=per_piece,
         dtype=dtype,
         a_eff=a_eff,
+        hubble_flow=hubble_flow,
+        aH_ref=aH_ref,
     )
     logger.debug(
         "compute_optical_depth: %d lines x %d skewers x %d pieces, %d velocities (%s frame, velocity_period=%s, voigt %s, "

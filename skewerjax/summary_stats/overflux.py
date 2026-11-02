@@ -18,7 +18,8 @@ pixels (each mode gives <delta> = 0 over its own set, and removes what is consta
 "redshift" groups the pixels by their scale factor: samples on a shared grid (every row of ``grid`` the same, as on
 the toy lattice, where all skewers share one v -> a grid) give T_bar(v) at each pixel; samples whose grids differ raise
 a ``ValueError`` (``check_shared_grid``). On one array of samples "global" and "box" are the same mean; an ensemble
-split over realisations (``simulations.toy_boxes.run_skewers``) distinguishes them.
+split over realisations (``ensemble_mean_transmissions``, notebook 08) distinguishes them, and ``overflux_check`` checks
+the normalisation over the sets of the mode.
 
 Per line j, delta_j = T_j / T_bar_j - 1; for the total, T = prod_j T_j and T_bar = <prod_j T_j> != prod_j T_bar_j. The
 subset products delta_A = prod_{j in A} delta_j and
@@ -101,6 +102,82 @@ def mean_transmissions(transmissions: jnp.ndarray, mean: str = "redshift", *, gr
             check_shared_grid(grid, T.shape[-1])
         return m
     return jnp.broadcast_to(jnp.mean(m, axis=1, keepdims=True), m.shape)
+
+
+def ensemble_mean_transmissions(transmissions, mean: str = "redshift", *, grid=None) -> np.ndarray:
+    """The mean transmission T_bar of every line and of the total over the set of pixels of ``mean`` (module docstring),
+    for an ensemble of realisations (boxes) with the same number of samples each.
+
+    transmissions : (n_real, N_lines, N_samples, N_pix) T_j = exp(-tau_j) of every realisation (or a list of
+        (N_lines, N_samples, N_pix)).
+    mean : "redshift" (default): at each pixel over every sample of every realisation, T_bar(z) (the mean of the
+        per-realisation means at each pixel, ``mean_transmissions``); "global": over every pixel of every sample of every
+        realisation; "box": over every pixel of every sample of each realisation; "skewer": over the pixels of each sample.
+    grid : (N_pix,) or (n_real, N_pix), optional, with ``mean="redshift"``: the scale factor (or redshift) of every
+        pixel of every realisation, checked to be shared (``check_shared_grid``, ``ValueError`` otherwise).
+
+    Returns (n_real, N_lines + 1, N_samples, N_pix), the rows T_bar_j of the lines and, last, T_bar of the total
+    prod_j T_j: a read-only broadcast view of the means (no copy), so that delta = T / T_bar - 1 is elementwise for every
+    mode, and T_bar[i][:, s] is the mean seen by sample s of realisation i."""
+    mean = _check_mean(mean)
+    T = [np.asarray(x) for x in transmissions]
+    n, (n_l, n_s, n_pix) = len(T), T[0].shape
+    if mean == "redshift" and grid is not None:
+        check_shared_grid(grid, n_pix, what="realisations")
+    shape = (n, n_l + 1, n_s, n_pix)
+    if mean == "skewer":
+        m = np.stack([np.concatenate([x, x.prod(axis=0, keepdims=True)]).mean(axis=2, keepdims=True) for x in T])
+        return np.broadcast_to(m, shape)
+    per = np.stack([np.asarray(mean_transmissions(x, "redshift")) for x in T])  # (n, N_lines + 1, N_pix): T_bar(v) per box
+    m = {
+        "redshift": lambda: per.mean(axis=0)[None],  # equal samples per realisation: T_bar(v) of the ensemble
+        "global": lambda: per.mean(axis=0).mean(axis=-1, keepdims=True)[None],
+        "box": lambda: per.mean(axis=-1, keepdims=True),
+    }[mean]()
+    return np.broadcast_to(m[:, :, None, :], shape)
+
+
+_SET_AXES = {"redshift": (0, 2), "global": (0, 2, 3), "box": (2, 3), "skewer": (3,)}  # (n_real, field, sample, pixel)
+
+
+def overflux_check(delta, mean_transmission, mean: str = "redshift") -> dict:
+    """Checks of the normalisation of an ensemble overflux over the sets of pixels of ``mean`` (module docstring).
+
+    delta : (n_real, N_lines + 1, N_samples, N_pix) the overflux of every line and, last, of the total, delta = T / T_bar
+        - 1 with mean_transmission (the same shape, ``ensemble_mean_transmissions``).
+
+    Returns dict(
+        mean_delta (N_lines + 1, N_pix): <delta> at each pixel over every sample of every realisation (the pattern shared
+            by the samples: zero with "redshift", a diagnostic in every mode),
+        mean_delta_level (N_lines + 1,): max |<delta>| over the sets of the mode (zero to rounding),
+        C (float): the mean of C = T_bar / prod_j T_bar_j - 1,
+        C_error: max |C - sum_{|A| >= 2} <delta_A>| over the sets of the mode (delta_A = prod_{j in A} delta_j),
+        decomposition_error: max |[sum_A delta_A - C] / (1 + C) - delta_tot| over every pixel of every sample (the exact
+            decomposition, ``summary_stats.orders``))."""
+    mean = _check_mean(mean)
+    d = np.asarray(delta)
+    Tb = np.broadcast_to(mean_transmission, d.shape)
+    n, m = d.shape[0], d.shape[1] - 1
+    H, C, err = np.empty((n,) + d.shape[2:]), np.empty((n,) + d.shape[2:]), 0.0
+    for i in range(n):  # one realisation at a time: the products of the lines, C and the decomposition
+        dl = d[i, :m]
+        h = 0.0
+        for r in range(2, m + 1):
+            for A in combinations(range(m), r):
+                h = h + np.prod(dl[list(A)], axis=0)
+        H[i] = h
+        C[i] = Tb[i, -1] / np.prod(Tb[i, :m], axis=0) - 1.0
+        err = max(err, float(np.max(np.abs((sum(dl) + h - C[i]) / (1.0 + C[i]) - d[i, -1]))))
+    ax = _SET_AXES[mean]
+    lvl = np.abs(d.mean(axis=ax, keepdims=True))
+    ax3 = tuple(a - (a > 1) for a in ax)  # the same sets on (n_real, sample, pixel)
+    return dict(
+        mean_delta=d.mean(axis=(0, 2)),
+        mean_delta_level=lvl.max(axis=tuple(a for a in range(4) if a != 1)).ravel(),
+        C=float(C.mean()),
+        C_error=float(np.max(np.abs(H.mean(axis=ax3) - C.mean(axis=ax3)))),
+        decomposition_error=err,
+    )
 
 
 def overflux_terms(

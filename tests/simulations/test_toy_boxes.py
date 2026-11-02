@@ -116,7 +116,8 @@ def test_skewer_setup():
 
 
 def test_one_box_along_its_skewers():
-    r = skewer_box(BOXES, 0, SETUP)
+    r = skewer_box(BOXES, 0, SETUP, decompose=True)  # the order-by-order decomposition is opt-in
+    assert skewer_box(BOXES, 0, SETUP)["flux"] is None
     n_sk = BOXES.columns(SETUP.stride).shape[0]
     assert r["tau"].shape == (2, n_sk, SETUP.n_pix)
     assert r["warnings"] == [] and np.all(r["resolution"][..., 1] < 1e-3), "the resolution check passes"
@@ -141,7 +142,7 @@ def test_run_in_memory_and_field_statistics():
     """``run_skewers`` and ``field_statistics`` return their results in memory (nothing is stored), recomputed at every
     call: identical results for the same configuration."""
     logs = []
-    run = run_skewers(BOXES, SETUP, realisations=[0, 1, 2], log=logs.append)
+    run = run_skewers(BOXES, SETUP, realisations=[0, 1, 2], decompose=True, log=logs.append)
     assert len(logs) == 3 and set(run["skewers"]) == {0} and run["skewers"][0]["tau"].shape[1] == 16
     assert run["flux"]["n_real"] == 3 and run["flux3d"]["total"]["n_real"] == 3
     assert np.all(np.isfinite(run["p1d"]["p1d_err"][:, 1:])) and run["p1d"]["k"].size == SETUP.n_pix // 2 + 1
@@ -178,7 +179,7 @@ def test_ensemble_normalisation_of_the_overflux(mean):
     over the sets of the mode (``mean_delta_level``); C = T_bar / prod_j T_bar_j - 1 = <delta_1 delta_2> over the same
     sets (``C_error``), the decomposition delta_tot = [sum_A delta_A - C] / (1 + C) is exact and order 1 vanishes; only
     "redshift" removes the pattern shared by every skewer (``mean_delta``); mismatched redshift grids raise."""
-    run = run_skewers(BOXES, SETUP, realisations=[0, 1, 2], keep=(0, 1, 2), mean=mean, log=None)
+    run = run_skewers(BOXES, SETUP, realisations=[0, 1, 2], keep=(0, 1, 2), mean=mean, decompose=True, log=None)
     T = np.stack([np.exp(-run["skewers"][i]["tau"]) for i in range(3)], 1)  # (2, 3 boxes, N_sk, n_pix)
     T = np.concatenate([T, T.prod(0)[None]])  # the lines and the total
     axes = {"redshift": (1, 2), "global": (1, 2, 3), "box": (2, 3), "skewer": 3}[mean]
@@ -387,18 +388,28 @@ def test_bins_of_the_fields():
     k_f = 1.0
     e, inf = bao_k_edges(k_f, 100.0, 20.1, info=True)
     np.testing.assert_allclose(e[:4], [0.5, 1.5, 2.5, 3.5]) and inf["k_1"] == 3.5
-    assert inf["k_2"] == 20.0 and inf["n_mode"] == 3 and inf["n_quarter"] == (20.0 - 3.5) / 0.25 and inf["n_log"] == 12
-    q = e[3 : 4 + inf["n_quarter"]]
+    assert inf["k_2"] == 20.0 and inf["n_mode"] == 3 and inf["n_step"] == (20.0 - 3.5) / 0.25 and inf["n_log"] == 12
+    assert inf["dk"] == 0.25
+    q = e[3 : 4 + inf["n_step"]]
     np.testing.assert_allclose(np.diff(q), 0.25) and q[-1] == 20.0  # the quarter bins end where the log bins start
     np.testing.assert_allclose(e[-13:], np.geomspace(20.0, 100.0, 13))
     e2, inf2 = bao_k_edges(k_f, 100.0, 20.1, k_1=6.0, n_log=5, info=True)
     assert inf2["k_1"] == 5.5 and inf2["n_mode"] == 5 and inf2["n_log"] == 5 and e2[-1] == 100.0
     e3, inf3 = bao_k_edges(k_f, 10.0, 20.0, info=True)  # the wiggles run past k_max: quarter bins to k_max, no log bins
     assert inf3["n_log"] == 0 and e3[-1] == 10.0 and inf3["k_2"] == 10.0
+    # the step between k_1 and k_2: dk_factor k_f (default 1/4: the edges above, unchanged)
+    np.testing.assert_array_equal(bao_k_edges(k_f, 100.0, 20.1, dk_factor=0.25), e)
+    e4, inf4 = bao_k_edges(k_f, 100.0, 20.1, dk_factor=0.5, info=True)
+    assert inf4["k_2"] == 20.0 and inf4["n_step"] == (20.0 - 3.5) / 0.5 and inf4["dk"] == 0.5
+    np.testing.assert_allclose(np.diff(e4[3 : 4 + inf4["n_step"]]), 0.5)
+    with pytest.raises(ValueError, match="dk_factor"):
+        bao_k_edges(k_f, 100.0, 20.1, dk_factor=0.0)
     b = BOXES
     lim = b.limits()
     assert lim == dict(k_min=2 * np.pi / b.box_cMpc, k_max=np.pi / b.dx, r_min=b.dx, r_max=b.box_cMpc / 2)
     np.testing.assert_allclose(b.k_edges(), bao_k_edges(lim["k_min"], lim["k_max"], 3.0 / b.sigma_bao))
+    np.testing.assert_array_equal(b.k_edges(dk_factor=0.25), b.k_edges())
+    assert b.k_edges(dk_factor=0.5, info=True)[1]["dk"] == pytest.approx(0.5 * lim["k_min"])
     np.testing.assert_allclose(b.r_edges(), np.arange(0, b.box_cMpc / 2 + b.dx, b.dx), atol=1e-12)
     logs = []
     be = b.bin_edges(np.linspace(0.1, 2 * lim["k_max"], 11), np.arange(0, b.box_cMpc, b.dx), log=logs.append)
@@ -410,3 +421,88 @@ def test_bins_of_the_fields():
     assert a["rperp"][0] == 0.0 and np.all(a["n_lags_xi_map"][:, 0] > 0), "the first r_perp column: r_perp = 0 only"
     np.testing.assert_array_equal(a["kperp_edges"], a["k_edges"]) and res["limits"] == lim
     assert np.all(np.isfinite(res["cov_xi_iso"][1:, 1:])) and res["axes"]["r_iso"][0] == 0.0
+
+
+def test_explicit_pipeline_equals_run_skewers():
+    """The explicit pipeline of notebook 08 (Part B: SkewerBundle -> cells -> cell_pieces -> compute_optical_depth ->
+    ensemble_mean_transmissions -> delta = T / T_bar - 1 -> skewer_p1d, skewer_xi1d, lattice_grid + measure_lattice,
+    decompose_1d) gives exactly what the wrapper ``run_skewers`` returns, from arrays and geometry only."""
+    import warnings
+
+    from skewerjax.core import LineBundle, bundle_frame, compute_optical_depth, phys
+    from skewerjax.core.absorbers import cell_pieces
+    from skewerjax.simulations.toy_boxes import LINE_IDS, TERM_LABELS
+    from skewerjax.summary_stats import (
+        decompose_1d,
+        ensemble_mean_transmissions,
+        lattice_grid,
+        measure_lattice,
+        overflux_check,
+        skewer_p1d,
+        skewer_xi1d,
+    )
+
+    b, st, idx = BOXES, SETUP, [0, 1]
+    lines = LineBundle(list(LINE_IDS), ref_line_id=LINE_IDS[0])
+    cols = b.columns(st.stride)
+    frame = bundle_frame(b.skewer_bundle(cols[: st.batch], st.points_per_cell))
+    period = frame.velocity_span(0)
+    v = (np.arange(st.n_pix) + 0.5) * period / st.n_pix
+    tau = []
+    for i in idx:
+        cells = b.cells(i)
+        t_i = []
+        for b0 in range(0, len(cols), st.batch):
+            pieces = cell_pieces(cells, lines, skewer_bundle=b.skewer_bundle(cols[b0 : b0 + st.batch], st.points_per_cell))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                t_i.append(np.asarray(compute_optical_depth(pieces, v, lines, velocity_period=True, line_frame="reference")))
+        tau.append(np.concatenate(t_i, axis=1))
+    T = np.exp(-np.stack(tau))
+    T_bar = ensemble_mean_transmissions(T, mean="redshift", grid=frame.a_dagger * np.exp(-v / phys.c_kms))
+    delta = np.concatenate([T, T.prod(axis=1, keepdims=True)], axis=1) / T_bar - 1
+    run = run_skewers(b, st, realisations=idx, keep=(0, 1), decompose=True, log=None)
+    np.testing.assert_array_equal(np.stack(tau), np.stack([run["skewers"][i]["tau"] for i in idx]))
+    np.testing.assert_array_equal(T_bar[0, :, 0], run["mean_transmission"])
+    chk = overflux_check(delta, T_bar, "redshift")
+    assert chk["C_error"] == run["C_error"] and chk["decomposition_error"] == run["decomposition_error"] < 1e-14
+    dv = period / st.n_pix
+    gs = lattice_grid(b.n_cells // 4, b.n_cells // 4, st.n_pix, b.box_cMpc, 4 * b.dx, k_edges=run["axes3d"]["k_edges"])
+    for i in idx:
+        np.testing.assert_array_equal(skewer_p1d(delta[i], dv)[1], run["p1d"]["p1d_each"][i])
+        np.testing.assert_array_equal(skewer_xi1d(delta[i], dv)[1], run["xi1d"]["xi1d_each"][i])
+        np.testing.assert_array_equal(measure_lattice(delta[i, 2], gs)["xi_map"], run["flux3d"]["total"]["xi_map_each"][i])
+        s = decompose_1d(tau[i], dv, T_bar[i], labels=TERM_LABELS)
+        np.testing.assert_array_equal(s["P_order"], run["flux"]["P_order_each"][i])
+
+
+def test_linear_hubble_flow_flattens_a_uniform_gas():
+    """``SkewerRun(hubble_flow="linear")`` with ``a_eff = 1/(1+z)`` and ``detuning="linear"`` (fake_spectra's model of one
+    snapshot): a uniform gas in the toy boxes gives a flat tau(v), apart from the wrap pixel; the period is the frame's
+    aH at y = 0 times L, = ``ToyBoxes.aH`` L, and ``SkewerRun.derived`` follows it. With "exact" the Jacobian 1/(aH)
+    remains (-1.8 %, ``test_a_eff_and_the_jacobian_of_the_exact_frame``)."""
+    from skewerjax.simulations import skewer_tau
+
+    boxes = ToyBoxes(box_cMpc=150.0, n_cells=16, n_real=1, bao_ratio=0.0)
+    setup = SkewerRun(stride=(16, 16), points_per_cell=128, n_pix=64, a_eff=1 / (1 + boxes.z), detuning="linear")
+    f = boxes.fields(0)
+    n_bar = {"HI": boxes.n_bar_HI, "SiIII": boxes.siiii_to_hi * boxes.n_bar_HI}
+    uniform = dict(
+        delta=np.zeros_like(f["delta"]),
+        n={sp: np.full_like(f["delta"], n) for sp, n in n_bar.items()},
+        T=np.full_like(f["T"], boxes.T0),
+        v=np.zeros_like(f["v"]),
+    )
+    col = np.array([[0, 0]])
+    flat = {}
+    for hf in ("exact", "linear"):
+        st = replace(setup, hubble_flow=hf)
+        r = skewer_tau(boxes, 0, st, columns=col, fields=uniform)
+        tau = r["tau"][0, 0]  # Lya
+        inner = tau[1:-1]  # without the pixels next to the wrap (y = 0 = L, the split cell)
+        flat[hf] = float(np.max(np.abs(inner / inner.mean() - 1)))
+        if hf == "linear":
+            assert r["period"] == pytest.approx(boxes.aH * boxes.box_cMpc, rel=1e-6)
+            d = st.derived(boxes)
+            assert d["period_kms"] == pytest.approx(r["period"], rel=1e-12) and d["aH_start"] == d["aH_end"] == d["kms_per_cMpc"]
+    assert flat["linear"] < 1e-8 and flat["exact"] > 5e-3, flat  # 5.7e-10 and 8.6e-3 (the Jacobian 1/(aH))

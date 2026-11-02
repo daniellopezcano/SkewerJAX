@@ -81,6 +81,9 @@ class IntegrationOptions:
     a_eff : None (default: a_p^-2 of every piece) or a scalar, the effective scale factor of the comoving-to-physical
         density conversion (``core.compute_optical_depth``; e.g. the snapshot's a, ``header.a``). Independent of
         ``frame`` and ``detuning``: the line centres keep the frame's a(x).
+    hubble_flow, aH_ref : the Hubble part of the line centres, passed through to ``core.compute_optical_depth``
+        ("exact" default; "linear": (aH)_ref y; identical in the "snapshot" frame). Left out of the cache key at their
+        defaults (``tau_key``), so earlier results stay valid.
     """
 
     frame: str = "exact"
@@ -88,6 +91,8 @@ class IntegrationOptions:
     detuning: str = "exact"
     dtype: str | None = None
     a_eff: float | None = None
+    hubble_flow: str = "exact"
+    aH_ref: float | None = None
 
     def replace(self, **kw) -> IntegrationOptions:
         return replace(self, **kw)
@@ -508,7 +513,9 @@ class SimulationSkewers:
     ) -> str:
         """Cache key of a tau result: skewers, ion, lines, velocity grid, override name and every option."""
         v = np.asarray(velocities_kms, dtype=np.float64)
-        opts = {**asdict(relevant_options(ext, ion)), **asdict(integ), "velocity_period": velocity_period}
+        new = {"hubble_flow": "exact", "aH_ref": None}  # options added later: in the key only when not at their defaults
+        integ_d = {k: w for k, w in asdict(integ).items() if not (k in new and w == new[k])}
+        opts = {**asdict(relevant_options(ext, ion)), **integ_d, "velocity_period": velocity_period}
         geo = hashlib.md5(
             self.points.tobytes() + (b"" if self.scale_factors is None else self.scale_factors.tobytes())
         ).hexdigest()[:10]
@@ -582,4 +589,6 @@ class SimulationSkewers:
             check=check,
             dtype=integ.dtype,
             a_eff=integ.a_eff,
+            hubble_flow=integ.hubble_flow,
+            aH_ref=integ.aH_ref,
         )[0]

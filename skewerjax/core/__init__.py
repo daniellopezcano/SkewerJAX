@@ -25,6 +25,7 @@ from skewerjax.core.absorbers import (
     scale_factors_along_paths,
     tau_absorbers,
     tau_by_path_bins,
+    velocity_span,
 )
 from skewerjax.core.cells import Cells, cells_from_values, cells_on_grid, grid_points, voronoi_volumes
 from skewerjax.core.constants import PhysicalConstants, phys
@@ -42,6 +43,7 @@ from skewerjax.core.diagnostics import SkewerCheck, check_skewers, enable_loggin
 from skewerjax.core.line_profiles import line_profiles, voigt_line_profiles, voigt_width_kms, voigt_widths_GHz
 from skewerjax.core.lines import LINES, Line, LineBundle, get_line, get_mass_amu
 from skewerjax.core.optical_depth import (
+    HUBBLE_FLOWS,
     Pieces,
     check_pieces,
     compute_optical_depth,

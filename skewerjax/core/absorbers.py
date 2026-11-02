@@ -78,6 +78,23 @@ class SnapshotFrame:
         """dv/ds of the frame [km/s per cMpc]."""
         return np.full(np.shape(s), self.velfac)
 
+    def hubble_coordinate(self, skewer: int, s):
+        """The path coordinate along which the frame's c ln(a_dagger / a) runs: 0 here (a = a_snap everywhere; the
+        Hubble flow velfac s is in the injected velocity), so ``hubble_flow="linear"`` and "exact" coincide."""
+        return np.zeros(np.shape(s))
+
+    def path_length_of(self, skewer: int) -> float:
+        """The comoving length of the path [cMpc]."""
+        return float(np.asarray(self.path_length)[skewer])
+
+    def first_hubble_rate(self, skewer: int) -> float:
+        """dV_H/dy at the first point [km/s per cMpc]: velfac."""
+        return float(self.velfac)
+
+    def first_hubble_velocity(self, skewer: int) -> float:
+        """V_H at the first point of the frame's c ln(a_dagger / a): 0."""
+        return 0.0
+
 
 @dataclass
 class ExactFrame:
@@ -125,6 +142,49 @@ class ExactFrame:
     def velocity_span(self, skewer: int) -> float:
         """c |ln(a_first / a_last)| [km/s]: the line-centre span of the path without peculiar velocities."""
         return float(phys.c_kms * abs(np.log(self.a_grid[skewer, 0] / self.a_grid[skewer, -1])))
+
+    def hubble_coordinate(self, skewer: int, s):
+        """The comoving path coordinate y = s - s_first [cMpc], along which c ln(a_dagger / a(y)) runs."""
+        return np.asarray(s, dtype=np.float64) - float(self.s_grid[skewer, 0])
+
+    def path_length_of(self, skewer: int) -> float:
+        """The comoving length of the path, first to last point [cMpc]."""
+        return float(self.s_grid[skewer, -1] - self.s_grid[skewer, 0])
+
+    def first_hubble_rate(self, skewer: int) -> float:
+        """dV_H/dy = -c d ln a / dy at the first point (the position of a_dagger) [km/s per cMpc], signed (> 0 when a
+        decreases along the path): the default (aH)_ref of ``hubble_flow="linear"``. Second-order one-sided difference
+        of ln a on the sampling points."""
+        lna, sg = np.log(self.a_grid[skewer]), self.s_grid[skewer]
+        g = np.gradient(lna[:3], sg[:3], edge_order=2)[0] if lna.size >= 3 else (lna[1] - lna[0]) / (sg[1] - sg[0])
+        return float(-phys.c_kms * g)
+
+    def first_hubble_velocity(self, skewer: int) -> float:
+        """V_H at the first point, c ln(a_dagger / a_first) [km/s] (0 when a_dagger is a at the first point)."""
+        a_d = self.a_dagger if self.a_dagger_per_skewer is None else float(np.asarray(self.a_dagger_per_skewer)[skewer])
+        return float(phys.c_kms * np.log(a_d / self.a_grid[skewer, 0]))
+
+
+def velocity_span(source, hubble_flow: str = "exact", aH_ref=None, *, ii_cosmology: int = 0):
+    """(N_sk,) the line-centre span of every path without peculiar velocities [km/s] under ``hubble_flow`` (the period
+    of ``velocity_period=True``, and the length of the pixel axis of one box): "exact" c |ln(a_first / a_last)| of the
+    frame, "linear" |(aH)_ref| L with ``aH_ref`` (None: the frame's aH at the first point, ``first_hubble_rate``).
+
+    source : ``Pieces`` (``optical_depth.velocity_span``), a ``SkewerBundle`` (its ``bundle_frame``) or a frame
+    (``ExactFrame``, ``SnapshotFrame``)."""
+    from skewerjax.core.optical_depth import HUBBLE_FLOWS
+    from skewerjax.core.optical_depth import velocity_span as pieces_span
+
+    if isinstance(source, Pieces):
+        return np.asarray(pieces_span(source, hubble_flow, aH_ref))
+    if hubble_flow not in HUBBLE_FLOWS:
+        raise ValueError(f"hubble_flow must be one of {HUBBLE_FLOWS}, got {hubble_flow!r}.")
+    frame = source if hasattr(source, "velocity_span") else bundle_frame(source, ii_cosmology=ii_cosmology)
+    n_sk = np.shape(frame.s_grid)[0] if hasattr(frame, "s_grid") else np.size(frame.path_length)
+    if hubble_flow == "exact":
+        return np.array([frame.velocity_span(k) for k in range(n_sk)])
+    rate = lambda k: frame.first_hubble_rate(k) if aH_ref is None else float(aH_ref)
+    return np.array([abs(rate(k)) * frame.path_length_of(k) for k in range(n_sk)])
 
 
 def scale_factors_along_paths(s, a_ref: float, cosmology, s_ref=None) -> np.ndarray:
@@ -417,8 +477,10 @@ def absorber_pieces(
 
     Every absorber is one piece: at its centroid s, with the frame's a(s), the velocity along the photon (the frame's
     injected velocity; photons travel towards decreasing s unless the frame says otherwise), T x ``T_scale``, the
-    comoving density n x ``n_scale``, its turbulence and collisional term, and its length (a fixed comoving-to-physical
-    conversion, e.g. fake_spectra's column at the data epoch a_data, is ``compute_optical_depth(a_eff=a_data)``). Its width in velocity is the frame's Hubble
+    comoving density n x ``n_scale``, its turbulence and collisional term, its length, and the path fields of
+    ``hubble_flow="linear"`` (``hubble_coordinate``, ``path_length_of``, ``first_hubble_rate``,
+    ``first_hubble_velocity`` of the frame) (a fixed
+    comoving-to-physical conversion, e.g. fake_spectra's column at the data epoch a_data, is ``compute_optical_depth(a_eff=a_data)``). Its width in velocity is the frame's Hubble
     rate times its length (n, T and v_pec are constant inside a cell). ``T_scale`` and ``n_scale`` are matched-mode
     knobs (fake_spectra's b constants and 7/8 chords).
     """
@@ -447,6 +509,10 @@ def absorber_pieces(
         number_density=lines(n_com),
         width_kms=lines(W),
         velocity_span_kms=jnp.asarray([frame.velocity_span(k) for k in ks]),
+        path_cMpc=jnp.asarray(np.stack([frame.hubble_coordinate(k, s[i]) for i, k in enumerate(ks)])),
+        path_length_cMpc=jnp.asarray([frame.path_length_of(k) for k in ks]),
+        aH_first=jnp.asarray([frame.first_hubble_rate(k) for k in ks]),
+        vH_first=jnp.asarray([frame.first_hubble_velocity(k) for k in ks]),
     )
 
 
@@ -461,6 +527,8 @@ def tau_absorbers(
     T_scale: float = 1.0,
     n_scale: float = 1.0,
     detuning: str = "exact",
+    hubble_flow: str = "exact",
+    aH_ref=None,
     pixel_offsets=None,
     pixel_weights=None,
     chunk: int = 2048,
@@ -486,6 +554,7 @@ def tau_absorbers(
         conversion (``core.compute_optical_depth``; e.g. a_eff = ``ab.a_data``, fake_spectra's column at the data epoch).
     T_scale, n_scale : see ``absorber_pieces``.
     detuning : "exact" (default) or "linear" (matched mode).
+    hubble_flow, aH_ref : the Hubble part of the line centres (``core.compute_optical_depth``; "exact" default).
     pixel_offsets, pixel_weights : sub-pixel offsets [km/s] and weights (sum 1) to average each pixel; None: centres.
     chunk : pieces per kernel call (``compute_optical_depth``'s ``piece_chunk``); v_chunk : velocities per call.
     check : tolerance of ``sampling_check`` (None: no check).
@@ -521,6 +590,8 @@ def tau_absorbers(
         dtype=None if per_absorber else dtype,
         devices=devices,
         a_eff=a_eff,
+        hubble_flow=hubble_flow,
+        aH_ref=aH_ref,
     )
     for i, k in enumerate(ks):
         pieces = absorber_pieces(ab, frame, n_lines, skewers=[k], T_scale=T_scale, n_scale=n_scale)

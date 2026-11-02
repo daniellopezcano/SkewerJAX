@@ -36,6 +36,7 @@ from skewerjax.simulations.toy_boxes import (
     on_points,
     run_skewers,
     skewer_box,
+    skewer_density_statistics,
     skewer_statistics,
     skewer_tau,
     xi_chi2,
