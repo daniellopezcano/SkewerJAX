@@ -5,14 +5,17 @@ One pytest suite, laid out like the package and the pipeline (reader → cells �
 | folder | covers |
 |---|---|
 | `core/` | constants and lines, cosmology a(x), skewers, cells, selection (in memory and streamed), deposition, pieces, spectral frames, Voigt, the optical depth (`test_optical_depth.py`: periodicity, frames, closed forms, precision, sharding, GPU), JAX transformations (of the whole package), input checks (`test_validation.py`) and diagnostics |
-| `summary_stats/` | the overflux and its statistics: P1D / ξ1D / P3D recovery, the decomposition by order and pair, contamination fits, the 3D grid statistics (`test_statistics.py`) |
-| `simulations/` | the GRF and its toy cells, gas physics, the TNG50-4 snapshot (reader, selections, field extraction, τ) |
+| `summary_stats/` | the overflux and its statistics: P1D / ξ1D / P3D recovery, the decomposition by order and pair, contamination fits, the 3D grid statistics (`test_statistics.py`); P and ξ of 3D fields against P(k) (`test_field_stats.py`); the density on a lattice of skewers against its exact expectation (`test_density.py`) |
+| `skewers/` | the lattice of skewers: columns, points, the bundle and its frame, the 3D grid of the lattice (`test_lattice.py`) |
+| `simulations/` | the GRF and its toy cells, the toy boxes (and, through the explicit pipeline of notebook 09, along skewers: `test_toy_boxes.py`), gas physics, the TNG50-4 snapshot (reader, selections, field extraction, τ) |
 | `utils/` | the figure functions |
 | `comparison/` | the benchmark utilities, the comparison with fake_spectra |
 | `regression/` | every result against reference arrays (`data/*.npz`, built by `outputs.py`) |
+| `test_import_graph.py` | the import graph: `simulations`, `skewers` and `summary_stats` import `core` at most and not one another (static, on the source, and at run time) |
 
 `conftest.py` runs JAX on the CPU in float64 and skips the tests whose markers need what the machine lacks;
-`helpers.py` holds a few shared builders.
+`helpers.py` holds a few shared builders (test-only), among them `toy_tau` and `toy_lattice_statistics`: the toy boxes
+along a lattice of skewers by the explicit pipeline of notebook 09.
 
 ## Running it
 

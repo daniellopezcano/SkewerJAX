@@ -54,9 +54,11 @@ flowchart LR
     SIM -. "fake_spectra, external (09, 10)" .-> T
 ```
 
-Dependencies run one way only. `core` imports nothing from the other subpackages; `summary_stats` (the overflux and
-its statistics) imports `core` only. `simulations` holds every source of
-gas cells (the toy fields and the snapshots), and the boundary between `simulations` and `core` is `core.Cells`; `core.Pieces`, the constant-property pieces of
+Dependencies run one way only. `core` imports nothing from the other subpackages, and three realms sit around it,
+none importing another (`tests/test_import_graph.py`): `simulations` (the gas: every source of gas cells, the toy fields
+and the snapshots; the boundary with `core` is `core.Cells`), `skewers` (the paths: lattices of skewers for a
+`core.SkewerBundle`) and `summary_stats` (the overflux and every statistic, from arrays and geometry only, an
+expectation passed as a callable P(k)). Notebooks compose them. `core.Pieces`, the constant-property pieces of
 every skewer, is what the τ sum runs over. `docs/usage.md` lists the entry points of each
 subpackage.
 
@@ -240,14 +242,18 @@ skewerjax/            the package
                       input checks (validation) and diagnostics (check_skewers)
   summary_stats/      the overflux (overflux), the order-by-order decomposition (orders), P1D/xi1D (stats_1d),
                       P3D/xi3D by term (stats_3d), P and xi of 3D grids: isotropic, (par, perp), mu wedges (grid3d),
-                      shared conventions and binning (fourier, binning), metal-contamination models (contaminants)
-  simulations/        the sources of gas cells: toy fields (PowerLawGRF, grf_cells) and snapshots (readers, gas physics,
+                      shared conventions and binning (fourier, binning), metal-contamination models (contaminants),
+                      statistics on a lattice of skewers (lattice), 3D fields over an ensemble (field_stats), the
+                      density along skewers and its exact expectation (density)
+  skewers/            lattices of skewers: columns and points of a SkewerBundle (lattice), the Hubble velocity (frame)
+  simulations/        the sources of gas cells: toy fields (PowerLawGRF, grf_cells, ToyBoxes) and snapshots (readers, gas physics,
                       streamed selection, snapshot_cells, SimulationSkewers, maps)
     cloudy_tables/    CLOUDY ionisation tables (git submodule sbird/cloudy_tables)
   comparison/         fake_spectra emulation, matched options and effect chain, fake_spectra driver, benchmark
   utils/              plotting (style, figures), paths (data, cache and benchmark folders)
 notebooks/            00-11 tutorials (committed with outputs cleared)
-tests/                one pytest suite: core/, summary_stats/, simulations/, utils/, comparison/, regression/ (+ data/); README.md
+tests/                one pytest suite: core/, summary_stats/, skewers/, simulations/, utils/, comparison/, regression/ (+ data/),
+                      test_import_graph.py; README.md
 benchmarks/
   results/            the benchmark summary read by notebook 11 (committed)
   raw/                the per-run records (git-ignored)

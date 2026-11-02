@@ -1,14 +1,21 @@
 """SkewerJAX: absorption along skewers (tau, F = exp(-tau)) for many transitions, and their summary statistics, in JAX.
 
-Three blocks and the summary statistics, with dependencies in one direction only (comparison -> simulations ->
-summary_stats -> core):
+The core and three realms around it, with dependencies in one direction only (each realm imports ``core`` at most and
+none imports another; ``tests/test_import_graph.py`` checks it):
 
-* ``skewerjax.core`` (A): lines, cosmology, skewers, the gas cells (``Cells``), the deposition, line profiles and the tau
-  integral; self-contained.
-* ``skewerjax.summary_stats``: the overflux and its 1D and 3D statistics (P1D, xi1D, P3D, xi3D, the (par, perp) plane
-  and the wedges of mu), term by term and order by order; imports ``core`` only.
-* ``skewerjax.simulations`` (B): reading hydrodynamical (or N-body) snapshots into the inputs of the core.
-* ``skewerjax.comparison`` (C): fake_spectra's scheme and results, compared with SkewerJAX's.
+* ``skewerjax.core`` (A): lines, cosmology, ``SkewerBundle``, the gas cells (``Cells``), the deposition, line profiles
+  and the tau integral; self-contained.
+* ``skewerjax.simulations`` (B): the gas: toy fields (``PowerLawGRF``, ``ToyBoxes``) and hydrodynamical (or N-body)
+  snapshots, turned into the inputs of the core.
+* ``skewerjax.skewers``: the paths: lattices of skewers through a box, their points and frame (``lattice_columns``,
+  ``lattice_points``, ``hubble_velocity``), for a ``core.SkewerBundle``.
+* ``skewerjax.summary_stats``: the statistics, from arrays and geometry only: the overflux and its 1D and 3D statistics
+  (P1D, xi1D, P3D, xi3D, the (par, perp) plane and the wedges of mu), term by term and order by order; P and xi of 3D
+  fields and of the density along skewers, against an expectation P(k).
+* ``skewerjax.comparison`` (C): fake_spectra's scheme and results, compared with SkewerJAX's (uses the blocks above).
+
+Notebooks compose the realms. The subpackages are imported lazily (PEP 562): ``import skewerjax.summary_stats`` loads
+``core`` at most, while ``skewerjax.simulations`` and ``from skewerjax import simulations`` work as before.
 
 ``skewerjax.utils.plotting`` holds the shared figure style.
 
@@ -23,11 +30,25 @@ otherwise). ``simulations.PowerLawGRF`` warns when x64 is off; ``voigt_convoluti
 simulation and comparison blocks hold host arrays in float64 NumPy.
 """
 
+import importlib as _importlib
 import logging as _logging
 
-from skewerjax import comparison, core, simulations, summary_stats, utils
+_SUBPACKAGES = ("core", "summary_stats", "skewers", "simulations", "comparison", "utils")
 
 __version__ = "0.0.1"
 _logging.getLogger("skewerjax").addHandler(_logging.NullHandler())  # silent unless configured (core.enable_logging)
 
-__all__ = ["__version__", "core", "summary_stats", "simulations", "comparison", "utils"]
+__all__ = ["__version__", *_SUBPACKAGES]
+
+
+def __getattr__(name: str):
+    """Import a subpackage on first access (PEP 562): ``skewerjax.core``, ``skewerjax.simulations``, ..."""
+    if name in _SUBPACKAGES:
+        module = _importlib.import_module(f"skewerjax.{name}")
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module 'skewerjax' has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_SUBPACKAGES))

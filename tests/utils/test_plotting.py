@@ -121,8 +121,12 @@ def test_toy_box_figures():
     from dataclasses import replace
 
     from skewerjax.core import LineBundle
-    from skewerjax.simulations import SkewerRun, ToyBoxes, field_statistics, run_skewers
+    from skewerjax.simulations import ToyBoxes
+    from skewerjax.skewers import lattice_columns
+    from skewerjax.summary_stats import bao_k_edges, box_grid, field_statistics, grid_limits
     from skewerjax.utils.reference_data import P1D_DESI_DR1_Z22
+
+    from helpers import toy_lattice_statistics
 
     b = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3, bao_ratio=1e-3)
     fig, axs, info = pl.plot_toy_fields(replace(b, velocity="linear").fields(0), b.box_cMpc, arrow_every=4)
@@ -133,9 +137,19 @@ def test_toy_box_figures():
     )  # zero velocities: no arrows
     fig.canvas.draw()
     assert info["arrow_scale"] == 0 and not any(ax.get_title() for ax in axs.ravel())
-    setup = SkewerRun(stride=(4, 4), points_per_cell=80, n_pix=64, batch=8)
-    res = field_statistics(b, log=None)
-    run = run_skewers(b, setup, decompose=True, log=None)
+    n_pix, p = 64, 80  # the skewers: stride (4, 4), 80 points per cell, 64 pixels
+    g, lim = b.grf(), grid_limits(b.n_cells, b.box_cMpc)
+    gs = box_grid(
+        b.n_cells,
+        b.box_cMpc,
+        k_edges=bao_k_edges(lim["k_min"], lim["k_max"], 3.0 / b.sigma_bao),
+        r_edges=np.arange(0, b.box_cMpc / 2 + b.dx, b.dx),
+        log=None,
+    )
+    res = field_statistics(
+        (b.delta(i) for i in range(b.n_real)), gs, power=g.power, power_nw=lambda k: g.power(k, bao=False), log=None
+    )
+    run = toy_lattice_statistics(b, range(b.n_real), (4, 4), p, n_pix, decompose=True)
     for quantity, k_scale in (("xi", "linear"), ("r2xi", "log")):
         fig, axs, out = pl.plot_isotropic_recovery(
             res, quantity=quantity, r_bao=2.0, grf=b.grf(), k_scale=k_scale, k_marks={"$k_1$": 1.0, "$k_2$": 50.0}
@@ -232,12 +246,12 @@ def test_toy_box_figures():
     assert has(gap) and has(sparse) == bool(np.any(np.all(~np.isfinite(res["P_map"]), axis=0)))
     assert len(chi2) == len(pl.MU_WEDGES) - 1
     assert not hasattr(pl, "plot_pk_mu_wedges")
-    sk = run["skewers"][0]
+    sk = dict(tau=run["tau"][0], v=run["v"], period=run["period"], columns=lattice_columns(b.n_cells, (4, 4)))
     ix, iz = sk["columns"][0]
     fl = b.fields(0)
     n = {sp: fl["n"][sp][ix, :, iz] for sp in ("HI", "SiIII")}
     fig, axs, info = pl.plot_toy_skewer(
-        b.box_cMpc, n, sk["v"], sk["tau"][:, 0], mean_transmission=run["mean_transmission"], points_per_cell=setup.points_per_cell
+        b.box_cMpc, n, sk["v"], sk["tau"][:, 0], mean_transmission=run["mean_transmission"], points_per_cell=p
     )
     fig.canvas.draw()
     assert len(axs) == 5 and axs[0].get_xlabel().startswith("position") and axs[2].get_xlabel() == pl.LABELS["v_ref"]
@@ -255,7 +269,7 @@ def test_toy_box_figures():
     assert len(arrows) == 1, "the skewers' legend entry: a line with its arrowhead along it"
     (x0, y0), (x1, y1) = arrows[0]._posA_posB
     assert x1 > x0 and y1 == y0, "the arrow points along the (horizontal) line of the handle"
-    u = float(run["skewers"][0]["period"]) / b.box_cMpc  # km/s per cMpc
+    u = float(run["period"]) / b.box_cMpc  # km/s per cMpc
     lim3 = dict(k_min=2 * np.pi / b.box_cMpc, k_max=np.pi / (4 * b.dx), r_min=4 * b.dx, r_max=b.box_cMpc / 2)
     fig, axs = pl.plot_overflux_3d(
         run["flux3d"], run["axes3d"], kms_per_cMpc=u, r_bao=2.0, r_marks={"$\\Delta$": 1.0}, limits=lim3
@@ -266,7 +280,7 @@ def test_toy_box_figures():
     assert axs["P"].get_ylabel().startswith("$P(k)$") and "cMpc$^2$" in axs["xi"].get_ylabel(), "P and r^2 xi in comoving units"
     assert "km" in axs["P"].child_axes[0].get_xlabel() and "km" in axs["xi"].child_axes[0].get_xlabel()
     tot = dict(run["flux3d"]["total"], axes=run["axes3d"])
-    period = float(run["skewers"][0]["period"])
+    period = float(run["period"])
     fig, ax, drawn = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, n_sigma=1.5, cmap="tol_BuRd")
     fig.canvas.draw()
     assert not fig.legends and ax.get_legend() is None, "no legend: the curves and the diamond are labelled"
@@ -279,12 +293,12 @@ def test_toy_box_figures():
         "no parenthetical on the reference axes"
     )
     assert "km" in ax.get_ylabel() and "parallel" in ax.get_ylabel(), "native units: perp in cMpc across, par in km/s up"
-    dv = period / setup.n_pix
+    dv = period / n_pix
     top = u * run["axes3d"]["rpar"][-1]  # the last row, centred on half the period [km/s]
     assert top == pytest.approx(period / 2)
     np.testing.assert_allclose(ax.get_ylim(), (-dv / 2, period / 2 + dv / 2))
     assert ax.get_xlim()[0] == 0, "one row per pixel separation j dv, j = 0 .. n_pix / 2, each centred on it"
-    np.testing.assert_allclose(u * run["axes3d"]["rpar"], dv * np.arange(setup.n_pix // 2 + 1), atol=1e-9)
+    np.testing.assert_allclose(u * run["axes3d"]["rpar"], dv * np.arange(n_pix // 2 + 1), atol=1e-9)
     # the echoes: r_par = |sqrt(r_bao^2 - r_perp^2) +- Delta|, folded with the period L, in km/s
     d, L = 100.0 / u, b.box_cMpc
     c = pl.echo_curves(2.0, d, L)
@@ -336,17 +350,15 @@ def test_toy_box_figures():
     assert any(ln.get_linestyle() == "--" for ln in axs["P"].lines), "the expectation, dashed"
     fig, axs, chi2 = pl.plot_xi_mu_wedges(dict(dens, theory=run["density_theory"]), kms_per_cMpc=u)
     assert len(axs) == 2 and len(chi2) == len(pl.MU_WEDGES) - 1
-    k_lim = (2 * np.pi / period, np.pi / (period / setup.n_pix))
+    k_lim = (2 * np.pi / period, np.pi / (period / n_pix))
     fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1_Z22, kms_per_cMpc=u, k_limits=k_lim, k_max=1.2 * k_lim[1])
     fig.canvas.draw()
     assert not fig.legends and len(ax.get_legend().get_texts()) == 5  # three overfluxes, the boxes and the reference
     assert len(ax.child_axes) == 1 and "cMpc" in ax.child_axes[0].get_xlabel(), "one reference top axis"
     spans = sorted((p.get_x(), p.get_x() + p.get_width()) for p in ax.patches if isinstance(p, matplotlib.patches.Rectangle))
     assert np.isclose(spans[0][1], k_lim[0]) and np.isclose(spans[-1][0], k_lim[1]), "shaded below k_min, above k_max"
-    from skewerjax.simulations import DENSITY_FIELDS
-
     fig, ax = pl.plot_p1d_reference(
-        run["density_p1d"], P1D_DESI_DR1_Z22, fields=DENSITY_FIELDS, unit="cMpc", kms_per_cMpc=u, k_max=3.0
+        run["density_p1d"], P1D_DESI_DR1_Z22, fields=list(run["density3d"]), unit="cMpc", kms_per_cMpc=u, k_max=3.0
     )
     fig.canvas.draw()
     assert "cMpc" in ax.get_xlabel() and "km" in ax.child_axes[0].get_xlabel() and len(ax.get_legend().get_texts()) == 6
@@ -373,14 +385,12 @@ def test_toy_box_figures():
     line = [c for c in pl.plot_orders_compared(ens, "P")[1][0, 0].lines if c.get_marker() == "o"][0]
     assert line.get_linestyle() == "-", "the points of every series are joined by a thin line"
     # explicit display bins: P1D in the bins of bao_k_edges along the line of sight, xi1D at every lag
-    from skewerjax.summary_stats import bao_k_edges
-
     k_f = 2 * np.pi / period
-    e1 = bao_k_edges(k_f, np.pi / (period / setup.n_pix), 3.0 / u, n_log=4)
+    e1 = bao_k_edges(k_f, np.pi / (period / n_pix), 3.0 / u, n_log=4)
     pts = [c for c in pl.plot_orders_compared(ens, "P", k_edges=e1)[1][0, 0].lines if c.get_marker() == "o"][0]
     assert np.all(pts.get_xdata() >= e1[0]) and np.all(pts.get_xdata() <= e1[-1])
     xs = [c for c in pl.plot_orders_compared(ens, "xi", lag_bin=1)[1][0, 0].lines if c.get_marker() == "o"][0]
-    np.testing.assert_allclose(np.diff(xs.get_xdata()), period / setup.n_pix), "every lag j dv"
+    np.testing.assert_allclose(np.diff(xs.get_xdata()), period / n_pix), "every lag j dv"
 
 
 def test_comoving_axis():

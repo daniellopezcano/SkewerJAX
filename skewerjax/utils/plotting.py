@@ -3304,7 +3304,7 @@ def plot_skewer_slice(
     spacing of two neighbours marked at the top. The legend, inside the panel, draws a skewer as a line with its
     arrowhead along it (``_ArrowHandler``).
 
-    columns : (N_sk, 2) the node indices (i_x, i_z) of the skewers (``ToyBoxes.columns``); highlight : (i_x, i_z) of
+    columns : (N_sk, 2) the node indices (i_x, i_z) of the skewers (``skewers.lattice_columns``); highlight : (i_x, i_z) of
     one skewer drawn thicker (the skewer of ``plot_toy_skewer``). Returns (fig, ax, info {n_row, spacing_cMpc})."""
     N = fields["v"].shape[0]
     dx = L / N
@@ -3374,7 +3374,7 @@ def plot_skewer_slice(
 
 
 def _ensemble_xy(res, key, theory=True):
-    """(mean, error, each, theory) of one statistic of a ``simulations.field_statistics`` result."""
+    """(mean, error, each, theory) of one statistic of a ``summary_stats.field_statistics`` result."""
     return res[key], res[key + "_err"], res[key + "_each"], (res["theory"][key] if theory else None)
 
 
@@ -3532,7 +3532,7 @@ def plot_isotropic_recovery(
 ):
     """P(|k|) and xi(|r|) of many realisations of a 3D field against their exact expectation (notebook 08, A3).
 
-    res : ``simulations.field_statistics`` (the mean over the realisations, its error, every realisation, the
+    res : ``summary_stats.field_statistics`` (the mean over the realisations, its error, every realisation, the
     expectation ``theory`` binned like the measurement, the ``axes``, the full-coverage ``limits``). Columns: (a) P(|k|)
     (k the mode-weighted centre of each bin, for the measurement and the expectation alike) and (b) xi(|r|); rows: the
     statistic (every realisation faint, the mean with the error of the mean, the expectation on top) and its residual:
@@ -3736,7 +3736,7 @@ def plot_kpar_kperp_maps(
     a column with no mode is light grey. ``k_marks`` {label: k}: dotted vertical lines, each within [k_min, k_max]
     (``res["limits"]``). ``kms_per_cMpc``: reference axes in s/km (e.g. the boxes' aH; None: none). The legend
     (``_map_legend``): the expected contours, the measured contours with their band, and the empty bins when there are
-    some. res : ``simulations.field_statistics``. Returns (figs (2,): expected, measured; axs (2,); chi2/dof of
+    some. res : ``summary_stats.field_statistics``. Returns (figs (2,): expected, measured; axs (2,); chi2/dof of
     (measured - expected) / error per bin)."""
     Pm, Pth = res["P_map"], res["theory"]["P_map"]
     good = np.isfinite(Pm) & np.isfinite(Pth) & (Pm > 0) & (Pth > 0)
@@ -3900,7 +3900,7 @@ def plot_rpar_rperp_maps(
     wedges of mu as white rays with coloured sectors (``mu_edges``, default those of the measurement); ``r_bao``: the
     dotted circle, labelled. Rows: one per separation of the grid along the line of sight, r_par = j dx; columns: the
     r_perp bins ``rperp_edges`` (checked against the measurement). ``kms_per_cMpc``: reference axes in km/s (None: none).
-    The legend (``_map_legend``). res : ``simulations.field_statistics``. Returns (figs (2,): expected, measured; axs
+    The legend (``_map_legend``). res : ``summary_stats.field_statistics``. Returns (figs (2,): expected, measured; axs
     (2,); chi2/dof of (measured - expected) / error of xi per bin)."""
     _check_option("quantity", quantity, tuple(_MAP_QUANTITY))
     weight = _MAP_QUANTITY[quantity][0]
@@ -4011,7 +4011,7 @@ def line_pair_label(line_ids=("HI-LyA", "SiIII-1206"), *, comoving: bool = False
 def comoving_axis(ax, kms_per_cMpc: float, kind: str = "r", *, side: str = "top", label: str | None = None):
     """A secondary axis in comoving units on an axis in velocity units (notebook 09, Parts D and E), with one conversion
     factor, v = u x and k_v = k_x / u: u = ``kms_per_cMpc`` [km/s per cMpc] (u = period / L = (1/L) int_0^L aH dy, the
-    mean aH along a skewer, ``SkewerRun.derived``).
+    mean aH along a skewer, from ``core.velocity_span``).
 
     kind : "r" (km/s below, cMpc on the new axis) or "k" (s/km below, cMpc^-1); side : "top" (on the x axis) or "right"
     (on the y axis); label : default the comoving label of ``_UNITS``. Returns the secondary axis."""
@@ -4079,9 +4079,9 @@ def plot_xi_mu_wedges(
     """xi(r) in wedges of mu = r_par / r (``MU_WEDGES``) of many realisations, as DESI DR2 shows the Lya auto-correlation
     (arXiv:2503.14739, Fig. 3, top): r^2 xi(r) (``quantity="r2xi"``) or xi (``"xi"``) against r, one colour per wedge
     (``MU_COLORS``), every realisation as a faint line, the mean with the error of the mean as points joined by thin
-    lines (notebook 08, A3; notebook 09, D3). With an expectation (``res["theory"]``: ``simulations.field_statistics``, or the
-    density of ``run_skewers`` with its ``density_theory``): the expectation of each wedge as a dashed line in the
-    wedge's colour and, below, (measured - expected) / error. Without (the overflux of ``run_skewers``, ``res`` = one
+    lines (notebook 08, A3; notebook 09, D3). With an expectation (``res["theory"]``: ``summary_stats.field_statistics``, or the
+    density of ``skewer_density_statistics`` with its ``lattice_density_theory``): the expectation of each wedge as a dashed line in the
+    wedge's colour and, below, (measured - expected) / error. Without (the overflux on the lattice, ``res`` = one
     entry of its ``flux3d`` with ``res["axes"]`` = its ``axes3d``): one panel, the measurement only. The wedges are
     offset by a few per cent of a bin in r so that every point shows. Two legends inside the main panel: the wedges
     (colour: mu interval; upper right) and the styles (measured, expected, per realisation; lower left). No titles.
@@ -4246,19 +4246,19 @@ def plot_overflux_3d(
 ):
     """P(|k|) and r^2 xi(|r|) (``quantity="r2xi"``) or xi (``"xi"``) of the overflux of each line and of the total on
     the lattice of skewers, in comoving units (notebook 09, D2; the line of sight converted with u = period / L,
-    ``SkewerRun.grid3d``), or of the density of each species and of their sum at the points of the skewers (E2): the
+    ``summary_stats.lattice_grid``), or of the density of each species and of their sum at the points of the skewers (E2): the
     lattice counterpart of ``plot_isotropic_recovery``, with its estimators (every mode of the lattice inside the sphere
     of its smallest Nyquist frequency in |k| bins, every pair of points up to half the box in |r| bins), its options and
     styles (every box faint, the mean over the boxes with the error of the mean as points joined by thin lines; one
     colour per line or species, ``ENTITY_COLORS``, the total ``FG``; one small marker shape each, open after the first,
     so that coinciding curves show); no residual row; no titles.
 
-    flux3d : {field: ``ensemble_mean`` of the ``GRID_KEYS`` statistics} and axes : the bins (``run_skewers``'s ``flux3d``
-    and ``axes3d``, or ``density3d`` and ``density_axes3d``; k [1/cMpc], r [cMpc]); the last field is the total. names :
+    flux3d : {field: ``ensemble_mean`` of the ``GRID_KEYS`` statistics} and axes : the bins (the ``ensemble_mean`` of
+    ``measure_lattice`` and ``lattice_grid(...).axes()``, or ``skewer_density_statistics``'s ``density3d`` and ``density_axes3d``; k [1/cMpc], r [cMpc]); the last field is the total. names :
     {field: legend label}. each : the boxes drawn faint, "all" (every field), "total" (the total only) or None.
     kms_per_cMpc : top axes in s/km and km/s for reference (``velocity_axis``). limits : dict(k_min, k_max, r_min,
     r_max) [1/cMpc], [cMpc]: shaded outside, the limits written inside the grey bands. theory : the exact expectation
-    (``GRID_KEYS`` dict, e.g. ``run_skewers``'s ``density_theory``) as a dashed line. ``r_bao`` [cMpc] and ``r_marks``
+    (``GRID_KEYS`` dict, e.g. ``lattice_density_theory``) as a dashed line. ``r_bao`` [cMpc] and ``r_marks``
     {label: r}: labelled dotted lines in the xi panel (only inside its range). ``k_edges``, ``r_edges``: the isotropic
     bins, checked against those of the measurement (``_check_edges``). k_scale, r_scale : "log" or "linear"; y_scale :
     of the xi panel (default linear for r2xi, symlog for xi; ``_y_scale``). P on a log y axis. x_bin : where each bin
@@ -4437,7 +4437,7 @@ def plot_overflux_rpar_rperp(
     ``_map_scale``, the same colour limits in both), contours at ``levels`` (default three) in green with the band where
     the level lies within the mean +- ``n_sigma`` times its error (the error of the mean over the boxes), the
     boundaries of the wedges of mu as white rays labelled with their mu, with a coloured sector per wedge near the
-    origin; ``theory`` (a ``GRID_KEYS`` dict, e.g. ``run_skewers``'s ``density_theory``): the expected contours, dashed;
+    origin; ``theory`` (a ``GRID_KEYS`` dict, e.g. ``lattice_density_theory``): the expected contours, dashed;
     no title. ``show``: "measured" (default) or "expected" (the map of ``theory``, with its dashed contours only: the
     expected panel of ``plot_rpar_rperp_maps``, which shares one ``norm`` and ``levels`` between the two); ``norm``: a
     colour norm to use instead of ``_map_scale``'s; ``legend``: the legend of ``_map_legend`` (default none: the curves
@@ -4451,8 +4451,8 @@ def plot_overflux_rpar_rperp(
     is averaged into the r_perp bin that contains it, ``rperp_edges`` (default those of the measurement; checked
     against them, ``_check_edges``), up to L / 2; with bins of the skewer spacing from 0, the first holds the pairs on the
     same skewer. r^2 [cMpc^2] and mu combine both axes in comoving units, r^2 at the separation-weighted centre of each
-    cell. res : one entry of ``run_skewers``'s ``flux3d`` (or ``density3d``) with ``res["axes"]`` = its ``axes3d``
-    (``density_axes3d``).
+    cell. res : the ``ensemble_mean`` of ``measure_lattice`` of one field (or one entry of ``density3d``) with
+    ``res["axes"]`` = the bins of its ``lattice_grid`` (``density_axes3d``).
 
     Curves, labelled on the panel, every line-of-sight separation folded with the period ``box`` [cMpc] (default: twice
     the last row, L) and nothing beyond r_perp = L / 2 (``echo_curves``): ``r_bao`` [cMpc], the BAO ring (dotted);
@@ -4572,7 +4572,7 @@ def plot_overflux_kpar_kperp(
     scale (``cmap``, default ``CMAPS["diverging"]``; the limits of the expectation with ``theory``, else of the
     measurement), iso-P contours at ``levels`` (default three, ``_three_levels``) in green with the band where the
     level lies within the mean +- ``n_sigma`` times its error (the error of the mean over the boxes); ``theory`` (a
-    ``GRID_KEYS`` dict, e.g. ``run_skewers``'s ``density_theory``): the expected contours, dashed; a column of the
+    ``GRID_KEYS`` dict, e.g. ``lattice_density_theory``): the expected contours, dashed; a column of the
     k_perp bins that holds no mode is left empty, in light grey; ``k_marks`` {label: k_perp [cMpc^-1]}: labelled dotted
     vertical lines. No title. ``show``: "measured" (default) or "expected" (the map of ``theory`` with its dashed
     contours only: the expected panel of ``plot_kpar_kperp_maps``, which shares one ``norm`` and ``levels`` between the
@@ -4586,8 +4586,8 @@ def plot_overflux_kpar_kperp(
     Part C). Rows: one per mode of the lattice along the line of sight, k_par = 2 pi m / L (2 pi m / v_per in s/km), m =
     1 .. n_los / 2, each centred on it, shown up to ``kpar_max`` [cMpc^-1] (default all; e.g. the transverse Nyquist
     frequency for the fine lattice of the density points); columns: the k_perp bins, ``kperp_edges`` (default those of
-    the measurement; checked against them, ``_check_edges``). res : one entry of ``run_skewers``'s ``flux3d`` (or ``density3d``) with
-    ``res["axes"]`` = its ``axes3d`` (``density_axes3d``). Returns (fig, ax, chi2/dof of (measured - expected) / error
+    the measurement; checked against them, ``_check_edges``). res : the ``ensemble_mean`` of ``measure_lattice`` of one field (or one entry of ``density3d``) with
+    ``res["axes"]`` = the bins of its ``lattice_grid`` (``density_axes3d``). Returns (fig, ax, chi2/dof of (measured - expected) / error
     per bin with ``theory``, else None)."""
     _check_option("kpar_scale", kpar_scale, ("log", "linear"))
     _check_option("kperp_scale", kperp_scale, ("log", "linear"))
@@ -4677,27 +4677,27 @@ def plot_p1d_reference(
     figsize=(12, 10),
 ):
     """k P1D(k) / pi against k, linear k and logarithmic P, the convention of Fig. 1 of the reference (Chaves-Montero et
-    al., DESI DR1 P1D; notebook 09, E1): the P1D of each overflux of the toy boxes (``run_skewers``'s ``p1d``, k in
-    s/km, ``unit="km/s"``) or of each density along the skewers (``density_p1d``, k in cMpc^-1, ``unit="cMpc"``), binned
+    al., DESI DR1 P1D; notebook 09, E1): the P1D of each overflux of the toy boxes (the ``ensemble_mean`` of ``skewer_p1d``, k in
+    s/km, ``unit="km/s"``) or of each density along the skewers (``skewer_density_statistics``'s ``density_p1d``, k in cMpc^-1, ``unit="cMpc"``), binned
     in k: every box faint (``each``), the mean over the boxes with the error of the mean as small points joined by thin
     lines (one colour and one marker shape per field, open after the first; the total ``FG``); with ``p1d["theory"]``
     (the exact expectation on the lattice, ``lattice_density_theory(p1d=True)``), a dashed line. The reference
     measurement (``utils.reference_data``: dict(k [s/km], kP_pi, label)) as small grey squares; k P / pi is
     dimensionless, so with ``unit="cMpc"`` only its k becomes u k [cMpc^-1]. The legend inside the panel.
 
-    fields : the rows of ``p1d["p1d"]`` (default ``simulations.toy_boxes.OVERFLUX_FIELDS``); names : {field: legend
+    fields : the rows of ``p1d["p1d"]`` (default ``(*simulations.LINE_IDS, "total")``); names : {field: legend
     label}; k_max : the right end of the k axis, in the units of the axis (default 1.6 times the largest reference k);
     k_edges : the k bins, in the units of the axis (default linear bins of the reference's spacing from half the first
     mode); k_limits : (k_min, k_max) of the line of sight (2 pi / v_per and pi / dv), shaded outside and labelled inside
     the grey bands; x_bin : where each bin is drawn ("weighted" default: the mean of its modes; "linear", "log";
     ``summary_stats.bin_centres``); kms_per_cMpc : u, the one reference top axis, in the other unit (``comoving_axis`` /
     ``velocity_axis``; needed for ``unit="cMpc"``). No title. Returns (fig, ax)."""
-    from skewerjax.simulations.toy_boxes import OVERFLUX_FIELDS
+    from skewerjax.simulations.toy_boxes import LINE_IDS
 
     _check_option("unit", unit, ("km/s", "cMpc"))
     if unit == "cMpc" and kms_per_cMpc is None:
         raise ValueError("unit='cMpc' needs kms_per_cMpc (u) to draw the reference.")
-    fields = list(fields or OVERFLUX_FIELDS)
+    fields = list(fields or (*LINE_IDS, "total"))
     names = names or {}
     ku = float(kms_per_cMpc) if unit == "cMpc" else 1.0  # reference k [s/km] -> the units of the axis
     k_ref, y_ref = ku * np.asarray(reference["k"]), np.asarray(reference["kP_pi"])

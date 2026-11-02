@@ -2,8 +2,8 @@
 
 Toy fields: ``grf`` (``PowerLawGRF``, Gaussian random fields with optional anisotropy and BAO), ``toy_cells``
 (``grf_cells``: the realisation on the cells of its grid, cubes centred on the nodes) and ``toy_boxes`` (``ToyBoxes``: many
-realisations regenerated from their seeds, their gas, skewers through them and their statistics, streamed and recomputed
-at every call; notebooks 08 and 09).
+realisations regenerated from their seeds and their gas, recomputed at every call; notebooks 08 and 09). The skewers
+through them are ``skewerjax.skewers`` and their statistics ``skewerjax.summary_stats``, which this block does not import.
 
 Snapshots: read hydro (or FGPA-painted N-body) snapshots and turn them into the gas cells of the core. Layers:
 ``readers`` (HDF5 I/O, NumPy) -> ``gas_cells`` (``GasCells``: the raw per-cell data of the snapshot) -> ``gas_physics``
@@ -13,7 +13,8 @@ skewers) or for the cells within reach of a set of skewers (``selection``, strea
 ``SimulationSkewers.to_cells``). ``snapshot_skewers`` (``SimulationSkewers``) then runs the core's route (deposition,
 ``core.absorbers``, ``core.compute_optical_depth``) for any options; ``maps`` projects slabs of the gas for figures.
 
-Depends on ``skewerjax.core`` only; the boundary with the core is ``core.Cells``.
+Depends on ``skewerjax.core`` only (not on ``skewers`` or ``summary_stats``: ``tests/test_import_graph.py``); the
+boundary with the core is ``core.Cells``.
 """
 
 from skewerjax.simulations.gas_cells import GasCells
@@ -24,24 +25,7 @@ from skewerjax.simulations.readers import ArepoHDF5Reader, SnapshotHeader
 from skewerjax.simulations.selection import select_cells_near_paths
 from skewerjax.simulations.snapshot_cells import gas_to_cells, select_cells_in_region, snapshot_cells
 from skewerjax.simulations.snapshot_skewers import ExtractionOptions, IntegrationOptions, SimulationSkewers, cached
-from skewerjax.simulations.toy_boxes import (
-    DENSITY_FIELDS,
-    SkewerRun,
-    ToyBoxes,
-    bao_height,
-    field_statistics,
-    hubble_velocity,
-    lattice_density_check,
-    lattice_density_theory,
-    on_points,
-    run_skewers,
-    skewer_box,
-    skewer_density_statistics,
-    skewer_statistics,
-    skewer_tau,
-    xi_chi2,
-    xi_subset_offsets,
-)
+from skewerjax.simulations.toy_boxes import LINE_IDS, ToyBoxes
 from skewerjax.simulations.toy_cells import grf_cells, interpolate_periodic
 
 __all__ = [n for n in dir() if not n.startswith("_")]

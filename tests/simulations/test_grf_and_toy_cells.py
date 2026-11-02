@@ -2,8 +2,8 @@
 periodogram averages to P(k), the optional Kaiser / Fingers-of-God / BAO terms), ``grf_cells`` (n = n_bar (1 + delta)
 with no transform on the grid cells: generators at the nodes, exact volumes, one realisation shared by several species,
 per-cell T and v, the positivity warning, the input checks), and ``interpolate_periodic``. The toy boxes of notebooks 08 and 09
-(``ToyBoxes``, ``run_skewers``): ``tests/simulations/test_toy_boxes.py``; the statistics of many draws (P(k), xi(r), the
-planes and the wedges): ``tests/core/test_statistics.py``."""
+(``ToyBoxes``, and along skewers): ``tests/simulations/test_toy_boxes.py``; the statistics of many draws (P(k), xi(r),
+the planes and the wedges): ``tests/summary_stats/test_statistics.py`` and ``test_field_stats.py``."""
 
 import warnings
 

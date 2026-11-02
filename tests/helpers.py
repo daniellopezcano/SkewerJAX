@@ -58,3 +58,139 @@ def ramp_pieces(n_skewers: int = 7, L: float = 1e-3):
     )
     sb = SkewerBundle(spatial_points=pts, manual_scale_factors=jnp.full((1,) + pts.shape[:2], 0.9))
     return cell_pieces(cells, lb, skewer_bundle=sb, a_dagger=0.88), jnp.linspace(-400, 400, 300), lb
+
+
+# ---------------------------------------------------------------------- toy boxes along skewers (test-only fixtures)
+def toy_tau(boxes, i, columns, points_per_cell: int, n_pix: int, *, fields=None, batch: int = 256, **opts) -> dict:
+    """tau (2, N_sk, n_pix) of Lya and Si III along skewers through the cell ``columns`` of realisation i of a
+    ``ToyBoxes``, by the explicit pipeline of notebook 09: ``SkewerBundle(lattice_points)`` in the exact frame (z at
+    y = 0) -> ``cell_pieces`` -> ``compute_optical_depth`` (periodic over one box, both lines on the Lya axis);
+    ``opts``: a_eff, detuning, hubble_flow, aH_ref. ``fields``: the gas instead of ``boxes.fields(i)``. Returns
+    dict(tau, v, period, dv, a_pix (the scale factor of the pixels), bundle (of the first batch), resolution
+    (n_batches, 2, 2), warnings (list of str), fields)."""
+    import warnings
+
+    import jax.numpy as jnp
+
+    from skewerjax.core import LineBundle, SkewerBundle, bundle_frame, cell_pieces, compute_optical_depth, phys, velocity_span
+    from skewerjax.simulations import LINE_IDS
+    from skewerjax.skewers import lattice_points
+
+    lines = LineBundle(list(LINE_IDS), ref_line_id=LINE_IDS[0])
+    f = boxes.fields(i) if fields is None else fields
+    cells = boxes.cells(i, f)
+    cols = np.atleast_2d(columns)
+    frame_kw = dict(cosmologies=boxes.cosmology(), a0=1 / (1 + boxes.z), x0=0.0, ICs_defined_at_index=0)
+    bundles = [
+        SkewerBundle(
+            spatial_points=jnp.asarray(
+                lattice_points(cols[b : b + batch], boxes.dx, boxes.box_cMpc, boxes.n_cells, points_per_cell)
+            ),
+            **frame_kw,
+        )
+        for b in range(0, len(cols), batch)
+    ]
+    period = float(velocity_span(bundles[0], opts.get("hubble_flow", "exact"), opts.get("aH_ref"))[0])
+    v = (np.arange(n_pix) + 0.5) * period / n_pix
+    taus, res = [], []
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for sb in bundles:
+            pieces = cell_pieces(cells, lines, skewer_bundle=sb)
+            tau, info = compute_optical_depth(
+                pieces, v, lines, velocity_period=True, line_frame="reference", return_info=True, **opts
+            )
+            taus.append(np.asarray(tau))
+            r = info["resolution"]
+            res.append(np.stack([r["max_ratio"], r["column_fraction"]], -1))
+    a_dagger = float(np.asarray(bundle_frame(bundles[0]).a_dagger))
+    return dict(
+        tau=np.concatenate(taus, axis=1),
+        v=v,
+        period=period,
+        dv=period / n_pix,
+        a_pix=a_dagger * np.exp(-v / phys.c_kms),
+        bundle=bundles[0],
+        resolution=np.stack(res),
+        warnings=sorted({str(w.message) for w in caught}),
+        fields=f,
+    )
+
+
+def toy_lattice_statistics(boxes, idx, stride, points_per_cell: int, n_pix: int, *, mean="redshift", decompose=False) -> dict:
+    """The statistics of notebook 09 on a lattice of skewers through realisations ``idx`` of a ``ToyBoxes``, composed of
+    the public functions (``toy_tau``; ``ensemble_mean_transmissions``, delta = T / T_bar - 1, ``overflux_check``;
+    ``skewer_p1d``, ``skewer_xi1d``, ``lattice_grid`` + ``measure_lattice``; ``decompose_1d`` with ``decompose``; the
+    density at the points, ``skewer_density_statistics``, against ``lattice_density_theory``). |k| bins: ``bao_k_edges``
+    up to the smallest Nyquist frequency of the lattice. Returns dict(tau (n, 2, N_sk, n_pix), T (n, 2, N_sk, n_pix),
+    T_bar (n, 3, N_sk, n_pix), delta (n, 3, N_sk, n_pix), check, v, period, dv, a_pix, mean_transmission (3, n_pix),
+    resolution, warnings, p1d, xi1d, flux3d, axes3d, grid, flux (None without ``decompose``), and the density entries of
+    ``skewer_density_statistics`` with density_theory and density_p1d["theory"])."""
+    from skewerjax.simulations import LINE_IDS
+    from skewerjax.skewers import lattice_columns
+    from skewerjax.summary_stats import (
+        GRID_KEYS,
+        bao_k_edges,
+        decompose_1d,
+        ensemble_1d,
+        ensemble_mean,
+        ensemble_mean_transmissions,
+        lattice_density_theory,
+        lattice_grid,
+        measure_lattice,
+        overflux_check,
+        skewer_density_statistics,
+        skewer_p1d,
+        skewer_xi1d,
+    )
+
+    sx, sz = stride
+    N, L, p = boxes.n_cells, float(boxes.box_cMpc), int(points_per_cell)
+    cols = lattice_columns(N, stride)
+    runs = [toy_tau(boxes, int(i), cols, p, n_pix) for i in idx]
+    tau = np.stack([r["tau"] for r in runs])
+    r0 = runs[0]
+    T = np.exp(-tau)
+    T_bar = ensemble_mean_transmissions(T, mean, grid=r0["a_pix"])
+    delta = np.concatenate([T, T.prod(axis=1, keepdims=True)], axis=1) / T_bar - 1
+    d_perp = np.array(stride, dtype=float) * boxes.dx
+    k_edges = bao_k_edges(2 * np.pi / L, float(min(np.pi * n_pix / L, *(np.pi / d_perp))), 3.0 / boxes.sigma_bao)
+    gs = lattice_grid(N // sx, N // sz, n_pix, L, d_perp, k_edges=k_edges)
+    fields = (*LINE_IDS, "total")
+    p1d, xi1d, f3d = [], [], []
+    for d in delta:
+        k1d, P = skewer_p1d(d, r0["dv"])
+        lags, X = skewer_xi1d(d, r0["dv"])
+        p1d.append(dict(p1d=P))
+        xi1d.append(dict(xi1d=X))
+        f3d.append({f: measure_lattice(x, gs) for f, x in zip(fields, d)})
+    out = dict(
+        tau=tau,
+        T=T,
+        T_bar=T_bar,
+        delta=delta,
+        check=overflux_check(delta, T_bar, mean),
+        v=r0["v"],
+        period=r0["period"],
+        dv=r0["dv"],
+        a_pix=r0["a_pix"],
+        mean_transmission=np.asarray(T_bar[0, :, 0]),
+        resolution=np.stack([r["resolution"] for r in runs]),
+        warnings=[r["warnings"] for r in runs],
+        p1d=dict(ensemble_mean(p1d, ("p1d",)), k=k1d),
+        xi1d=dict(ensemble_mean(xi1d, ("xi1d",)), lags=lags),
+        flux3d={f: ensemble_mean([s[f] for s in f3d], GRID_KEYS) for f in fields},
+        axes3d=gs.axes(),
+        grid=gs,
+        flux=ensemble_1d([decompose_1d(t, r0["dv"], tb, mean=mean) for t, tb in zip(tau, T_bar)]) if decompose else None,
+    )
+    dens = [{sp: n[::sx, :, ::sz] for sp, n in r["fields"]["n"].items()} for r in runs]
+    gs_rho = lattice_grid(N // sx, N // sz, N * p, L, d_perp, k_edges=k_edges)
+    n_bar = {"HI": boxes.n_bar_HI, "SiIII": boxes.siiii_to_hi * boxes.n_bar_HI}
+    ds = skewer_density_statistics(dens, p, gs_rho, L, n_bar=n_bar)
+    th, p1d_th = lattice_density_theory(
+        boxes.grf().power, gs_rho, N, stride, points_per_cell=p, p1d=True, scale=ds["density_scale"]
+    )
+    ds["density_p1d"]["theory"] = p1d_th
+    out.update(ds, density_theory=th, grid_rho=gs_rho)
+    return out

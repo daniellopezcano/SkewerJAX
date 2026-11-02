@@ -1,5 +1,7 @@
 """The summary statistics of the flux: the overflux of each line and of their product, and its 1D and 3D two-point
-statistics, total, term by term and order by order (imports ``skewerjax.core`` at most; nothing in ``core`` imports it).
+statistics, total, term by term and order by order; and the statistics of 3D fields and of the density along skewers.
+From arrays and geometry only: imports ``skewerjax.core`` at most, nothing from ``skewerjax.simulations`` or
+``skewerjax.skewers`` (``tests/test_import_graph.py``); nothing in ``core`` imports it.
 
 * ``overflux``: ``DeltaFieldBuilder`` (delta_j = T_j / T_bar_j - 1 with T = e^-tau the transmission and T_bar_j its
   mean, ``mean`` = "redshift" (default, T_bar(z)), "global", "box" or "skewer", the subset products delta_A, the total
@@ -10,7 +12,12 @@ statistics, total, term by term and order by order (imports ``skewerjax.core`` a
   ``ensemble_1d``, ``p1d_from_tau``);
 * ``lattice``: the statistics of an ensemble of periodic skewers from arrays and geometry only: P1D and xi1D by one 1D
   FFT per skewer (``skewer_p1d``, ``skewer_xi1d``), and the 3D statistics on the lattice of skewers (``lattice_grid``,
-  ``lattice_limits``, ``on_lattice``, ``measure_lattice``);
+  ``lattice_limits``, ``on_lattice``, ``measure_lattice``), and the cell values at the points of the skewers (``on_points``);
+* ``field_stats``: P and xi of periodic 3D fields on their own grid over an ensemble of realisations, from arrays and
+  an optional expectation P(k) (``box_grid``, ``grid_limits``, ``grid_power``, ``field_statistics``, ``xi_chi2``,
+  ``xi_subset_offsets``, ``bao_height``);
+* ``density``: the density along a lattice of skewers through the same 3D estimator, and its exact expectation on that
+  lattice from P(k) (``skewer_density_statistics``, ``lattice_density_theory``);
 * ``stats_3d``: P3D and xi3D of the overflux on a grid of skewers, by term and order (``OverfluxStatistics3D``);
 * ``grid3d``: P and xi of a periodic 3D field on its grid, isotropic, in the (par, perp) plane and in wedges of mu, with
   exact expectations and covariance (``GridStatistics3D``, ``MU_WEDGES``);
@@ -20,7 +27,19 @@ statistics, total, term by term and order by order (imports ``skewerjax.core`` a
 * ``contaminants``: the P1D metal-contamination models (McDonald et al.; Ma et al.) and their fits.
 """
 
-from skewerjax.summary_stats import binning, contaminants, fourier, grid3d, lattice, orders, overflux, stats_1d, stats_3d
+from skewerjax.summary_stats import (
+    binning,
+    contaminants,
+    density,
+    field_stats,
+    fourier,
+    grid3d,
+    lattice,
+    orders,
+    overflux,
+    stats_1d,
+    stats_3d,
+)
 from skewerjax.summary_stats.binning import (
     X_BIN_MODES,
     bao_k_edges,
@@ -33,6 +52,16 @@ from skewerjax.summary_stats.binning import (
     occupied_edges,
 )
 from skewerjax.summary_stats.contaminants import fit_ma_model_profiled, fit_mcdonald_a, ma_factor, mcdonald_factor
+from skewerjax.summary_stats.density import lattice_density_theory, skewer_density_statistics
+from skewerjax.summary_stats.field_stats import (
+    bao_height,
+    box_grid,
+    field_statistics,
+    grid_limits,
+    grid_power,
+    xi_chi2,
+    xi_subset_offsets,
+)
 from skewerjax.summary_stats.fourier import lag_axis, xi3d_from_power, xi_from_power
 from skewerjax.summary_stats.grid3d import GRID_KEYS, MU_WEDGES, GridStatistics3D
 from skewerjax.summary_stats.lattice import (
@@ -40,6 +69,7 @@ from skewerjax.summary_stats.lattice import (
     lattice_limits,
     measure_lattice,
     on_lattice,
+    on_points,
     skewer_p1d,
     skewer_xi1d,
 )
@@ -77,6 +107,16 @@ __all__ = [
     "lattice_limits",
     "on_lattice",
     "measure_lattice",
+    "on_points",
+    "box_grid",
+    "grid_limits",
+    "grid_power",
+    "field_statistics",
+    "xi_chi2",
+    "xi_subset_offsets",
+    "bao_height",
+    "skewer_density_statistics",
+    "lattice_density_theory",
     "ensemble_mean",
     "GridStatistics3D",
     "GRID_KEYS",

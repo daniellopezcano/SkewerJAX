@@ -15,7 +15,8 @@ the nodes of a regular (n_x, n_z) lattice of spacing d_perp, every pixel one lat
 (n_x d_perp_x, L, n_z d_perp_z). Bins: |k| ``k_edges`` (also the k_perp columns of the (k_par, k_perp) plane, whose rows
 are the lattice's own k_par = 2 pi m / L), |r| and the mu wedges ``r_edges``, r_perp ``rperp_edges``, the r_par rows the
 lattice's own separations j L / n_los; every bin beyond the full-coverage limits (the smallest Nyquist frequency, half
-the box) cut (``binning.full_coverage``); ``lattice_limits`` the spacings and those limits.
+the box) cut (``binning.full_coverage``); ``lattice_limits`` the spacings and those limits; ``on_points`` the values of
+a field uniform in each cell at the points of the skewers (p per cell).
 
 The two are related on the lattice by P1D(k_par) = (1 / (L_x L_z)) sum_{k_perp} P(k_perp, k_par) (Parseval across the
 line of sight), the discrete form of P1D(k_par) = int d^2k_perp / (2 pi)^2 P3D.
@@ -125,7 +126,7 @@ def lattice_limits(L: float, d_perp, n_los: int, period: float) -> dict:
 
 
 def on_lattice(delta, n_x: int, n_z: int) -> np.ndarray:
-    """The fields of the skewers (..., N_sk, n_los), the skewers x-major (``ToyBoxes.columns``: i_x outer, i_z inner),
+    """The fields of the skewers (..., N_sk, n_los), the skewers x-major (``skewers.lattice_columns``: i_x outer, i_z inner),
     on the lattice (..., n_x, n_los, n_z), the line of sight along the middle axis."""
     d = np.asarray(delta)
     return d.reshape(d.shape[:-2] + (int(n_x), int(n_z), d.shape[-1])).swapaxes(-1, -2)
@@ -135,3 +136,13 @@ def measure_lattice(delta, grid: GridStatistics3D) -> dict:
     """The 3D statistics (``GridStatistics3D.measure``: the ``GRID_KEYS``) of one field along the skewers of a lattice,
     delta (N_sk, n_los) x-major, on ``grid`` (``lattice_grid``)."""
     return grid.measure(on_lattice(delta, grid.shape[0], grid.shape[2]))
+
+
+def on_points(columns, points_per_cell: int) -> np.ndarray:
+    """The values at the points of the skewers of cell values ``columns`` (..., N, ...) along axis 1 (y): (..., N p, ...)
+    at y_m = m dx / p, m = 0 .. N p - 1 (p = ``points_per_cell``; the end point y = L, the same place of the periodic
+    box as y = 0, dropped, so the lattice is exactly periodic). The field is uniform in each cell, so a point takes the
+    value of its cell, that of the nearest node j = floor(m / p + 1/2) mod N (a point on a cell boundary goes to the
+    upper cell): every cell holds exactly p points."""
+    p = int(points_per_cell)
+    return np.roll(np.repeat(np.asarray(columns), p, axis=1), -(p // 2), axis=1)

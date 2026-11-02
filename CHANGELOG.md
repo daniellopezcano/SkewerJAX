@@ -3,6 +3,41 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — toy fields, skewers and summary statistics as three realms (2026-11-02)
+
+### Added
+- `skewerjax.skewers` (imports `core` only): `lattice_columns(n_cells, stride)`, `lattice_points(columns, dx, L, n_cells,
+  points_per_cell)` (the points of a `core.SkewerBundle` built by the caller, e.g. in the exact frame with z at y = 0)
+  and `hubble_velocity(bundle)`.
+- `summary_stats.field_stats`: `box_grid(n_cells, L, k_edges=, r_edges=)`, `grid_limits(n_cells, L)`,
+  `grid_power(power, shape, L)` (P(|k|) on the rfft modes, = `PowerLawGRF.power_grid` bit for bit),
+  `field_statistics(fields, grid, power=, power_nw=)` (an iterable of fields, each measured and discarded; the
+  expectation as callables P(k)), and, moved from `simulations`, `xi_chi2`, `xi_subset_offsets`, `bao_height`.
+- `summary_stats.density`: `skewer_density_statistics` (moved; the two species are the keys of `columns`) and
+  `lattice_density_theory(power, grid, n_cells, stride, points_per_cell=, p1d=, scale=)` (P(k) a callable, the bins
+  those of the `lattice_grid` passed); `summary_stats.on_points` (moved, `lattice`).
+- `tests/test_import_graph.py`: `simulations`, `skewers` and `summary_stats` import `core` at most and not one another,
+  checked on the source (every import, also inside functions) and at run time.
+
+### Changed
+- `skewerjax/__init__.py` imports its subpackages lazily (PEP 562): `import skewerjax.summary_stats` no longer loads
+  `simulations`; `skewerjax.<name>` and `from skewerjax import <name>` work as before.
+- `simulations.toy_boxes` holds only `ToyBoxes` (the gas) and `LINE_IDS`, and imports nothing from `summary_stats`.
+- Notebooks 08 and 09 call the explicit functions: `bao_k_edges(2π/L, π/dx, 3/σ_BAO, ...)` for the bins, `box_grid`
+  and `field_statistics((boxes.delta(i) for i in idx), grid, power=g.power, power_nw=...)`, `lattice_columns`,
+  `SkewerBundle(spatial_points=lattice_points(...), cosmologies=boxes.cosmology(), a0=1/(1+z), x0=0,
+  ICs_defined_at_index=0)`, `lattice_density_theory(boxes.grf().power, GRID_E, ...)`. Every statistic, print and figure
+  is unchanged (compared against the committed version: identical).
+- Tests rewritten on the explicit functions (`tests/helpers.py`: `toy_tau`, `toy_lattice_statistics`, test-only);
+  new `tests/skewers/test_lattice.py`, `tests/summary_stats/test_field_stats.py`, `test_density.py`.
+
+### Removed
+- `ToyBoxes.limits`, `k_edges`, `r_edges`, `bin_edges`, `columns`, `skewer_bundle` (→ `grid_limits`, `bao_k_edges`,
+  `box_grid`, `lattice_columns`, `lattice_points`).
+- The orchestration of the toy skewers: `SkewerRun`, `run_skewers`, `skewer_tau`, `skewer_box`, `skewer_statistics`
+  (notebook 09 runs the explicit pipeline), and `lattice_density_check`, `DENSITY_FIELDS`, `OVERFLUX_FIELDS`,
+  `OVERFLUX_KEYS` (= `GRID_KEYS`), `TERM_LABELS` (the default labels of `decompose_1d`). No aliases are kept.
+
 ## Unreleased — notebook 08 split into 08 (toy fields) and 09 (skewers); later notebooks renumbered (2026-11-02)
 
 ### Changed
