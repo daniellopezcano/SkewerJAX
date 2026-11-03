@@ -11,7 +11,7 @@ Snapshots: read hydro (or FGPA-painted N-body) snapshots and turn them into the 
 peculiar velocity: the same container as the toy fields), either for a region of the box (``snapshot_cells``, no
 skewers) or for the cells within reach of a set of skewers (``selection``, streamed from disk;
 ``SimulationSkewers.to_cells``). ``snapshot_skewers`` (``SimulationSkewers``) then runs the core's route (deposition,
-``core.absorbers``, ``core.compute_optical_depth``) for any options; ``maps`` projects slabs of the gas for figures.
+``core.absorbers``, ``core.compute_optical_depth``) for any options; ``maps`` projects slabs of the gas and cuts the Voronoi cells by a plane, for figures.
 
 Depends on ``skewerjax.core`` only (not on ``skewers`` or ``summary_stats``: ``tests/test_import_graph.py``); the
 boundary with the core is ``core.Cells``.
@@ -20,7 +20,7 @@ boundary with the core is ``core.Cells``.
 from skewerjax.simulations.gas_cells import GasCells
 from skewerjax.simulations.gas_physics import HI, CloudyIonTable, Ion, ion_from_species, ion_properties
 from skewerjax.simulations.grf import PowerLawGRF
-from skewerjax.simulations.maps import slab_projection
+from skewerjax.simulations.maps import slab_projection, voronoi_slice
 from skewerjax.simulations.readers import ArepoHDF5Reader, SnapshotHeader
 from skewerjax.simulations.selection import select_cells_near_paths
 from skewerjax.simulations.snapshot_cells import gas_to_cells, select_cells_in_region, snapshot_cells

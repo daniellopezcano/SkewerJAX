@@ -16,8 +16,10 @@ pixels (each mode gives <delta> = 0 over its own set, and removes what is consta
 | "skewer" | the pixels of each sample: one number per skewer | the k_par = 0 mode of every skewer, as continuum fitting does | mimicking a fitted continuum amplitude |
 
 "redshift" groups the pixels by their scale factor: samples on a shared grid (every row of ``grid`` the same, as on
-the toy lattice, where all skewers share one v -> a grid) give T_bar(v) at each pixel; samples whose grids differ raise
-a ``ValueError`` (``check_shared_grid``). On one array of samples "global" and "box" are the same mean; an ensemble
+the toy lattice, where all skewers share one v -> a grid) give T_bar(v) at each pixel; pixels of the grid at the same
+scale factor (to ``GRID_RTOL``) share one mean (``redshift_groups``: in one snapshot every pixel has the same a, so
+T_bar(z) is the global mean); samples whose grids differ raise a ``ValueError`` (``check_shared_grid``). Without
+``grid`` every pixel is its own redshift. On one array of samples "global" and "box" are the same mean; an ensemble
 split over realisations (``ensemble_mean_transmissions``, notebook 09) distinguishes them, and ``overflux_check`` checks
 the normalisation over the sets of the mode.
 
@@ -80,13 +82,38 @@ def check_shared_grid(grid, n_pix: int | None = None, rtol: float = GRID_RTOL, w
     return g[0]
 
 
+def redshift_groups(grid, n_pix: int | None = None, rtol: float = GRID_RTOL, what: str = "samples"):
+    """The pixels at the same scale factor of a shared grid (``check_shared_grid``), for ``mean="redshift"``: the label
+    (N_pix,) of the group of every pixel (groups numbered by increasing grid value; equal values to ``rtol``, relative),
+    or None when every pixel has its own scale factor (then T_bar(z) is the mean at each pixel)."""
+    g = check_shared_grid(grid, n_pix, rtol, what)
+    order = np.argsort(g, kind="stable")
+    gs = g[order]
+    new = np.concatenate([[True], np.abs(np.diff(gs)) > rtol * np.maximum(np.abs(gs[1:]), 1e-300)])
+    if new.all():
+        return None
+    labels = np.empty(g.size, dtype=np.int64)
+    labels[order] = np.cumsum(new) - 1
+    return labels
+
+
+def _group_mean(m, labels):
+    """The mean of ``m`` (..., N_pix) over each group of pixels (``redshift_groups``), at every pixel of the group
+    (``labels`` None: ``m`` itself)."""
+    if labels is None:
+        return m
+    onehot = np.eye(int(labels.max()) + 1)[labels]  # (N_pix, n_groups)
+    return (m @ (onehot / onehot.sum(0)))[..., labels]
+
+
 def mean_transmissions(transmissions: jnp.ndarray, mean: str = "redshift", *, grid=None) -> jnp.ndarray:
     """The mean transmission of every line and of the total, rows T_bar_j = <T_j> and, last, T_bar = <prod_j T_j>, of
     ``transmissions`` (N_lines, N_samples, N_pix), over the set of pixels of ``mean`` (module docstring):
 
     * "redshift" (default): over the samples at each pixel, T_bar(z): (N_lines + 1, N_pix). ``grid`` (N_pix,) or
       (N_samples, N_pix), optional: the scale factor (or redshift) of every pixel, checked to be shared by all the
-      samples (``check_shared_grid``; without it the samples are assumed to share one grid);
+      samples (``check_shared_grid``; without it the samples are assumed to share one grid); pixels at the same scale
+      factor share their mean (``redshift_groups``);
     * "global", "box": over every pixel of every sample (the same here: one array is one box), the same value in every
       column: (N_lines + 1, N_pix);
     * "skewer": over the pixels of each sample, the same value along it: (N_lines + 1, N_samples, N_pix).
@@ -98,9 +125,7 @@ def mean_transmissions(transmissions: jnp.ndarray, mean: str = "redshift", *, gr
         return jnp.broadcast_to(jnp.mean(T, axis=2, keepdims=True), T.shape)
     m = jnp.mean(T, axis=1)
     if mean == "redshift":
-        if grid is not None:
-            check_shared_grid(grid, T.shape[-1])
-        return m
+        return m if grid is None else _group_mean(m, redshift_groups(grid, T.shape[-1]))
     return jnp.broadcast_to(jnp.mean(m, axis=1, keepdims=True), m.shape)
 
 
@@ -111,7 +136,8 @@ def ensemble_mean_transmissions(transmissions, mean: str = "redshift", *, grid=N
     transmissions : (n_real, N_lines, N_samples, N_pix) T_j = exp(-tau_j) of every realisation (or a list of
         (N_lines, N_samples, N_pix)).
     mean : "redshift" (default): at each pixel over every sample of every realisation, T_bar(z) (the mean of the
-        per-realisation means at each pixel, ``mean_transmissions``); "global": over every pixel of every sample of every
+        per-realisation means at each pixel, ``mean_transmissions``; pixels at the same scale factor of ``grid`` share
+        their mean, ``redshift_groups``); "global": over every pixel of every sample of every
         realisation; "box": over every pixel of every sample of each realisation; "skewer": over the pixels of each sample.
     grid : (N_pix,) or (n_real, N_pix), optional, with ``mean="redshift"``: the scale factor (or redshift) of every
         pixel of every realisation, checked to be shared (``check_shared_grid``, ``ValueError`` otherwise).
@@ -122,15 +148,16 @@ def ensemble_mean_transmissions(transmissions, mean: str = "redshift", *, grid=N
     mean = _check_mean(mean)
     T = [np.asarray(x) for x in transmissions]
     n, (n_l, n_s, n_pix) = len(T), T[0].shape
-    if mean == "redshift" and grid is not None:
-        check_shared_grid(grid, n_pix, what="realisations")
+    groups = redshift_groups(grid, n_pix, what="realisations") if mean == "redshift" and grid is not None else None
     shape = (n, n_l + 1, n_s, n_pix)
     if mean == "skewer":
         m = np.stack([np.concatenate([x, x.prod(axis=0, keepdims=True)]).mean(axis=2, keepdims=True) for x in T])
         return np.broadcast_to(m, shape)
     per = np.stack([np.asarray(mean_transmissions(x, "redshift")) for x in T])  # (n, N_lines + 1, N_pix): T_bar(v) per box
     m = {
-        "redshift": lambda: per.mean(axis=0)[None],  # equal samples per realisation: T_bar(v) of the ensemble
+        "redshift": lambda: _group_mean(per.mean(axis=0), groups)[
+            None
+        ],  # equal samples per realisation: T_bar(v) of the ensemble
         "global": lambda: per.mean(axis=0).mean(axis=-1, keepdims=True)[None],
         "box": lambda: per.mean(axis=-1, keepdims=True),
     }[mean]()
@@ -140,15 +167,16 @@ def ensemble_mean_transmissions(transmissions, mean: str = "redshift", *, grid=N
 _SET_AXES = {"redshift": (0, 2), "global": (0, 2, 3), "box": (2, 3), "skewer": (3,)}  # (n_real, field, sample, pixel)
 
 
-def overflux_check(delta, mean_transmission, mean: str = "redshift") -> dict:
+def overflux_check(delta, mean_transmission, mean: str = "redshift", *, grid=None) -> dict:
     """Checks of the normalisation of an ensemble overflux over the sets of pixels of ``mean`` (module docstring).
 
     delta : (n_real, N_lines + 1, N_samples, N_pix) the overflux of every line and, last, of the total, delta = T / T_bar
-        - 1 with mean_transmission (the same shape, ``ensemble_mean_transmissions``).
+        - 1 with mean_transmission (the same shape, ``ensemble_mean_transmissions``). grid : with ``mean="redshift"``,
+        the pixel grid of the means (``ensemble_mean_transmissions``): the sets are the pixels at the same scale factor.
 
     Returns dict(
         mean_delta (N_lines + 1, N_pix): <delta> at each pixel over every sample of every realisation (the pattern shared
-            by the samples: zero with "redshift", a diagnostic in every mode),
+            by the samples: zero with "redshift" on a grid of distinct scale factors, a diagnostic in every mode),
         mean_delta_level (N_lines + 1,): max |<delta>| over the sets of the mode (zero to rounding),
         C (float): the mean of C = T_bar / prod_j T_bar_j - 1,
         C_error: max |C - sum_{|A| >= 2} <delta_A>| over the sets of the mode (delta_A = prod_{j in A} delta_j),
@@ -169,13 +197,14 @@ def overflux_check(delta, mean_transmission, mean: str = "redshift") -> dict:
         C[i] = Tb[i, -1] / np.prod(Tb[i, :m], axis=0) - 1.0
         err = max(err, float(np.max(np.abs((sum(dl) + h - C[i]) / (1.0 + C[i]) - d[i, -1]))))
     ax = _SET_AXES[mean]
-    lvl = np.abs(d.mean(axis=ax, keepdims=True))
+    groups = redshift_groups(grid, d.shape[-1], what="realisations") if mean == "redshift" and grid is not None else None
+    lvl = np.abs(_group_mean(d.mean(axis=ax, keepdims=True), groups))
     ax3 = tuple(a - (a > 1) for a in ax)  # the same sets on (n_real, sample, pixel)
     return dict(
         mean_delta=d.mean(axis=(0, 2)),
         mean_delta_level=lvl.max(axis=tuple(a for a in range(4) if a != 1)).ravel(),
         C=float(C.mean()),
-        C_error=float(np.max(np.abs(H.mean(axis=ax3) - C.mean(axis=ax3)))),
+        C_error=float(np.max(np.abs(_group_mean(H.mean(axis=ax3) - C.mean(axis=ax3), groups)))),
         decomposition_error=err,
     )
 
@@ -228,7 +257,7 @@ class DeltaFieldBuilder:
     mean : "redshift" (default), "global", "box" or "skewer" (module docstring, ``MEAN_MODES``): the set of pixels of
         the mean transmission.
     grid : (N_pix,) or (N_samples, N_pix), optional: the scale factor (or redshift) of every pixel, checked to be shared
-        by the samples with ``mean="redshift"`` (``check_shared_grid``).
+        by the samples with ``mean="redshift"`` (``check_shared_grid``); pixels at the same scale factor share their mean.
     mean_transmission : (N_lines + 1, N_pix) or, for "skewer", (N_lines + 1, N_samples, N_pix), optional
         The means T_bar_j and T_bar (``mean_transmissions``) when the ensemble holds more samples than ``optical_depth``
         (e.g. every box of a run); default: the mean over the kept samples of ``optical_depth`` (``mean``). With few
@@ -270,8 +299,10 @@ class DeltaFieldBuilder:
                 f"`mean_transmission` must have shape (N_lines + 1, N_pix) = {shapes[0]} or (N_lines + 1, N_samples, "
                 f"N_pix) = {shapes[1]}. Got {self.mean_transmission.shape}."
             )
+        self.grid = None
         if grid is not None and self.mean == "redshift":
             check_shared_grid(grid, self.N_points)
+            self.grid = np.asarray(grid)
         self.transmissions = jnp.exp(-optical_depth)
         bad = jnp.any(jnp.isnan(optical_depth), axis=(0, 2)) | jnp.any(jnp.isnan(self.transmissions), axis=(0, 2))
         self._drop(bad, "input NaNs")
@@ -298,7 +329,11 @@ class DeltaFieldBuilder:
                 "This DeltaFieldBuilder has already been built and its temporary transmissions were released. "
                 "Create a new instance to rebuild."
             )
-        T_bar = mean_transmissions(self.transmissions, self.mean) if self.mean_transmission is None else self.mean_transmission
+        T_bar = (
+            mean_transmissions(self.transmissions, self.mean, grid=self.grid)
+            if self.mean_transmission is None
+            else self.mean_transmission
+        )
         if bool(jnp.any(T_bar == 0.0)):
             raise ValueError("A mean transmission is zero at some pixel (of a line or of the total): delta is undefined there.")
         out = overflux_terms(self.transmissions, self.labels, self.key_joiner, T_bar, self.mean)

@@ -239,7 +239,7 @@ class GridStatistics3D:
         xi = jnp.fft.irfftn(f2, s=self.shape) / self.N
         return self._bin(P, xi)
 
-    def measure_points(self, positions, values, *, mas: str = "tsc", interlace: bool = True, shot_noise=None) -> dict:
+    def measure_points(self, positions, values, *, mas: str = "pcs", interlace: bool = True, shot_noise=None) -> dict:
         """The binned P and xi (``GRID_KEYS``, as ``measure``) of a field known at points, through a mesh of the grid's
         shape (``mesh.fourier_mesh``): the values assigned with the scheme ``mas`` ("ngp", "cic", "tsc", "pcs"),
         interlaced (``interlace``: the odd alias images cancel) and divided by the window (Sefusatti et al. 2016,

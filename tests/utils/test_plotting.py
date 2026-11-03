@@ -369,6 +369,31 @@ def test_toy_box_figures():
     )
     fig.canvas.draw()
     assert "cMpc" in ax.get_xlabel() and "km" in ax.child_axes[0].get_xlabel() and len(ax.get_legend().get_texts()) == 6
+    # the options of notebook 10 (one simulation): the legend of the ensemble, one reference per field, the spot without
+    # r_BAO, a density map under the skewers, the error bars of the reference
+    lab = "each of the 3 lines of sight (not independent)"
+    ref = {f: {k: 1.1 * np.asarray(run["density3d"][f][k]) for k in ("P_iso", "xi_iso")} for f in run["density3d"]}
+    fig, axs = pl.plot_overflux_3d(run["density3d"], run["density_axes3d"], theory=ref, theory_label="whole box", each_label=lab)
+    texts = [t.get_text() for t in axs["P"].get_legend().get_texts()]
+    assert "whole box" in texts and lab in texts
+    dashed = [ln for ln in axs["P"].lines if ln.get_linestyle() == "--"]
+    assert len(dashed) == len(ref) and len({ln.get_color() for ln in dashed}) == len(ref), "one reference per field, its colour"
+    fig, axs, _ = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, r_bao=None, delta_v=100.0, box=L, each_label=lab)
+    legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
+    assert len(legs) == 2, "no echoes without r_BAO"
+    assert [t.get_text() for t in axs[0].get_legend().get_texts()] == ["measured", lab]
+    sep = pl.fold_periodic(100.0 / u, L)
+    spot = [ln for ln in axs[0].lines if ln.get_linestyle() == "--" and np.allclose(ln.get_xdata(), sep)]
+    assert len(spot) == 1, "the spot of the two lines, without r_BAO"
+    ref_err = dict(P1D_DESI_DR1_Z22, kP_pi_err=0.1 * P1D_DESI_DR1_Z22["kP_pi"])
+    fig, ax = pl.plot_p1d_reference(run["p1d"], ref_err, kms_per_cMpc=u, each_label=lab)
+    assert lab in [t.get_text() for t in ax.get_legend().get_texts()]
+    assert any(c.get_label() == ref_err["label"] for c in ax.containers), "the reference with its error bars"
+    nmap = np.exp(np.random.default_rng(0).normal(size=(64, 64)))
+    fig, ax, info = pl.plot_skewer_slice(nmap, L, sk["columns"], highlight=(ix, iz), spacing=b.dx)  # node indices x dx
+    assert info["spacing_cMpc"] == pytest.approx(4 * b.dx) and np.allclose(ax.get_xlim(), (0.0, L))
+    with pytest.raises(ValueError, match="spacing"):
+        pl.plot_skewer_slice(nmap, L, sk["columns"])
     dens1d = run["density_flux"]
     for orders_fn, terms_fn in ((pl.plot_p1d_orders, pl.plot_p1d_terms), (pl.plot_xi1d_orders, pl.plot_xi1d_terms)):
         fig, axs = orders_fn(dens1d, kms_per_cMpc=u, unit="cMpc")

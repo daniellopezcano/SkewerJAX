@@ -3,6 +3,41 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — PCS by default; notebook 10: the skewer statistics on TNG50-4; notebooks 10, 11 → 11, 12 (2026-11-03)
+
+### Added
+- Notebook `10_skewer_statistics_tng`: the statistics of 09 on TNG50-4 (snapshot 25, z = 3.008): 32 × 32 periodic
+  skewers along each axis in the snapshot frame (the three lines of sight as the ensemble, not independent), points
+  every 0.5 km/s (the resolution check passes), 256 pixels; the density on the skewers against the whole box through a
+  mesh (PCS, interlaced); the transmission and overflux; the planes, P, r²ξ, the wedges, P1D next to DESI DR1 at z = 3.0,
+  the decomposition by order and term by term; no BAO (r_BAO > L / 2).
+- `summary_stats.redshift_groups(grid)`: the pixels at the same scale factor of a shared grid; `overflux_check(...,
+  grid=)`.
+- `simulations.voronoi_slice(cells, species, normal_axis, centre, n_pix)`: the section of the Voronoi cells by a plane.
+- `utils.reference_data.P1D_DESI_DR1_Z30`: the DESI DR1 P1D at z = 3.0 with its error bars, read from the vector paths of
+  Fig. 1 of Chaves-Montero et al. (the same extraction reproduces the digitised z = 2.2 curve to 1e-4 s/km in k and
+  1.1 % in k P / π).
+- `utils.plotting`: `each_label` (the legend of the faint realisations; `EACH_LABEL` = "each box ({n})") on
+  `plot_overflux_3d`, `plot_p1d_reference`, `plot_orders_superimposed`, `plot_p1d_orders`, `plot_xi1d_orders`,
+  `plot_xi_mu_wedges`; `plot_overflux_3d(theory={field: ...}, theory_label=)` (one reference per field);
+  `plot_p1d_reference` draws the reference's error bars when it has `kP_pi_err`; `plot_skewer_slice(density_map, ...,
+  spacing=)` (a map instead of the toy fields).
+- Tests: `tests/simulations/test_maps.py`; the PCS default (`test_point_statistics`); the redshift groups
+  (`test_statistics`); the options of notebook 10 (`test_plotting`).
+
+### Changed
+- The default mass assignment of the point path is PCS: `mesh.paint`, `mesh.fourier_mesh`,
+  `GridStatistics3D.measure_points`, `point_statistics` (`mas="pcs"`, `interlace=True`). No notebook or script used the
+  point path before notebook 10: nothing else changes.
+- `mean="redshift"` groups the pixels by their scale factor, as documented: pixels of the grid at the same scale factor
+  share one mean (in one snapshot, the global mean). On a grid of distinct scale factors (notebook 09) the result is the
+  same, bit for bit; `DeltaFieldBuilder` now passes its `grid` to the mean.
+- `plot_xi_mu_wedges` draws the spot of the two lines (the wedge with μ = 1) with `delta_v` alone; the echoes still need
+  `r_bao`.
+- Notebooks renumbered (`mv`): `10_comparison_fake_spectra_results` → `11_comparison_fake_spectra_results`,
+  `11_comparison_fake_spectra_performance` → `12_comparison_fake_spectra_performance`; references updated (README, docs,
+  `utils.paths`, `utils.dag.DAG_NOTEBOOKS` and the README diagrams, the benchmark script, notebooks 00, 05, 11, 12).
+
 ## Unreleased — mass assignment and interlacing; notebook 09 restructured; architecture diagrams (2026-11-02, evening)
 
 ### Added

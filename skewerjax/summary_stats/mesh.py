@@ -114,7 +114,7 @@ def _paint(positions, weights, n_mesh, L, mas, shift):
     return mesh.reshape(n_mesh)
 
 
-def paint(positions, weights, n_mesh, L, mas: str = "tsc", shift: float = 0.0):
+def paint(positions, weights, n_mesh, L, mas: str = "pcs", shift: float = 0.0):
     """Periodic deposition of points with weights onto a mesh (module docstring; S16 eqs. 13-18).
 
     positions : (N, D) [cMpc] (D = 1, 2, 3; (N,) for D = 1), wrapped into the box; weights : (N,) (or a scalar);
@@ -190,7 +190,7 @@ def _fourier_mesh(positions, weights, n_mesh, L, mas, interlace, deconvolve, sig
     return F
 
 
-def fourier_mesh(positions, weights, n_mesh, L, *, mas: str = "tsc", interlace: bool = True, deconvolve: bool = True):
+def fourier_mesh(positions, weights, n_mesh, L, *, mas: str = "pcs", interlace: bool = True, deconvolve: bool = True):
     """The Fourier field (rfft layout) of points with weights on a periodic mesh (module docstring; S16 §§2.3, 3.1).
 
     positions : (N, D) [cMpc]; weights : (N,); n_mesh : int or (D,); L : scalar or (D,) [cMpc]; mas : "ngp", "cic",

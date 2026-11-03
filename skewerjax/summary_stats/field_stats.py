@@ -127,7 +127,7 @@ def point_statistics(
     samples: Iterable,
     grid: GridStatistics3D,
     *,
-    mas: str = "tsc",
+    mas: str = "pcs",
     interlace: bool = True,
     shot_noise=None,
     power: Callable | None = None,

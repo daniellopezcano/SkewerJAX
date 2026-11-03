@@ -3,17 +3,22 @@ the exact FFT and refuse a mass-assignment scheme; fields known at points go thr
 assignment, interlacing, the window divided; Sefusatti et al. 2016) in ``GridStatistics3D.measure_points`` and
 ``point_statistics``, against the expectation with its alias images (``mesh.aliased_power``)."""
 
+import inspect
+
 import numpy as np
 import pytest
 
 from skewerjax.simulations import ToyBoxes
 from skewerjax.summary_stats import (
     GRID_KEYS,
+    GridStatistics3D,
     box_grid,
     field_statistics,
+    fourier_mesh,
     grid_limits,
     lattice_grid,
     measure_lattice,
+    paint,
     point_statistics,
     skewer_density_statistics,
 )
@@ -28,6 +33,13 @@ def _grid(n=16, L=64.0):
     return box_grid(
         n, L, k_edges=np.linspace(0.5 * lim["k_min"], lim["k_max"], 9), r_edges=np.arange(0, L / 2 + 0.1, 4.0), log=None
     )
+
+
+def test_the_point_path_defaults_to_interlaced_pcs():
+    for fn in (paint, fourier_mesh, point_statistics, GridStatistics3D.measure_points):
+        par = inspect.signature(fn).parameters
+        assert par["mas"].default == "pcs", fn.__name__
+        assert "interlace" not in par or par["interlace"].default is True, fn.__name__
 
 
 def test_grid_native_inputs_refuse_a_scheme():

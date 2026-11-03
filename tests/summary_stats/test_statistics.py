@@ -443,3 +443,40 @@ def test_bin_centres():
         bin_centres(e, "middle")
     with pytest.raises(ValueError, match="weighted"):
         bin_centres(e, "weighted")
+
+
+def test_redshift_mean_groups_the_pixels_by_scale_factor():
+    """``mean="redshift"`` is the mean over the pixels at the same scale factor (``redshift_groups``): on a grid of
+    distinct scale factors the mean at each pixel, exactly as without a grid; on one snapshot (every pixel at the same a)
+    the global mean; on a grid with repeated values the mean over each group. ``overflux_check`` with the same grid finds
+    <delta> = 0 over each group."""
+    from skewerjax.summary_stats import ensemble_mean_transmissions, mean_transmissions, overflux_check, redshift_groups
+
+    rng = np.random.default_rng(11)
+    tau = rng.gamma(2.0, 0.3, (3, 2, 20, 16))  # (n_real, N_lines, N_samples, N_pix)
+    T = np.exp(-tau)
+    distinct, snapshot = 0.25 * np.exp(-np.arange(16) * 1e-3), np.full(16, 0.2495)
+    mixed = np.repeat([0.25, 0.24, 0.23, 0.22], 4)
+    assert redshift_groups(distinct) is None and np.all(redshift_groups(snapshot) == 0)
+    assert np.array_equal(redshift_groups(mixed[::-1]), np.repeat([3, 2, 1, 0], 4)[::-1])
+    for grid in (None, distinct):  # bit for bit as before
+        assert np.array_equal(ensemble_mean_transmissions(T, "redshift", grid=grid), ensemble_mean_transmissions(T, "redshift"))
+        assert np.array_equal(np.asarray(mean_transmissions(T[0], "redshift", grid=grid)), np.asarray(mean_transmissions(T[0])))
+    glob = ensemble_mean_transmissions(T, "global")
+    np.testing.assert_allclose(ensemble_mean_transmissions(T, "redshift", grid=snapshot), glob, rtol=1e-14)
+    np.testing.assert_allclose(
+        np.asarray(mean_transmissions(T[0], "redshift", grid=snapshot)),
+        np.asarray(mean_transmissions(T[0], "global")),
+        rtol=1e-14,
+    )
+    Tb = ensemble_mean_transmissions(T, "redshift", grid=mixed)
+    full = np.concatenate([T, T.prod(1, keepdims=True)], 1)
+    for g in range(4):
+        sl = slice(4 * g, 4 * g + 4)
+        np.testing.assert_allclose(Tb[0, :, 0, sl], full[..., sl].mean(axis=(0, 2, 3))[:, None].repeat(4, 1), rtol=1e-14)
+    delta = full / Tb - 1
+    chk = overflux_check(delta, Tb, "redshift", grid=mixed)
+    assert chk["mean_delta_level"].max() < 1e-15 and chk["C_error"] < 1e-15
+    assert overflux_check(delta, Tb, "redshift")["mean_delta_level"].max() > 1e-3, "per pixel: not the set of this grid"
+    ov = DeltaFieldBuilder(tau[0], mean="redshift", grid=snapshot).build()
+    np.testing.assert_allclose(np.asarray(ov.mean_transmission), np.asarray(mean_transmissions(T[0], "global")), rtol=1e-14)

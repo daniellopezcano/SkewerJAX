@@ -621,6 +621,15 @@ def _binned(x, each, edges, *, per_box: bool = False, x_bin: str = "weighted"):
     return xc[keep], b.mean(0)[..., keep], err[..., keep]
 
 
+EACH_LABEL = "each box ({n})"  # the legend of the faint lines of every realisation ({n}: their number); e.g. notebook 10:
+# "each line of sight ({n}, not independent)"
+
+
+def _each_label(each_label, n: int) -> str:
+    """The legend of the faint lines of every realisation: ``each_label`` (default ``EACH_LABEL``) with {n} = n."""
+    return (EACH_LABEL if each_label is None else each_label).format(n=n)
+
+
 def _with_errors(ax, x, y, e, color, kind: str, label=None, each=None, **kw):
     """The mean with its error as points with error bars, joined by a thin line of the same colour, above every
     realisation ``each`` (n, N) as a thin faint line and above the order totals; smaller points for xi (dense lags)."""
@@ -684,6 +693,7 @@ def plot_orders_superimposed(
     each: bool = True,
     unit: str = "km/s",
     k_scale: str = "log",
+    each_label: str | None = None,
     axes=None,
     figsize=(12, 9),
 ):
@@ -698,8 +708,8 @@ def plot_orders_superimposed(
     (1: every lag). x_bin : where each bin is drawn ("weighted" default: the mean of its modes or lags; "linear", "log";
     ``summary_stats.bin_centres``). delta_v_list : line offsets [the unit of the lags]: for xi, dashed
     lines at every separation folded into half the period. unit : "km/s" (the overflux) or "cMpc" (the density along
-    the skewers): the axis labels (``_labels_1d``); k_scale : "log" (default) or "linear", the k axis of P. Returns (fig,
-    (main, residual)).
+    the skewers): the axis labels (``_labels_1d``); k_scale : "log" (default) or "linear", the k axis of P; each_label :
+    the legend of the faint realisations (``EACH_LABEL``, "{n}" their number). Returns (fig, (main, residual)).
     """
     if kind not in ("P", "xi"):
         raise ValueError(f"kind must be 'P' or 'xi', got {kind!r}.")
@@ -741,7 +751,7 @@ def plot_orders_superimposed(
     ax0.axhline(0.0, color=DIM, lw=0.8)
     ax1.set_ylabel(r"$\Delta / \max|{\rm tot}|$")
     if show_each:
-        ax0.plot([], [], color=DIM, lw=1.2, alpha=0.5, label=f"each box ({orders_b.shape[0]})")
+        ax0.plot([], [], color=DIM, lw=1.2, alpha=0.5, label=_each_label(each_label, orders_b.shape[0]))
     _legend(ax0, frameon=False, ncol=2, fontsize=FONT_MIN["legend"])
     return ax0.figure, np.array([ax0, ax1])
 
@@ -887,6 +897,7 @@ def plot_p1d_orders(
     linthresh=None,
     kms_per_cMpc: float | None = None,
     unit: str = "km/s",
+    each_label: str | None = None,
     figsize=(12, 10),
 ):
     """P1D of a composite overflux split by order |A| + |B| (``plot_orders_superimposed``, kind "P"; notebook 09, D5):
@@ -894,10 +905,21 @@ def plot_p1d_orders(
     max |total| below. stats : ``summary_stats.ensemble_1d`` (or one ``OverfluxStatistics1D``); k_edges : the display
     bins (e.g. ``bao_k_edges`` along the line of sight); k_limits : (k_min, k_max) = (2 pi / v_per, pi / dv), the range
     drawn, shaded outside; x_bin : where each bin is drawn; each : every realisation faint; k_scale : "log" or
-    "linear"; kms_per_cMpc : the reference top axis in the other unit (``_comoving_1d``); unit : "km/s" or "cMpc".
-    Small markers, the legend inside the panel, on top. Returns (fig, axs (2,))."""
+    "linear"; kms_per_cMpc : the reference top axis in the other unit (``_comoving_1d``); unit : "km/s" or "cMpc";
+    each_label : the legend of the faint realisations (``EACH_LABEL``). Small markers, the legend inside the panel, on
+    top. Returns (fig, axs (2,))."""
     fig, axs = _orders_figure(
-        stats, "P", kms_per_cMpc, unit, figsize, k_edges=k_edges, x_bin=x_bin, each=each, k_scale=k_scale, linthresh=linthresh
+        stats,
+        "P",
+        kms_per_cMpc,
+        unit,
+        figsize,
+        k_edges=k_edges,
+        x_bin=x_bin,
+        each=each,
+        k_scale=k_scale,
+        linthresh=linthresh,
+        each_label=each_label,
     )
     _k_range(axs, k_limits, k_scale)
     return fig, axs
@@ -913,6 +935,7 @@ def plot_xi1d_orders(
     each: bool = True,
     kms_per_cMpc: float | None = None,
     unit: str = "km/s",
+    each_label: str | None = None,
     figsize=(12, 10),
 ):
     """xi1D of a composite overflux split by order (``plot_orders_superimposed``, kind "xi"; notebook 09, D5): every
@@ -929,6 +952,7 @@ def plot_xi1d_orders(
         delta_v_list=delta_v_list,
         x_bin=x_bin,
         each=each,
+        each_label=each_label,
     )
 
 
@@ -1065,7 +1089,7 @@ def plot_toy_skewer(
     zoom_pixels: int = 12,
     figsize=(22, 24),
 ):
-    """One skewer of a toy box, from the gas to the overflux (notebook 09, C1). Five rows:
+    """One skewer of a toy box or of a simulation, from the gas to the overflux (notebooks 09 and 10, C1). Five rows:
 
     (a) n of each species against the comoving position y along the skewer (the cell values, as steps); (b) the
     overdensities n / <n> - 1 (<.> along this skewer); (c) the transmission T = exp(-tau) of each line and the total
@@ -1080,7 +1104,9 @@ def plot_toy_skewer(
     lines of a panel would lie closer than about 0.05 inch, they are drawn only in a zoomed inset (``zoom_cells`` cells
     from y = L / 2, or ``zoom_pixels`` pixels from the middle of the axis), marked on the panel.
 
-    L : box side [cMpc]; n : {species: (N,)} the cells along y, centred on j L / N; v : (N_pix,) the Lya axis [km/s];
+    L : box side [cMpc]; n : {species: (N,)} the cells along y, centred on j L / N (or the values at the N points of a
+    simulation skewer, each the mean over its dual segment, the end point dropped: notebook 10); v : (N_pix,) the Lya
+    axis [km/s];
     tau : (n_lines, N_pix) on it. Species and lines in the same order (H I / Lya, Si III / Si III 1206). Returns
     (fig, axs (5,), info {"points": "panel" | "inset" | None, "pixels": "panel" | "inset"}).
     """
@@ -2107,7 +2133,7 @@ def plot_bench_accuracy(ax, rows, *, line: str = "HI-LyA", sims=("TNG50-4", "TNG
     return ax
 
 
-# --------------------------------------------------------------------------- figures of the tutorial notebooks (01-10)
+# --------------------------------------------------------------------------- figures of the tutorial notebooks (01-12)
 def species_color(species: str, i: int = 0) -> str:
     """``ENTITY_COLORS`` of a species or line id, else a colour of the cycle."""
     return ENTITY_COLORS.get(species, PALETTE_CYCLE[(i + 3) % len(PALETTE_CYCLE)])
@@ -3290,11 +3316,16 @@ _ECHO_STYLES = {"plus": dict(ls=(0, (6, 3)), lw=1.6), "minus": dict(ls=(0, (1, 1
 
 def _slice_image(ax, fields, L: float, *, species: str = "HI", z_index: int = 0, colorbar: bool = True, cmap=None):
     """The log number density of one species in the plane z = z_index dx (x across, y upwards), as panel (a1) of
-    ``plot_toy_fields`` (``cmap``: default ``CMAPS["density"]``); returns the image."""
-    N = fields["v"].shape[0]
-    dx = L / N
-    ext = (-dx / 2, L - dx / 2, -dx / 2, L - dx / 2)  # cell j is centred on j dx
-    ln = np.log10(np.asarray(fields["n"][species])[:, :, z_index].T)  # (y, x): imshow rows are y
+    ``plot_toy_fields`` (``cmap``: default ``CMAPS["density"]``); returns the image. ``fields`` the toy fields (dict), or
+    a map (n_x, n_y) of the density in the plane, pixel i centred on (i + 1/2) L / n (e.g. ``simulations.voronoi_slice``)."""
+    if isinstance(fields, dict):
+        N = fields["v"].shape[0]
+        dx = L / N
+        ext = (-dx / 2, L - dx / 2, -dx / 2, L - dx / 2)  # cell j is centred on j dx
+        ln = np.log10(np.asarray(fields["n"][species])[:, :, z_index].T)  # (y, x): imshow rows are y
+    else:
+        ext = (0.0, L, 0.0, L)
+        ln = np.log10(np.asarray(fields, dtype=float).T)
     im = ax.imshow(ln, origin="lower", extent=ext, cmap=cmap or CMAPS["density"], norm=_density_norm(ln), interpolation="nearest")
     if colorbar:
         ax.figure.colorbar(im, ax=ax, label=rf"$\log_{{10}} n_{{\rm {species}}}\ [\mathrm{{cm^{{-3}}}}]$", shrink=0.85)
@@ -3405,6 +3436,7 @@ def plot_skewer_slice(
     highlight=None,
     n_arrows: int = 4,
     cmap=None,
+    spacing: float | None = None,
     figsize=(12, 10.5),
 ):
     """Where the skewers run (notebook 09, C1): the number density of ``species`` in the plane of the cell layer
@@ -3414,10 +3446,18 @@ def plot_skewer_slice(
     spacing of two neighbours marked at the top. The legend, inside the panel, draws a skewer as a line with its
     arrowhead along it (``_ArrowHandler``).
 
-    columns : (N_sk, 2) the node indices (i_x, i_z) of the skewers (``skewers.lattice_columns``); highlight : (i_x, i_z) of
-    one skewer drawn thicker (the skewer of ``plot_toy_skewer``). Returns (fig, ax, info {n_row, spacing_cMpc})."""
-    N = fields["v"].shape[0]
-    dx = L / N
+    fields : the toy fields of one box (dict: the cell layer ``z_index``), or a map (n_x, n_y) of the density in the
+    plane of the row of skewers (e.g. ``simulations.voronoi_slice`` of a snapshot; notebook 10), pixel i centred on
+    (i + 1/2) L / n. columns : (N_sk, 2) the node indices (i_x, i_z) of the skewers (``skewers.lattice_columns``), at
+    x = i_x dx with dx the cell size of the fields, or ``spacing`` [cMpc] with a map; highlight : (i_x, i_z) of one
+    skewer drawn thicker (the skewer of ``plot_toy_skewer``). Returns (fig, ax, info {n_row, spacing_cMpc})."""
+    if isinstance(fields, dict):
+        dx = L / fields["v"].shape[0]
+        lo = -dx / 2  # cell j centred on j dx
+    elif spacing is None:
+        raise ValueError("plot_skewer_slice with a density map needs spacing, the distance of neighbouring columns [cMpc].")
+    else:
+        dx, lo = float(spacing), 0.0
     cols = np.atleast_2d(np.asarray(columns))
     row = np.sort(cols[cols[:, 1] == z_index, 0])
     if row.size == 0:
@@ -3425,7 +3465,7 @@ def plot_skewer_slice(
     fig, ax = plt.subplots(figsize=figsize, layout="constrained")
     _slice_image(ax, fields, L, species=species, z_index=z_index, cmap=cmap)
     x = row * dx
-    y0, y1 = -dx / 2, L - dx / 2
+    y0, y1 = lo, lo + L
     ax.vlines(x, y0, y1, colors="black", lw=0.6, zorder=5)
     ya = (np.arange(n_arrows) + 0.5) / n_arrows * L
     Xa, Ya = np.meshgrid(x, ya)
@@ -3469,7 +3509,7 @@ def plot_skewer_slice(
             fontsize=FONT_MIN["annotation"],
             clip_on=False,
         )
-    ax.set(xlim=(-dx / 2, L - dx / 2), ylim=(y0, y1))
+    ax.set(xlim=(lo, lo + L), ylim=(y0, y1))
     _legend(
         ax,
         handles=handles,
@@ -4184,6 +4224,7 @@ def plot_xi_mu_wedges(
     linthresh: float | None = None,
     linthresh_frac: float = 1e-2,
     linscale: float = 1.0,
+    each_label: str = "per realisation",
     figsize=None,
 ):
     """xi(r) in wedges of mu = r_par / r (``MU_WEDGES``) of many realisations, as DESI DR2 shows the Lya auto-correlation
@@ -4200,16 +4241,17 @@ def plot_xi_mu_wedges(
     r_edges : the |r| bins of the wedges: a wedge is the average over the separations with |r| in a bin and mu in the
     wedge (default those of the measurement, ``res["axes"]["r_mu_edges"]``; checked against them, ``_check_edges``).
     r_bao : one labelled dotted line, the same for every wedge; r_marks : {label: r} further labelled dotted lines, each
-    drawn only inside the plotted range. delta_v [km/s] (with r_bao and ``kms_per_cMpc`` = u): the separation of two
+    drawn only inside the plotted range. delta_v [km/s] (with ``kms_per_cMpc`` = u): the separation of two
     lines (``line_ids``: line 1 the reference line; labels ``line_pair_label``), Delta = |delta_v| / u [cMpc]: the spot of
     their cross term at r = Delta as a dashed line in the colour of the wedge that contains mu = 1 (the spot lies on the
-    line of sight only), and the echoes of the BAO ring at r^+-(mu) of every wedge (``wedge_echoes``, at its mean mu) as
+    line of sight only), and, with r_bao, the echoes of the BAO ring at r^+-(mu) of every wedge (``wedge_echoes``, at its mean mu) as
     vertical lines in the wedge's colour, r^+ dashed and r^- dotted (a small legend of the two styles, in a neutral
     colour, inside the panel at the bottom, on top of the data); every scale folded into [0, box / 2]
     (``box``: the period of the line of sight [cMpc], default twice the last |r| edge). unit : "cMpc" or "km/s" (the
     axis labels); kms_per_cMpc : a secondary top axis in the other unit (``comoving_axis`` / ``velocity_axis``).
     x_bin : where each bin is drawn ("weighted" default: the separation-weighted |r| of the bin in the wedge, "linear",
-    "log"; ``summary_stats.bin_centres``). y_scale : "linear" or "symlog" (``linthresh``, ``linthresh_frac``, ``linscale``: ``_y_scale``). Returns (fig, axs
+    "log"; ``summary_stats.bin_centres``). y_scale : "linear" or "symlog" (``linthresh``, ``linthresh_frac``, ``linscale``: ``_y_scale``).
+    each_label : the legend of the faint realisations ("{n}": their number). Returns (fig, axs
     (2,) with an expectation, (1,) without, chi2/dof per wedge against the expectation (diagonal), or None)."""
     _check_option("quantity", quantity, tuple(_MAP_QUANTITY))
     _check_option("y_scale", y_scale, ("linear", "symlog"))
@@ -4257,7 +4299,7 @@ def plot_xi_mu_wedges(
         axs[1].axhline(0.0, color=FG, lw=1.0)
         axs[1].axhspan(-2, 2, color=DIM, alpha=0.15, lw=0)
     if each is not None:
-        styles.append(mpl.lines.Line2D([], [], color=grey, lw=1.2, alpha=0.5, label="per realisation"))
+        styles.append(mpl.lines.Line2D([], [], color=grey, lw=1.2, alpha=0.5, label=each_label.format(n=len(each))))
     wr = weight(r**2)
     y = [(wr * (X - Xe)).ravel(), (wr * (X + Xe)).ravel()] + ([(wr * Xth).ravel()] if theory else [])
     yy = np.concatenate(y)
@@ -4274,20 +4316,23 @@ def plot_xi_mu_wedges(
         marks = {r"$r_{\rm BAO}$": float(fold_periodic(r_bao, L)), **marks}
     for i, ax in enumerate(axs):
         _mark_lines(ax, marks, labels=i == 0)
-    if delta_v is not None and r_bao is not None:
+    if delta_v is not None:
         if kms_per_cMpc is None:
             raise ValueError("delta_v needs kms_per_cMpc (u) to convert the separation to cMpc.")
-        ec = wedge_echoes(r_bao, abs(float(delta_v)) / float(kms_per_cMpc), mu, L)
-        if ec["spot_wedge"] is not None:  # the spot: on the line of sight only
+        delta = abs(float(delta_v)) / float(kms_per_cMpc)
+        on_los = np.flatnonzero(np.isclose(np.asarray(mu, dtype=float)[1:], 1.0))
+        if on_los.size:  # the spot: on the line of sight only (the wedge with mu = 1), with or without r_bao
             for i, ax in enumerate(axs):
                 _mark_lines(
                     ax,
-                    {line_pair_label(line_ids, comoving=True): ec["delta"]},
-                    color=cols[ec["spot_wedge"]],
+                    {line_pair_label(line_ids, comoving=True): float(fold_periodic(delta, L))},
+                    color=cols[int(on_los[-1])],
                     ls="--",
                     lw=2.0,
                     labels=i == 0,
                 )
+    if delta_v is not None and r_bao is not None:
+        ec = wedge_echoes(r_bao, delta, mu, L)
         lo, hi = sorted(axs[0].get_xlim())
         for w in range(nm):  # the echoes: vertical lines at r^+-(mu) of each wedge, in its colour, + dashed, - dotted
             for key in ("plus", "minus"):
@@ -4333,6 +4378,8 @@ def plot_overflux_3d(
     linthresh_frac: float = 1e-2,
     linscale: float = 1.0,
     x_bin: str = "weighted",
+    theory_label: str = "expectation (exact, this lattice)",
+    each_label: str | None = None,
     figsize=(22, 9),
 ):
     """P(|k|) and r^2 xi(|r|) (``quantity="r2xi"``) or xi (``"xi"``) of the overflux of each line and of the total on
@@ -4349,7 +4396,10 @@ def plot_overflux_3d(
     {field: legend label}. each : the boxes drawn faint, "all" (every field), "total" (the total only) or None.
     kms_per_cMpc : top axes in s/km and km/s for reference (``velocity_axis``). limits : dict(k_min, k_max, r_min,
     r_max) [1/cMpc], [cMpc]: shaded outside, the limits written inside the grey bands. theory : the exact expectation
-    (``GRID_KEYS`` dict, e.g. ``lattice_density_theory``) as a dashed line. ``r_bao`` [cMpc] and ``r_marks``
+    (``GRID_KEYS`` dict, e.g. ``lattice_density_theory``) as a dashed ``FG`` line, or one reference per field ({field:
+    dict with "P_iso", "xi_iso" in the same bins}, e.g. the full-box density through a mesh, ``point_statistics``) as
+    dashed lines in the fields' colours; ``theory_label`` its legend. each_label : the legend of the faint realisations
+    (``EACH_LABEL``). ``r_bao`` [cMpc] and ``r_marks``
     {label: r}: labelled dotted lines in the xi panel (only inside its range). ``k_edges``, ``r_edges``: the isotropic
     bins, checked against those of the measurement (``_check_edges``). k_scale, r_scale : "log" or "linear"; y_scale :
     of the xi panel (default linear for r2xi, symlog for xi; ``_y_scale``). P on a log y axis. x_bin : where each bin
@@ -4389,12 +4439,19 @@ def plot_overflux_3d(
         axX.errorbar(rx[okr], (wr * e["xi_iso"])[okr], (wr * e["xi_iso_err"])[okr], color=c, **style)
         yv += [(wr * (e["xi_iso"] - e["xi_iso_err"]))[okr], (wr * (e["xi_iso"] + e["xi_iso_err"]))[okr]]
     if theory is not None:
-        okt = np.isfinite(theory["P_iso"]) & (theory["P_iso"] > 0)
-        axP.plot(k[okt], theory["P_iso"][okt], color=FG, ls="--", lw=2.2, zorder=12, label="expectation (exact, this lattice)")
-        okt = np.isfinite(theory["xi_iso"]) & (r > 0)
-        axX.plot(rx[okt], (wr * theory["xi_iso"])[okt], color=FG, ls="--", lw=2.2, zorder=12)
+        per_field = "P_iso" not in theory
+        for j, f in enumerate(fields if per_field else [None]):
+            th = theory[f] if per_field else theory
+            if th is None:
+                continue
+            c = FG if f in (None, total) else ENTITY_COLORS.get(f, PALETTE_CYCLE[j])
+            okt = np.isfinite(th["P_iso"]) & (th["P_iso"] > 0)
+            lt = theory_label if j == 0 else None
+            axP.plot(k[okt], th["P_iso"][okt], color=c, ls="--", lw=2.2, zorder=12, label=lt)
+            okt = np.isfinite(th["xi_iso"]) & (r > 0)
+            axX.plot(rx[okt], (wr * th["xi_iso"])[okt], color=c, ls="--", lw=2.2, zorder=12)
     if each:
-        axP.plot([], [], color=DIM, lw=1.2, alpha=0.5, label=f"each box ({n})")
+        axP.plot([], [], color=DIM, lw=1.2, alpha=0.5, label=_each_label(each_label, n))
     axP.set(xscale=k_scale, yscale="log", xlabel=lab["k"], ylabel=lab["P"])
     _y_scale(axX, y_scale, np.concatenate(yv), linthresh=linthresh, linthresh_frac=linthresh_frac, linscale=linscale)
     axX.axhline(0.0, color=DIM, lw=0.8)
@@ -4765,6 +4822,7 @@ def plot_p1d_reference(
     each: bool = True,
     kms_per_cMpc: float | None = None,
     unit: str = "km/s",
+    each_label: str | None = None,
     figsize=(12, 10),
 ):
     """k P1D(k) / pi against k, linear k and logarithmic P, the convention of Fig. 1 of the reference (Chaves-Montero et
@@ -4773,8 +4831,9 @@ def plot_p1d_reference(
     in k: every box faint (``each``), the mean over the boxes with the error of the mean as small points joined by thin
     lines (one colour and one marker shape per field, open after the first; the total ``FG``); with ``p1d["theory"]``
     (the exact expectation on the lattice, ``lattice_density_theory(p1d=True)``), a dashed line. The reference
-    measurement (``utils.reference_data``: dict(k [s/km], kP_pi, label)) as small grey squares; k P / pi is
-    dimensionless, so with ``unit="cMpc"`` only its k becomes u k [cMpc^-1]. The legend inside the panel.
+    measurement (``utils.reference_data``: dict(k [s/km], kP_pi, label), with its error bars where it has
+    ``kP_pi_err``) as small grey squares; k P / pi is dimensionless, so with ``unit="cMpc"`` only its k becomes u k
+    [cMpc^-1]. The legend inside the panel; ``each_label`` the legend of the faint realisations (``EACH_LABEL``).
 
     fields : the rows of ``p1d["p1d"]`` (default ``(*simulations.LINE_IDS, "total")``); names : {field: legend
     label}; k_max : the right end of the k axis, in the units of the axis (default 1.6 times the largest reference k);
@@ -4821,10 +4880,12 @@ def plot_p1d_reference(
             label="expectation (exact, this lattice)",
         )
     if each:
-        ax.plot([], [], color=DIM, lw=1.2, alpha=0.5, label=f"each box ({np.shape(p1d['p1d_each'])[0]})")
-    ax.plot(
-        k_ref, y_ref, "s", color=ENTITY_COLORS["reference"], ms=_MS_SMALL, mec=FG, mew=0.6, label=reference["label"], zorder=7
-    )
+        ax.plot([], [], color=DIM, lw=1.2, alpha=0.5, label=_each_label(each_label, np.shape(p1d["p1d_each"])[0]))
+    ref_style = dict(color=ENTITY_COLORS["reference"], ms=_MS_SMALL, mec=FG, mew=0.6, label=reference["label"], zorder=7)
+    if reference.get("kP_pi_err") is None:
+        ax.plot(k_ref, y_ref, "s", **ref_style)
+    else:
+        ax.errorbar(k_ref, y_ref, np.asarray(reference["kP_pi_err"]), fmt="s", capsize=2, elinewidth=1.0, ecolor=FG, **ref_style)
     ax.set(
         xlim=(0.0, k_max),
         yscale="log",

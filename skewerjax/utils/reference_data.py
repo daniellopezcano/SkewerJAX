@@ -5,6 +5,11 @@ Chaves-Montero et al., "Cosmological analysis of the DESI DR1 Lyman-alpha 1D pow
 forests with SNR > 3 per pixel; ``.project_material/Chaves-Montero``, ``data_journal.tex``, Fig. ``p1d_qmle3``). The
 points were digitised from the figure (the lowest-redshift curve), so they carry its reading error and no error bars.
 
+``P1D_DESI_DR1_Z30``: the same figure's z = 3.0 curve (notebook 10, TNG50-4 at z = 3.008), read exactly from the vector
+paths of the figure's PDF (``figures/p1d_qmle3.pdf``: the polyline and the error bars of that colour, the axes
+calibrated on their tick marks; the same extraction reproduces ``P1D_DESI_DR1_Z22`` to 1e-4 s/km in k and 1.1 % in
+k P / pi, the reading error of the digitised curve), with the half-length of every error bar (``kP_pi_err``).
+
 ``XI_LYA_LYA_AA_WEDGES``: a measured Lya(A) x Lya(A) correlation function in four wedges of mu (the edges of
 ``summary_stats.MU_WEDGES``), r^2 xi against r in h^-1 Mpc units (r [h^-1 Mpc], r^2 xi [h^-2 Mpc^2]); in comoving
 units, r / h [cMpc] and r^2 xi / h^2 [cMpc^2]. Not drawn by any figure function at present.
@@ -50,6 +55,49 @@ P1D_DESI_DR1_Z22 = dict(
 )
 # fmt: on
 """DESI DR1 Lya P1D at z = 2.2 (module docstring): k [s/km], kP_pi = k P1D / pi, z, label, k_max_figure [s/km]."""
+
+
+# fmt: off
+P1D_DESI_DR1_Z30 = dict(
+    z=3.0,
+    label=r"Chaves-Montero et al. 2026 (DESI DR1), $z = 3.0$",
+    k=np.asarray(
+        [
+            0.00125, 0.00175, 0.00225, 0.00275, 0.00325, 0.00375, 0.00425, 0.00475, 0.00525, 0.00575,
+            0.00625, 0.00675, 0.00725, 0.00775, 0.00825, 0.00875, 0.00925, 0.00975, 0.01025, 0.01075,
+            0.01125, 0.01175, 0.01225, 0.01275, 0.01325, 0.01375, 0.01425, 0.01475, 0.01525, 0.01575,
+            0.01625, 0.01675, 0.01725, 0.01775, 0.01825, 0.01875, 0.01925, 0.01975, 0.02025, 0.02075,
+            0.02125, 0.02175, 0.02225, 0.02275, 0.02325, 0.02375, 0.02425, 0.02475, 0.02525, 0.02575,
+            0.02625, 0.02675, 0.02725, 0.02775, 0.02825, 0.02875, 0.02925, 0.02975, 0.0303494, 0.0310563,
+            0.0317797,
+        ]
+    ),
+    kP_pi=np.asarray(
+        [
+            0.018482, 0.023666, 0.032146, 0.035966, 0.040211, 0.039496, 0.042327, 0.050255, 0.053909, 0.05793,
+            0.055068, 0.056813, 0.056537, 0.066776, 0.066848, 0.066444, 0.06675, 0.064117, 0.066701, 0.074049,
+            0.076196, 0.072184, 0.069112, 0.073678, 0.076284, 0.079114, 0.073899, 0.071032, 0.076965, 0.077025,
+            0.07441, 0.079155, 0.079243, 0.077452, 0.072398, 0.08239, 0.080002, 0.075454, 0.076425, 0.075356,
+            0.079356, 0.077745, 0.080375, 0.077714, 0.077185, 0.08044, 0.076423, 0.076989, 0.074478, 0.079429,
+            0.076577, 0.080064, 0.07828, 0.078666, 0.074997, 0.070975, 0.076483, 0.071743, 0.071836, 0.072809,
+            0.07152,
+        ]
+    ),
+    kP_pi_err=np.asarray(
+        [
+            0.000469, 0.000612, 0.000742, 0.000852, 0.000956, 0.00105, 0.00114, 0.00122, 0.0013, 0.00138,
+            0.00144, 0.00151, 0.00156, 0.00161, 0.00167, 0.00172, 0.00177, 0.0018, 0.00184, 0.0019,
+            0.00192, 0.00196, 0.00199, 0.00201, 0.00205, 0.00207, 0.00211, 0.00212, 0.00216, 0.00218,
+            0.00219, 0.00222, 0.00224, 0.00227, 0.00228, 0.0023, 0.00233, 0.00235, 0.00238, 0.0024,
+            0.00241, 0.00245, 0.00247, 0.00251, 0.00253, 0.00257, 0.00259, 0.00261, 0.00265, 0.00267,
+            0.00273, 0.00275, 0.00277, 0.00283, 0.00285, 0.00291, 0.00295, 0.00297, 0.00269, 0.00275,
+            0.00278,
+        ]
+    ),
+    k_max_figure=0.042,
+)
+# fmt: on
+"""DESI DR1 Lya P1D at z = 3.0 (module docstring): k [s/km], kP_pi = k P1D / pi and its error bar, z, label, k_max_figure."""
 
 
 # fmt: off
