@@ -32,35 +32,179 @@ reproduces the scheme of fake_spectra, so that the two codes can be compared opt
 
 ## Architecture
 
+The diagrams, the tree and the table below are generated from one specification, `skewerjax/utils/dag.py`, which also
+draws the dependency graph of the notebooks (`plot_dag`): `python scripts/dev/make_diagrams.py` rewrites them, and
+`tests/utils/test_dag.py` checks the specification against the code and this README against the specification.
+
+**(a) Layers.** Dependencies run one way only. `core` imports nothing from the other subpackages, and three realms sit
+around it, none importing another (`tests/test_import_graph.py`): `simulations` (the gas: every source of gas cells,
+the toy fields and the snapshots; the boundary with `core` is `core.Cells`), `skewers` (the paths: lattices of skewers
+for a `core.SkewerBundle`) and `summary_stats` (the overflux and every statistic, from arrays and geometry only, an
+expectation passed as a callable P(k)). `comparison` and `utils` (plotting) build on them; notebooks compose them. An
+arrow points from the importer to what it imports.
+
+<!-- BEGIN generated:layers -->
+```mermaid
+flowchart TB
+    notebooks["notebooks/: compose the realms"]
+    utils["utils: plotting, dag, paths"]
+    comparison["comparison: fake_spectra"]
+    simulations["simulations: the gas"]
+    skewers["skewers: the paths"]
+    summary_stats["summary_stats: statistics from arrays"]
+    core["core: lines, cosmology, cells, τ"]
+    notebooks --> utils
+    notebooks --> comparison
+    notebooks --> simulations
+    notebooks --> skewers
+    notebooks --> summary_stats
+    notebooks --> core
+    utils --> comparison
+    utils --> simulations
+    utils --> summary_stats
+    utils --> core
+    comparison --> simulations
+    comparison --> summary_stats
+    comparison --> core
+    simulations --> core
+    skewers --> core
+```
+<!-- END generated:layers -->
+
+**(b) Pipeline.** The ingredients (boxes: what, plain text, module), grouped by realm; every arrow is a dependency of the
+code, labelled with the functions that implement it and the array it carries (dotted: optional or data only).
+`core.Pieces`, the constant-property pieces of every skewer, is what the τ sum runs over. The statistics of 3D fields
+take a field on its own grid (exact FFT) or fields known at points through a mesh: mass assignment (NGP, CIC, TSC,
+PCS), interlacing and the window divided (`summary_stats.mesh`; Sefusatti et al. 2016).
+
+<!-- BEGIN generated:pipeline -->
 ```mermaid
 flowchart LR
-    C["cosmology (02)"] -. "a(x), or manual" .-> K["skewers (03)"]
-    subgraph SRC["sources of cells (interchangeable)"]
-        TS["toy fields: GRF → cells (04)"]
-        SIM["simulation outputs → cells (05)"]
+    subgraph core_band["core"]
+        lines["<b>lines</b><br/>LineBundle<br/><code>core.lines</code>"]
+        cosmology["<b>cosmology</b><br/>Cosmology, a(x)<br/><code>core.cosmology</code>"]
+        fields["<b>gas cells</b><br/>Cells: n, T, v<br/><code>core.cells</code>"]
+        deposition["<b>deposition</b><br/>cells → pieces<br/><code>core.absorbers, core.deposition</code>"]
+        profiles["<b>line profiles</b><br/>Voigt φ_j(v) per piece<br/><code>core.line_profiles</code>"]
+        tau["<b>optical depth</b><br/>τ(v), T = e^−τ<br/><code>core.optical_depth</code>"]
     end
-    L["lines (01)"] -. "ion masses" .-> SIM
-    TS --> F["gas cells (04, 05)"]
-    SIM --> F
-    F --> D["deposition: cells → pieces (07)"]
-    K -- "points, a(x)" --> D
-    D -- "T, v∥, a" --> LP["line profiles (06)"]
-    L -- "atomic data: λ, A₂₁, m" --> LP
-    LP --> T["optical depth τ, F (07)"]
-    D -- "n ℓ / a² of the pieces" --> T
-    L -- "f, λ, line offsets Δv" --> T
-    T --> O["overflux δ_F (08)"]
-    O --> P["P1D, ξ1D, P3D, ξ3D (08)"]
-    SIM -. "fake_spectra, external (09, 10)" .-> T
+    subgraph simulations_band["simulations"]
+        samplers["<b>toy fields</b><br/>PowerLawGRF → cells<br/><code>simulations.grf, simulations.toy_cells</code>"]
+        simulation["<b>simulation outputs</b><br/>TNG snapshot → cells<br/><code>simulations.snapshot_cells</code>"]
+    end
+    subgraph skewers_band["skewers"]
+        skewers["<b>skewers</b><br/>SkewerBundle; lattice of paths<br/><code>core.skewers, skewers.lattice</code>"]
+    end
+    subgraph summary_stats_band["summary_stats"]
+        normalisation["<b>mean transmission</b><br/>T̄ = ⟨T⟩ over a set of pixels<br/><code>summary_stats.overflux</code>"]
+        overflux["<b>overflux</b><br/>δ = T/T̄ − 1, per line and total<br/><code>summary_stats.overflux</code>"]
+        stats_1d["<b>1D statistics</b><br/>P1D, ξ1D (by order and term)<br/><code>summary_stats.lattice, summary_stats.stats_1d</code>"]
+        stats_3d["<b>3D statistics</b><br/>P3D, ξ3D on the lattice of skewers<br/><code>summary_stats.lattice, summary_stats.grid3d</code>"]
+        field_stats["<b>field statistics</b><br/>P, ξ of 3D fields: grid, or mesh (MAS + interlacing)<br/><code>summary_stats.field_stats, summary_stats.mesh</code>"]
+    end
+    cosmology -.->|"SkewerBundle<br/>a(x)"| skewers
+    lines -.->|"Ion, get_mass_amu"| simulation
+    samplers -->|"grf_cells<br/>Cells (N³)"| fields
+    simulation -->|"snapshot_cells<br/>Cells (N_cells)"| fields
+    fields -->|"cell_pieces, voronoi_segments"| deposition
+    skewers -->|"bundle_frame, lattice_points<br/>points (N_sk, N_pt, 3)"| deposition
+    deposition -->|"optical_depth_kernel"| profiles
+    deposition -->|"compute_optical_depth<br/>Pieces (N_lines, N_sk, N_p)"| tau
+    lines -->|"voigt_widths_GHz"| profiles
+    lines -->|"frequency_offset_GHz, wrap_to_ref_line"| tau
+    profiles -->|"line_profiles"| tau
+    tau -->|"ensemble_mean_transmissions<br/>τ (N_lines, N_sk, N_v)"| normalisation
+    normalisation -->|"DeltaFieldBuilder<br/>T̄ (N_lines + 1, N_sk, N_v)"| overflux
+    overflux -->|"skewer_p1d, skewer_xi1d, decompose_1d<br/>δ (N_lines + 1, N_sk, N_v)"| stats_1d
+    overflux -->|"measure_lattice<br/>δ on (n_x, N_v, n_z)"| stats_3d
+    samplers -->|"field_statistics, GridStatistics3D<br/>δ (N, N, N)"| field_stats
 ```
+<!-- END generated:pipeline -->
 
-Dependencies run one way only. `core` imports nothing from the other subpackages, and three realms sit around it,
-none importing another (`tests/test_import_graph.py`): `simulations` (the gas: every source of gas cells, the toy fields
-and the snapshots; the boundary with `core` is `core.Cells`), `skewers` (the paths: lattices of skewers for a
-`core.SkewerBundle`) and `summary_stats` (the overflux and every statistic, from arrays and geometry only, an
-expectation passed as a callable P(k)). Notebooks compose them. `core.Pieces`, the constant-property pieces of
-every skewer, is what the τ sum runs over. `docs/usage.md` lists the entry points of each
+**(c) Modules**, with the first sentence of each docstring.
+
+<!-- BEGIN generated:tree -->
+```
+skewerjax/                    # SkewerJAX: absorption along skewers (tau, F = exp(-tau)) for many transitions, and …
+├── comparison/               # Block C, comparison with fake_spectra: its per-cell scheme on SkewerJAX absorbers …
+│   ├── benchmark.py          # Wall time and memory of SkewerJAX against fake_spectra on identical skewers (Lya …
+│   ├── driver.py             # Runs fake_spectra (NumPy / C, no JAX): full skewer runs to HDF5 and its per-cell …
+│   ├── effects.py            # fake_spectra vs SkewerJAX, one difference at a time: the matched option sets, the …
+│   ├── emulation.py          # fake_spectra's per-cell integration scheme on SkewerJAX's absorbers, and the …
+│   └── source.py             # fake_spectra results for the comparisons: live (``comparison.driver``) or read …
+├── core/                     # Block A, the core backbone: lines, cosmology, skewers, gas cells, the route cells …
+│   ├── absorbers.py          # Absorbers: the deposited pieces of every skewer, their frame a(s), and the pieces …
+│   ├── analytic.py           # Closed-form optical depths of uniform gas (review notes): the validation targets …
+│   ├── cells.py              # Gas cells: the one representation of the gas, whatever its source (toy models or …
+│   ├── constants.py          # Physical constants and unit conversions (``phys``)
+│   ├── cosmology.py          # Background cosmology: the scale factor along a photon path, a(x) (review notes)
+│   ├── deposition.py         # Deposition: the pieces of the path, i.e. which cell lies on the dual segment of …
+│   ├── diagnostics.py        # Debugging tools: what to call when a result looks wrong
+│   ├── line_profiles.py      # Line profiles: the widths and the normalised profile phi(nu) of every transition …
+│   ├── lines.py              # Atomic transitions: the line table (``LINES``) and ``LineBundle``, the lines of …
+│   ├── optical_depth.py      # Line profiles and the optical depth tau(v) along skewers (review notes, Eqs. …
+│   ├── selection.py          # Cell selection: the cells within reach of a set of paths (periodic k-d tree), for …
+│   ├── skewers.py            # Skewers: the sampling points of a set of sightlines, their geometry and their …
+│   ├── spectral.py           # Spectral coordinates: the observer's velocity v_dagger, local wavelengths lambda' …
+│   ├── validation.py         # Input validation shared by the entry points: informative errors for non-finite or …
+│   └── voigt.py              # The Voigt function V(x; sigma, gamma) = (G * L)(x) (review notes, Eq. …
+├── simulations/              # Block B, the field sources: everything that produces the gas cells of the core …
+│   ├── gas_cells.py          # Gas cells (layer 2): a format-independent pytree of gas elements in physical units
+│   ├── gas_physics.py        # Gas physics (layer 3): per-cell n_H, T, ion fractions and ion densities (JAX), and …
+│   ├── grf.py                # Toy field source: power-law Gaussian random fields (``PowerLawGRF``) in 1D, 2D and …
+│   ├── maps.py               # Projected maps of the gas in a slab of a snapshot, streamed in blocks (for figures …
+│   ├── readers.py            # Snapshot readers (layer 1): format-specific HDF5 I/O and units, NumPy only
+│   ├── selection.py          # Cell selection (layer 4): streaming k-d tree selection of the gas cells of a …
+│   ├── snapshot_cells.py     # The snapshot as gas cells, without skewers: the cells of a region of the box after …
+│   ├── snapshot_skewers.py   # Skewers through a simulation snapshot: the gas cells, columns and tau for any …
+│   ├── toy_boxes.py          # Toy boxes (notebooks 08 and 09): periodic 3D Gaussian fields of known spectrum and …
+│   └── toy_cells.py          # Toy field source: the gas cells of a Gaussian random field (``grf_cells``)
+├── skewers/                  # The paths: skewers through a periodic box, their geometry and their frame (imports …
+│   ├── frame.py              # The frame of a bundle of skewers: the Hubble velocity of the line centres along …
+│   └── lattice.py            # A regular lattice of straight skewers along y through the centres of the cell …
+├── summary_stats/            # The summary statistics of the flux: the overflux of each line and of their …
+│   ├── binning.py            # Binning of the two-point statistics: bin indices, jitted weighted bin means, bin …
+│   ├── contaminants.py       # P1D metal-contamination models (McDonald et al. 2006; Ma et al.) and their fits to …
+│   ├── density.py            # The density sampled along a lattice of periodic skewers (notebook 09, Part B) …
+│   ├── field_stats.py        # P and xi of periodic 3D fields on their own grid, over an ensemble of …
+│   ├── fourier.py            # The Fourier conventions of the two-point statistics: lag and mode axes, and the …
+│   ├── grid3d.py             # Two-point statistics of a periodic 3D field on its own grid, and their exact …
+│   ├── lattice.py            # Two-point statistics of an ensemble of periodic skewers, from arrays and geometry …
+│   ├── mesh.py               # Points on a periodic mesh: mass assignment, interlacing and the window correction …
+│   ├── orders.py             # The order-by-order decomposition of the total overflux into its subset terms
+│   ├── overflux.py           # The transmission T = exp(-tau) and the overflux (flux-contrast) fields delta of …
+│   ├── stats_1d.py           # P1D and xi1D of overflux fields: total, per line pair and per order …
+│   └── stats_3d.py           # P3D and xi3D of overflux fields on a regular grid of skewers …
+└── utils/                    # Utilities outside the three blocks: the shared plotting style and figure helpers …
+    ├── dag.py                # The architecture of SkewerJAX as data: one specification of the dependency graph …
+    ├── paths.py              # Where SkewerJAX looks for data that is not part of the package: one place, each …
+    ├── plotting.py           # Shared plotting style and figure helpers
+    └── reference_data.py     # Reference measurements for visual comparisons in the notebooks (not used in any …
+```
+<!-- END generated:tree -->
+
+**(d) Concepts**: where each ingredient lives and which notebooks show it. `docs/usage.md` lists the entry points of each
 subpackage.
+
+<!-- BEGIN generated:concepts -->
+| Concept | Module | Key functions and classes | Notebooks |
+|---|---|---|---|
+| lines: LineBundle | `core.lines` | `LineBundle`, `get_line`, `get_mass_amu` | 01 |
+| cosmology: Cosmology, a(x) | `core.cosmology` | `Cosmology` | 02 |
+| skewers: SkewerBundle; lattice of paths | `core.skewers`, `skewers.lattice` | `SkewerBundle`, `lattice_columns`, `lattice_points` | 03, 09 |
+| toy fields: PowerLawGRF → cells | `simulations.grf`, `simulations.toy_cells` | `PowerLawGRF`, `grf_cells` | 04, 08 |
+| simulation outputs: TNG snapshot → cells | `simulations.snapshot_cells` | `snapshot_cells`, `select_cells_in_region` | 05 |
+| gas cells: Cells: n, T, v | `core.cells` | `Cells`, `cells_on_grid` | 04, 05 |
+| deposition: cells → pieces | `core.absorbers`, `core.deposition` | `cell_pieces`, `voronoi_segments`, `absorber_pieces` | 07 |
+| line profiles: Voigt φ_j(v) per piece | `core.line_profiles` | `line_profiles`, `voigt_widths_GHz` | 06 |
+| optical depth: τ(v), T = e^−τ | `core.optical_depth` | `compute_optical_depth`, `Pieces` | 07, 09 |
+| mean transmission: T̄ = ⟨T⟩ over a set of pixels | `summary_stats.overflux` | `ensemble_mean_transmissions`, `mean_transmissions` | 09 |
+| overflux: δ = T/T̄ − 1, per line and total | `summary_stats.overflux` | `DeltaFieldBuilder`, `overflux_check` | 09 |
+| 1D statistics: P1D, ξ1D (by order and term) | `summary_stats.lattice`, `summary_stats.stats_1d` | `skewer_p1d`, `skewer_xi1d`, `decompose_1d` | 09 |
+| 3D statistics: P3D, ξ3D on the lattice of skewers | `summary_stats.lattice`, `summary_stats.grid3d` | `lattice_grid`, `measure_lattice`, `GridStatistics3D` | 09 |
+| field statistics: P, ξ of 3D fields: grid, or mesh (MAS + interlacing) | `summary_stats.field_stats`, `summary_stats.mesh` | `field_statistics`, `point_statistics`, `fourier_mesh` | 08 |
+| fake_spectra: external reference | `comparison.source` | `FakeSpectraSource` | 10, 11 |
+<!-- END generated:concepts -->
 
 ## Quickstart
 
@@ -244,23 +388,25 @@ skewerjax/            the package
                       P3D/xi3D by term (stats_3d), P and xi of 3D grids: isotropic, (par, perp), mu wedges (grid3d),
                       shared conventions and binning (fourier, binning), metal-contamination models (contaminants),
                       statistics on a lattice of skewers (lattice), 3D fields over an ensemble (field_stats), the
-                      density along skewers and its exact expectation (density)
+                      density along skewers and its exact expectation (density), points on a mesh: mass assignment,
+                      interlacing, the window (mesh)
   skewers/            lattices of skewers: columns and points of a SkewerBundle (lattice), the Hubble velocity (frame)
   simulations/        the sources of gas cells: toy fields (PowerLawGRF, grf_cells, ToyBoxes) and snapshots (readers, gas physics,
                       streamed selection, snapshot_cells, SimulationSkewers, maps)
     cloudy_tables/    CLOUDY ionisation tables (git submodule sbird/cloudy_tables)
   comparison/         fake_spectra emulation, matched options and effect chain, fake_spectra driver, benchmark
-  utils/              plotting (style, figures), paths (data, cache and benchmark folders)
+  utils/              plotting (style, figures), dag (the architecture as data: DAG, layers, README diagrams),
+                      paths (data, cache and benchmark folders)
 notebooks/            00-11 tutorials (committed with outputs cleared)
 tests/                one pytest suite: core/, summary_stats/, skewers/, simulations/, utils/, comparison/, regression/ (+ data/),
-                      test_import_graph.py; README.md
+                      test_import_graph.py, test_mesh.py; README.md
 benchmarks/
   results/            the benchmark summary read by notebook 11 (committed)
   raw/                the per-run records (git-ignored)
 scripts/
   benchmarks/         benchmark_fake_spectra.py
   dev/                update_regression_references.py, check_markdown_math.py, run_tests.py (+ pytest_shim: the suite
-                      without pytest)
+                      without pytest), make_diagrams.py (the generated blocks of this README)
   figures/            optical_depth_vs_analytic.py
   verify_install.py   environment smoke test
 docs/                 installation.md, usage.md

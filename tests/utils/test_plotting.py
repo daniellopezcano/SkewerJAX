@@ -38,15 +38,7 @@ def test_style_and_dag():
     assert pl.CMAPS["density"] == "tol_rainbow_WhBr" and pl.CMAPS["density"] in matplotlib.colormaps
     nrm = pl._density_norm(np.array([-13.0, -12.0, -11.0]), decades=1.5)  # one norm for 04, 05, 07: tight, 0.05 dex pad
     assert np.isclose(nrm.vmin, -12.55) and np.isclose(nrm.vmax, -10.95)
-    # every edge starts and ends on the drawn outline of its boxes (the box plus its pad)
-    ew, eh = pl._DAG_W / 2 + pl._DAG_PAD, pl._DAG_H / 2 + pl._DAG_PAD
-    on_outline = lambda p, k: (
-        (np.isclose(abs(p[0] - pl.DAG_NODES[k][0]), ew) and abs(p[1] - pl.DAG_NODES[k][1]) <= eh)
-        or (np.isclose(abs(p[1] - pl.DAG_NODES[k][1]), eh) and abs(p[0] - pl.DAG_NODES[k][0]) <= ew)
-    )
-    for a, b, _, _, route in pl.DAG_EDGES:
-        pts = pl._dag_route(a, b, route, pl.DAG_NODES, pl._DAG_LANES.get((a, b), 0.0), pl._DAG_END_DX.get((a, b), 0.0))
-        assert on_outline(pts[0], a) and on_outline(pts[-1], b), (a, b, pts)
+    # the routes of the DAG: tests/utils/test_dag.py
 
 
 def test_line_table_and_skewer_figures():
@@ -323,8 +315,13 @@ def test_toy_box_figures():
     fig.canvas.draw()
     assert chi2 is None and len(axs) == 1 and "cMpc" in axs[0].get_xlabel() and "km" in axs[0].child_axes[0].get_xlabel()
     legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
-    assert not fig.legends and len(legs) == 2, "the wedges and the styles, inside the panel"
-    assert [t.get_text() for t in legs[1].get_texts()] == ["measured", "per realisation"]
+    assert not fig.legends and len(legs) == 3, "the echoes, the wedges and the styles, inside the panel"
+    texts = [[t.get_text() for t in g.get_texts()] for g in legs]
+    assert ["measured", "per realisation"] in texts
+    echo = [t for t in texts if t[0].startswith("echo")][0]
+    assert len(echo) == 2 and "+" in echo[0] and "-" in echo[1] and "Delta v" in echo[0]
+    assert all(g.get_zorder() == pl.LEGEND_ZORDER for g in legs)
+    assert not any("ticks at the top" in t.get_text() for t in axs[0].texts), "no note"
     ec = pl.wedge_echoes(2.0, 100.0 / u, pl.MU_WEDGES, L)
     mu_ = np.asarray(ec["mu"])
     root = np.sqrt(2.0**2 - (100.0 / u) ** 2 * (1 - mu_**2))
@@ -334,6 +331,16 @@ def test_toy_box_figures():
     assert round(ec["r_bao"], 9) in drawn_x and round(ec["delta"], 9) in drawn_x
     spot = [ln for ln in axs[0].lines if ln.get_linestyle() == "--" and np.allclose(ln.get_xdata(), ec["delta"])]
     assert len(spot) == 1 and spot[0].get_color() == pl.PALETTE[pl.MU_COLORS[ec["spot_wedge"]]]
+    lo, hi = axs[0].get_xlim()
+    dashes = {}
+    for w in range(len(pl.MU_WEDGES) - 1):  # the echoes: vertical lines in the wedge colour, + dashed, - dotted
+        for key in ("plus", "minus"):
+            if lo <= ec[key][w] <= hi:
+                col = pl.PALETTE[pl.MU_COLORS[w]]
+                ln = [x for x in axs[0].lines if np.allclose(x.get_xdata(), ec[key][w]) and x.get_color() == col]
+                assert ln, (w, key)
+                dashes.setdefault(key, set()).add(tuple(ln[0]._unscaled_dash_pattern[1]))
+    assert set(dashes) == {"plus", "minus"} and dashes["plus"].isdisjoint(dashes["minus"]), "two styles"
     with pytest.raises(TypeError):
         pl.plot_xi_mu_wedges(tot, reference={})
     # the density along the skewers (E, F): comoving line of sight, km/s for reference, with its exact expectation
@@ -362,35 +369,51 @@ def test_toy_box_figures():
     )
     fig.canvas.draw()
     assert "cMpc" in ax.get_xlabel() and "km" in ax.child_axes[0].get_xlabel() and len(ax.get_legend().get_texts()) == 6
-    for kind in ("P", "xi"):
-        fig, axs = pl.plot_orders_compared({"density": run["density_flux"]}, kind, kms_per_cMpc=u, unit="cMpc")
-        assert "cMpc" in axs[1, 0].get_xlabel() and "km" in axs[0, 0].child_axes[0].get_xlabel()
-        fig, axs = pl.plot_terms_compared({"density": run["density_flux"]}, kind, kms_per_cMpc=u, unit="cMpc")
-        assert axs.shape == (1, 1), "the density: one order (2), its terms 1-1, 2-2, 1-2"
-    ens = {"flux contrast": run["flux"]}
+    dens1d = run["density_flux"]
+    for orders_fn, terms_fn in ((pl.plot_p1d_orders, pl.plot_p1d_terms), (pl.plot_xi1d_orders, pl.plot_xi1d_terms)):
+        fig, axs = orders_fn(dens1d, kms_per_cMpc=u, unit="cMpc")
+        assert "cMpc" in axs[1].get_xlabel() and "km" in axs[0].child_axes[0].get_xlabel()
+        fig, axs = terms_fn(dens1d, kms_per_cMpc=u, unit="cMpc")
+        assert axs.shape == (1,), "the density: one order (2), its terms 1-1, 2-2, 1-2"
+    ens = run["flux"]
     dv = [0.0, float(LineBundle(["HI-LyA", "SiIII-1206"]).delta_v[1])]
-    for kind in ("P", "xi"):
-        fig, axs = pl.plot_orders_compared(ens, kind, delta_v_list=dv, kms_per_cMpc=u)
+    k_lim = (2 * np.pi / period, np.pi / (period / n_pix))
+    for kind, orders_fn, terms_fn, kw in (
+        ("P", pl.plot_p1d_orders, pl.plot_p1d_terms, dict(k_limits=k_lim)),
+        ("xi", pl.plot_xi1d_orders, pl.plot_xi1d_terms, dict(delta_v_list=dv)),
+    ):
+        fig, axs = orders_fn(ens, kms_per_cMpc=u, **kw)
         fig.canvas.draw()
-        assert not axs[0, 0].get_title() and "cMpc" in axs[0, 0].child_axes[0].get_xlabel()
-        fig, axs = pl.plot_terms_compared(ens, kind, kms_per_cMpc=u)
+        assert axs.shape == (2,) and not axs[0].get_title() and "cMpc" in axs[0].child_axes[0].get_xlabel()
+        fig, axs = terms_fn(ens, kms_per_cMpc=u, **kw)
         fig.canvas.draw()
-        assert axs.shape == (3, 1), f"{kind}: one row per order 2, 3, 4 (order 1 vanishes, order 0 not shown)"
-        for ax in axs.ravel():  # the legend inside the panel
+        assert axs.shape == (3,), f"{kind}: one row per order 2, 3, 4 (order 1 vanishes, order 0 not shown)"
+        for ax in axs:  # the legend inside the panel
             bb, la = ax.get_legend().get_window_extent(), ax.get_window_extent()
             assert bb.x0 >= la.x0 - 1 and bb.x1 <= la.x1 + 1
-        assert not any(ax.get_title() for ax in axs.ravel())
-    xi_lines = [c for c in pl.plot_orders_compared(ens, "xi")[1][0, 0].lines if c.get_marker() == "o"]
+        assert not any(ax.get_title() for ax in axs)
+        if kind == "P":  # from k_min to k_max, shaded outside
+            spans = sorted(
+                (p.get_x(), p.get_x() + p.get_width()) for p in axs[0].patches if isinstance(p, matplotlib.patches.Rectangle)
+            )
+            assert np.isclose(spans[0][1], k_lim[0]) and np.isclose(spans[-1][0], k_lim[1])
+        else:  # the separation folded into half the period, dashed, on every row
+            assert all(any(ln.get_linestyle() == "--" for ln in ax.lines) for ax in axs)
+    xi_lines = [c for c in pl.plot_xi1d_orders(ens)[1][0].lines if c.get_marker() == "o"]
     assert xi_lines, "xi1D: points with error bars too"
-    line = [c for c in pl.plot_orders_compared(ens, "P")[1][0, 0].lines if c.get_marker() == "o"][0]
-    assert line.get_linestyle() == "-", "the points of every series are joined by a thin line"
+    line = [c for c in pl.plot_p1d_orders(ens)[1][0].lines if c.get_marker() == "o"][0]
+    assert line.get_linestyle() == "-" and line.get_markersize() == pl._MS_SMALL, "small points joined by a thin line"
     # explicit display bins: P1D in the bins of bao_k_edges along the line of sight, xi1D at every lag
     k_f = 2 * np.pi / period
     e1 = bao_k_edges(k_f, np.pi / (period / n_pix), 3.0 / u, n_log=4)
-    pts = [c for c in pl.plot_orders_compared(ens, "P", k_edges=e1)[1][0, 0].lines if c.get_marker() == "o"][0]
+    pts = [c for c in pl.plot_p1d_orders(ens, k_edges=e1)[1][0].lines if c.get_marker() == "o"][0]
     assert np.all(pts.get_xdata() >= e1[0]) and np.all(pts.get_xdata() <= e1[-1])
-    xs = [c for c in pl.plot_orders_compared(ens, "xi", lag_bin=1)[1][0, 0].lines if c.get_marker() == "o"][0]
+    old = pl.plot_orders_superimposed(ens, "P", k_edges=e1)[1][0]  # the data drawn: those of the building block
+    ref = [c for c in old.lines if c.get_marker() == "o"][0]
+    np.testing.assert_array_equal(pts.get_ydata(), ref.get_ydata())
+    xs = [c for c in pl.plot_xi1d_orders(ens)[1][0].lines if c.get_marker() == "o"][0]
     np.testing.assert_allclose(np.diff(xs.get_xdata()), period / n_pix), "every lag j dv"
+    assert not hasattr(pl, "plot_orders_compared") and not hasattr(pl, "plot_terms_compared")
 
 
 def test_comoving_axis():

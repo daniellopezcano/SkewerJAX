@@ -628,7 +628,7 @@ def _with_errors(ax, x, y, e, color, kind: str, label=None, each=None, **kw):
         for yy in each:
             ax.plot(x, yy, color=color, **_EACH)
     e = None if np.all(~np.isfinite(e)) else e
-    size = dict(ms=5, capsize=2.5, elinewidth=1.6) if kind == "P" else dict(ms=3.5, capsize=1.5, elinewidth=1.2)
+    size = dict(ms=_MS_SMALL, capsize=2.5, elinewidth=1.6) if kind == "P" else dict(ms=3.5, capsize=1.5, elinewidth=1.2)
     ax.errorbar(x, y, e, color=color, fmt="o-", lw=1.0, label=label, zorder=5, **size, **kw)
 
 
@@ -683,6 +683,7 @@ def plot_orders_superimposed(
     x_bin: str = "weighted",
     each: bool = True,
     unit: str = "km/s",
+    k_scale: str = "log",
     axes=None,
     figsize=(12, 9),
 ):
@@ -697,10 +698,12 @@ def plot_orders_superimposed(
     (1: every lag). x_bin : where each bin is drawn ("weighted" default: the mean of its modes or lags; "linear", "log";
     ``summary_stats.bin_centres``). delta_v_list : line offsets [the unit of the lags]: for xi, dashed
     lines at every separation folded into half the period. unit : "km/s" (the overflux) or "cMpc" (the density along
-    the skewers): the axis labels (``_labels_1d``). Returns (fig, (main, residual)).
+    the skewers): the axis labels (``_labels_1d``); k_scale : "log" (default) or "linear", the k axis of P. Returns (fig,
+    (main, residual)).
     """
     if kind not in ("P", "xi"):
         raise ValueError(f"kind must be 'P' or 'xi', got {kind!r}.")
+    _check_option("k_scale", k_scale, ("log", "linear"))
     ens = _as_ensemble(stats)
     x, edges = _display_axis(ens, kind, max_lag, n_lin, n_log, lag_bin, k_edges)
     xc, tot, tot_e = _binned(x, ens[f"{kind}_total_each"], edges, x_bin=x_bin)
@@ -724,15 +727,10 @@ def plot_orders_superimposed(
     ax1.plot(x[sel], ((total_sum - full) / scale)[sel], lw=1.2, color=PALETTE["red"])
     ax1.axhline(0.0, color=FG, lw=1.0, ls=":")
     if kind == "xi" and delta_v_list is not None:
-        period = float(len(ens["lags"]) * (ens["lags"][1] - ens["lags"][0]))
-        dv = np.asarray(delta_v_list, dtype=float)
-        seps = np.unique(np.round(np.abs(np.mod(dv[:, None] - dv[None, :] + period / 2, period) - period / 2), 3))
-        for d in seps[seps > 0]:
-            for a in (ax0, ax1):
-                a.axvline(d, color=PALETTE["grey"], ls="--", lw=1.4)
+        _separation_lines((ax0, ax1), ens, delta_v_list)
     lab = _labels_1d(unit)
     if kind == "P":
-        ax0.set_xscale("log")
+        ax0.set_xscale(k_scale)
         _symlog_decades(ax0, 1e-3 * scale if linthresh is None else linthresh)
         ax0.set_ylabel(lab["P"])
         ax1.set_xlabel(lab["k"])
@@ -746,6 +744,17 @@ def plot_orders_superimposed(
         ax0.plot([], [], color=DIM, lw=1.2, alpha=0.5, label=f"each box ({orders_b.shape[0]})")
     _legend(ax0, frameon=False, ncol=2, fontsize=FONT_MIN["legend"])
     return ax0.figure, np.array([ax0, ax1])
+
+
+def _separation_lines(axes, ens, delta_v_list):
+    """Dashed grey vertical lines at every separation of the line offsets ``delta_v_list`` folded into half the period
+    of the lags of ``ens`` (the cross terms of two lines put a peak of xi1D there)."""
+    period = float(len(ens["lags"]) * (ens["lags"][1] - ens["lags"][0]))
+    dv = np.asarray(delta_v_list, dtype=float)
+    seps = np.unique(np.round(np.abs(np.mod(dv[:, None] - dv[None, :] + period / 2, period) - period / 2), 3))
+    for d in seps[seps > 0]:
+        for a in axes:
+            a.axvline(d, color=PALETTE["grey"], ls="--", lw=1.4)
 
 
 def _pair_label(pair):
@@ -768,6 +777,7 @@ def plot_terms_by_order(
     each: bool = True,
     legend: str = "inside",
     unit: str = "km/s",
+    k_scale: str = "log",
     axs=None,
     figsize=None,
 ):
@@ -781,10 +791,12 @@ def plot_terms_by_order(
     realisation faint with ``each``) or one ``OverfluxStatistics1D``. P: symlog y against log k (display bins as
     ``plot_orders_superimposed``: ``k_edges``, or ``n_lin``, ``n_log``); xi: linear, lags 0 .. max_lag in bins of
     ``lag_bin`` pixels; ``x_bin``: where each bin is drawn (``plot_orders_superimposed``). ``axs``: draw into these axes (one per order); ``legend``: "inside" each panel (default), "below"
-    it or on its "right"; ``unit``: "km/s" or "cMpc" (the axis labels, ``_labels_1d``). Returns (fig, axs).
+    it or on its "right"; ``unit``: "km/s" or "cMpc" (the axis labels, ``_labels_1d``); ``k_scale``: "log" or "linear".
+    Returns (fig, axs).
     """
     if kind not in ("P", "xi"):
         raise ValueError(f"kind must be 'P' or 'xi', got {kind!r}.")
+    _check_option("k_scale", k_scale, ("log", "linear"))
     ens = _as_ensemble(stats)
     x, edges = _display_axis(ens, kind, max_lag, n_lin, n_log, lag_bin, k_edges)
     pairs = [tuple(p) for p in np.asarray(ens["pairs"])]
@@ -810,7 +822,7 @@ def plot_terms_by_order(
                 _with_errors(ax, xc, y, e, c, kind, label=_pair_label(key), each=b if each and b.shape[0] > 1 else None)
         ax.plot(xc, by_order[n], color=FG, lw=3.0, alpha=0.6, label=rf"$\mathcal{{O}}({n})$ total", zorder=1)
         if kind == "P":
-            ax.set_xscale("log")
+            ax.set_xscale(k_scale)
             _symlog_decades(ax, 1e-2 * float(np.max(np.abs(by_order[n]))) if linthresh is None else linthresh)
             ax.set_xlabel(_labels_1d(unit)["k"])
         else:
@@ -841,66 +853,161 @@ def _comoving_1d(ax, kind: str, kms_per_cMpc: float | None, unit: str = "km/s"):
         add(ax, kms_per_cMpc, "k" if kind == "P" else "r", label=lab["k" if kind == "P" else "lag"])
 
 
-def plot_orders_compared(
-    ensembles: dict, kind: str = "P", *, kms_per_cMpc: float | None = None, unit: str = "km/s", figsize=None, **kw
-):
-    """``plot_orders_superimposed`` of one or several ensembles side by side, one column each, with identical layouts
-    (notebook 09, Part E: the flux contrast). ensembles : {title: ``ensemble_1d``} (the titles are drawn only for more
-    than one ensemble); kms_per_cMpc : a reference top axis in the other unit (``_comoving_1d``: k_x = u k_v or x = v / u);
-    unit : "km/s" (the overflux) or "cMpc" (the density, Part F); kw: the options of ``plot_orders_superimposed``.
-    Returns (fig, axs (2, n))."""
-    n = len(ensembles)
-    fig, axs = plt.subplots(
-        2,
-        n,
-        figsize=figsize or (12 * n, 10),
-        sharex="col",
-        gridspec_kw={"height_ratios": [3, 1.2]},
-        layout="constrained",
-        squeeze=False,
-    )
-    for c, (title, ens) in enumerate(ensembles.items()):
-        plot_orders_superimposed(ens, kind, axes=axs[:, c], unit=unit, **kw)
-        _comoving_1d(axs[0, c], kind, kms_per_cMpc, unit)
-        if n > 1:
-            axs[0, c].set_title(title, fontsize=FONT_MIN["title"] + 2)
+def _k_range(axes, k_limits, k_scale: str, labels: bool = True):
+    """The P1D axes from k_min to k_max (``k_limits``: 2 pi / v_per and pi / dv), shaded outside (``_shade_outside``)."""
+    if k_limits is None:
+        return
+    lo, hi = (float(x) for x in k_limits)
+    for i, ax in enumerate(np.atleast_1d(axes)):
+        _shade_outside(
+            ax,
+            lo,
+            hi,
+            log=k_scale == "log",
+            pad=0.04,
+            labels=(r"$k_{\min} = 2\pi/v_{\rm per}$", r"$k_{\max} = \pi/dv$") if labels and i == 0 else None,
+        )
+
+
+def _orders_figure(stats, kind, kms_per_cMpc, unit, figsize, **kw):
+    fig, axs = plt.subplots(2, 1, figsize=figsize, sharex=True, gridspec_kw={"height_ratios": [3, 1.2]}, layout="constrained")
+    plot_orders_superimposed(stats, kind, axes=axs, unit=unit, **kw)
+    _comoving_1d(axs[0], kind, kms_per_cMpc, unit)
     return fig, axs
 
 
-def plot_terms_compared(
-    ensembles: dict, kind: str = "P", *, orders=None, kms_per_cMpc: float | None = None, unit: str = "km/s", figsize=None, **kw
+def plot_p1d_orders(
+    stats,
+    *,
+    k_edges=None,
+    k_limits=None,
+    x_bin: str = "weighted",
+    each: bool = True,
+    k_scale: str = "log",
+    linthresh=None,
+    kms_per_cMpc: float | None = None,
+    unit: str = "km/s",
+    figsize=(12, 10),
 ):
-    """``plot_terms_by_order`` of one or several ensembles, stacked: one row per order (sharing the x axis), one column
-    per ensemble, with identical layouts (notebook 09, Part E). ensembles : {title: ``ensemble_1d``}; orders : the
-    orders shown (default: those with a non-zero contribution in the first ensemble, without order 0: in P1D it lives
-    at k = 0 only, in xi1D it is a constant); kms_per_cMpc : a reference top axis in the other unit on the first row
-    (``_comoving_1d``); unit : "km/s" (the overflux) or "cMpc" (the density, Part F). No titles for one ensemble. Returns
-    (fig, axs (n_orders, n)). The legend of every panel inside it (``plot_terms_by_order``'s ``legend``, through
-    ``kw``)."""
-    first = _as_ensemble(next(iter(ensembles.values())))
-    if orders is None:
-        o = np.abs(np.asarray(first[f"{kind}_order"]))
+    """P1D of a composite overflux split by order |A| + |B| (``plot_orders_superimposed``, kind "P"; notebook 09, D5):
+    every order on one panel (symmetric-log y, ``linthresh``), the total and the sum of the orders, and (sum - total) /
+    max |total| below. stats : ``summary_stats.ensemble_1d`` (or one ``OverfluxStatistics1D``); k_edges : the display
+    bins (e.g. ``bao_k_edges`` along the line of sight); k_limits : (k_min, k_max) = (2 pi / v_per, pi / dv), the range
+    drawn, shaded outside; x_bin : where each bin is drawn; each : every realisation faint; k_scale : "log" or
+    "linear"; kms_per_cMpc : the reference top axis in the other unit (``_comoving_1d``); unit : "km/s" or "cMpc".
+    Small markers, the legend inside the panel, on top. Returns (fig, axs (2,))."""
+    fig, axs = _orders_figure(
+        stats, "P", kms_per_cMpc, unit, figsize, k_edges=k_edges, x_bin=x_bin, each=each, k_scale=k_scale, linthresh=linthresh
+    )
+    _k_range(axs, k_limits, k_scale)
+    return fig, axs
+
+
+def plot_xi1d_orders(
+    stats,
+    *,
+    lag_bin: int = 1,
+    max_lag=None,
+    delta_v_list=None,
+    x_bin: str = "weighted",
+    each: bool = True,
+    kms_per_cMpc: float | None = None,
+    unit: str = "km/s",
+    figsize=(12, 10),
+):
+    """xi1D of a composite overflux split by order (``plot_orders_superimposed``, kind "xi"; notebook 09, D5): every
+    lag from 0 to half the period (``lag_bin`` = 1; ``max_lag``), the line separations ``delta_v_list`` folded into
+    half the period as dashed lines; options as ``plot_p1d_orders``. Returns (fig, axs (2,))."""
+    return _orders_figure(
+        stats,
+        "xi",
+        kms_per_cMpc,
+        unit,
+        figsize,
+        lag_bin=lag_bin,
+        max_lag=max_lag,
+        delta_v_list=delta_v_list,
+        x_bin=x_bin,
+        each=each,
+    )
+
+
+def _terms_figure(stats, kind, orders, kms_per_cMpc, unit, figsize, **kw):
+    ens = _as_ensemble(stats)
+    if orders is None:  # those with a non-zero contribution, without order 0 (P1D: k = 0 only; xi1D: a constant)
+        o = np.abs(np.asarray(ens[f"{kind}_order"]))
         o = o[:, 1:] if kind == "P" else o
         orders = [n for n in range(1, o.shape[0]) if o[n].max() > 1e-12 * o.max()]
-    n = len(ensembles)
     fig, axs = plt.subplots(
-        len(orders),
-        n,
-        figsize=figsize or (16 if n == 1 else 13 * n, 5.5 * len(orders)),
-        sharex=True,
-        layout="constrained",
-        squeeze=False,
+        len(orders), 1, figsize=figsize or (16, 5.5 * len(orders)), sharex=True, layout="constrained", squeeze=False
     )
+    axs = axs[:, 0]
+    plot_terms_by_order(ens, kind, orders=orders, axs=axs, unit=unit, **kw)
     ylab = _labels_1d(unit)["P"] if kind == "P" else LABELS["xi"]
-    for c, (title, ens) in enumerate(ensembles.items()):
-        plot_terms_by_order(ens, kind, orders=orders, axs=axs[:, c], unit=unit, **kw)
-        for r, ax in enumerate(axs[:, c]):
-            ax.set_ylabel(ylab)
-            if r < len(orders) - 1:
-                ax.set_xlabel("")
-        _comoving_1d(axs[0, c], kind, kms_per_cMpc, unit)
-        if n > 1:
-            axs[0, c].set_title(title, fontsize=FONT_MIN["title"])
+    for r, ax in enumerate(axs):
+        ax.set_ylabel(ylab)
+        if r < len(orders) - 1:
+            ax.set_xlabel("")
+    _comoving_1d(axs[0], kind, kms_per_cMpc, unit)
+    return fig, axs, ens
+
+
+def plot_p1d_terms(
+    stats,
+    *,
+    orders=None,
+    k_edges=None,
+    k_limits=None,
+    x_bin: str = "weighted",
+    each: bool = True,
+    k_scale: str = "log",
+    linthresh=None,
+    kms_per_cMpc: float | None = None,
+    unit: str = "km/s",
+    figsize=None,
+):
+    """P1D of the total overflux, each order term by term (``plot_terms_by_order``, kind "P"; notebook 09, D6): one row
+    per order (default those with a non-zero contribution, without order 0, which lives at k = 0), sharing the k axis;
+    every pair of terms A–B on its order's total; options as ``plot_p1d_orders``; the legend inside every panel, on top.
+    Returns (fig, axs (n_orders,))."""
+    fig, axs, _ = _terms_figure(
+        stats,
+        "P",
+        orders,
+        kms_per_cMpc,
+        unit,
+        figsize,
+        k_edges=k_edges,
+        x_bin=x_bin,
+        each=each,
+        k_scale=k_scale,
+        linthresh=linthresh,
+    )
+    _k_range(axs, k_limits, k_scale)
+    return fig, axs
+
+
+def plot_xi1d_terms(
+    stats,
+    *,
+    orders=None,
+    lag_bin: int = 1,
+    max_lag=None,
+    delta_v_list=None,
+    x_bin: str = "weighted",
+    each: bool = True,
+    kms_per_cMpc: float | None = None,
+    unit: str = "km/s",
+    figsize=None,
+):
+    """xi1D of the total overflux, each order term by term (``plot_terms_by_order``, kind "xi"; notebook 09, D6): one
+    row per order, every lag from 0 to half the period, the line separations ``delta_v_list`` folded as dashed lines;
+    options as ``plot_xi1d_orders``. Returns (fig, axs (n_orders,))."""
+    fig, axs, ens = _terms_figure(
+        stats, "xi", orders, kms_per_cMpc, unit, figsize, lag_bin=lag_bin, max_lag=max_lag, x_bin=x_bin, each=each
+    )
+    if delta_v_list is not None:
+        _separation_lines(axs, ens, delta_v_list)
     return fig, axs
 
 
@@ -1072,80 +1179,49 @@ LABELS = {  # one label (with its unit) per quantity, in every notebook
     "delta": r"$\delta_F$",
     "sigma": r"$\Sigma_{\rm gas}\ [\mathrm{M_\odot\,ckpc^{-2}}]$",
 }
-FIGSIZES = {"wide": (20, 6), "single": (13, 6), "tall": (13, 9), "triple": (22, 6), "grid": (22, 12), "dag": (26, 6.6)}
+FIGSIZES = {"wide": (20, 6), "single": (13, 6), "tall": (13, 9), "triple": (22, 6), "grid": (22, 12), "dag": (26, 8.6)}
 
-# The dependency graph of the ingredients, derived from the code. Columns are topological levels; the two field sources
-# (toy fields and simulation outputs) are interchangeable inputs of the gas cells, side by side in one column.
-DAG_NODES = {  # key: (column, row, name, detail)
-    "lines": (0, 1.45, "lines", "LineBundle"),
-    "cosmology": (0, -1.2, "cosmology", "Cosmology"),
-    "skewers": (1, -1.2, "skewers", "SkewerBundle, a(x)"),
-    "samplers": (2, 0.52, "toy fields", "PowerLawGRF → cells"),
-    "simulation": (2, -0.52, "simulation outputs", "TNG snapshot → cells"),
-    "fields": (3, 0.0, "gas cells", "Voronoi cells: n, T, v"),
-    "deposition": (4, 0.0, "deposition", "cells → pieces"),
-    "profiles": (5, 0.0, "line profiles", r"Voigt $\phi_j(v)$ per piece"),
-    "tau": (6, 0.0, "optical depth", r"$\tau(v)$, $F=e^{-\tau}$"),
-    "overflux": (7, 0.0, "overflux", r"$\delta_F$ per line, total"),
-    "stats": (8, 0.0, "statistics", "P1D, ξ1D, P3D, ξ3D"),
-    "fake_spectra": (3, -0.8, "fake_spectra", "external reference"),
-}
-# (from, to, kind, label, route): kind "solid" required | "optional" optional input or data table | "external";
-# route = waypoints between the two ends (``_dag_route``). Every edge is a dependency of the code:
-#   cosmology -> skewers   ``SkewerBundle`` solves a(x) with ``Cosmology.solve_a_of_x`` (or takes manual_scale_factors);
-#   lines -> simulation    ``gas_physics.Ion.mass_amu`` (``core.lines.get_mass_amu``);
-#   sources -> gas cells   ``grf_cells`` / ``snapshot_cells``, ``SimulationSkewers.to_cells`` return ``core.Cells``;
-#   cells, skewers -> deposition   ``core.cell_pieces(cells, lines, skewer_bundle=...)``: points and a(x) (``bundle_frame``);
-#   deposition -> line profiles    the profiles are evaluated at the pieces' T, v_par and a (``optical_depth_kernel``);
-#   lines -> line profiles         lambda_j, A_21, m (``voigt_widths_GHz``);
-#   deposition, profiles, lines -> tau   tau = C f_j sum_p (n l / a^2)_p phi_jp: f_j in the prefactor, lambda_j in the
-#                                  detuning (``frequency_offset_GHz``), delta_v_j for the reference axis
-#                                  (``line_frame="reference"``, ``wrap_to_ref_line``);
-#   tau -> overflux -> statistics  ``DeltaFieldBuilder(tau)``, ``OverfluxStatistics1D/3D`` (no line data: the lines are
-#                                  already on one axis).
-DAG_EDGES = (
-    ("cosmology", "skewers", "optional", "a(x) (or manual)", None),
-    ("lines", "simulation", "optional", "ion masses", "v"),
-    ("samplers", "fields", "solid", None, None),
-    ("simulation", "fields", "solid", None, None),
-    ("fields", "deposition", "solid", None, None),
-    ("skewers", "deposition", "solid", "points, a(x)", "h"),
-    ("deposition", "profiles", "solid", r"T, $v_\parallel$, a", None),
-    ("deposition", "tau", "solid", r"$n\,\ell/a^2$ of the pieces", "u"),
-    ("lines", "profiles", "solid", "atomic data: λ, A₂₁, m", "h"),
-    ("lines", "tau", "solid", "f, λ, line offsets Δv", "h"),
-    ("profiles", "tau", "solid", None, None),
-    ("tau", "overflux", "solid", None, None),
-    ("overflux", "stats", "solid", None, None),
-)
-DAG_EXTERNAL = (("simulation", "fake_spectra", None), ("fake_spectra", "tau", "compared"))  # same snapshot, compared τ
-DAG_NOTEBOOKS = {
-    "lines": "01",
-    "cosmology": "02",
-    "skewers": "03",
-    "samplers": "04",
-    "fields": "04, 05",
-    "simulation": "05",
-    "profiles": "06",
-    "deposition": "07",
-    "tau": "07",
-    "overflux": "09",
-    "stats": "08, 09",
-    "fake_spectra": "10, 11",
-}
-_DAG_W, _DAG_H, _DAG_PAD = 0.80, 0.56, 0.02  # box width and height, and the pad of its rounded outline [data]
+# The dependency graph of the ingredients: the specification (nodes, edges, notebooks, realms) lives in ``utils.dag``,
+# the one source of truth of this figure and of the README's Mermaid diagrams.
+_DAG_W, _DAG_H, _DAG_PAD = 1.0, 0.66, 0.02  # box width and height, and the pad of its rounded outline [data]
 # per edge: the lane of its route (``_dag_route``), and the x offset of its end from the centre of the target box
-_DAG_LANES = {("lines", "profiles"): -0.12, ("lines", "tau"): 0.12, ("lines", "simulation"): 0.12, ("deposition", "tau"): 0.34}
-_DAG_END_DX = {("skewers", "deposition"): -0.2, ("deposition", "tau"): -0.2}
+_DAG_LANES = {
+    ("lines", "profiles"): -0.12,
+    ("lines", "tau"): 0.12,
+    ("lines", "simulation"): 0.2,
+    ("deposition", "tau"): 0.34,
+    ("samplers", "field_stats"): 0.34,
+}
+_DAG_END_DX = {
+    ("skewers", "deposition"): -0.22,
+    ("deposition", "tau"): -0.3,
+    ("samplers", "fields"): -0.22,
+    ("simulation", "fields"): 0.22,
+    ("lines", "tau"): -0.12,
+    ("fake_spectra", "tau"): 0.22,
+    ("cosmology", "skewers"): 0.25,
+}
+_DAG_LABEL_AT = {  # where the label sits along its segment (default the middle)
+    ("skewers", "deposition"): 0.3,
+    ("samplers", "field_stats"): 0.3,
+    ("lines", "profiles"): 0.72,
+    ("lines", "tau"): 0.72,
+    ("lines", "simulation"): 0.15,
+    ("cosmology", "skewers"): 0.7,
+}
+_DAG_LIMITS = dict(xlim=(-0.75, 10.35), ylim=(-2.08, 2.72))
 
 
 def _dag_route(a, b, route, nodes, lane, dx=0.0):
     """Polyline from box a to box b, starting and ending on the drawn outlines (the box plus its pad).
 
     None: straight between facing sides; "h": out of the right side of a at height ``lane`` above its centre,
-    horizontally, then vertically into the top or bottom of b (``dx`` from its centre); "v": out of the top / bottom of a, vertically to height
-    ``lane`` above b's centre, then horizontally into the left side of b; "u": out of the bottom of a (its centre), down
-    by ``lane``, horizontally, then up into the bottom of b (``dx`` from its centre), under the boxes in between.
+    horizontally, then vertically into the top or bottom of b (``dx`` from its centre); "v": out of the top / bottom of
+    a, vertically to height ``lane`` above b's centre, then horizontally into the left side of b; "u": out of the bottom
+    of a (its centre), down by ``lane``, horizontally, then up into the bottom of b (``dx`` from its centre), under the
+    boxes in between; "d": straight from the bottom (top) of a to the top (bottom) of b (``dx``); "over": out of the top
+    of a, up to ``lane`` above the higher box, horizontally, then down into the top of b (``dx``); "s": out of the right
+    side of a, horizontally to the middle of the gap, vertically to b's height, into its left side (a fork).
     """
     (xa, ya), (xb, yb) = nodes[a][:2], nodes[b][:2]
     w, h = _DAG_W / 2 + _DAG_PAD, _DAG_H / 2 + _DAG_PAD
@@ -1157,72 +1233,100 @@ def _dag_route(a, b, route, nodes, lane, dx=0.0):
     if route == "u":
         x0, x1, y0 = xa, xb + dx, min(ya, yb) - h - lane
         return [(x0, ya - h), (x0, y0), (x1, y0), (x1, yb - h)]
+    if route == "d":
+        down = yb < ya
+        return [(xa, ya - h if down else ya + h), (xb + dx, yb + h if down else yb - h)]
+    if route == "over":
+        y0 = max(ya, yb) + h + lane
+        return [(xa, ya + h), (xa, y0), (xb + dx, y0), (xb + dx, yb + h)]
+    if route == "s":
+        xm = 0.5 * ((xa + w) + (xb - w))
+        return [(xa + w, ya), (xm, ya), (xm, yb), (xb - w, yb)]
     y1, x0 = yb + lane, xa + 0.18
     return [(x0, ya + (h if y1 > ya else -h)), (x0, y1), (xb - w, y1)]
 
 
+def _dag_module_label(node) -> str:
+    """The module(s) of a node as file paths, without the realm of its band (``core/skewers.py`` in the skewers band
+    keeps its realm); a second module as " …" when both do not fit (the full paths: the README)."""
+    paths = []
+    for m in (m.strip() for m in node.module.split(",")):
+        p = m.replace(".", "/") + ".py"
+        paths.append(p[len(node.realm) + 1 :] if p.startswith(node.realm + "/") else p)
+    both = ", ".join(paths)
+    return both if len(both) <= 22 else paths[0] + " …"
+
+
+def _dag_bands(ax, nodes):
+    """The background band of every realm (``dag.REALMS``): a light rounded rectangle around its nodes, labelled in its
+    upper-left corner."""
+    from skewerjax.utils.dag import REALMS
+
+    w, h, m = _DAG_W / 2, _DAG_H / 2, 0.08
+    for realm, (label, colour) in REALMS.items():
+        pts = [(n.x, n.y) for n in nodes.values() if n.realm == realm]
+        if not pts:
+            continue
+        xs, ys = zip(*pts)
+        x0, x1, y0, y1 = min(xs) - w - m, max(xs) + w + m, min(ys) - h - m - 0.04, max(ys) + h + m + 0.1
+        c = PALETTE[colour]
+        ax.add_patch(
+            mpl.patches.FancyBboxPatch(
+                (x0, y0),
+                x1 - x0,
+                y1 - y0,
+                boxstyle="round,pad=0.0,rounding_size=0.12",
+                facecolor=mpl.colors.to_rgba(c, 0.08),
+                edgecolor=mpl.colors.to_rgba(c, 0.55),
+                lw=1.2,
+                path_effects=[],
+                zorder=0,
+            )
+        )
+        ax.text(x0 + 0.06, y1 - 0.03, label, ha="left", va="top", fontsize=FONT_MIN["floor"], color=c, style="italic", zorder=1)
+
+
 def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, notebooks: bool = True):
-    """The dependency graph (DAG) of SkewerJAX's ingredients; ``highlight`` (keys of ``DAG_NODES``: the ingredients a
+    """The dependency graph (DAG) of SkewerJAX's ingredients (``utils.dag``: ``DAG_NODES``, ``DAG_EDGES``, the one
+    specification, also rendered as Mermaid in the README); ``highlight`` (keys of ``DAG_NODES``: the ingredients a
     notebook uses) are drawn with one light fill and a coloured edge, and the edges into them in the same colour.
 
-    Arrows point from an ingredient to what needs it, and each is a dependency of the code (``DAG_EDGES``). Solid: a
-    required input. Dashed: optional, or data only (the cosmology can be replaced by manual a(x); the simulation reads
-    only ion masses from the line table). The two sources of gas are interchangeable: both produce the same container,
-    Voronoi gas cells, which the deposition cuts into pieces along the skewers. The line profiles are evaluated at the
-    pieces' temperature, velocity and scale factor with the lines' atomic data; the optical depth sums them, weighted by
-    each piece's n l / a^2, with the oscillator strengths f and wavelengths λ of the lines, and puts every line on the
-    reference axis with the offsets Δv. ``external`` adds fake_spectra, the external reference code (comparison notebook
-    only). ``notebooks`` writes the notebook of every ingredient under its box. Returns (fig, ax).
+    Arrows point from an ingredient to what needs it, and each is a dependency of the code. Solid: a required input.
+    Dashed: optional, or data only (the cosmology can be replaced by manual a(x); the simulation reads only ion masses
+    from the line table). Every box gives the ingredient, what it is and its module; the light bands are the realms of
+    the package (``dag.REALMS``: core, simulations, skewers, summary_stats). The two sources of gas are interchangeable:
+    both produce the same container, gas cells, which the deposition cuts into pieces along the skewers. The line
+    profiles are evaluated at the pieces' temperature, velocity and scale factor with the lines' atomic data; the
+    optical depth sums them, weighted by each piece's n l / a^2, with the oscillator strengths f and wavelengths λ of the
+    lines, and puts every line on the reference axis with the offsets Δv. Downstream, the mean transmission normalises
+    the overflux, measured in 1D along each skewer and in 3D on the lattice of skewers; the statistics of 3D fields take
+    a field on its grid or, through a mesh (mass assignment and interlacing), fields known at points. ``external`` adds
+    fake_spectra, the external reference code (comparison notebooks only). ``notebooks`` writes the notebook of every
+    ingredient under its box. Returns (fig, ax).
     """
     from matplotlib.lines import Line2D
 
+    from skewerjax.utils.dag import DAG_EDGES, DAG_EXTERNAL, DAG_NODES, DAG_NOTEBOOKS
+
     hl = {highlight} if isinstance(highlight, str) else set(highlight)
+    unknown = hl - set(DAG_NODES)
+    if unknown:
+        raise ValueError(f"unknown ingredients {sorted(unknown)}; the keys of utils.dag.DAG_NODES: {sorted(DAG_NODES)}.")
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize or FIGSIZES["dag"], layout="constrained")
     ax.set_axis_off()
-    ax.set(xlim=(-0.5, 8.5), ylim=(-1.62, 1.86))
+    ax.set(**_DAG_LIMITS)
     fg, on, ext_c = plt.rcParams["text.color"], PALETTE["cyan"], PALETTE["yellow"]
     on_fill = mpl.colors.to_rgba(on, 0.30)  # the one highlight: a light fill and a coloured edge
     w, h, pad = _DAG_W, _DAG_H, _DAG_PAD
-    nodes = {k: v for k, v in DAG_NODES.items() if external or k != "fake_spectra"}
-    # the group of interchangeable field sources
-    gx, gy = DAG_NODES["samplers"][0], 0.5 * (DAG_NODES["samplers"][1] + DAG_NODES["simulation"][1])
-    gh = DAG_NODES["samplers"][1] - DAG_NODES["simulation"][1] + h + 0.34
-    ax.add_patch(
-        mpl.patches.FancyBboxPatch(
-            (gx - w / 2 - 0.08, gy - gh / 2),
-            w + 0.16,
-            gh,
-            boxstyle="round,pad=0.02,rounding_size=0.1",
-            facecolor="none",
-            edgecolor=DIM,
-            lw=1.2,
-            ls=":",
-            path_effects=[],
-        )
-    )
-    ax.text(
-        gx,
-        gy + gh / 2 + 0.04,
-        "sources of cells (interchangeable)",
-        ha="center",
-        va="bottom",
-        fontsize=FONT_MIN["floor"],
-        color=DIM,
-        style="italic",
-    )
-    edges = [e for e in DAG_EDGES] + ([(a, b, "external", lab, None) for a, b, lab in DAG_EXTERNAL] if external else [])
-    ew, eh = w / 2 + pad, h / 2 + pad  # the drawn outline of a box, from its centre
-    for a, b, kind, label, route in edges:
+    nodes = {k: v for k, v in DAG_NODES.items() if external or v.realm != "external"}
+    _dag_bands(ax, nodes)
+    edges = list(DAG_EDGES) + (list(DAG_EXTERNAL) if external else [])
+    for e in edges:
+        a, b, kind, label, route = e.a, e.b, e.kind, e.label, e.route
         if a not in nodes or b not in nodes:
             continue
-        if (a, b) == ("fake_spectra", "tau"):
-            y0 = nodes[a][1] - 0.12  # below the deposition -> tau route
-            pts = [(nodes[a][0] + ew, y0), (nodes[b][0], y0), (nodes[b][0], nodes[b][1] - eh)]
-        elif (a, b) == ("simulation", "fake_spectra"):
-            pts = [(nodes[a][0] + ew, nodes[a][1] - 0.15), (nodes[b][0] - ew, nodes[a][1] - 0.15)]
-        else:
-            pts = _dag_route(a, b, route, nodes, _DAG_LANES.get((a, b), 0.0), _DAG_END_DX.get((a, b), 0.0))
+        pts = _dag_route(a, b, route, nodes, _DAG_LANES.get((a, b), 0.0), _DAG_END_DX.get((a, b), 0.0))
         hot = b in hl  # the inputs of a highlighted ingredient light up
         col = on if hot else (ext_c if kind == "external" else DIM)
         dashed = kind in ("optional", "external")
@@ -1237,6 +1341,7 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
             path_effects=[],
             solid_capstyle="butt",
             dash_capstyle="butt",
+            zorder=2,
             **(dict(ls=(0, (4.0, 3.0))) if dashed else dict(ls="-")),
         )
         (xe0, ye0), (xe1, ye1) = pts[-2], pts[-1]  # the arrow head only, on a short stub of the last segment
@@ -1253,7 +1358,7 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
             seg = max(range(len(pts) - 1), key=lambda k: np.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]))
             (x0, y0), (x1, y1) = pts[seg], pts[seg + 1]
             vert = abs(x1 - x0) < 1e-9
-            f = 0.3 if (a, b) == ("skewers", "deposition") else 0.5
+            f = _DAG_LABEL_AT.get((a, b), 0.5)
             xl, yl = x0 + f * (x1 - x0) + (0.03 if vert else 0.0), 0.5 * (y0 + y1) + (0.0 if vert else 0.035)
             if route is None and not vert and abs(x1 - x0) < 0.5:
                 yl = max(nodes[a][1], nodes[b][1]) + h / 2 + 0.04
@@ -1267,11 +1372,13 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
                 color=col,
                 style="italic",
                 rotation=0,
+                zorder=5,
                 bbox=dict(boxstyle="round,pad=0.12", facecolor=plt.rcParams["axes.facecolor"], edgecolor="none", alpha=0.85),
             )
-    for key, (x, y, name, sub) in nodes.items():
+    for key, n in nodes.items():
+        x, y = n.x, n.y
         hit = key in hl
-        ext = key == "fake_spectra"
+        ext = n.realm == "external"
         ec = on if hit else (ext_c if ext else DIM)
         ax.add_patch(
             mpl.patches.FancyBboxPatch(
@@ -1288,8 +1395,10 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
             )
         )
         tc = fg if hit else (ext_c if ext else fg)
-        ax.text(x, y + 0.1, name, ha="center", va="center", fontsize=FONT_MIN["legend"], color=tc, fontweight="bold", zorder=4)
-        ax.text(x, y - 0.13, sub, ha="center", va="center", fontsize=FONT_MIN["floor"], color=tc, zorder=4)
+        ax.text(x, y + 0.17, n.name, ha="center", va="center", fontsize=FONT_MIN["legend"], color=tc, fontweight="bold", zorder=4)
+        ax.text(x, y - 0.03, n.detail, ha="center", va="center", fontsize=FONT_MIN["floor"], color=tc, zorder=4)
+        mod = _dag_module_label(n)
+        ax.text(x, y - 0.21, mod, ha="center", va="center", fontsize=FONT_MIN["floor"], color=DIM, family="monospace", zorder=4)
         if notebooks and key in DAG_NOTEBOOKS:
             ax.text(
                 x + w / 2,
@@ -1327,7 +1436,7 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
         ncol=len(handles),
         frameon=False,
         fontsize=FONT_MIN["floor"],
-        bbox_to_anchor=(1.0, -0.04),
+        bbox_to_anchor=(1.0, -0.02),
         handlelength=2.4,
     )
     return ax.figure, ax
@@ -3173,9 +3282,10 @@ def plot_skewer_geometry_3d(ax, points, *, scale_factors=None, label_w=None, tan
 MU_COLORS = ("blue", "cyan", "green", "red")  # one colour per wedge, in every panel (PALETTE keys)
 _EACH = dict(lw=0.8, alpha=0.12)  # one realisation, faint, in the background
 _MEAN = dict(fmt="o-", lw=1.0, ms=7, capsize=4, elinewidth=2.2, capthick=2.0, mew=1.5, zorder=6)  # the mean and its error, joined
-_MS_SMALL = 4.5  # the small markers of several series on one panel (shape and colour tell them apart; notebook 09, D2, E1)
+_MS_SMALL = 4.5  # the small markers of several series on one panel (shape and colour tell them apart; notebook 09, D3, D4)
 _BAND = dict(color=PALETTE["green"], alpha=0.28)  # the uncertainty band of a measured iso-contour
 _LEGEND_08 = FONT_MIN["legend"] + 2  # the custom legends of the wedge figures
+_ECHO_STYLES = {"plus": dict(ls=(0, (6, 3)), lw=1.6), "minus": dict(ls=(0, (1, 1.6)), lw=2.0)}  # the BAO echoes r^+, r^-
 
 
 def _slice_image(ax, fields, L: float, *, species: str = "HI", z_index: int = 0, colorbar: bool = True, cmap=None):
@@ -4009,7 +4119,7 @@ def line_pair_label(line_ids=("HI-LyA", "SiIII-1206"), *, comoving: bool = False
 
 
 def comoving_axis(ax, kms_per_cMpc: float, kind: str = "r", *, side: str = "top", label: str | None = None):
-    """A secondary axis in comoving units on an axis in velocity units (notebook 09, Parts D and E), with one conversion
+    """A secondary axis in comoving units on an axis in velocity units (notebook 09, Part D), with one conversion
     factor, v = u x and k_v = k_x / u: u = ``kms_per_cMpc`` [km/s per cMpc] (u = period / L = (1/L) int_0^L aH dy, the
     mean aH along a skewer, from ``core.velocity_span``).
 
@@ -4033,7 +4143,7 @@ def velocity_axis(ax, kms_per_cMpc: float, kind: str = "r", *, side: str = "top"
 
 
 def wedge_echoes(r_bao: float, delta: float, mu_edges, box: float) -> dict:
-    """The BAO echoes of the cross term of two lines Delta apart along the line of sight (notebook 09, D1 and D3) in
+    """The BAO echoes of the cross term of two lines Delta apart along the line of sight (notebook 09, D2 and D3) in
     wedges of mu = r_par / r: the echo rings r_perp^2 + (r_par -+ Delta)^2 = r_bao^2 cross the direction mu at
 
         r^+-(mu) = sqrt(r_bao^2 - Delta^2 (1 - mu^2)) +- mu Delta,
@@ -4083,8 +4193,9 @@ def plot_xi_mu_wedges(
     density of ``skewer_density_statistics`` with its ``lattice_density_theory``): the expectation of each wedge as a dashed line in the
     wedge's colour and, below, (measured - expected) / error. Without (the overflux on the lattice, ``res`` = one
     entry of its ``flux3d`` with ``res["axes"]`` = its ``axes3d``): one panel, the measurement only. The wedges are
-    offset by a few per cent of a bin in r so that every point shows. Two legends inside the main panel: the wedges
-    (colour: mu interval; upper right) and the styles (measured, expected, per realisation; lower left). No titles.
+    offset by a few per cent of a bin in r so that every point shows. Legends inside the main panel: the wedges
+    (colour: mu interval; upper right), the styles (measured, expected, per realisation; lower left) and, with
+    ``delta_v``, the two echoes (lower centre). No titles.
 
     r_edges : the |r| bins of the wedges: a wedge is the average over the separations with |r| in a bin and mu in the
     wedge (default those of the measurement, ``res["axes"]["r_mu_edges"]``; checked against them, ``_check_edges``).
@@ -4093,7 +4204,8 @@ def plot_xi_mu_wedges(
     lines (``line_ids``: line 1 the reference line; labels ``line_pair_label``), Delta = |delta_v| / u [cMpc]: the spot of
     their cross term at r = Delta as a dashed line in the colour of the wedge that contains mu = 1 (the spot lies on the
     line of sight only), and the echoes of the BAO ring at r^+-(mu) of every wedge (``wedge_echoes``, at its mean mu) as
-    short marks in the wedge's colour at the top of the panel, labelled + and -; every scale folded into [0, box / 2]
+    vertical lines in the wedge's colour, r^+ dashed and r^- dotted (a small legend of the two styles, in a neutral
+    colour, inside the panel at the bottom, on top of the data); every scale folded into [0, box / 2]
     (``box``: the period of the line of sight [cMpc], default twice the last |r| edge). unit : "cMpc" or "km/s" (the
     axis labels); kms_per_cMpc : a secondary top axis in the other unit (``comoving_axis`` / ``velocity_axis``).
     x_bin : where each bin is drawn ("weighted" default: the separation-weighted |r| of the bin in the wedge, "linear",
@@ -4177,45 +4289,24 @@ def plot_xi_mu_wedges(
                     labels=i == 0,
                 )
         lo, hi = sorted(axs[0].get_xlim())
-        tr = axs[0].get_xaxis_transform()
-        for w in range(nm):
-            for key, sign in (("plus", "+"), ("minus", "−")):
+        for w in range(nm):  # the echoes: vertical lines at r^+-(mu) of each wedge, in its colour, + dashed, - dotted
+            for key in ("plus", "minus"):
                 x = float(ec[key][w])
                 if lo <= x <= hi:
-                    axs[0].plot([x, x], [0.93, 0.99], transform=tr, color=cols[w], lw=3.0, solid_capstyle="butt", zorder=8)
-                    axs[0].text(
-                        x,
-                        0.925,
-                        sign,
-                        transform=tr,
-                        color=cols[w],
-                        ha="center",
-                        va="top",
-                        fontsize=FONT_MIN["annotation"],
-                        path_effects=_halo(),
-                        zorder=9,
-                    )
-        axs[0].text(
-            0.01,
-            0.86,
-            "ticks at the top: echo "
-            + line_pair_label(line_ids, comoving=True).replace(r"$\Delta", r"$\pm\Delta")
-            + "\nat the mean $\mu$ of each wedge",
-            transform=axs[0].transAxes,
-            ha="left",
-            va="top",
-            fontsize=FONT_MIN["annotation"],
-            color=FG,
-            path_effects=_halo(),
-            zorder=9,
-        )
+                    for ax in axs:
+                        ax.axvline(x, color=cols[w], zorder=4, **_ECHO_STYLES[key])
+        pair = line_pair_label(line_ids)
+        echo_h = [
+            mpl.lines.Line2D([], [], color=FG, label="echo " + pair.replace(r"$\Delta", sign + r"\Delta", 1), **_ECHO_STYLES[key])
+            for key, sign in (("plus", "$+"), ("minus", "$-"))
+        ]
+        axs[0].add_artist(_legend(axs[0], handles=echo_h, loc="lower center", ncol=2, fontsize=FONT_MIN["legend"]))
     if kms_per_cMpc is not None:
         (velocity_axis if unit == "cMpc" else comoving_axis)(axs[0], kms_per_cMpc, "r")
     wedges_h = [
         mpl.lines.Line2D([], [], color=cols[w], marker="o", ms=7, lw=2.0, label=_wedge_label(mu[w], mu[w + 1])) for w in range(nm)
     ]
-    below_ticks = dict(bbox_to_anchor=(1.0, 0.87)) if delta_v is not None and r_bao is not None else {}
-    leg = _legend(axs[0], handles=wedges_h, loc="upper right", ncol=1, fontsize=_LEGEND_08, framealpha=0.9, **below_ticks)
+    leg = _legend(axs[0], handles=wedges_h, loc="upper right", ncol=1, fontsize=_LEGEND_08, framealpha=0.9)
     axs[0].add_artist(leg)
     _legend(axs[0], handles=styles, loc="lower left", ncol=1, fontsize=_LEGEND_08 - 1, framealpha=0.9)
     return fig, axs, out
@@ -4245,8 +4336,8 @@ def plot_overflux_3d(
     figsize=(22, 9),
 ):
     """P(|k|) and r^2 xi(|r|) (``quantity="r2xi"``) or xi (``"xi"``) of the overflux of each line and of the total on
-    the lattice of skewers, in comoving units (notebook 09, D2; the line of sight converted with u = period / L,
-    ``summary_stats.lattice_grid``), or of the density of each species and of their sum at the points of the skewers (E2): the
+    the lattice of skewers, in comoving units (notebook 09, D3; the line of sight converted with u = period / L,
+    ``summary_stats.lattice_grid``), or of the density of each species and of their sum at the points of the skewers (Part B): the
     lattice counterpart of ``plot_isotropic_recovery``, with its estimators (every mode of the lattice inside the sphere
     of its smallest Nyquist frequency in |k| bins, every pair of points up to half the box in |r| bins), its options and
     styles (every box faint, the mean over the boxes with the error of the mean as points joined by thin lines; one
@@ -4337,7 +4428,7 @@ def plot_overflux_3d(
 
 
 def _native_map_axes(ax, u: float, kind: str, x_max: float, y_max: float, y_min: float = 0.0, unit: str = "km/s"):
-    """The axes of the (perp, par) maps of the overflux and of the density (notebook 09, D1 and B1): perpendicular across
+    """The axes of the (perp, par) maps of the overflux and of the density (notebook 09, D2 and B1): perpendicular across
     in comoving units, parallel upwards in its native unit (``unit``: "km/s" for the overflux, "cMpc" for the density
     along the skewers), the origin at the bottom-left corner, equal comoving lengths (aspect), and the reference axes in
     km/s through u: the perpendicular on top, and the parallel on the right in the other unit. kind "r": cMpc and km/s;
@@ -4371,7 +4462,7 @@ def _native_map_axes(ax, u: float, kind: str, x_max: float, y_max: float, y_min:
 
 def echo_curves(r_bao: float, delta: float, box: float, *, n: int = 400) -> dict:
     """The BAO ring and its two echoes in the (r_perp, r_par) plane of the overflux of two lines Delta apart along the line
-    of sight (notebook 09, D1), comoving [the units of the inputs], for r_perp <= min(r_bao, box / 2). The cross term
+    of sight (notebook 09, D2), comoving [the units of the inputs], for r_perp <= min(r_bao, box / 2). The cross term
     copies the correlation shifted by -+ Delta along the line of sight; folded, r_par -> |r_par|, both copies lie on the
     ring re-centred on (0, Delta), r_perp^2 + (r_par - Delta)^2 = r_bao^2, with the two branches
 
@@ -4431,7 +4522,7 @@ def plot_overflux_rpar_rperp(
     figsize=(14, 12.5),
 ):
     """r^2 xi(r_perp, r_par) (``quantity="r2xi"``) or xi (``"xi"``) of one overflux on the exact lattice of skewers
-    (notebook 09, D1), or of the density at the points of the skewers (B1, ``unit="cMpc"``): the measured panel of
+    (notebook 09, D2), or of the density at the points of the skewers (B1, ``unit="cMpc"``): the measured panel of
     ``plot_rpar_rperp_maps``, with its options: a diverging colour scale centred on 0 (``cmap``, default
     ``CMAPS["diverging"]``; ``color_scale`` "linear" or "symlog" with ``linthresh``, ``linthresh_frac``, ``linscale``:
     ``_map_scale``, the same colour limits in both), contours at ``levels`` (default three) in green with the band where
@@ -4566,8 +4657,8 @@ def plot_overflux_kpar_kperp(
     legend: bool = False,
     figsize=(14, 12.5),
 ):
-    """P(k_perp, k_par) of one overflux on the exact lattice of skewers (notebook 09, D1), or of the density at the
-    points of the skewers (E1, ``unit="cMpc"``): the measured panel of ``plot_kpar_kperp_maps``, derived from it as
+    """P(k_perp, k_par) of one overflux on the exact lattice of skewers (notebook 09, D2), or of the density at the
+    points of the skewers (B1, ``unit="cMpc"``): the measured panel of ``plot_kpar_kperp_maps``, derived from it as
     ``plot_overflux_rpar_rperp`` from ``plot_rpar_rperp_maps``, with its options: P (not k P) on a logarithmic colour
     scale (``cmap``, default ``CMAPS["diverging"]``; the limits of the expectation with ``theory``, else of the
     measurement), iso-P contours at ``levels`` (default three, ``_three_levels``) in green with the band where the
@@ -4677,7 +4768,7 @@ def plot_p1d_reference(
     figsize=(12, 10),
 ):
     """k P1D(k) / pi against k, linear k and logarithmic P, the convention of Fig. 1 of the reference (Chaves-Montero et
-    al., DESI DR1 P1D; notebook 09, E1): the P1D of each overflux of the toy boxes (the ``ensemble_mean`` of ``skewer_p1d``, k in
+    al., DESI DR1 P1D; notebook 09, D4): the P1D of each overflux of the toy boxes (the ``ensemble_mean`` of ``skewer_p1d``, k in
     s/km, ``unit="km/s"``) or of each density along the skewers (``skewer_density_statistics``'s ``density_p1d``, k in cMpc^-1, ``unit="cMpc"``), binned
     in k: every box faint (``each``), the mean over the boxes with the error of the mean as small points joined by thin
     lines (one colour and one marker shape per field, open after the first; the total ``FG``); with ``p1d["theory"]``

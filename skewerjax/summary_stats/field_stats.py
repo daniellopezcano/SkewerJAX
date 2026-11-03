@@ -7,7 +7,11 @@ shape, side L [cMpc] and bins) and, optionally, the expected spectrum as a calla
 * ``grid_power``: an isotropic spectrum P(k) on the rfft modes of a grid (what ``GridStatistics3D.theory`` and
   ``xi_iso_covariance`` take);
 * ``field_statistics``: the statistics of every field of an iterable (each one measured and discarded), their mean over
-  the ensemble, the expectation and the exact Gaussian covariance of the isotropic xi bins;
+  the ensemble, the expectation and the exact Gaussian covariance of the isotropic xi bins; the fields are given on the
+  grid (grid-native: the exact FFT, ``mas`` = None);
+* ``point_statistics``: the same for fields known at points, through a mesh of the grid (mass assignment ``mas``,
+  interlacing, the window divided; Sefusatti et al. 2016), against the expectation with its alias images
+  (``mesh.aliased_power``);
 * ``xi_chi2``, ``xi_subset_offsets``: the chi^2 and the offset of the mean xi from its expectation;
 * ``bao_height``: the height of the BAO peak of a curve r^2 xi(r) above its sidebands.
 """
@@ -22,6 +26,7 @@ import numpy as np
 
 from skewerjax.summary_stats.binning import ensemble_mean, full_coverage, native_edges
 from skewerjax.summary_stats.grid3d import GRID_KEYS, GridStatistics3D
+from skewerjax.summary_stats.mesh import aliased_power, check_grid_native
 
 
 def grid_limits(n_cells: int, L: float) -> dict:
@@ -79,11 +84,21 @@ def grid_power(power: Callable, shape, L):
 
 
 def field_statistics(
-    fields: Iterable, grid: GridStatistics3D, *, power: Callable | None = None, power_nw: Callable | None = None, log=print
+    fields: Iterable,
+    grid: GridStatistics3D,
+    *,
+    mas=None,
+    power: Callable | None = None,
+    power_nw: Callable | None = None,
+    log=print,
 ) -> dict:
     """P and xi of every field of ``fields`` (an iterable of arrays of ``grid.shape``, e.g. the overdensities of the
     realisations, generated one at a time: ``(boxes.delta(i) for i in idx)``) on ``grid`` (``box_grid``), streamed: each
     field is measured and discarded. Nothing is stored.
+
+    mas : None (the only value): the fields are given on the grid itself (grid-native), so their FFT is exact, with no
+        window and no alias images of an assignment (Sefusatti et al. 2016, §2.3); a scheme raises. Fields known at
+        points take ``point_statistics``.
 
     power : callable P(k) [cMpc^3] of |k| [1/cMpc], optional: the expected spectrum (``grid_power``), for the expectation
         ``theory`` {key: array} of every statistic on the grid (``GridStatistics3D.theory``) and the exact Gaussian
@@ -96,6 +111,7 @@ def field_statistics(
     ``power`` / ``power_nw``), the bin ``axes`` (``GridStatistics3D.axes``), ``min_one_plus_delta`` (n,) (1 + min of
     every field), ``limits`` (``grid_limits``, a cubic grid), ``time_s`` (the measurements) and ``time_cov_s`` (the
     covariance)."""
+    check_grid_native(mas, "field_statistics")
     gs = grid
     t0 = time.perf_counter()
     recs, mins = [], []
@@ -104,13 +120,53 @@ def field_statistics(
         recs.append(gs.measure(d))
         if log and (n + 1) % 16 == 0:
             log(f"field statistics: {n + 1} fields, {time.perf_counter() - t0:.0f} s")
-    t_meas = time.perf_counter() - t0
+    return _ensemble(recs, mins, gs, power, power_nw, lambda f: grid_power(f, gs.shape, gs.L), time.perf_counter() - t0)
+
+
+def point_statistics(
+    samples: Iterable,
+    grid: GridStatistics3D,
+    *,
+    mas: str = "tsc",
+    interlace: bool = True,
+    shot_noise=None,
+    power: Callable | None = None,
+    power_nw: Callable | None = None,
+    log=print,
+) -> dict:
+    """P and xi of fields known at points, one realisation per item of ``samples`` (an iterable of (positions (N, 3)
+    [cMpc], values (N,)) pairs, streamed), through a mesh of ``grid``'s shape (``GridStatistics3D.measure_points``):
+    the values assigned with ``mas`` ("ngp", "cic", "tsc", "pcs"), interlaced (``interlace``), the window divided, ``shot_noise``
+    (a constant [cMpc^3]) subtracted if given (none by default: the inputs are fields, not discrete tracers).
+
+    The expectations (``power``, ``power_nw``: callables P(|k|)) are those of this estimator: the alias sum of the
+    spectrum on the mesh modes, sum_n theta_n |W(k - n k_s) / W(k)|^2 P(|k - n k_s|) (``mesh.aliased_power``;
+    Sefusatti et al. 2016, eqs. 29, 37), binned by ``GridStatistics3D.theory``; ``cov_xi_iso`` from the same aliased
+    spectrum (Gaussian, without the shot noise of the sampling). Returns the keys of ``field_statistics``, plus ``mas``
+    and ``interlace``; ``min_one_plus_delta`` is 1 + the smallest value of every realisation."""
+    gs = grid
+    t0 = time.perf_counter()
+    recs, mins = [], []
+    for n, (x, v) in enumerate(samples):
+        mins.append(float(1.0 + np.min(v)))
+        recs.append(gs.measure_points(x, v, mas=mas, interlace=interlace, shot_noise=shot_noise))
+        if log and (n + 1) % 16 == 0:
+            log(f"point statistics: {n + 1} realisations, {time.perf_counter() - t0:.0f} s")
+    on_modes = lambda f: aliased_power(f, gs.shape, gs.L, mas=mas, interlace=interlace)  # noqa: E731
+    res = _ensemble(recs, mins, gs, power, power_nw, on_modes, time.perf_counter() - t0)
+    res.update(mas=mas, interlace=bool(interlace))
+    return res
+
+
+def _ensemble(recs, mins, gs, power, power_nw, on_modes, t_meas) -> dict:
+    """The ensemble mean of the measurements, the expectations (``on_modes``: a callable P(k) -> P on the rfft modes),
+    the covariance of the isotropic xi and the axes (``field_statistics``)."""
     res = ensemble_mean(recs, GRID_KEYS)
-    P = None if power is None else grid_power(power, gs.shape, gs.L)
+    P = None if power is None else on_modes(power)
     if P is not None:
         res["theory"] = gs.theory(P)
     if power_nw is not None:
-        res["theory_nw"] = gs.theory(grid_power(power_nw, gs.shape, gs.L))
+        res["theory_nw"] = gs.theory(on_modes(power_nw))
     t0 = time.perf_counter()
     if P is not None:
         res["cov_xi_iso"] = gs.xi_iso_covariance(P)

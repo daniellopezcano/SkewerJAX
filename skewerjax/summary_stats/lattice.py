@@ -1,4 +1,4 @@
-"""Two-point statistics of an ensemble of periodic skewers, from arrays and geometry only (notebook 09, Parts D and E):
+"""Two-point statistics of an ensemble of periodic skewers, from arrays and geometry only (notebook 09, Part D):
 no box or set-up class enters, only the fields along the skewers, the pixel width, the lattice spacing and the bins.
 
 **1D, along each skewer** (review notes, P1D and xi1D sections; the conventions of ``stats_1d``): N pixels of width dv
@@ -28,6 +28,7 @@ import numpy as np
 
 from skewerjax.summary_stats.binning import full_coverage, native_edges
 from skewerjax.summary_stats.grid3d import GridStatistics3D
+from skewerjax.summary_stats.mesh import check_grid_native
 
 
 def skewer_p1d(delta, dv: float):
@@ -132,9 +133,14 @@ def on_lattice(delta, n_x: int, n_z: int) -> np.ndarray:
     return d.reshape(d.shape[:-2] + (int(n_x), int(n_z), d.shape[-1])).swapaxes(-1, -2)
 
 
-def measure_lattice(delta, grid: GridStatistics3D) -> dict:
+def measure_lattice(delta, grid: GridStatistics3D, *, mas=None) -> dict:
     """The 3D statistics (``GridStatistics3D.measure``: the ``GRID_KEYS``) of one field along the skewers of a lattice,
-    delta (N_sk, n_los) x-major, on ``grid`` (``lattice_grid``)."""
+    delta (N_sk, n_los) x-major, on ``grid`` (``lattice_grid``).
+
+    mas : None (the only value): the samples of the skewers are the nodes of the lattice, so the field is already on
+    the mesh (lattice-native) and its FFT is exact, with no window and no alias images of an assignment (Sefusatti et
+    al. 2016, §2.3); a scheme raises."""
+    check_grid_native(mas, "measure_lattice")
     return grid.measure(on_lattice(delta, grid.shape[0], grid.shape[2]))
 
 

@@ -3,6 +3,47 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — mass assignment and interlacing; notebook 09 restructured; architecture diagrams (2026-11-02, evening)
+
+### Added
+- `summary_stats.mesh` (JAX; Sefusatti, Crocce, Scoccimarro & Couchman 2016): `paint(positions, weights, n_mesh, L,
+  mas="tsc", shift=0.0)` (periodic NGP, CIC, TSC, PCS deposition in 1D, 2D, 3D; mass conserved; jitted, `n_mesh` and
+  `mas` static; differentiable in the weights), `mas_window(k, H, mas)`, `fourier_mesh(..., mas="tsc", interlace=True,
+  deconvolve=True)` (the second mesh shifted by H/2, brought back by e^{+i Σk_i H/2}: the odd alias images cancel),
+  `fourier_grid(field, L)` (the exact path), `aliased_power(power, n_mesh, L, mas=, interlace=)` (the alias sum),
+  `mesh_k_axes`, `MAS_SCHEMES`, `MAS_ORDERS`, `check_grid_native`.
+- `GridStatistics3D.measure_points(positions, values, mas="tsc", interlace=True, shot_noise=None)` and
+  `summary_stats.point_statistics(samples, grid, mas=, interlace=, shot_noise=, power=, power_nw=)` (the expectation:
+  the alias sum of the mesh).
+- `skewerjax.utils.dag`: the architecture as data (`DAG_NODES`, `DAG_EDGES` with the implementing functions and the
+  arrays they carry, `DAG_EXTERNAL`, `DAG_NOTEBOOKS`, `REALMS`, `LAYERS`, `LAYER_EDGES`), `dag_to_mermaid("pipeline" |
+  "layers")`, `module_tree`, `concept_table`, `readme_blocks`; `scripts/dev/make_diagrams.py` writes the README's
+  generated blocks.
+- `utils.plotting`: `plot_p1d_orders`, `plot_xi1d_orders`, `plot_p1d_terms`, `plot_xi1d_terms` (one space each;
+  `k_limits` shaded outside, `k_scale`, small markers); `k_scale` on `plot_orders_superimposed` and `plot_terms_by_order`.
+- Tests: `tests/test_mesh.py` (mass, nodes bit for bit, the window, plane waves below and above k_Nyq, the interlacing
+  phase sign, jit and gradients, `aliased_power`), `tests/summary_stats/test_point_statistics.py` (the two paths),
+  `tests/utils/test_dag.py` (the specification against the code, the layers against the import graph, the README).
+
+### Changed
+- Grid- and lattice-native statistics take `mas=None` only (`GridStatistics3D.measure`, `field_statistics`,
+  `measure_lattice`, `skewer_density_statistics`; a scheme raises): the exact FFT, results unchanged bit for bit.
+- `plot_dag` draws the specification of `utils.dag`: the statistics downstream of τ (mean transmission, overflux, 1D,
+  3D on the lattice, field statistics with the mesh), bands for core, simulations, skewers and summary_stats, the
+  module under every name; figure size (26, 8.6). Highlight keys `normalisation`, `stats_1d`, `stats_3d`, `field_stats`
+  (`stats` is gone; notebooks 00, 00b and 08 updated); an unknown key raises.
+- `plot_xi_mu_wedges`: the echoes r^±(μ) as vertical lines in the wedge's colour (+ dashed, − dotted) with a small
+  legend of the two styles; the note "ticks at the top" removed.
+- Notebook 09: Part B has its own bins (`EDGES_B`, from the lattice of the points), its maps drawn over the range of
+  the overflux maps (k∥ ≤ π u/dv); Part D is "Summary statistics of the overfluxes": D1 bins and statistics (from old
+  Part B and C2), D2 planes (old D1), D3 P, ξ and wedges (old D2, D3), D4 P1D (old E1), D5 by order (old E2), D6 term
+  by term (old E3); the wedge call restored (`plot_xi_mu_wedges`); grid-native call sites commented.
+- README: an "Architecture" section generated from `utils.dag` (layers, pipeline, module tree, concepts).
+
+### Removed
+- `plot_orders_compared`, `plot_terms_compared` (→ the four single-space functions); `plotting.DAG_NODES` & co. (→
+  `utils.dag`).
+
 ## Unreleased — toy fields, skewers and summary statistics as three realms (2026-11-02)
 
 ### Added
@@ -26,7 +67,7 @@ All notable changes to SkewerJAX. Dates are those of the working sessions; the p
 - Notebooks 08 and 09 call the explicit functions: `bao_k_edges(2π/L, π/dx, 3/σ_BAO, ...)` for the bins, `box_grid`
   and `field_statistics((boxes.delta(i) for i in idx), grid, power=g.power, power_nw=...)`, `lattice_columns`,
   `SkewerBundle(spatial_points=lattice_points(...), cosmologies=boxes.cosmology(), a0=1/(1+z), x0=0,
-  ICs_defined_at_index=0)`, `lattice_density_theory(boxes.grf().power, GRID_E, ...)`. Every statistic, print and figure
+  ICs_defined_at_index=0)`, `lattice_density_theory(boxes.grf().power, GRID_B, ...)`. Every statistic, print and figure
   is unchanged (compared against the committed version: identical).
 - Tests rewritten on the explicit functions (`tests/helpers.py`: `toy_tau`, `toy_lattice_statistics`, test-only);
   new `tests/skewers/test_lattice.py`, `tests/summary_stats/test_field_stats.py`, `test_density.py`.

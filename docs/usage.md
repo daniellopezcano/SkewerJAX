@@ -84,7 +84,8 @@ Dependencies run one way only: `comparison` uses `simulations`, `simulations` us
 
 The overflux and its statistics (imports `core` at most). Modules: `overflux`, `orders` (the order-by-order
 decomposition), `stats_1d`, `stats_3d`, `grid3d`, `fourier` and `binning` (shared conventions and binning),
-`contaminants`, `field_stats` (3D fields on their grid) and `density` (the density along a lattice of skewers); every
+`contaminants`, `field_stats` (3D fields on their grid or at points), `mesh` (points on a mesh: mass assignment,
+interlacing, the window) and `density` (the density along a lattice of skewers); every
 entry point below is also importable from `skewerjax.summary_stats`. Arrays and geometry only: nothing from
 `skewerjax.simulations` or `skewerjax.skewers` enters (an expectation is a callable P(k)).
 
@@ -97,6 +98,8 @@ entry point below is also importable from `skewerjax.summary_stats`. Arrays and 
 | 3D statistics by term | `OverfluxStatistics3D(ov, dv, d_perp)` (`stats_3d`) | pairs, orders, binning (`bin_p3d_kperp`) |
 | 3D fields on their grid | `GridStatistics3D(shape, L, los_axis=1)` (`grid3d`): `.measure(delta)`, `.theory(P_on_modes)` (the exact expectation, binned alike), `.xi_iso_covariance(P_on_modes)` (the exact Gaussian covariance of the isotropic ξ bins), `.axes()`; `ensemble_mean(records, GRID_KEYS)` (`binning`) | without the k = 0 mode (ξ of the field minus its box mean); P and ξ isotropic, in the (∥, ⊥) plane and in wedges of μ (`MU_WEDGES`, DESI DR2); bin edges (`hybrid_k_edges`, `bao_k_edges(k_f, k_max, k_w, k_1=, dk_factor=0.25, n_log=)`, `native_edges`, `full_coverage`, `occupied_edges`, `binning`); `multipoles=True` |
 | 3D fields over an ensemble | `box_grid(n_cells, L, k_edges=, r_edges=)` (`GridStatistics3D` with the map rows on the grid's own modes and separations; bins beyond `grid_limits(n_cells, L)` cut), `field_statistics(fields, grid, power=, power_nw=)` (`field_stats`: an iterable of fields, each measured and discarded), `grid_power(power, shape, L)` (P(\|k\|) on the rfft modes), `xi_chi2(res)`, `xi_subset_offsets(res)`, `bao_height(r, r2xi, r_bao, sigma_bao, err=)` | `power`, `power_nw`: callables P(k) of \|k\| (e.g. `PowerLawGRF.power`): the expectation, the exact covariance of ξ, the expectation without the bump |
+| points on a mesh | `paint(positions, weights, n_mesh, L, mas="tsc", shift=0.0)` (periodic deposition in 1D, 2D, 3D), `mas_window(k, H, mas)` (W(k) = Π [sin(k_i H/2)/(k_i H/2)]^p), `fourier_mesh(positions, weights, n_mesh, L, mas="tsc", interlace=True, deconvolve=True)` (rfft of the mesh, interlaced with the mesh shifted by H/2, divided by W; returns (F, meta)), `fourier_grid(field, L)` (a field already on the mesh: the exact rfft), `aliased_power(power, n_mesh, L, mas=, interlace=)` (the expectation: the alias sum) (`mesh`; Sefusatti et al. 2016) | `mas`: "ngp", "cic", "tsc" (default), "pcs" (B-spline orders 1–4); `interlace` cancels the alias images with odd n_x + n_y + n_z; jitted, `n_mesh` and `mas` static; differentiable in the weights (and the positions for p ≥ 2) |
+| 3D fields at points | `point_statistics(samples, grid, mas="tsc", interlace=True, shot_noise=None, power=, power_nw=)` (`field_stats`: an iterable of (positions (N, 3), values (N,)) per realisation), `GridStatistics3D.measure_points(positions, values, mas=, interlace=, shot_noise=)` | the expectation is the alias sum of the mesh (`aliased_power`); `shot_noise` a constant [cMpc³] subtracted from P (1/n̄ for discrete tracers, ⟨v²⟩/n̄ for values at random points; none by default). Grid- and lattice-native inputs (`GridStatistics3D.measure`, `field_statistics`, `measure_lattice`, `skewer_density_statistics`) take the exact FFT: their `mas` must be None (a scheme raises) |
 | density along skewers | `skewer_density_statistics(columns, points_per_cell, grid, L, n_bar=)` (`density`: two species and their sum at the points of the skewers, `on_points`, against their global mean; the 3D estimator on `lattice_grid` of the points and the 1D statistics), `lattice_density_theory(power, grid, n_cells, stride, points_per_cell=, p1d=, scale=)` (its exact expectation on that lattice: ξ_grid at the lattice separations, the aliased P) | `scale` = `density_scale` (the global-mean normalisation) |
 | metal models | `fit_mcdonald_a`, `fit_ma_model_profiled`, `mcdonald_factor`, `ma_factor` (`contaminants`) | |
 
@@ -317,8 +320,12 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
 - `SKEWERJAX_HEADLESS=1` forces the inline backend (e.g. when executing notebooks with nbconvert).
 
 - Line styles per mode: `MODE_STYLES`; labels with units: `LABELS`; sizes: `FIGSIZES`.
-- `plot_dag(highlight, external=False)`: the dependency graph of the ingredients (`DAG_NODES`, `DAG_EDGES`; every
-  edge is a dependency of the code, listed above `DAG_EDGES`).
+- `plot_dag(highlight, external=False)`: the dependency graph of the ingredients, from the one specification
+  `skewerjax.utils.dag` (`DAG_NODES`: name, module, realm, key functions; `DAG_EDGES`: every edge a dependency of the
+  code, with the functions that implement it and the array it carries; `DAG_NOTEBOOKS`; `LAYERS`), drawn over the bands
+  of the realms with the module under every name. The same specification gives the README's Mermaid diagrams, tree
+  and table (`dag_to_mermaid("pipeline" | "layers")`, `module_tree`, `concept_table`; written by
+  `scripts/dev/make_diagrams.py`, checked by `tests/utils/test_dag.py`).
 - Path geometry: `geometry_style(name)`, the one style of points, midpoints, dual segments, tangents, line elements,
   piece ends and generators (03).
 - Helpers: `add_panel_letters(axes, labels=None, box=True)` ((a), (b), ... or any labels such as "a1", "a2"),
@@ -331,13 +338,14 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   sectors): `plot_toy_fields` (A2),
   `plot_isotropic_recovery(res, quantity="r2xi", k_edges=, r_edges=, k_marks=, k_scale=, r_scale=, x_bin=)` (P and r²ξ, shaded outside the full coverage with the limits written inside), `plot_kpar_kperp_maps(res, kperp_edges=, levels=, cmap=, k_marks=, kpar_scale=, kperp_scale=, kms_per_cMpc=)` (P on the grid's own k∥ rows), `plot_rpar_rperp_maps(res, rperp_edges=, quantity=, color_scale=, levels=, cmap=, kms_per_cMpc=)` (on the grid's own r∥ rows): each two figures, expected and measured, in the format of `plot_overflux_kpar_kperp` / `plot_overflux_rpar_rperp` (`show=`, `norm=`, `legend=`), one colour norm and one set of levels; every binned figure takes `x_bin="weighted" | "linear" | "log"` (`summary_stats.bin_centres`; default the weighted centres, unchanged); every legend is the top layer with an opaque frame (`_legend`),
   `plot_xi_mu_wedges(res, r_edges=, r_bao=, delta_v=, box=, r_marks=, quantity=, y_scale=)` (DESI DR2 Fig. 3: r²ξ in wedges of μ, `MU_WEDGES`, `MU_COLORS`, the expectation of each wedge dashed
-  in its colour, two legends inside the panel; r_BAO, the Si III–Lyα spot in the wedge of μ = 1 and the echoes r^±(μ) of every wedge, `wedge_echoes`), `plot_skewer_slice` (B2: the skewers of one layer on the H I density, a line-with-arrow legend handle), `plot_toy_skewer` (B2, with the
-  sampling grids), `plot_overflux_kpar_kperp(res, kms_per_cMpc, kperp_edges=, unit=, theory=)` (C1, E1: P on the lattice's own k∥ rows, k∥ in s/km), `plot_overflux_rpar_rperp(res, kms_per_cMpc, rperp_edges=, delta_v=, line_ids=, unit=, theory=)` (C1, E1: one row per lattice separation; with `delta_v` the Si III–Lyα spot labelled with the pair and the folded echo branches of the BAO ring, `echo_curves`; no legend), `plot_overflux_3d(..., limits=, theory=, r_marks=)` (C2, E2: P and
-  r²ξ inside the smallest Nyquist frequency and half the period), `plot_p1d_reference(..., k_edges=, k_limits=, unit=)` (D1: k P1D / π as Fig. 1 of
+  in its colour, legends inside the panel; r_BAO, the Si III–Lyα spot in the wedge of μ = 1 and the echoes r^±(μ) of every wedge as vertical lines in its colour, + dashed and − dotted, `wedge_echoes`), `plot_skewer_slice` (09 C1: the skewers of one layer on the H I density, a line-with-arrow legend handle), `plot_toy_skewer` (09 C1, with the
+  sampling grids), `plot_overflux_kpar_kperp(res, kms_per_cMpc, kperp_edges=, unit=, theory=)` (09 B1, D2: P on the lattice's own k∥ rows, k∥ in s/km), `plot_overflux_rpar_rperp(res, kms_per_cMpc, rperp_edges=, delta_v=, line_ids=, unit=, theory=)` (09 B1, D2: one row per lattice separation; with `delta_v` the Si III–Lyα spot labelled with the pair and the folded echo branches of the BAO ring, `echo_curves`; no legend), `plot_overflux_3d(..., limits=, theory=, r_marks=)` (09 D3: P and
+  r²ξ inside the smallest Nyquist frequency and half the period), `plot_p1d_reference(..., k_edges=, k_limits=, unit=)` (09 D4: k P1D / π as Fig. 1 of
   Chaves-Montero et al., with `utils.reference_data.P1D_DESI_DR1_Z22`), `fold_periodic`, `echo_scales`, `line_pair_label(line_ids)` (Δv_{Lyα–Si III} from the names of the lines), `comoving_axis(ax, kms_per_cMpc, "r" | "k")` (a
   cMpc or cMpc⁻¹ axis on a velocity axis, v = u x; a secondary axis alone draws the ticks of its side); every map takes `cmap`,
   `plot_orders_superimposed`, `plot_terms_by_order` (an `ensemble_1d` with errors, or one `OverfluxStatistics1D`),
-  `plot_orders_compared`, `plot_terms_compared` (one or several ensembles, identical layouts, `kms_per_cMpc`: cMpc top axes), `plot_nH_T_fractions`, `plot_gas_cells` (the standard
+  `plot_p1d_orders`, `plot_xi1d_orders`, `plot_p1d_terms`, `plot_xi1d_terms` (09, D5 and D6: one space each; `k_edges`,
+  `k_limits` (shaded outside k_min, k_max), `x_bin`, `k_scale`, `each`, `delta_v_list` (ξ1D), `kms_per_cMpc`: a cMpc top axis), `plot_nH_T_fractions`, `plot_gas_cells` (the standard
   view of a `core.Cells` along one skewer, `plot_gas_cells(cells, select_cells(cells, bundle.spatial_points), bundle)`:
   the cells it crosses in 3D (cubes, or Voronoi polyhedra), one row per species: density, temperature, peculiar
   velocity with one arrow per cell, scaled by `velocity_arrow_scale` with a reference arrow in the 3D scene; 04 and 05),

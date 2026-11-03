@@ -13,9 +13,14 @@ From arrays and geometry only: imports ``skewerjax.core`` at most, nothing from 
 * ``lattice``: the statistics of an ensemble of periodic skewers from arrays and geometry only: P1D and xi1D by one 1D
   FFT per skewer (``skewer_p1d``, ``skewer_xi1d``), and the 3D statistics on the lattice of skewers (``lattice_grid``,
   ``lattice_limits``, ``on_lattice``, ``measure_lattice``), and the cell values at the points of the skewers (``on_points``);
-* ``field_stats``: P and xi of periodic 3D fields on their own grid over an ensemble of realisations, from arrays and
-  an optional expectation P(k) (``box_grid``, ``grid_limits``, ``grid_power``, ``field_statistics``, ``xi_chi2``,
-  ``xi_subset_offsets``, ``bao_height``);
+* ``field_stats``: P and xi of periodic 3D fields over an ensemble of realisations, on their own grid or from points
+  through a mesh, from arrays and an optional expectation P(k) (``box_grid``, ``grid_limits``, ``grid_power``,
+  ``field_statistics``, ``point_statistics``, ``xi_chi2``, ``xi_subset_offsets``, ``bao_height``);
+* ``mesh``: points on a periodic mesh in 1D, 2D, 3D (Sefusatti et al. 2016): mass assignment ``paint`` (NGP, CIC, TSC,
+  PCS), its window ``mas_window``, the interlaced and deconvolved Fourier field ``fourier_mesh`` (and ``fourier_grid``,
+  the exact path of a field already on the mesh), the alias sum ``aliased_power``; the statistics take ``mas`` /
+  ``interlace`` on the point path (``point_statistics``, ``GridStatistics3D.measure_points``) and ``mas=None`` only on
+  grid- and lattice-native inputs (``field_statistics``, ``measure_lattice``, ``skewer_density_statistics``);
 * ``density``: the density along a lattice of skewers through the same 3D estimator, and its exact expectation on that
   lattice from P(k) (``skewer_density_statistics``, ``lattice_density_theory``);
 * ``stats_3d``: P3D and xi3D of the overflux on a grid of skewers, by term and order (``OverfluxStatistics3D``);
@@ -35,6 +40,7 @@ from skewerjax.summary_stats import (
     fourier,
     grid3d,
     lattice,
+    mesh,
     orders,
     overflux,
     stats_1d,
@@ -59,6 +65,7 @@ from skewerjax.summary_stats.field_stats import (
     field_statistics,
     grid_limits,
     grid_power,
+    point_statistics,
     xi_chi2,
     xi_subset_offsets,
 )
@@ -72,6 +79,14 @@ from skewerjax.summary_stats.lattice import (
     on_points,
     skewer_p1d,
     skewer_xi1d,
+)
+from skewerjax.summary_stats.mesh import (
+    MAS_SCHEMES,
+    aliased_power,
+    fourier_grid,
+    fourier_mesh,
+    mas_window,
+    paint,
 )
 from skewerjax.summary_stats.orders import ZERO_ORDER_KEY, order_sum
 from skewerjax.summary_stats.overflux import (
@@ -112,6 +127,13 @@ __all__ = [
     "grid_limits",
     "grid_power",
     "field_statistics",
+    "point_statistics",
+    "paint",
+    "mas_window",
+    "fourier_mesh",
+    "fourier_grid",
+    "aliased_power",
+    "MAS_SCHEMES",
     "xi_chi2",
     "xi_subset_offsets",
     "bao_height",
