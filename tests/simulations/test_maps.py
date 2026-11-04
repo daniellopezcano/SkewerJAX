@@ -1,5 +1,5 @@
 """Maps of the gas for figures (``simulations.maps``): ``voronoi_slice``, the section of the Voronoi cells by a plane,
-against the nearest generating point found by brute force over every cell and its periodic images (notebook 10, C1).
+against the nearest generating point found by brute force over every cell and its periodic images (notebook 11, C1).
 ``slab_projection`` reads a snapshot: notebook 00_quickstart_step_by_step."""
 
 import numpy as np

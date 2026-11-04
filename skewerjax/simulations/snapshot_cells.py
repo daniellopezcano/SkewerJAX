@@ -21,6 +21,8 @@ from skewerjax.simulations.gas_cells import GasCells
 from skewerjax.simulations.selection import read_selected
 from skewerjax.simulations.snapshot_skewers import ExtractionOptions, ion_cell_fields
 
+GAS_SPECIES = "gas"  # the total gas in ``gas_to_cells``: n = rho / m_u (nucleons), no ion fraction
+
 
 def _region(lo, hi, margin: float, box: float):
     lo = np.broadcast_to(np.asarray(lo, dtype=np.float64), (3,))
@@ -69,15 +71,22 @@ def select_cells_in_region(reader, lo, hi, *, margin: float = 0.0, max_rows: int
 def gas_to_cells(gas: GasCells, species, ext: ExtractionOptions = ExtractionOptions()) -> Cells:
     """``core.Cells`` of raw snapshot cells after the gas physics, per species (as ``SimulationSkewers.to_cells``).
 
-    species : a species key (e.g. "HI"), an ``Ion``, or a sequence of them. Per species: ``number_density`` = n_ion a^3
-    [comoving cm^-3], ``temperature`` [K] and ``velocity`` [km/s, physical peculiar]; positions [cMpc], volumes
-    [cMpc^3], the periodic box and the snapshot ids of the cells. ``ext``: the gas-physics options of
-    ``ExtractionOptions`` (mass unit, T constants, x_HI model, CLOUDY density and interpolation).
+    species : a species key (e.g. "HI"), an ``Ion``, or a sequence of them; ``GAS_SPECIES`` ("gas") is the total gas, the
+    number density of nucleons rho / m_u (no ion fraction: its density follows the mass). Per species:
+    ``number_density`` = n a^3 [comoving cm^-3], ``temperature`` [K] and ``velocity`` [km/s, physical peculiar];
+    positions [cMpc], volumes [cMpc^3], the periodic box and the snapshot ids of the cells. ``ext``: the gas-physics
+    options of ``ExtractionOptions`` (mass unit, T constants, x_HI model, CLOUDY density and interpolation).
     """
     items = [species] if isinstance(species, (str, gp.Ion)) else list(species)
-    ions = [x if isinstance(x, gp.Ion) else gp.ion_from_species(x) for x in items]
     a = float(gas.a)
     per, cloudy = {}, None
+    if GAS_SPECIES in items:
+        f = gas.fields
+        n_gas = gp.element_number_density(np.asarray(f["rho"]), 1.0, 1.0, ext.mass_unit)
+        T = gp.temperature(f["u"], f["n_e"], constants=ext.T_constants)
+        per[GAS_SPECIES] = ion_cell_fields(n_gas, T, f["velocity"], a)
+        items = [x for x in items if not (isinstance(x, str) and x == GAS_SPECIES)]
+    ions = [x if isinstance(x, gp.Ion) else gp.ion_from_species(x) for x in items]
     for ion in ions:
         if not ion.is_HI and cloudy is None:
             cloudy = gp.CloudyIonTable(1.0 / a - 1.0)

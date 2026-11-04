@@ -4,19 +4,18 @@ One pytest suite, laid out like the package and the pipeline (reader → cells �
 
 | folder | covers |
 |---|---|
-| `core/` | constants and lines, cosmology a(x), skewers, cells, selection (in memory and streamed), deposition, pieces, spectral frames, Voigt, the optical depth (`test_optical_depth.py`: periodicity, frames, closed forms, precision, sharding, GPU), JAX transformations (of the whole package), input checks (`test_validation.py`) and diagnostics |
-| `summary_stats/` | the overflux and its statistics: P1D / ξ1D / P3D recovery, the decomposition by order and pair, contamination fits, the 3D grid statistics (`test_statistics.py`); P and ξ of 3D fields against P(k) (`test_field_stats.py`); the density on a lattice of skewers against its exact expectation (`test_density.py`); the two paths of the 3D statistics, grid-native (exact, `mas=None`) and points through a mesh (`test_point_statistics.py`) |
-| `skewers/` | the lattice of skewers: columns, points, the bundle and its frame, the 3D grid of the lattice (`test_lattice.py`) |
-| `simulations/` | the GRF and its toy cells, the toy boxes (and, through the explicit pipeline of notebook 09, along skewers: `test_toy_boxes.py`), gas physics, the section of the Voronoi cells by a plane (`test_maps.py`), the TNG50-4 snapshot (reader, selections, field extraction, τ) |
-| `utils/` | the figure functions; the architecture specification (`test_dag.py`: every module, function and import it names exists, the layers are the import graph, the README's generated blocks are current) |
+| `core/` | constants and lines, cosmology a(x) and r_d, skewers and the lattice of skewers (`test_skewer_lattice.py`), cells, selection (in memory and streamed), deposition, pieces, spectral frames, Voigt, the optical depth (`test_optical_depth.py`: periodicity, frames, a line shift beyond the period, closed forms, precision, sharding, GPU), JAX transformations (of the whole package), input checks (`test_validation.py`) and diagnostics |
+| `summary_stats/` | the overflux and its statistics: P1D / ξ1D / P3D recovery, the decomposition by order and pair, contamination fits, the 3D grid statistics (`test_statistics.py`); P and ξ of gas cells through the mesh against P(k) (`test_field_stats.py`); the density on a lattice of skewers against its exact expectation (`test_density.py`); the one path of the field statistics, the cells of every source through a mesh (the same calls for toy and Voronoi cells, convergence to the exact grid FFT at low k, mass conservation, redshift-space cells), the lattice path refusing a scheme (`test_point_statistics.py`); the decomposition of N = 3 and 4 lines, the periodic ranges (`test_statistics.py`) |
+| `simulations/` | the GRF and its toy cells, the toy boxes (and, through the explicit pipeline of notebook 10, along skewers: `test_toy_boxes.py`), gas physics, the section of the Voronoi cells by a plane (`test_maps.py`), the TNG50-4 snapshot (reader, selections, field extraction, τ) |
+| `utils/` | the figure functions (any number of lines; the BAO images in a periodic box); the architecture specification (`test_dag.py`: every module, function and import it names exists, the layers are the import graph, the README's generated blocks are current) |
 | `comparison/` | the benchmark utilities, the comparison with fake_spectra |
 | `regression/` | every result against reference arrays (`data/*.npz`, built by `outputs.py`) |
-| `test_mesh.py` | mass assignment and interlacing (`summary_stats.mesh`): mass conservation, the nodes bit for bit, the window, plane waves below and above k_Nyq, the sign of the interlacing phase, jit and gradients, in 1D, 2D, 3D |
-| `test_import_graph.py` | the import graph: `simulations`, `skewers` and `summary_stats` import `core` at most and not one another (static, on the source, and at run time) |
+| `test_mesh.py` | mass assignment and interlacing (`summary_stats.mesh`): mass conservation and the periodic wrap, the nodes bit for bit, the window, plane waves below and above k_Nyq, the sign of the interlacing phase, jit and gradients, in 1D, 2D, 3D; the chunked deposit and `node_transfer` |
+| `test_import_graph.py` | the import graph: `simulations` and `summary_stats` import `core` at most and not each other (static, on the source, and at run time) |
 
 `conftest.py` runs JAX on the CPU in float64 and skips the tests whose markers need what the machine lacks;
 `helpers.py` holds a few shared builders (test-only), among them `toy_tau` and `toy_lattice_statistics`: the toy boxes
-along a lattice of skewers by the explicit pipeline of notebook 09.
+along a lattice of skewers by the explicit pipeline of notebook 10.
 
 ## Running it
 

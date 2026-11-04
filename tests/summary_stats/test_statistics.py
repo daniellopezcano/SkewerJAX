@@ -480,3 +480,78 @@ def test_redshift_mean_groups_the_pixels_by_scale_factor():
     assert overflux_check(delta, Tb, "redshift")["mean_delta_level"].max() > 1e-3, "per pixel: not the set of this grid"
     ov = DeltaFieldBuilder(tau[0], mean="redshift", grid=snapshot).build()
     np.testing.assert_allclose(np.asarray(ov.mean_transmission), np.asarray(mean_transmissions(T[0], "global")), rtol=1e-14)
+
+
+@pytest.mark.parametrize("n_lines", [3, 4])
+@pytest.mark.parametrize("mean", ["redshift", "skewer"])
+def test_decomposition_of_n_lines(n_lines, mean):
+    """Any number of lines (``DeltaFieldBuilder`` with the default labels "1" .. "N"): every non-empty subset of lines is
+    a term (2^N - 1), the correlator C = T_bar / prod_j T_bar_j - 1 equals sum_{|A| >= 2} <delta_A> over the set of the
+    mode, the decomposition delta_tot = [sum_A delta_A - C] / (1 + C) is exact at every pixel, and P1D, xi1D (and P3D)
+    of the total split into the orders 0 .. 2N, which add up to the total to rounding, with order 1 zero; the same
+    through ``decompose_1d`` and ``overflux_check``."""
+    from itertools import combinations
+
+    from skewerjax.summary_stats import decompose_1d, overflux_check
+
+    rng = np.random.default_rng(10 + n_lines)
+    N_s, N_v = 30, 48
+    base = 0.3 * rng.gamma(2.0, 0.5, (N_s, N_v))
+    tau = np.stack([(0.4 + 0.2 * j) * base + 0.15 * rng.gamma(2.0, 0.5, (N_s, N_v)) for j in range(n_lines)])
+    ov = DeltaFieldBuilder(tau, mean=mean).build()
+    assert ov.labels == [str(j + 1) for j in range(n_lines)] and len(ov.subset_keys) == 2**n_lines - 1
+    axes = MEAN_AXES[mean]
+    corr = sum(
+        np.asarray(ov.delta_terms["".join(A)]).mean(axes, keepdims=True)
+        for r in range(2, n_lines + 1)
+        for A in combinations(ov.labels, r)
+    )
+    C = np.asarray(ov.C_per_pixel)
+    np.testing.assert_allclose(np.broadcast_to(C, (N_s, N_v)), np.broadcast_to(corr, (N_s, N_v)), rtol=1e-12, atol=1e-16)
+    recon = (sum(np.asarray(v) for v in ov.delta_terms.values()) - C) / (1 + C)
+    assert np.max(np.abs(recon - np.asarray(ov.total))) < 1e-14
+    st = OverfluxStatistics1D(ov, 2.0).compute_xi1d()
+    assert sorted(st.Pk_total_by_order) == list(range(2 * n_lines + 1))
+    for tot, orders in ((st.Pk_total, st.Pk_total_by_order), (st.xi_total, st.xi_total_by_order)):
+        sc = float(np.max(np.abs(np.asarray(tot))))
+        assert np.max(np.abs(sum(np.asarray(v) for v in orders.values()) - np.asarray(tot))) < 1e-12 * sc
+        assert np.max(np.abs(np.asarray(orders[1]))) < 1e-12 * sc, "order 1 vanishes"
+        assert np.max(np.abs(np.asarray(orders[2 * n_lines]))) > 0, "the highest order is there"
+    st3 = OverfluxStatistics3D(ov, 2.0, 1.0, grid_shape=(5, 6)).compute_p3d()
+    sc = float(np.max(np.asarray(st3.Pk3d_total)))
+    assert np.max(np.abs(np.asarray(st3.Pk3d_total_from_terms) - np.asarray(st3.Pk3d_total))) < 1e-12 * sc
+    s = decompose_1d(tau, 2.0, mean=mean)
+    assert s["P_order"].shape[0] == 2 * n_lines + 1
+    np.testing.assert_allclose(s["P_total"], np.asarray(st.Pk_total), rtol=1e-12)
+    T = np.exp(-tau)
+    Tb = np.asarray(ov.mean_transmission)
+    Tb = Tb if Tb.ndim == 3 else np.broadcast_to(Tb[:, None], (n_lines + 1, N_s, N_v))
+    delta = np.concatenate([T, T.prod(0)[None]]) / Tb - 1
+    chk = overflux_check(delta[None], Tb[None], mean)
+    assert chk["C_error"] < 1e-14 and chk["decomposition_error"] < 1e-14 and np.max(chk["mean_delta_level"]) < 1e-14
+
+
+def test_periodic_ranges_of_the_statistics():
+    """The periodicity audit of the statistics: the 3D maps and wedges stop at L / 2 (minimum-image separations of
+    ``GridStatistics3D``, the rows of ``lattice_grid`` up to half the period, bins beyond cut by ``full_coverage``); the
+    1D lags of ``skewer_xi1d`` and ``OverfluxStatistics1D`` run up to v_per / 2 (the separation of the nearest images);
+    the mesh wraps every deposit (``tests/test_mesh.py::test_mass_conservation_and_periodic_wrap``)."""
+    from skewerjax.summary_stats import GridStatistics3D, lattice_grid, skewer_p1d, skewer_xi1d
+
+    L, n = 12.0, 8
+    gs = GridStatistics3D((n,) * 3, L)
+    assert gs.r_edges[-1] <= L / 2 + 1e-12 and gs.r_mu_edges[-1] <= L / 2 + 1e-12
+    assert np.nanmax(gs.rpar) <= L / 2 + 1e-12 and np.nanmax(gs.rpar_map) <= L / 2 + 1e-12, (
+        "the rows of the map: |r_par| <= L / 2"
+    )
+    lat = lattice_grid(4, 4, 16, L, 3.0, k_edges=np.linspace(0.5, 1.0, 3), log=None)
+    assert np.isclose(lat.rpar[-1], L / 2) and lat.rpar.size == 16 // 2 + 1, "one row per separation j dv, j = 0 .. N / 2"
+    assert lat.r_edges[-1] <= L / 2 + 1e-12
+    rng = np.random.default_rng(0)
+    d, dv = rng.normal(size=(5, 64)), 2.5
+    lags, _ = skewer_xi1d(d, dv)
+    k, _ = skewer_p1d(d, dv)
+    assert lags[-1] == pytest.approx(64 * dv / 2) and k[-1] == pytest.approx(np.pi / dv), "lags to v_per / 2, k to pi / dv"
+    ov = DeltaFieldBuilder(rng.uniform(0.1, 1.0, (1, 5, 64))).build()
+    st = OverfluxStatistics1D(ov, dv).compute_xi1d()
+    assert np.max(np.abs(np.asarray(st.lags))) == pytest.approx(64 * dv / 2), "centred lags within +- v_per / 2"

@@ -4,7 +4,7 @@ comoving units) applied to the overdensity sampled on the lattice recovers its e
 interpolated linearly between the cells), BAO peak included; that expectation is the aliasing sum of the input
 spectrum; ``on_points`` puts p points in every cell; and ``skewer_density_statistics`` (two species and their sum,
 against their global mean) measures the same field through the same estimator, against the same expectation scaled by
-``density_scale`` (notebook 09, Part B)."""
+``density_scale`` (notebook 10, Part B)."""
 
 import numpy as np
 import pytest
@@ -85,7 +85,7 @@ def test_aliasing_sum():
 
 
 def test_skewer_density_statistics_against_the_lattice_expectation():
-    """``skewer_density_statistics`` on the cells the lattice crosses (two species, n_SiIII = r n_HI): the three
+    """``skewer_density_statistics`` on the cells the lattice crosses (three species, n_X = r_X n_HI): the four
     overdensities identical, the 3D statistics = ``measure`` of n / <n> - 1 at the points, the exact decomposition of the
     1D statistics, and the estimator against its exact expectation on the lattice of the points
     (``lattice_density_theory`` with ``scale = density_scale``: the global-mean normalisation), P and xi, BAO included."""
@@ -94,10 +94,9 @@ def test_skewer_density_statistics_against_the_lattice_expectation():
     gp = _grid(b, STRIDE, b.n_cells * P)
     fields = [b.fields(i) for i in range(n_real)]
     cols = [{sp: n[::2, :, ::2] for sp, n in f["n"].items()} for f in fields]
-    n_bar = {"HI": b.n_bar_HI, "SiIII": b.siiii_to_hi * b.n_bar_HI}
-    ds = skewer_density_statistics(cols, P, gp, b.box_cMpc, n_bar=n_bar)
-    assert list(ds["density3d"]) == ["HI", "SiIII", "total"] and ds["density_axes3d"]["k_edges"].size == gp.k_edges.size
-    assert np.all(ds["density_identity"] < 1e-13), "n_SiIII = r n_HI: the three overdensities are identical"
+    ds = skewer_density_statistics(cols, P, gp, b.box_cMpc, n_bar=b.n_bar)
+    assert list(ds["density3d"]) == ["HI", "SiIII", "SiII", "total"] and ds["density_axes3d"]["k_edges"].size == gp.k_edges.size
+    assert np.all(ds["density_identity"] < 1e-13), "n_X = r_X n_HI: the overdensities are identical"
     m = b.n_bar_HI * ds["density_mean"]["HI"]
     np.testing.assert_allclose(ds["density_means"]["HI"], m, rtol=1e-14)
     one = gp.measure(on_points(cols[1]["HI"], P) / m - 1)["xi_map"]
@@ -106,10 +105,12 @@ def test_skewer_density_statistics_against_the_lattice_expectation():
         e1 = ds["density_flux"]
         assert np.max(np.abs(e1[f"{kind}_order"].sum(0) - e1[f"{kind}_total"])) < 1e-12 * np.max(np.abs(e1[f"{kind}_total"]))
     pk = ds["density_p1d"]
-    assert pk["p1d"].shape == (3, gp.shape[1] // 2 + 1) and pk["k"].shape == (gp.shape[1] // 2 + 1,)
+    assert pk["p1d"].shape == (4, gp.shape[1] // 2 + 1) and pk["k"].shape == (gp.shape[1] // 2 + 1,)
     assert ds["density_scale"] == pytest.approx((1 / ds["density_mean"]["total"]) ** 2, rel=1e-14)
     th = lattice_density_theory(g.power, gp, b.n_cells, STRIDE, points_per_cell=P, scale=ds["density_scale"])
     for key in GRID_KEYS:
         assert _mean_pull2(ds["density3d"]["total"], th, key) < 2.0, key
-    with pytest.raises(ValueError, match="two species"):
-        skewer_density_statistics([{"HI": cols[0]["HI"]}], P, gp, b.box_cMpc)
+    one = skewer_density_statistics([{"HI": c["HI"]} for c in cols[:2]], P, gp, b.box_cMpc)  # any number of species
+    assert list(one["density3d"]) == ["HI", "total"] and one["density_identity"][1] < 1e-13
+    with pytest.raises(ValueError, match="at least one species"):
+        skewer_density_statistics([{}], P, gp, b.box_cMpc)

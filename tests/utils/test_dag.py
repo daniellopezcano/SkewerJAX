@@ -119,6 +119,6 @@ def test_plot_dag_routes_and_keys():
         pl.plot_dag(("stats",))
     fig, ax = pl.plot_dag(("samplers", "field_stats"))
     texts = {t.get_text() for t in ax.texts}
-    assert {"core", "simulations", "skewers", "summary_stats"} <= texts, "the bands, labelled"
-    assert "overflux.py" in texts and "core/skewers.py …" in texts, "the module under every name"
+    assert {"core", "simulations", "summary_stats"} <= texts, "the bands, labelled"
+    assert "overflux.py" in texts and "skewers.py" in texts, "the module under every name"
     assert pl.check_fonts(fig) == []

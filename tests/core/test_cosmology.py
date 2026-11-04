@@ -44,3 +44,20 @@ def test_planck_background_is_monotonic_and_bracketed():
 def test_densities_must_sum_to_one():
     with pytest.raises(ValueError):
         Cosmology(H0=phys.H0, Omega_r_0=0.0, Omega_m_0=0.5, Omega_k_0=0.0, Omega_lambda_0=0.4)
+
+
+def test_sound_horizon_at_the_drag_epoch():
+    """``sound_horizon_drag``: the fit of Aubourg et al. 2015 (eq. 16), r_d = 55.154 exp[-72.3 (omega_nu + 0.0006)^2] /
+    (omega_cb^0.25351 omega_b^0.12807) Mpc; for the cosmology of IllustrisTNG (Planck 2015) r_d = 147.30 Mpc; vectorised,
+    and smaller for more matter, more baryons or massive neutrinos."""
+    from skewerjax.core import sound_horizon_drag
+    from skewerjax.simulations import TNG_COSMOLOGY as C
+
+    h2 = C["h"] ** 2
+    wb, wcb = C["Omega_b"] * h2, C["Omega_m"] * h2
+    rd = float(sound_horizon_drag(wb, wcb))
+    assert rd == pytest.approx(55.154 * np.exp(-72.3 * 0.0006**2) / (wcb**0.25351 * wb**0.12807), rel=1e-14)
+    assert rd == pytest.approx(147.30, abs=0.01)
+    r = np.asarray(sound_horizon_drag(np.array([wb, wb, 1.1 * wb]), np.array([wcb, 1.1 * wcb, wcb])))
+    assert r[1] < r[0] and r[2] < r[0] and r[0] == pytest.approx(rd)
+    assert float(sound_horizon_drag(wb, wcb, 0.0006)) < rd, "massive neutrinos lower r_d"

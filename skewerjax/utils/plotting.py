@@ -184,6 +184,8 @@ ENTITY_COLORS = {
     "SiIII": PALETTE["red"],
     "SiIII-1206": PALETTE["red"],
     "SiII": PALETTE["green"],
+    "SiII-1193": PALETTE["green"],
+    "SiII-1190": PALETTE["yellow"],
     "HI-LyB": PALETTE["cyan"],
     "CIV": PALETTE["yellow"],
     "SiIV": PALETTE["purple"],
@@ -191,6 +193,7 @@ ENTITY_COLORS = {
     "analytic": PALETTE["grey"],
     "reference": PALETTE["grey"],
     "total": FG,
+    "gas": FG,
     "input": FG,
     "density": PALETTE["green"],
     "temperature": PALETTE["purple"],
@@ -200,6 +203,23 @@ ENTITY_COLORS = {
     "crossings": PALETTE["purple"],
 }
 LINE_COLOR_ORDER = ("blue", "red", "green", "cyan", "yellow", "purple")  # further lines of a bundle, in this order
+# One style per line and per species, the same in every figure (``line_style``): the colour of ``ENTITY_COLORS``, a
+# marker and a line style. The lines of the default bundle (Lya, Si III 1206, Si II 1193, Si II 1190) first; a line or a
+# species not listed takes the next unused colour, marker and style of the cycles below, by its index in the figure.
+LINE_STYLES = {
+    "HI-LyA": ("o", "-"),
+    "SiIII-1206": ("s", "--"),
+    "SiII-1193": ("^", "-."),
+    "SiII-1190": ("v", ":"),
+    "HI-LyB": ("D", (0, (5, 1.5, 1, 1.5))),
+    "HI": ("o", "-"),
+    "SiIII": ("s", "--"),
+    "SiII": ("^", "-."),
+    "gas": ("h", "-"),
+    "total": ("*", "-"),
+}
+_MARKER_CYCLE = ("o", "s", "^", "v", "D", "P", "X", "<", ">")
+_LS_CYCLE = ("-", "--", "-.", ":", (0, (5, 1.5, 1, 1.5)), (0, (1, 1)))
 MODE_STYLES = {  # SkewerJAX default solid; matched (fake_spectra reproduced) dashed; references thick and light underneath
     "default": dict(ls="-", lw=2.0),
     "matched": dict(ls="--", lw=2.0),
@@ -562,8 +582,9 @@ def pk_sigma(P_input, n_modes, n_real: int = 1):
     return np.asarray(P_input, dtype=float) * np.sqrt(2.0 / (np.where(n > 0, n, np.nan) * n_real))
 
 
-# --------------------------------------------------------------------------- 1D statistics by order and term (notebook 09)
+# --------------------------------------------------------------------------- 1D statistics by order and term (notebook 10)
 ORDER_COLORS = [PALETTE[k] for k in ("grey", "purple", "blue", "green", "yellow", "cyan", "red")]  # by order n (cycled)
+ORDER_MARKERS = ("o", "o", "o", "s", "^", "v", "D", "P", "X")  # by order n: a new shape past the colours (N lines: 2N + 1 orders)
 
 
 def _as_ensemble(stats):
@@ -577,7 +598,7 @@ def _as_ensemble(stats):
 
 def _labels_1d(unit: str) -> dict:
     """The axis labels of the 1D statistics along the line of sight: in velocity units (``unit="km/s"``, the overflux,
-    ``LABELS``) or in comoving units (``"cMpc"``, the density along the skewers, notebook 09, Part B)."""
+    ``LABELS``) or in comoving units (``"cMpc"``, the density along the skewers, notebook 10, Part B)."""
     _check_option("unit", unit, ("km/s", "cMpc"))
     if unit == "km/s":
         return dict(P=LABELS["P1D"], k=LABELS["k"], lag=LABELS["lag"])
@@ -621,7 +642,7 @@ def _binned(x, each, edges, *, per_box: bool = False, x_bin: str = "weighted"):
     return xc[keep], b.mean(0)[..., keep], err[..., keep]
 
 
-EACH_LABEL = "each box ({n})"  # the legend of the faint lines of every realisation ({n}: their number); e.g. notebook 10:
+EACH_LABEL = "each box ({n})"  # the legend of the faint lines of every realisation ({n}: their number); e.g. notebook 11:
 # "each line of sight ({n}, not independent)"
 
 
@@ -630,15 +651,16 @@ def _each_label(each_label, n: int) -> str:
     return (EACH_LABEL if each_label is None else each_label).format(n=n)
 
 
-def _with_errors(ax, x, y, e, color, kind: str, label=None, each=None, **kw):
-    """The mean with its error as points with error bars, joined by a thin line of the same colour, above every
-    realisation ``each`` (n, N) as a thin faint line and above the order totals; smaller points for xi (dense lags)."""
+def _with_errors(ax, x, y, e, color, kind: str, label=None, each=None, marker: str = "o", **kw):
+    """The mean with its error as points (``marker``) with error bars, joined by a thin line of the same colour, above
+    every realisation ``each`` (n, N) as a thin faint line and above the order totals; smaller points for xi (dense
+    lags)."""
     if each is not None:
         for yy in each:
             ax.plot(x, yy, color=color, **_EACH)
     e = None if np.all(~np.isfinite(e)) else e
     size = dict(ms=_MS_SMALL, capsize=2.5, elinewidth=1.6) if kind == "P" else dict(ms=3.5, capsize=1.5, elinewidth=1.2)
-    ax.errorbar(x, y, e, color=color, fmt="o-", lw=1.0, label=label, zorder=5, **size, **kw)
+    ax.errorbar(x, y, e, color=color, fmt=marker + "-", lw=1.0, label=label, zorder=5, **size, **kw)
 
 
 def _symlog_decades(ax, linthresh: float):
@@ -728,7 +750,19 @@ def plot_orders_superimposed(
     for n, (y, e) in enumerate(zip(orders, orders_e)):
         if np.max(np.abs(y)) > 1e-12 * scale:
             c = ORDER_COLORS[n % len(ORDER_COLORS)]
-            _with_errors(ax0, xc, y, e, c, kind, label=rf"$\mathcal{{O}}({n})$", each=orders_b[:, n] if show_each else None)
+            mk = ORDER_MARKERS[n % len(ORDER_MARKERS)]
+            _with_errors(
+                ax0,
+                xc,
+                y,
+                e,
+                c,
+                kind,
+                label=rf"$\mathcal{{O}}({n})$",
+                each=orders_b[:, n] if show_each else None,
+                marker=mk,
+                mfc=c if n < len(ORDER_COLORS) else "none",
+            )
     ax0.plot(xc, tot, lw=3.0, color=FG, alpha=0.6, label="total", zorder=3)
     ax0.plot(xc, orders.sum(0), lw=1.5, ls="--", color=PALETTE["red"], label=r"$\sum$ orders", zorder=4)
     total_sum = np.asarray(ens[f"{kind}_order"]).sum(0)
@@ -788,6 +822,9 @@ def plot_terms_by_order(
     legend: str = "inside",
     unit: str = "km/s",
     k_scale: str = "log",
+    max_terms: int | None = 6,
+    terms=None,
+    line_ids=None,
     axs=None,
     figsize=None,
 ):
@@ -802,7 +839,10 @@ def plot_terms_by_order(
     ``plot_orders_superimposed``: ``k_edges``, or ``n_lin``, ``n_log``); xi: linear, lags 0 .. max_lag in bins of
     ``lag_bin`` pixels; ``x_bin``: where each bin is drawn (``plot_orders_superimposed``). ``axs``: draw into these axes (one per order); ``legend``: "inside" each panel (default), "below"
     it or on its "right"; ``unit``: "km/s" or "cMpc" (the axis labels, ``_labels_1d``); ``k_scale``: "log" or "linear".
-    Returns (fig, axs).
+    With N lines an order holds many terms (N = 4: up to 28): ``max_terms`` (default 6; None: all) keeps the largest of
+    each order (by max |value| where drawn) and sums the others into one grey dashed curve, "other terms (n)"; ``terms``
+    (a list of labels "A–B", e.g. "1–2", "𝒞–123") draws those only, the others summed alike. ``line_ids``: the lines
+    numbered 1 .. N in the term keys, written in the first panel ("1 = Lyα, ..."). Returns (fig, axs).
     """
     if kind not in ("P", "xi"):
         raise ValueError(f"kind must be 'P' or 'xi', got {kind!r}.")
@@ -824,12 +864,27 @@ def plot_terms_by_order(
     if axs is None:
         fig, axs = plt.subplots(1, len(orders), figsize=figsize or (6.5 * len(orders), 6.5), layout="constrained")
     axs = np.atleast_1d(axs)
+    wanted = None if terms is None else {t.replace(ZERO_ORDER_KEY, r"$\mathcal{C}$") for t in terms}
     for ax, n in zip(axs, orders):
-        for i, (key, idx) in enumerate(groups.get(n, {}).items()):
+        curves = []
+        for key, idx in groups.get(n, {}).items():
             _, y, e, b = _binned(x, terms_each[:, idx].sum(1), edges, per_box=True, x_bin=x_bin)
             if np.max(np.abs(y)) > 1e-12 * scale:
-                c = PALETTE_CYCLE[i % len(PALETTE_CYCLE)]
-                _with_errors(ax, xc, y, e, c, kind, label=_pair_label(key), each=b if each and b.shape[0] > 1 else None)
+                curves.append((key, idx, y, e, b))
+        if wanted is not None:
+            shown = [c for c in curves if _pair_label(c[0]) in wanted]
+        else:
+            ranked = sorted(curves, key=lambda c: -float(np.max(np.abs(c[2]))))
+            shown = ranked if max_terms is None else ranked[: int(max_terms)]
+        rest = [c for c in curves if all(c is not t for t in shown)]
+        for i, (key, _idx, y, e, b) in enumerate(c for c in curves if any(c is t for t in shown)):
+            c = PALETTE_CYCLE[i % len(PALETTE_CYCLE)]
+            mk = _MARKER_CYCLE[(i // len(PALETTE_CYCLE)) % len(_MARKER_CYCLE)]
+            _with_errors(ax, xc, y, e, c, kind, label=_pair_label(key), each=b if each and b.shape[0] > 1 else None, marker=mk)
+        if rest:
+            idx = [j for c in rest for j in c[1]]
+            _, y, e = _binned(x, terms_each[:, idx].sum(1), edges, x_bin=x_bin)
+            ax.plot(xc, y, color=PALETTE["grey"], ls="--", lw=2.0, zorder=4, label=f"other terms ({len(rest)})")
         ax.plot(xc, by_order[n], color=FG, lw=3.0, alpha=0.6, label=rf"$\mathcal{{O}}({n})$ total", zorder=1)
         if kind == "P":
             ax.set_xscale(k_scale)
@@ -850,6 +905,9 @@ def plot_terms_by_order(
                 ax, fontsize=FONT_MIN["legend"], ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.2)
             )  # the panels are dense
     axs[0].set_ylabel(_labels_1d(unit)["P"] if kind == "P" else LABELS["xi"])
+    if line_ids is not None and axs[0].get_legend() is not None:  # the numbering of the lines, the title of the first legend
+        key = ", ".join(f"{j + 1} = {nm}" for j, nm in enumerate(line_names(line_ids)))
+        axs[0].get_legend().set_title("lines: " + key, prop=dict(size=FONT_MIN["legend"]))
     return axs[0].figure, axs
 
 
@@ -900,7 +958,7 @@ def plot_p1d_orders(
     each_label: str | None = None,
     figsize=(12, 10),
 ):
-    """P1D of a composite overflux split by order |A| + |B| (``plot_orders_superimposed``, kind "P"; notebook 09, D5):
+    """P1D of a composite overflux split by order |A| + |B| (``plot_orders_superimposed``, kind "P"; notebook 10, D5):
     every order on one panel (symmetric-log y, ``linthresh``), the total and the sum of the orders, and (sum - total) /
     max |total| below. stats : ``summary_stats.ensemble_1d`` (or one ``OverfluxStatistics1D``); k_edges : the display
     bins (e.g. ``bao_k_edges`` along the line of sight); k_limits : (k_min, k_max) = (2 pi / v_per, pi / dv), the range
@@ -938,7 +996,7 @@ def plot_xi1d_orders(
     each_label: str | None = None,
     figsize=(12, 10),
 ):
-    """xi1D of a composite overflux split by order (``plot_orders_superimposed``, kind "xi"; notebook 09, D5): every
+    """xi1D of a composite overflux split by order (``plot_orders_superimposed``, kind "xi"; notebook 10, D5): every
     lag from 0 to half the period (``lag_bin`` = 1; ``max_lag``), the line separations ``delta_v_list`` folded into
     half the period as dashed lines; options as ``plot_p1d_orders``. Returns (fig, axs (2,))."""
     return _orders_figure(
@@ -988,11 +1046,15 @@ def plot_p1d_terms(
     linthresh=None,
     kms_per_cMpc: float | None = None,
     unit: str = "km/s",
+    max_terms: int | None = 6,
+    terms=None,
+    line_ids=None,
     figsize=None,
 ):
-    """P1D of the total overflux, each order term by term (``plot_terms_by_order``, kind "P"; notebook 09, D6): one row
-    per order (default those with a non-zero contribution, without order 0, which lives at k = 0), sharing the k axis;
-    every pair of terms A–B on its order's total; options as ``plot_p1d_orders``; the legend inside every panel, on top.
+    """P1D of the total overflux, each order term by term (``plot_terms_by_order``, kind "P"; notebooks 10 and 11, D6):
+    one row per order (default those with a non-zero contribution, without order 0, which lives at k = 0), sharing the k
+    axis; the pairs of terms A–B on its order's total (``max_terms``, ``terms``: the selection of ``plot_terms_by_order``;
+    ``line_ids``: the numbering of the lines); options as ``plot_p1d_orders``; the legend inside every panel, on top.
     Returns (fig, axs (n_orders,))."""
     fig, axs, _ = _terms_figure(
         stats,
@@ -1006,6 +1068,9 @@ def plot_p1d_terms(
         each=each,
         k_scale=k_scale,
         linthresh=linthresh,
+        max_terms=max_terms,
+        terms=terms,
+        line_ids=line_ids,
     )
     _k_range(axs, k_limits, k_scale)
     return fig, axs
@@ -1022,13 +1087,29 @@ def plot_xi1d_terms(
     each: bool = True,
     kms_per_cMpc: float | None = None,
     unit: str = "km/s",
+    max_terms: int | None = 6,
+    terms=None,
+    line_ids=None,
     figsize=None,
 ):
-    """xi1D of the total overflux, each order term by term (``plot_terms_by_order``, kind "xi"; notebook 09, D6): one
-    row per order, every lag from 0 to half the period, the line separations ``delta_v_list`` folded as dashed lines;
-    options as ``plot_xi1d_orders``. Returns (fig, axs (n_orders,))."""
+    """xi1D of the total overflux, each order term by term (``plot_terms_by_order``, kind "xi"; notebooks 10 and 11,
+    D6): one row per order, every lag from 0 to half the period, the line separations ``delta_v_list`` folded as dashed
+    lines; ``max_terms``, ``terms``, ``line_ids`` as ``plot_p1d_terms``; options as ``plot_xi1d_orders``. Returns (fig,
+    axs (n_orders,))."""
     fig, axs, ens = _terms_figure(
-        stats, "xi", orders, kms_per_cMpc, unit, figsize, lag_bin=lag_bin, max_lag=max_lag, x_bin=x_bin, each=each
+        stats,
+        "xi",
+        orders,
+        kms_per_cMpc,
+        unit,
+        figsize,
+        lag_bin=lag_bin,
+        max_lag=max_lag,
+        x_bin=x_bin,
+        each=each,
+        max_terms=max_terms,
+        terms=terms,
+        line_ids=line_ids,
     )
     if delta_v_list is not None:
         _separation_lines(axs, ens, delta_v_list)
@@ -1083,13 +1164,13 @@ def plot_toy_skewer(
     tau,
     *,
     mean_transmission,
-    line_ids=("HI-LyA", "SiIII-1206"),
+    line_ids=None,
     points_per_cell: int | None = None,
     zoom_cells: float = 2.0,
     zoom_pixels: int = 12,
     figsize=(22, 24),
 ):
-    """One skewer of a toy box or of a simulation, from the gas to the overflux (notebooks 09 and 10, C1). Five rows:
+    """One skewer of a toy box or of a simulation, from the gas to the overflux (notebooks 10 and 11, C1). Five rows:
 
     (a) n of each species against the comoving position y along the skewer (the cell values, as steps); (b) the
     overdensities n / <n> - 1 (<.> along this skewer); (c) the transmission T = exp(-tau) of each line and the total
@@ -1105,41 +1186,47 @@ def plot_toy_skewer(
     from y = L / 2, or ``zoom_pixels`` pixels from the middle of the axis), marked on the panel.
 
     L : box side [cMpc]; n : {species: (N,)} the cells along y, centred on j L / N (or the values at the N points of a
-    simulation skewer, each the mean over its dual segment, the end point dropped: notebook 10); v : (N_pix,) the Lya
-    axis [km/s];
-    tau : (n_lines, N_pix) on it. Species and lines in the same order (H I / Lya, Si III / Si III 1206). Returns
-    (fig, axs (5,), info {"points": "panel" | "inset" | None, "pixels": "panel" | "inset"}).
+    simulation skewer, each the mean over its dual segment, the end point dropped: notebook 11); v : (N_pix,) the Lya
+    axis [km/s]; tau : (n_lines, N_pix) on it, of the lines ``line_ids`` (default the first n_lines of
+    ``simulations.LINE_IDS``; the first is the reference). Any number of species and lines, each in its style
+    (``line_style``) and named after the line table (``line_names``, ``species_name``). Returns (fig, axs (5,), info
+    {"points": "panel" | "inset" | None, "pixels": "panel" | "inset"}).
     """
+    from skewerjax.simulations.toy_boxes import LINE_IDS
+
     sp = list(n)
     N = len(n[sp[0]])
     dx = L / N
     edges = (np.arange(N + 2) - 0.5) * dx  # cell j centred on j dx, and cell 0 again at the far end (periodic)
     wrap = lambda a: np.append(a, a[0])
     fig, axs = plt.subplots(5, 1, figsize=figsize, layout="constrained")
-    sty = [dict(lw=2.4), dict(lw=2.0, ls="--")]
-    name = {"HI": "H I", "SiIII": "Si III"}
     v = np.asarray(v)
     F = np.exp(-np.asarray(tau))
     Ft = F.prod(0)
+    line_ids = list(LINE_IDS[: F.shape[0]] if line_ids is None else line_ids)
+    if len(line_ids) != F.shape[0]:
+        raise ValueError(f"tau holds {F.shape[0]} lines, line_ids {len(line_ids)}.")
     T_bar = np.broadcast_to(np.asarray(mean_transmission, dtype=float), (len(line_ids) + 1, v.size))
+    lnames = line_names(line_ids)
 
     def gas(row):
         def draw(ax):
             for j, s in enumerate(sp):
-                c = ENTITY_COLORS.get(s, PALETTE_CYCLE[j])
+                st = line_style(s, j)
                 y = n[s] if row == 0 else n[s] / np.mean(n[s]) - 1
-                lab = name.get(s, s) if row == 0 else rf"$\delta_{{\rm {name.get(s, s).replace(' ', '')}}}$"
-                ax.stairs(wrap(y), edges, baseline=None, color=c, label=lab, **sty[j % 2])
+                nm = species_name(s)
+                lab = nm if row == 0 else rf"$\delta_{{\rm {nm.replace(' ', '')}}}$"
+                ax.stairs(wrap(y), edges, baseline=None, color=st["color"], ls=st["ls"], lw=2.4 if j == 0 else 2.0, label=lab)
 
         return draw
 
     def flux(row):  # 2: T, 3: T_bar, 4: delta
         def draw(ax):
             for j, lid in enumerate(line_ids):
-                c = ENTITY_COLORS.get(lid, PALETTE_CYCLE[j])
-                lab = {"HI-LyA": r"H I Ly$\alpha$", "SiIII-1206": r"Si III 1206 (on the Ly$\alpha$ axis)"}.get(lid, lid)
+                st = line_style(lid, j)
+                lab = lnames[j] + ("" if j == 0 else f" (on the {lnames[0]} axis)")
                 y = {2: F[j], 3: T_bar[j], 4: F[j] / T_bar[j] - 1}[row]
-                ax.plot(v, y, color=c, label=lab, **sty[j % 2])
+                ax.plot(v, y, color=st["color"], ls=st["ls"], lw=2.4 if j == 0 else 2.0, label=lab)
             y = {2: Ft, 3: T_bar[-1], 4: Ft / T_bar[-1] - 1}[row]
             ax.plot(v, y, color=FG, lw=1.4, label="total", zorder=5)
 
@@ -1160,7 +1247,12 @@ def plot_toy_skewer(
         draws[i](axs[i])
         axs[i].set(ylabel=ylab, xlabel=xlab)
         axs[i].set_xlim(0, L if xlab == pos else v_end)
-        _legend(axs[i], fontsize=FONT_MIN["legend"], ncol=3, loc="center right" if i == 3 else "upper right")
+        _legend(
+            axs[i],
+            fontsize=FONT_MIN["legend"],
+            ncol=3 if len(line_ids) < 3 else 2,
+            loc="center right" if i == 3 else "upper right",
+        )
     axs[0].set_yscale("log")
     for i in (1, 4):
         axs[i].axhline(0, color=DIM, lw=0.8)
@@ -1216,20 +1308,20 @@ _DAG_LANES = {
     ("lines", "tau"): 0.12,
     ("lines", "simulation"): 0.2,
     ("deposition", "tau"): 0.34,
-    ("samplers", "field_stats"): 0.34,
+    ("fields", "field_stats"): 1.3,
 }
 _DAG_END_DX = {
     ("skewers", "deposition"): -0.22,
     ("deposition", "tau"): -0.3,
-    ("samplers", "fields"): -0.22,
-    ("simulation", "fields"): 0.22,
+    ("samplers", "fields"): -0.3,
+    ("simulation", "fields"): 0.0,
     ("lines", "tau"): -0.12,
     ("fake_spectra", "tau"): 0.22,
     ("cosmology", "skewers"): 0.25,
 }
 _DAG_LABEL_AT = {  # where the label sits along its segment (default the middle)
     ("skewers", "deposition"): 0.3,
-    ("samplers", "field_stats"): 0.3,
+    ("fields", "field_stats"): 0.62,
     ("lines", "profiles"): 0.72,
     ("lines", "tau"): 0.72,
     ("lines", "simulation"): 0.15,
@@ -1247,7 +1339,9 @@ def _dag_route(a, b, route, nodes, lane, dx=0.0):
     of a (its centre), down by ``lane``, horizontally, then up into the bottom of b (``dx`` from its centre), under the
     boxes in between; "d": straight from the bottom (top) of a to the top (bottom) of b (``dx``); "over": out of the top
     of a, up to ``lane`` above the higher box, horizontally, then down into the top of b (``dx``); "s": out of the right
-    side of a, horizontally to the middle of the gap, vertically to b's height, into its left side (a fork).
+    side of a, horizontally to the middle of the gap, vertically to b's height, into its left side (a fork); "t": out of
+    the top of a near its right corner, up to the height ``lane`` (absolute), horizontally, then up into the bottom of b
+    (``dx``): under the boxes of a higher row, over those of a's row.
     """
     (xa, ya), (xb, yb) = nodes[a][:2], nodes[b][:2]
     w, h = _DAG_W / 2 + _DAG_PAD, _DAG_H / 2 + _DAG_PAD
@@ -1268,6 +1362,9 @@ def _dag_route(a, b, route, nodes, lane, dx=0.0):
     if route == "s":
         xm = 0.5 * ((xa + w) + (xb - w))
         return [(xa + w, ya), (xm, ya), (xm, yb), (xb - w, yb)]
+    if route == "t":
+        x0 = xa + 0.85 * (w - _DAG_PAD)
+        return [(x0, ya + h), (x0, lane), (xb + dx, lane), (xb + dx, yb - h)]
     y1, x0 = yb + lane, xa + 0.18
     return [(x0, ya + (h if y1 > ya else -h)), (x0, y1), (xb - w, y1)]
 
@@ -1320,7 +1417,7 @@ def plot_dag(highlight=(), *, external: bool = False, ax=None, figsize=None, not
     Arrows point from an ingredient to what needs it, and each is a dependency of the code. Solid: a required input.
     Dashed: optional, or data only (the cosmology can be replaced by manual a(x); the simulation reads only ion masses
     from the line table). Every box gives the ingredient, what it is and its module; the light bands are the realms of
-    the package (``dag.REALMS``: core, simulations, skewers, summary_stats). The two sources of gas are interchangeable:
+    the package (``dag.REALMS``: core, simulations, summary_stats). The two sources of gas are interchangeable:
     both produce the same container, gas cells, which the deposition cuts into pieces along the skewers. The line
     profiles are evaluated at the pieces' temperature, velocity and scale factor with the lines' atomic data; the
     optical depth sums them, weighted by each piece's n l / a^2, with the oscillator strengths f and wavelengths λ of the
@@ -3304,11 +3401,11 @@ def plot_skewer_geometry_3d(ax, points, *, scale_factors=None, label_w=None, tan
     return None
 
 
-# ----------------------------------------------------------------------- toy boxes: the fields and their 3D statistics (08, 09)
+# ----------------------------------------------------------------------- the fields and their 3D statistics, the skewers (08 to 11)
 MU_COLORS = ("blue", "cyan", "green", "red")  # one colour per wedge, in every panel (PALETTE keys)
 _EACH = dict(lw=0.8, alpha=0.12)  # one realisation, faint, in the background
 _MEAN = dict(fmt="o-", lw=1.0, ms=7, capsize=4, elinewidth=2.2, capthick=2.0, mew=1.5, zorder=6)  # the mean and its error, joined
-_MS_SMALL = 4.5  # the small markers of several series on one panel (shape and colour tell them apart; notebook 09, D3, D4)
+_MS_SMALL = 4.5  # the small markers of several series on one panel (shape and colour tell them apart; notebook 10, D3, D4)
 _BAND = dict(color=PALETTE["green"], alpha=0.28)  # the uncertainty band of a measured iso-contour
 _LEGEND_08 = FONT_MIN["legend"] + 2  # the custom legends of the wedge figures
 _ECHO_STYLES = {"plus": dict(ls=(0, (6, 3)), lw=1.6), "minus": dict(ls=(0, (1, 1.6)), lw=2.0)}  # the BAO echoes r^+, r^-
@@ -3338,34 +3435,46 @@ def plot_toy_fields(
     L: float,
     *,
     z_index: int = 0,
-    species=("HI", "SiIII"),
+    species=None,
     arrow_every: int = 8,
+    centres: str = "nodes",
     cmap=None,
     velocity_cmap=None,
-    figsize=(22, 18),
+    figsize=None,
 ):
     """The gas of one toy box in the plane of the cell layer ``z_index`` of the third axis (notebook 08, A2): rows number
     density (log, ``cmap``, default ``CMAPS["density"]``) and peculiar velocity (colour: v_y, the component along the
     skewers, ``velocity_cmap``, default ``CMAPS["diverging"]``; arrows: (v_x, v_y) in the plane, every
     ``arrow_every``-th cell, one scale for the figure from ``velocity_arrow_scale``, with a reference arrow; when every
-    velocity is zero, the row says so and has no arrows); one column per species, named by the colour-bar labels (no
-    titles). The temperature of the toy boxes is a function of the density (T = T0 (1 + delta)^(gamma - 1)), so it is
+    velocity is zero, the row says so and has no arrows); one column per species (``species``, default every species
+    of ``fields["n"]``), named by the colour-bar labels (no titles). The temperature of the toy boxes is a function of the density (T = T0 (1 + delta)^(gamma - 1)), so it is
     not drawn.
 
     fields : ``ToyBoxes.fields`` (n {species: (N, N, N)}, v (N, N, N, 3)); L : box side [cMpc]. x is horizontal and
-    y, the line of sight of the skewers, vertical. Returns (fig, axs (2, n_species), info {arrow_scale, key_kms}).
+    y, the line of sight of the skewers, vertical. ``centres``: "nodes" (cell j centred on j L / N, the toy grid) or
+    "pixels" (pixel j centred on (j + 1/2) L / N: maps of a plane with one layer, e.g. ``simulations.voronoi_slice`` of
+    each species, n (N, N, 1) and v (N, N, 1, 3), notebook 09). Returns (fig, axs (2, n_species), info {arrow_scale,
+    key_kms}).
     """
+    _check_option("centres", centres, ("nodes", "pixels"))
     N = fields["v"].shape[0]
     dx = L / N
-    ext = (-dx / 2, L - dx / 2, -dx / 2, L - dx / 2)
+    ext = (-dx / 2, L - dx / 2, -dx / 2, L - dx / 2) if centres == "nodes" else (0.0, L, 0.0, L)
     sl = lambda a: np.asarray(a)[:, :, z_index].T  # (y, x): imshow rows are y
-    fig, axs = plt.subplots(2, len(species), figsize=figsize, layout="constrained", squeeze=False)
+    species = list(fields["n"]) if species is None else list(species)
+    fig, axs = plt.subplots(
+        2,
+        len(species),
+        figsize=figsize or (max(22.0, 7.4 * len(species)), 1.9 * max(22.0, 7.4 * len(species)) / len(species)),
+        layout="constrained",
+        squeeze=False,
+    )
     vy = sl(fields["v"][..., 1])
     v_lim = float(np.percentile(np.abs(vy), 99.5))
     still = v_lim == 0.0
     norm_v = mpl.colors.Normalize(-v_lim, v_lim) if not still else mpl.colors.Normalize(-1.0, 1.0)
     s = slice(arrow_every // 2, N, arrow_every)
-    xa = np.arange(N)[s] * dx
+    xa = (np.arange(N)[s] + (0.5 if centres == "pixels" else 0.0)) * dx
     X, Y = np.meshgrid(xa, xa, indexing="xy")
     vx_a, vy_a = sl(fields["v"][..., 0])[s, s], vy[s, s]
     scale = key = 0.0
@@ -3373,7 +3482,8 @@ def plot_toy_fields(
         scale = velocity_arrow_scale(np.stack([vx_a.ravel(), vy_a.ravel()], -1), np.full(vx_a.size, arrow_every * dx))
         key = velocity_key_speed(np.stack([vx_a.ravel(), vy_a.ravel()], -1))
     for c, sp in enumerate(species):
-        _slice_image(axs[0, c], fields, L, species=sp, z_index=z_index, cmap=cmap)
+        src = fields if centres == "nodes" else np.asarray(fields["n"][sp])[:, :, z_index]
+        _slice_image(axs[0, c], src, L, species=sp, z_index=z_index, cmap=cmap)
         ax = axs[1, c]
         im = ax.imshow(
             vy, origin="lower", extent=ext, cmap=velocity_cmap or CMAPS["diverging"], norm=norm_v, interpolation="nearest"
@@ -3439,7 +3549,7 @@ def plot_skewer_slice(
     spacing: float | None = None,
     figsize=(12, 10.5),
 ):
-    """Where the skewers run (notebook 09, C1): the number density of ``species`` in the plane of the cell layer
+    """Where the skewers run (notebook 10, C1): the number density of ``species`` in the plane of the cell layer
     ``z_index`` of the third axis (as panel (a1) of ``plot_toy_fields``; ``cmap``, default ``CMAPS["density"]``), a plane
     that contains the line of sight (y) and the row of skewers with i_z = z_index; those skewers as thin black lines
     along y, each with ``n_arrows`` tiny arrows along its tangent (+y, the direction of the photons' path), and the
@@ -3447,8 +3557,8 @@ def plot_skewer_slice(
     arrowhead along it (``_ArrowHandler``).
 
     fields : the toy fields of one box (dict: the cell layer ``z_index``), or a map (n_x, n_y) of the density in the
-    plane of the row of skewers (e.g. ``simulations.voronoi_slice`` of a snapshot; notebook 10), pixel i centred on
-    (i + 1/2) L / n. columns : (N_sk, 2) the node indices (i_x, i_z) of the skewers (``skewers.lattice_columns``), at
+    plane of the row of skewers (e.g. ``simulations.voronoi_slice`` of a snapshot; notebook 11), pixel i centred on
+    (i + 1/2) L / n. columns : (N_sk, 2) the node indices (i_x, i_z) of the skewers (``core.lattice_columns``), at
     x = i_x dx with dx the cell size of the fields, or ``spacing`` [cMpc] with a map; highlight : (i_x, i_z) of one
     skewer drawn thicker (the skewer of ``plot_toy_skewer``). Returns (fig, ax, info {n_row, spacing_cMpc})."""
     if isinstance(fields, dict):
@@ -3560,8 +3670,8 @@ def fold_periodic(x, period: float):
 
 
 def echo_scales(r_bao: float, delta: float, box: float) -> dict:
-    """The characteristic separations of the cross term of two lines Delta apart along the line of sight (notebook 09,
-    Part D: Si III and Lya), in the units of the inputs, with every line-of-sight component folded into [0, box / 2]
+    """The characteristic separations of the cross term of two lines Delta apart along the line of sight (notebooks 10
+    and 11, Part D: one pair of lines), in the units of the inputs, with every line-of-sight component folded into [0, box / 2]
     (``fold_periodic``): r_BAO; Delta; the BAO echo of the cross term at its ends on the line of sight (r_perp = 0:
     |r_BAO - Delta| and r_BAO + Delta) and across it (r_perp = r_BAO, r_par = Delta: sqrt(r_BAO^2 + Delta^2)). Returns
     {mathtext label: |r|}."""
@@ -3678,9 +3788,12 @@ def plot_isotropic_recovery(
     linscale: float = 1.0,
     n_curve: int = 600,
     x_bin: str = "weighted",
+    r_marks=None,
+    each_label: str = "per realisation",
     figsize=(22, 12),
 ):
-    """P(|k|) and xi(|r|) of many realisations of a 3D field against their exact expectation (notebook 08, A3).
+    """P(|k|) and xi(|r|) of many realisations of a 3D field against their exact expectation (notebook 08, A3), or, with
+    no expectation in ``res`` (a simulation, notebook 09), the measurement alone (one row, no residuals).
 
     res : ``summary_stats.field_statistics`` (the mean over the realisations, its error, every realisation, the
     expectation ``theory`` binned like the measurement, the ``axes``, the full-coverage ``limits``). Columns: (a) P(|k|)
@@ -3699,8 +3812,10 @@ def plot_isotropic_recovery(
     midpoint of its edges) or "log" (their geometric mean) (``summary_stats.bin_centres``; the values do not move). k_marks : {label: k}
     labelled dotted vertical lines in (a) (e.g. the transitions k_1, k_2 of the |k| bins), each drawn only inside the
     axis range (which does not extend to them). ``k_edges``, ``r_edges``: the |k| and |r| bins, checked against those of
-    the measurement (``_check_edges``). Returns (fig, axs (2, 2), summary dict: chi2/dof of P, max |P / P_th - 1|, mean
-    pull and chi2/dof of xi (diagonal), xi_curve_r: the r range of the continuous xi [cMpc])."""
+    the measurement (``_check_edges``). r_marks : {label: r} further labelled dotted lines in (b); each_label : the
+    legend of the faint realisations ("{n}": their number). Returns (fig, axs (2, 2), or (1, 2) without an expectation,
+    summary dict: chi2/dof of P, max |P / P_th - 1|, mean pull and chi2/dof of xi (diagonal; with an expectation),
+    n_real, xi_curve_r: the r range of the continuous xi [cMpc])."""
     _check_option("quantity", quantity, ("r2xi", "xi"))
     _check_option("k_scale", k_scale, ("log", "linear"))
     _check_option("r_scale", r_scale, ("log", "linear"))
@@ -3709,23 +3824,31 @@ def plot_isotropic_recovery(
     _check_edges(a, "k_edges", k_edges, "plot_isotropic_recovery")
     _check_edges(a, "r_edges", r_edges, "plot_isotropic_recovery")
     lim = res["limits"]
-    fig, axs = plt.subplots(2, 2, figsize=figsize, sharex="col", gridspec_kw={"height_ratios": [2.0, 1.0]}, layout="constrained")
+    has_th = "theory" in res
+    if has_th:
+        fig, axs = plt.subplots(
+            2, 2, figsize=figsize, sharex="col", gridspec_kw={"height_ratios": [2.0, 1.0]}, layout="constrained"
+        )
+    else:  # a measurement without an expectation (a simulation): the statistic only, no residual row
+        fig, axs = plt.subplots(1, 2, figsize=(figsize[0], 0.6 * figsize[1]), layout="constrained", squeeze=False)
     col, n = ENTITY_COLORS["density"], res["n_real"]
     k = bin_centres(a["k_edges"], x_bin, a["k_iso"])  # where the bins are drawn
-    P, Pe, Peach, Pth = _ensemble_xy(res, "P_iso")
-    ok = np.isfinite(P) & np.isfinite(Pth)
+    P, Pe, Peach, Pth = _ensemble_xy(res, "P_iso", theory=has_th)
+    ok = np.isfinite(P) & (np.isfinite(Pth) if has_th else True)
     for y in Peach:
         axs[0, 0].plot(k[ok], y[ok], color=col, **_EACH)
-    axs[0, 0].plot([], [], color=col, lw=1.2, alpha=0.5, label="per realisation")
-    axs[0, 0].plot(k[ok], Pth[ok], color=FG, lw=2.2, zorder=8, label="expectation")
+    axs[0, 0].plot([], [], color=col, lw=1.2, alpha=0.5, label=each_label.format(n=n))
+    if has_th:
+        axs[0, 0].plot(k[ok], Pth[ok], color=FG, lw=2.2, zorder=8, label="expectation")
     if grf is not None:
         kc = np.geomspace(lim["k_min"], lim["k_max"], int(n_curve))
         axs[0, 0].plot(kc, np.asarray(grf.power(kc)), label="analytic input", **_ANALYTIC)
     axs[0, 0].errorbar(k[ok], P[ok], Pe[ok], color=col, label=r"mean $\pm$ error", **_MEAN)
-    rel, rel_e = P[ok] / Pth[ok] - 1, Pe[ok] / Pth[ok]
-    axs[1, 0].errorbar(k[ok], rel, rel_e, color=col, **_MEAN)
-    residual_band(axs[1, 0], 0.02)
-    ylim = max(0.03, 1.2 * float(np.max(np.abs(rel) + rel_e)))
+    if has_th:
+        rel, rel_e = P[ok] / Pth[ok] - 1, Pe[ok] / Pth[ok]
+        axs[1, 0].errorbar(k[ok], rel, rel_e, color=col, **_MEAN)
+        residual_band(axs[1, 0], 0.02)
+        ylim = max(0.03, 1.2 * float(np.max(np.abs(rel) + np.nan_to_num(rel_e))))
     for i, ax in enumerate(axs[:, 0]):
         _shade_outside(
             ax,
@@ -3735,25 +3858,31 @@ def plot_isotropic_recovery(
             labels=None if i else _limit_labels("k", lim["k_min"], lim["k_max"]),
         )
     axs[0, 0].set(xscale=k_scale, yscale="log", ylabel=r"$P(k)$ [cMpc$^3$]")
-    axs[1, 0].set(xscale=k_scale, xlabel=r"$|k|$ [cMpc$^{-1}$]", ylabel="measured / expected − 1", ylim=(-ylim, ylim))
+    axs[-1, 0].set(xscale=k_scale, xlabel=r"$|k|$ [cMpc$^{-1}$]")
+    if has_th:
+        axs[1, 0].set(ylabel="measured / expected − 1", ylim=(-ylim, ylim))
     _mark_lines(axs[0, 0], k_marks)
-    _mark_lines(axs[1, 0], k_marks, labels=False)
+    if has_th:
+        _mark_lines(axs[1, 0], k_marks, labels=False)
     _legend(axs[0, 0], fontsize=FONT_MIN["legend"], loc="lower left")
 
     r = a["r_iso"]  # the separation-weighted |r| of each bin: the weight r^2 of r^2 xi
     rx = bin_centres(a["r_edges"], x_bin, r)  # where the bins are drawn
-    X, Xe, Xeach, Xth = _ensemble_xy(res, "xi_iso")
+    X, Xe, Xeach, Xth = _ensemble_xy(res, "xi_iso", theory=has_th)
     okr = np.isfinite(X) & (r > 0)
     w = r**2 if quantity == "r2xi" else np.ones_like(r)
     for y in Xeach:
         axs[0, 1].plot(rx[okr], (w * y)[okr], color=col, **_EACH)
     axs[0, 1].errorbar(rx[okr], (w * X)[okr], (w * Xe)[okr], color=col, **_MEAN)
-    axs[0, 1].plot(rx[okr], (w * Xth)[okr], color=FG, lw=2.2, zorder=8)
+    if has_th:
+        axs[0, 1].plot(rx[okr], (w * Xth)[okr], color=FG, lw=2.2, zorder=8)
     rc = np.linspace(lim["r_min"], lim["r_max"], int(n_curve))
     if grf is not None:
         yc = (rc**2 if quantity == "r2xi" else 1.0) * grf.correlation(rc)
         axs[0, 1].plot(rc, yc, **_ANALYTIC)
-    yv = np.concatenate([(w * (X - Xe))[okr], (w * (X + Xe))[okr], (w * Xth)[okr]])
+    yv = np.concatenate(
+        [(w * (X - np.nan_to_num(Xe)))[okr], (w * (X + np.nan_to_num(Xe)))[okr]] + ([(w * Xth)[okr]] if has_th else [])
+    )
     _y_scale(axs[0, 1], y_scale, yv, linthresh=linthresh, linthresh_frac=linthresh_frac, linscale=linscale)
     if y_scale == "linear" and grf is not None:  # the axis follows the measurement; the continuum may leave it (no k = 0 mode)
         lo, hi = float(np.nanmin(yv)), float(np.nanmax(yv))
@@ -3767,24 +3896,26 @@ def plot_isotropic_recovery(
             labels=None if i else _limit_labels("r", lim["r_min"], lim["r_max"]),
         )
         ax.set_xscale(r_scale)
-    pull = (X - Xth)[okr] / Xe[okr]
-    axs[1, 1].errorbar(rx[okr], pull, np.ones_like(pull), color=col, **_MEAN)
-    axs[1, 1].axhline(0.0, color=FG, lw=1.0)
-    axs[1, 1].axhspan(-2, 2, color=DIM, alpha=0.15, lw=0)
     axs[0, 1].set(ylabel=r"$r^2 \xi(r)$ [cMpc$^2$]" if quantity == "r2xi" else r"$\xi(r)$")
     axs[0, 1].axhline(0.0, color=DIM, lw=0.8)
-    axs[1, 1].set(xlabel=r"$|r|$ [cMpc]", ylabel=r"$(\hat\xi - \xi_{\rm th})/\sigma$", ylim=(-5, 5))
-    if r_bao is not None:
-        _mark_lines(axs[0, 1], {r"$r_{\rm BAO}$": r_bao})
-        _mark_lines(axs[1, 1], {r"$r_{\rm BAO}$": r_bao}, labels=False)
-    summary = dict(
-        P_chi2_dof=float(np.mean(((P[ok] - Pth[ok]) / Pe[ok]) ** 2)),
-        P_max_rel=float(np.max(np.abs(rel))),
-        xi_mean_pull=float(np.mean(pull)),
-        xi_chi2_dof=float(np.mean(pull**2)),
-        n_real=int(n),
-        xi_curve_r=(float(rc[0]), float(rc[-1])),
-    )
+    axs[-1, 1].set(xlabel=r"$|r|$ [cMpc]")
+    marks = {} if r_bao is None else {r"$r_{\rm BAO}$": r_bao}
+    marks.update(r_marks or {})
+    _mark_lines(axs[0, 1], marks)
+    summary = dict(n_real=int(n), xi_curve_r=(float(rc[0]), float(rc[-1])))
+    if has_th:
+        pull = (X - Xth)[okr] / Xe[okr]
+        axs[1, 1].errorbar(rx[okr], pull, np.ones_like(pull), color=col, **_MEAN)
+        axs[1, 1].axhline(0.0, color=FG, lw=1.0)
+        axs[1, 1].axhspan(-2, 2, color=DIM, alpha=0.15, lw=0)
+        axs[1, 1].set(ylabel=r"$(\hat\xi - \xi_{\rm th})/\sigma$", ylim=(-5, 5))
+        _mark_lines(axs[1, 1], marks, labels=False)
+        summary.update(
+            P_chi2_dof=float(np.mean(((P[ok] - Pth[ok]) / Pe[ok]) ** 2)),
+            P_max_rel=float(np.max(np.abs(rel))),
+            xi_mean_pull=float(np.mean(pull)),
+            xi_chi2_dof=float(np.mean(pull**2)),
+        )
     return fig, axs, summary
 
 
@@ -3886,9 +4017,12 @@ def plot_kpar_kperp_maps(
     a column with no mode is light grey. ``k_marks`` {label: k}: dotted vertical lines, each within [k_min, k_max]
     (``res["limits"]``). ``kms_per_cMpc``: reference axes in s/km (e.g. the boxes' aH; None: none). The legend
     (``_map_legend``): the expected contours, the measured contours with their band, and the empty bins when there are
-    some. res : ``summary_stats.field_statistics``. Returns (figs (2,): expected, measured; axs (2,); chi2/dof of
-    (measured - expected) / error per bin)."""
-    Pm, Pth = res["P_map"], res["theory"]["P_map"]
+    some. res : ``summary_stats.field_statistics``; without an expectation (a simulation, notebook 09) the measured
+    figure only, on the measurement's colour scale. Returns (figs (2,): expected, measured, or (1,): measured; axs;
+    chi2/dof of (measured - expected) / error per bin, or None)."""
+    has_th = "theory" in res
+    Pm = res["P_map"]
+    Pth = res["theory"]["P_map"] if has_th else Pm
     good = np.isfinite(Pm) & np.isfinite(Pth) & (Pm > 0) & (Pth > 0)
     norm = mpl.colors.LogNorm(np.nanmin(Pth[good]), np.nanmax(Pth[good]))
     levels = _three_levels(norm.vmin, norm.vmax, log=True) if levels is None else np.sort(np.asarray(levels, dtype=float))
@@ -3906,15 +4040,15 @@ def plot_kpar_kperp_maps(
             kperp_scale=kperp_scale,
             k_marks=marks,
             unit="cMpc",
-            theory=res["theory"],
+            theory=res.get("theory"),
             show=show,
             norm=norm,
             legend=True,
             figsize=figsize,
         )
-        for show in ("expected", "measured")
+        for show in (("expected", "measured") if has_th else ("measured",))
     ]
-    return np.array([o[0] for o in out], dtype=object), np.array([o[1] for o in out], dtype=object), out[1][2]
+    return np.array([o[0] for o in out], dtype=object), np.array([o[1] for o in out], dtype=object), out[-1][2]
 
 
 def _mu_rays(
@@ -4050,12 +4184,16 @@ def plot_rpar_rperp_maps(
     wedges of mu as white rays with coloured sectors (``mu_edges``, default those of the measurement); ``r_bao``: the
     dotted circle, labelled. Rows: one per separation of the grid along the line of sight, r_par = j dx; columns: the
     r_perp bins ``rperp_edges`` (checked against the measurement). ``kms_per_cMpc``: reference axes in km/s (None: none).
-    The legend (``_map_legend``). res : ``summary_stats.field_statistics``. Returns (figs (2,): expected, measured; axs
-    (2,); chi2/dof of (measured - expected) / error of xi per bin)."""
+    The legend (``_map_legend``). res : ``summary_stats.field_statistics``; without an expectation (a simulation,
+    notebook 09) the measured figure only, on the measurement's colour scale; ``r_bao`` beyond L / 2: the arcs of its
+    periodic images (``plot_overflux_rpar_rperp``). Returns (figs (2,): expected, measured, or (1,); axs; chi2/dof of
+    (measured - expected) / error of xi per bin, or None)."""
     _check_option("quantity", quantity, tuple(_MAP_QUANTITY))
     weight = _MAP_QUANTITY[quantity][0]
     a = res["axes"]
-    Xm, Xe, Xth = res["xi_map"], res["xi_map_err"], res["theory"]["xi_map"]
+    has_th = "theory" in res
+    Xm, Xe = res["xi_map"], res["xi_map_err"]
+    Xth = res["theory"]["xi_map"] if has_th else Xm
     good = np.isfinite(Xm) & np.isfinite(Xth)
     w = weight(np.nan_to_num(a["rpar_map"]) ** 2 + np.nan_to_num(a["rperp_map"]) ** 2)
     norm, levels, _ = _map_scale(
@@ -4078,16 +4216,16 @@ def plot_rpar_rperp_maps(
             quantity=quantity,
             cmap=cmap,
             unit="cMpc",
-            theory=res["theory"],
+            theory=res.get("theory"),
             show=show,
             norm=norm,
             legend=True,
             figsize=figsize,
         )
-        for show in ("expected", "measured")
+        for show in (("expected", "measured") if has_th else ("measured",))
     ]
-    pull = (Xm - Xth)[good] / Xe[good]
-    return np.array([o[0] for o in out], dtype=object), np.array([o[1] for o in out], dtype=object), float(np.mean(pull**2))
+    chi2 = float(np.mean(((Xm - Xth)[good] / Xe[good]) ** 2)) if has_th else None
+    return np.array([o[0] for o in out], dtype=object), np.array([o[1] for o in out], dtype=object), chi2
 
 
 def _wedge_label(lo: float, hi: float) -> str:
@@ -4134,32 +4272,137 @@ def _secondary(ax, functions, side: str, label: str):
 
 
 _GREEK = {"α": r"\alpha", "β": r"\beta", "γ": r"\gamma", "δ": r"\delta"}
+_SPECIES_NAMES = {"gas": "gas", "total": "total"}
 
 
-def _line_short(line_id: str) -> str:
-    """The short mathtext name of a line of ``core.lines`` (inside ``\rm``): "Ly\alpha" for H I Lyman-alpha, the
-    species of a metal line without its wavelength ("Si\ III")."""
+def line_style(key: str, index: int = 0) -> dict:
+    """The style of a line (a ``core.lines`` id), a species ("HI", "SiIII", ...), the total gas ("gas") or the total
+    (``LINE_STYLES``, ``ENTITY_COLORS``): dict(color, marker, ls), the same in every figure. A key not in the registry
+    takes the colour, marker and line style of position ``index`` of the cycles (``LINE_COLOR_ORDER``,
+    ``_MARKER_CYCLE``, ``_LS_CYCLE``)."""
+    colour = ENTITY_COLORS.get(key, PALETTE[LINE_COLOR_ORDER[index % len(LINE_COLOR_ORDER)]])
+    marker, ls = LINE_STYLES.get(key, (_MARKER_CYCLE[index % len(_MARKER_CYCLE)], _LS_CYCLE[index % len(_LS_CYCLE)]))
+    return dict(color=FG if key in ("total", "gas") else colour, marker=marker, ls=ls)
+
+
+def _line_words(line_id: str):
+    """(name, wavelength) of a line of ``core.lines``: ("Ly\alpha" mathtext, None) for H I Lyman lines, else the species
+    words ("Si III") and the wavelength ("1206")."""
     from skewerjax.core import get_line
 
     name = get_line(line_id).name
     if name.startswith("Lyman-"):
-        return "Ly" + _GREEK.get(name[len("Lyman-") :], name[len("Lyman-") :])
-    words = [w for w in name.split() if not w.replace(".", "").isdigit()]
-    return "\ ".join(words)
+        return "Ly" + _GREEK.get(name[len("Lyman-") :], name[len("Lyman-") :]), None
+    words = name.split()
+    wave = [w for w in words if w.replace(".", "").isdigit()]
+    return " ".join(w for w in words if not w.replace(".", "").isdigit()), (wave[0] if wave else None)
 
 
-def line_pair_label(line_ids=("HI-LyA", "SiIII-1206"), *, comoving: bool = False, math: bool = True) -> str:
-    """The label of the separation of two lines of a ``LineBundle`` (line 1 the reference line), from their names:
-    Delta v_{Lya-Si III} (``comoving``: Delta v_{Lya-Si III} / u, the separation in cMpc); ``math=False`` gives the
-    pair alone, "Lya–Si III" (mathtext, for a text label)."""
-    pair = r"{\rm " + _line_short(line_ids[0]) + "–" + _line_short(line_ids[1]) + "}"
+def line_names(line_ids, *, math: bool = False) -> list:
+    """The short names of the lines of a bundle, from their ``core.lines`` names: "Lyα" for H I Lyman-alpha, the species
+    of a metal line ("Si III"), with its wavelength when another line of ``line_ids`` has the same species ("Si II
+    1193", "Si II 1190"). ``math``: mathtext inside \rm (no dollars), for labels built around them."""
+    words = [_line_words(i) for i in line_ids]
+    count = {}
+    for w, _ in words:
+        count[w] = count.get(w, 0) + 1
+    out = []
+    for w, wave in words:
+        txt = w + (" " + wave if count[w] > 1 and wave else "")
+        if math:
+            out.append(txt.replace(" ", r"\ "))
+        else:
+            out.append(txt.replace(r"Ly\alpha", "Lyα").replace(r"Ly\beta", "Lyβ"))
+    return out
+
+
+def species_name(species: str) -> str:
+    """The name of a species key: "HI" -> "H I", "SiIII" -> "Si III", "gas" and "total" as they are."""
+    import re
+
+    if species in _SPECIES_NAMES:
+        return _SPECIES_NAMES[species]
+    m = re.match(r"^([A-Z][a-z]?)([IVX]+)$", species)
+    return f"{m.group(1)} {m.group(2)}" if m else species
+
+
+def field_names(keys, line_ids=None) -> dict:
+    """{key: legend label} of the fields of a figure: lines by ``line_names`` (with every line of ``line_ids`` for the
+    disambiguation), species by ``species_name``, "total" and "gas" as they are."""
+    from skewerjax.core import LINES
+
+    ids = [k for k in (line_ids or keys) if k in LINES]
+    names = dict(zip(ids, line_names(ids)))
+    return {k: names.get(k, species_name(k)) for k in keys}
+
+
+def line_pair_label(line_ids=("HI-LyA", "SiIII-1206"), *, comoving: bool = False, math: bool = True, all_ids=None) -> str:
+    """The label of the separation of two lines of a ``LineBundle`` (the first the reference of the pair), from their
+    names (``line_names`` over ``all_ids``, default the pair: "Si II 1193" when two Si II lines are in the set):
+    Delta v_{Lya-Si III} (``comoving``: Delta v_{Lya-Si III} / u, the separation in cMpc); ``math=False`` gives the pair
+    alone, "Lya–Si III" (mathtext, for a text label)."""
+    ids = list(all_ids) if all_ids is not None else list(line_ids[:2])
+    names = dict(zip(ids, line_names(ids, math=True)))
+    pair = r"{\rm " + names[line_ids[0]] + "–" + names[line_ids[1]] + "}"
     if not math:
         return "$" + pair + "$"
     return r"$\Delta v_{" + pair + "}" + ("/u" if comoving else "") + "$"
 
 
+PAIR_MODES = ("all", "reference")
+# one line style per pair (i, j), by its place among every pair of the bundle: (0, 1), (0, 2), ..., (1, 2), ...
+PAIR_STYLES = (
+    "--",
+    "-.",
+    (0, (1, 1.5)),
+    (0, (6, 2, 1, 2, 1, 2)),
+    (0, (9, 3)),
+    (0, (3, 1.5)),
+    (0, (1, 3)),
+    (0, (6, 1.5, 1.5, 1.5)),
+)
+
+
+def line_pairs(line_ids, delta_v, period: float, pairs="all") -> list:
+    """The pairs (i, j), i < j, of the lines of a bundle and their separations along the line of sight, folded into
+    [0, period / 2] (``fold_periodic``: the separation of two lines on a periodic axis is that of their nearest images).
+
+    line_ids : the N lines; delta_v : their offsets from the reference line (``LineBundle.delta_v``) [the unit of
+    ``period``]; pairs : "all" (every pair, N (N - 1) / 2), "reference" (the pairs with the first line) or a list of
+    pairs, each (i, j) indices or (id_i, id_j). Returns [dict(i, j, ids, dv (|dv_j - dv_i|), fold (folded), label
+    (``line_pair_label``: Delta v_{i–j}), text (the pair alone), ls (the pair's line style, ``PAIR_STYLES`` by its place
+    among every pair: the same pair keeps its style whatever the selection))]."""
+    ids = list(line_ids)
+    dv = np.asarray(delta_v, dtype=float).ravel()
+    if dv.size != len(ids):
+        raise ValueError(f"delta_v holds {dv.size} offsets for {len(ids)} lines.")
+    if isinstance(pairs, str):
+        _check_option("pairs", pairs, PAIR_MODES)
+        sel = [(i, j) for i in range(len(ids)) for j in range(i + 1, len(ids)) if pairs == "all" or i == 0]
+    else:
+        sel = [tuple(ids.index(x) if isinstance(x, str) else int(x) for x in pr) for pr in pairs]
+        sel = [(min(i, j), max(i, j)) for i, j in sel]
+    every = [(a, b) for a in range(len(ids)) for b in range(a + 1, len(ids))]
+    out = []
+    for i, j in sel:
+        d = abs(float(dv[j] - dv[i]))
+        out.append(
+            dict(
+                i=i,
+                j=j,
+                ids=(ids[i], ids[j]),
+                dv=d,
+                fold=float(fold_periodic(d, period)),
+                label=line_pair_label((ids[i], ids[j]), all_ids=ids),
+                text=line_pair_label((ids[i], ids[j]), all_ids=ids, math=False),
+                ls=PAIR_STYLES[every.index((i, j)) % len(PAIR_STYLES)],
+            )
+        )
+    return out
+
+
 def comoving_axis(ax, kms_per_cMpc: float, kind: str = "r", *, side: str = "top", label: str | None = None):
-    """A secondary axis in comoving units on an axis in velocity units (notebook 09, Part D), with one conversion
+    """A secondary axis in comoving units on an axis in velocity units (notebook 10, Part D), with one conversion
     factor, v = u x and k_v = k_x / u: u = ``kms_per_cMpc`` [km/s per cMpc] (u = period / L = (1/L) int_0^L aH dy, the
     mean aH along a skewer, from ``core.velocity_span``).
 
@@ -4182,29 +4425,72 @@ def velocity_axis(ax, kms_per_cMpc: float, kind: str = "r", *, side: str = "top"
     return _secondary(ax, functions, side, label or _units("km/s")[kind])
 
 
-def wedge_echoes(r_bao: float, delta: float, mu_edges, box: float) -> dict:
-    """The BAO echoes of the cross term of two lines Delta apart along the line of sight (notebook 09, D2 and D3) in
-    wedges of mu = r_par / r: the echo rings r_perp^2 + (r_par -+ Delta)^2 = r_bao^2 cross the direction mu at
+def image_centres(box: float, r_reach: float, shift: float = 0.0) -> np.ndarray:
+    """The line-of-sight centres n L + shift of the periodic images (n_perp = 0) of a feature at ``shift`` along the line
+    of sight that can reach |r_par| <= ``r_reach`` [the units of ``box``]: xi_box(r) = sum_n xi(|r + n L|), so a ring of
+    radius r0 about the origin appears as rings about (0, n L) (``ring_crossings``, ``echo_curves``)."""
+    L = float(box)
+    n = int(np.ceil((float(r_reach) + abs(float(shift))) / L)) + 1
+    return np.arange(-n, n + 1) * L + float(shift)
 
-        r^+-(mu) = sqrt(r_bao^2 - Delta^2 (1 - mu^2)) +- mu Delta,
 
-    evaluated at the mean mu of each wedge (the middle of its interval), and the spot of the cross term at r = Delta,
-    on the line of sight only (the wedge that contains mu = 1). Every scale folded into [0, box / 2]
-    (``fold_periodic``). Units of the inputs. Returns dict(mu (n_w,), plus (n_w,), minus (n_w,), r_bao, delta,
-    spot_wedge (the index of the wedge with mu = 1, or None))."""
+def ring_crossings(r0: float, centres, mu: float, r_max: float) -> np.ndarray:
+    """The separations r in (0, r_max] at which the rings of radius ``r0`` centred on the line of sight at (r_perp,
+    r_par) = (0, c), c in ``centres`` and their mirrors -c (xi is even in r_par), cross the direction mu = r_par / r:
+    r^2 - 2 c mu r + c^2 - r0^2 = 0, r = c mu +- sqrt(r0^2 - c^2 (1 - mu^2)). Sorted, without repeats."""
+    c = np.asarray(centres, dtype=float).ravel()
+    c = np.concatenate([c, -c])
+    disc = float(r0) ** 2 - c**2 * (1.0 - float(mu) ** 2)
+    ok = disc >= 0
+    root = np.sqrt(disc[ok])
+    r = np.concatenate([c[ok] * mu + root, c[ok] * mu - root])
+    r = np.sort(r[(r > 0) & (r <= float(r_max) * (1 + 1e-12))])
+    return r[np.concatenate([[True], np.diff(r) > 1e-9 * max(float(r_max), 1.0)])] if r.size else r
+
+
+def wedge_echoes(r_bao: float, delta: float, mu_edges, box: float, *, r_max: float | None = None) -> dict:
+    """The BAO ring and the echoes of the cross term of two lines Delta apart along the line of sight, in wedges of
+    mu = r_par / r (notebooks 10 and 11, D3), in a periodic box of side ``box``: xi_box(r) = sum_n xi(|r + n L|), so along
+    the direction mu of each wedge (its mean mu, the middle of its interval) the ring crosses at the separations where
+    the rings of radius r_BAO about (0, n L) cross it, and the echoes where those about (0, n L +- Delta) do
+    (``ring_crossings``; the images across the line of sight, n_perp != 0, are smeared by the average over r_perp and are
+    not drawn). On the line of sight (mu = 1) these are |r_BAO - n L| and |r_BAO +- Delta - n L|, folded into [0, L / 2]
+    (``los``). Every r in (0, ``r_max``] (default L / 2: the minimum-image separations of the wedges). Units of the
+    inputs; valid for any r_BAO (also > L / 2). Returns dict(mu (n_w,), ring [array per wedge], echo [array per wedge],
+    los dict(ring, echo) (arrays: the positions on the line of sight), r_bao (r_BAO folded into [0, L / 2]), delta
+    (Delta folded), spot_wedge (the index of the wedge with mu = 1, or None))."""
     mu_e = np.asarray(mu_edges, dtype=float)
     mu = 0.5 * (mu_e[:-1] + mu_e[1:])
     r0, d, L = float(r_bao), abs(float(delta)), float(box)
-    root = np.sqrt(np.maximum(r0**2 - d**2 * (1.0 - mu**2), 0.0))
+    rmax = 0.5 * L if r_max is None else float(r_max)
+    ring_c = image_centres(L, r0 + rmax)
+    echo_c = np.concatenate([image_centres(L, r0 + rmax, d), image_centres(L, r0 + rmax, -d)])
     top = np.flatnonzero(np.isclose(mu_e[1:], 1.0))
     return dict(
         mu=mu,
-        plus=fold_periodic(root + mu * d, L),
-        minus=fold_periodic(np.abs(root - mu * d), L),
+        ring=[ring_crossings(r0, ring_c, m, rmax) for m in mu],
+        echo=[ring_crossings(r0, echo_c, m, rmax) for m in mu],
+        los=dict(ring=ring_crossings(r0, ring_c, 1.0, 0.5 * L), echo=ring_crossings(r0, echo_c, 1.0, 0.5 * L)),
         r_bao=float(fold_periodic(r0, L)),
         delta=float(fold_periodic(d, L)),
         spot_wedge=int(top[-1]) if top.size else None,
     )
+
+
+def _pair_inputs(delta_v, line_ids):
+    """(line ids, offsets) of the line pairs of a figure: ``delta_v`` the offsets of the lines (``LineBundle.delta_v``,
+    one per line of ``line_ids``; default ids: the first lines of ``simulations.LINE_IDS``) or one number, the separation
+    of the two lines of ``line_ids`` (default Lya and Si III 1206)."""
+    from skewerjax.simulations.toy_boxes import LINE_IDS
+
+    dv = np.atleast_1d(np.asarray(delta_v, dtype=float))
+    if dv.size == 1:
+        ids = list(line_ids or LINE_IDS[:2])[:2]
+        return ids, np.array([0.0, abs(float(dv[0]))])
+    ids = list(line_ids or LINE_IDS[: dv.size])
+    if len(ids) != dv.size:
+        raise ValueError(f"delta_v holds {dv.size} offsets for {len(ids)} lines.")
+    return ids, dv
 
 
 def plot_xi_mu_wedges(
@@ -4213,9 +4499,10 @@ def plot_xi_mu_wedges(
     r_edges=None,
     r_bao: float | None = None,
     r_marks=None,
-    delta_v: float | None = None,
+    delta_v=None,
     box: float | None = None,
-    line_ids=("HI-LyA", "SiIII-1206"),
+    line_ids=None,
+    pairs="reference",
     unit: str = "cMpc",
     kms_per_cMpc: float | None = None,
     quantity: str = "r2xi",
@@ -4230,24 +4517,28 @@ def plot_xi_mu_wedges(
     """xi(r) in wedges of mu = r_par / r (``MU_WEDGES``) of many realisations, as DESI DR2 shows the Lya auto-correlation
     (arXiv:2503.14739, Fig. 3, top): r^2 xi(r) (``quantity="r2xi"``) or xi (``"xi"``) against r, one colour per wedge
     (``MU_COLORS``), every realisation as a faint line, the mean with the error of the mean as points joined by thin
-    lines (notebook 08, A3; notebook 09, D3). With an expectation (``res["theory"]``: ``summary_stats.field_statistics``, or the
+    lines (notebook 08, A3; notebook 10, D3). With an expectation (``res["theory"]``: ``summary_stats.field_statistics``, or the
     density of ``skewer_density_statistics`` with its ``lattice_density_theory``): the expectation of each wedge as a dashed line in the
     wedge's colour and, below, (measured - expected) / error. Without (the overflux on the lattice, ``res`` = one
     entry of its ``flux3d`` with ``res["axes"]`` = its ``axes3d``): one panel, the measurement only. The wedges are
     offset by a few per cent of a bin in r so that every point shows. Legends inside the main panel: the wedges
-    (colour: mu interval; upper right), the styles (measured, expected, per realisation; lower left) and, with
-    ``delta_v``, the two echoes (lower centre). No titles.
+    (colour: mu interval; upper right) and the styles (measured, expected, per realisation; lower left); below the
+    figure, the spots, the echoes and the images of the ring (the legend of the last panel). No titles.
 
     r_edges : the |r| bins of the wedges: a wedge is the average over the separations with |r| in a bin and mu in the
     wedge (default those of the measurement, ``res["axes"]["r_mu_edges"]``; checked against them, ``_check_edges``).
-    r_bao : one labelled dotted line, the same for every wedge; r_marks : {label: r} further labelled dotted lines, each
-    drawn only inside the plotted range. delta_v [km/s] (with ``kms_per_cMpc`` = u): the separation of two
-    lines (``line_ids``: line 1 the reference line; labels ``line_pair_label``), Delta = |delta_v| / u [cMpc]: the spot of
-    their cross term at r = Delta as a dashed line in the colour of the wedge that contains mu = 1 (the spot lies on the
-    line of sight only), and, with r_bao, the echoes of the BAO ring at r^+-(mu) of every wedge (``wedge_echoes``, at its mean mu) as
-    vertical lines in the wedge's colour, r^+ dashed and r^- dotted (a small legend of the two styles, in a neutral
-    colour, inside the panel at the bottom, on top of the data); every scale folded into [0, box / 2]
-    (``box``: the period of the line of sight [cMpc], default twice the last |r| edge). unit : "cMpc" or "km/s" (the
+    r_bao : the BAO ring: one labelled dotted line, the same for every wedge, at r_BAO (when r_BAO <= box / 2), and the
+    crossings of its periodic images about (0, n L) in each wedge (``wedge_echoes``; for r_BAO > L / 2 only these) as
+    dotted lines in the wedge's colour; r_marks : {label: r} further labelled dotted lines, each drawn only inside the
+    plotted range. delta_v [km/s] (with ``kms_per_cMpc`` = u): the offsets of the lines ``line_ids`` from the reference
+    (``LineBundle.delta_v``, any number of lines, the first the reference; or one number, the separation of the two
+    lines of ``line_ids``): for every pair (i, j) (``line_pairs``) the spot of its cross term at r = Delta_ij =
+    |delta_v_j - delta_v_i| / u folded into [0, box / 2] as a vertical line in the colour of the wedge that contains mu =
+    1 (the spot lies on the line of sight only), in the pair's line style (``line_style`` of line j), named in a legend;
+    with r_bao, for the pairs ``pairs`` ("reference": those with the reference line (default), "all", or a list of
+    pairs), the echoes of the BAO ring and of its images in every wedge (``wedge_echoes``, at its mean mu) as vertical
+    lines in the wedge's colour and the pair's style, named in the same legend (lower centre). ``box``: the period of
+    the line of sight [cMpc], default twice the last |r| edge. unit : "cMpc" or "km/s" (the
     axis labels); kms_per_cMpc : a secondary top axis in the other unit (``comoving_axis`` / ``velocity_axis``).
     x_bin : where each bin is drawn ("weighted" default: the separation-weighted |r| of the bin in the wedge, "linear",
     "log"; ``summary_stats.bin_centres``). y_scale : "linear" or "symlog" (``linthresh``, ``linthresh_frac``, ``linscale``: ``_y_scale``).
@@ -4312,40 +4603,54 @@ def plot_xi_mu_wedges(
     axs[-1].set(xlabel=lab["r"])
     L = 2.0 * float(a["r_mu_edges"][-1]) if box is None else float(box)
     marks = dict(r_marks or {})
-    if r_bao is not None:
-        marks = {r"$r_{\rm BAO}$": float(fold_periodic(r_bao, L)), **marks}
+    if r_bao is not None and float(r_bao) <= 0.5 * L:
+        marks = {r"$r_{\rm BAO}$": float(r_bao), **marks}
     for i, ax in enumerate(axs):
         _mark_lines(ax, marks, labels=i == 0)
+    lo, hi = sorted(axs[0].get_xlim())
+    pair_h = []
+    if r_bao is not None:  # the periodic images of the ring (n L, n != 0) crossing each wedge
+        rings = wedge_echoes(r_bao, 0.0, mu, L, r_max=hi)["ring"]
+        drew = False
+        for w in range(nm):
+            for x in rings[w]:
+                if lo <= x <= hi and not np.isclose(x, float(r_bao)):
+                    drew = True
+                    for ax in axs:
+                        ax.axvline(float(x), color=cols[w], ls="-", lw=7.0, alpha=0.25, zorder=2)
+        if drew:
+            pair_h.append(mpl.lines.Line2D([], [], color=FG, ls="-", lw=7.0, alpha=0.25, label=r"$r_{\rm BAO}$ images ($nL$)"))
     if delta_v is not None:
         if kms_per_cMpc is None:
-            raise ValueError("delta_v needs kms_per_cMpc (u) to convert the separation to cMpc.")
-        delta = abs(float(delta_v)) / float(kms_per_cMpc)
+            raise ValueError("delta_v needs kms_per_cMpc (u) to convert the separations to cMpc.")
+        u = float(kms_per_cMpc)
+        ids, offs = _pair_inputs(delta_v, line_ids)
         on_los = np.flatnonzero(np.isclose(np.asarray(mu, dtype=float)[1:], 1.0))
-        if on_los.size:  # the spot: on the line of sight only (the wedge with mu = 1), with or without r_bao
-            for i, ax in enumerate(axs):
-                _mark_lines(
-                    ax,
-                    {line_pair_label(line_ids, comoving=True): float(fold_periodic(delta, L))},
-                    color=cols[int(on_los[-1])],
-                    ls="--",
-                    lw=2.0,
-                    labels=i == 0,
-                )
-    if delta_v is not None and r_bao is not None:
-        ec = wedge_echoes(r_bao, delta, mu, L)
-        lo, hi = sorted(axs[0].get_xlim())
-        for w in range(nm):  # the echoes: vertical lines at r^+-(mu) of each wedge, in its colour, + dashed, - dotted
-            for key in ("plus", "minus"):
-                x = float(ec[key][w])
-                if lo <= x <= hi:
-                    for ax in axs:
-                        ax.axvline(x, color=cols[w], zorder=4, **_ECHO_STYLES[key])
-        pair = line_pair_label(line_ids)
-        echo_h = [
-            mpl.lines.Line2D([], [], color=FG, label="echo " + pair.replace(r"$\Delta", sign + r"\Delta", 1), **_ECHO_STYLES[key])
-            for key, sign in (("plus", "$+"), ("minus", "$-"))
-        ]
-        axs[0].add_artist(_legend(axs[0], handles=echo_h, loc="lower center", ncol=2, fontsize=FONT_MIN["legend"]))
+        for pr in line_pairs(ids, offs / u, L, "all"):  # the spots: on the line of sight only (the wedge with mu = 1)
+            if on_los.size and lo <= pr["fold"] <= hi:
+                for ax in axs:
+                    ax.axvline(pr["fold"], color=cols[int(on_los[-1])], ls=pr["ls"], lw=2.2, zorder=5)
+            lab = "spot " + line_pair_label(pr["ids"], comoving=True, all_ids=ids)
+            pair_h.append(mpl.lines.Line2D([], [], color=FG, ls=pr["ls"], lw=2.2, label=lab))
+        if r_bao is not None:
+            for pr in line_pairs(ids, offs / u, L, pairs):
+                ec = wedge_echoes(r_bao, pr["dv"], mu, L, r_max=hi)
+                for w in range(nm):  # the echoes of every image of the ring, in the wedge's colour and the pair's style
+                    for x in ec["echo"][w]:
+                        if lo <= x <= hi:
+                            for ax in axs:
+                                ax.axvline(float(x), color=cols[w], ls=pr["ls"], lw=1.1, alpha=0.7, zorder=4)
+                pair_h.append(mpl.lines.Line2D([], [], color=FG, ls=pr["ls"], lw=1.1, label="echoes " + pr["text"]))
+    pairs_leg = None
+    if pair_h:  # below the panels: the lines of every pair (in the colour of the wedge they are drawn in), the legend of
+        # the last axes (kept in the layout)
+        pairs_leg = dict(
+            handles=pair_h,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.13),
+            ncol=3 if len(pair_h) > 4 else 2,
+            fontsize=FONT_MIN["legend"] - 1,
+        )
     if kms_per_cMpc is not None:
         (velocity_axis if unit == "cMpc" else comoving_axis)(axs[0], kms_per_cMpc, "r")
     wedges_h = [
@@ -4353,7 +4658,10 @@ def plot_xi_mu_wedges(
     ]
     leg = _legend(axs[0], handles=wedges_h, loc="upper right", ncol=1, fontsize=_LEGEND_08, framealpha=0.9)
     axs[0].add_artist(leg)
-    _legend(axs[0], handles=styles, loc="lower left", ncol=1, fontsize=_LEGEND_08 - 1, framealpha=0.9)
+    leg = _legend(axs[0], handles=styles, loc="lower left", ncol=1, fontsize=_LEGEND_08 - 1, framealpha=0.9)
+    if pairs_leg is not None:
+        axs[0].add_artist(leg)
+        _legend(axs[-1], **pairs_leg)
     return fig, axs, out
 
 
@@ -4383,21 +4691,21 @@ def plot_overflux_3d(
     figsize=(22, 9),
 ):
     """P(|k|) and r^2 xi(|r|) (``quantity="r2xi"``) or xi (``"xi"``) of the overflux of each line and of the total on
-    the lattice of skewers, in comoving units (notebook 09, D3; the line of sight converted with u = period / L,
+    the lattice of skewers, in comoving units (notebook 10, D3; the line of sight converted with u = period / L,
     ``summary_stats.lattice_grid``), or of the density of each species and of their sum at the points of the skewers (Part B): the
     lattice counterpart of ``plot_isotropic_recovery``, with its estimators (every mode of the lattice inside the sphere
     of its smallest Nyquist frequency in |k| bins, every pair of points up to half the box in |r| bins), its options and
-    styles (every box faint, the mean over the boxes with the error of the mean as points joined by thin lines; one
-    colour per line or species, ``ENTITY_COLORS``, the total ``FG``; one small marker shape each, open after the first,
-    so that coinciding curves show); no residual row; no titles.
+    styles (every box faint, the mean over the boxes with the error of the mean as points joined by thin lines; every
+    line, species and the total in its style, ``line_style``: one colour and one small marker shape each, open after
+    the first, so that coinciding curves show); no residual row; no titles.
 
     flux3d : {field: ``ensemble_mean`` of the ``GRID_KEYS`` statistics} and axes : the bins (the ``ensemble_mean`` of
     ``measure_lattice`` and ``lattice_grid(...).axes()``, or ``skewer_density_statistics``'s ``density3d`` and ``density_axes3d``; k [1/cMpc], r [cMpc]); the last field is the total. names :
-    {field: legend label}. each : the boxes drawn faint, "all" (every field), "total" (the total only) or None.
+    {field: legend label} (default ``field_names``). each : the boxes drawn faint, "all" (every field), "total" (the total only) or None.
     kms_per_cMpc : top axes in s/km and km/s for reference (``velocity_axis``). limits : dict(k_min, k_max, r_min,
     r_max) [1/cMpc], [cMpc]: shaded outside, the limits written inside the grey bands. theory : the exact expectation
     (``GRID_KEYS`` dict, e.g. ``lattice_density_theory``) as a dashed ``FG`` line, or one reference per field ({field:
-    dict with "P_iso", "xi_iso" in the same bins}, e.g. the full-box density through a mesh, ``point_statistics``) as
+    dict with "P_iso", "xi_iso" in the same bins}, e.g. the full-box density through a mesh, ``field_statistics``) as
     dashed lines in the fields' colours; ``theory_label`` its legend. each_label : the legend of the faint realisations
     (``EACH_LABEL``). ``r_bao`` [cMpc] and ``r_marks``
     {label: r}: labelled dotted lines in the xi panel (only inside its range). ``k_edges``, ``r_edges``: the isotropic
@@ -4410,7 +4718,7 @@ def plot_overflux_3d(
     y_scale = y_scale or ("linear" if quantity == "r2xi" else "symlog")
     lab = _units("cMpc")
     fields = list(flux3d)
-    names = names or {}
+    names = {**field_names(fields), **(names or {})}
     total = fields[-1]
     _check_edges(axes, "k_edges", k_edges, "plot_overflux_3d")
     _check_edges(axes, "r_edges", r_edges, "plot_overflux_3d")
@@ -4420,10 +4728,10 @@ def plot_overflux_3d(
     k = bin_centres(axes["k_edges"], x_bin, k)  # where the bins are drawn
     rx = bin_centres(axes["r_edges"], x_bin, r)
     n = flux3d[total]["n_real"]
-    markers = ("o", "s", "D", "^", "v")
     yv = []
     for j, f in enumerate(fields):
-        c = FG if f == total else ENTITY_COLORS.get(f, PALETTE_CYCLE[j])
+        st = line_style("total" if f == total else f, j)
+        c = st["color"]
         e = flux3d[f]
         faint = each == "all" or (each == "total" and f == total)
         ok = np.isfinite(e["P_iso"]) & (e["P_iso"] > 0)
@@ -4434,7 +4742,7 @@ def plot_overflux_3d(
                 axP.plot(k[ok], y[ok], color=c, **_EACH)
             for y in e["xi_iso_each"]:
                 axX.plot(rx[okr], (wr * y)[okr], color=c, **_EACH)
-        style = dict(_MEAN, ms=_MS_SMALL, mew=1.3, fmt=markers[j % len(markers)] + "-", mfc=c if j == 0 else "none", zorder=6 + j)
+        style = dict(_MEAN, ms=_MS_SMALL, mew=1.3, fmt=st["marker"] + "-", mfc=c if j == 0 else "none", zorder=6 + j)
         axP.errorbar(k[ok], e["P_iso"][ok], e["P_iso_err"][ok], color=c, label=lbl, **style)
         axX.errorbar(rx[okr], (wr * e["xi_iso"])[okr], (wr * e["xi_iso_err"])[okr], color=c, **style)
         yv += [(wr * (e["xi_iso"] - e["xi_iso_err"]))[okr], (wr * (e["xi_iso"] + e["xi_iso_err"]))[okr]]
@@ -4444,7 +4752,7 @@ def plot_overflux_3d(
             th = theory[f] if per_field else theory
             if th is None:
                 continue
-            c = FG if f in (None, total) else ENTITY_COLORS.get(f, PALETTE_CYCLE[j])
+            c = FG if f in (None, total) else line_style(f, j)["color"]
             okt = np.isfinite(th["P_iso"]) & (th["P_iso"] > 0)
             lt = theory_label if j == 0 else None
             axP.plot(k[okt], th["P_iso"][okt], color=c, ls="--", lw=2.2, zorder=12, label=lt)
@@ -4485,7 +4793,7 @@ def plot_overflux_3d(
 
 
 def _native_map_axes(ax, u: float, kind: str, x_max: float, y_max: float, y_min: float = 0.0, unit: str = "km/s"):
-    """The axes of the (perp, par) maps of the overflux and of the density (notebook 09, D2 and B1): perpendicular across
+    """The axes of the (perp, par) maps of the overflux and of the density (notebook 10, D2 and B1): perpendicular across
     in comoving units, parallel upwards in its native unit (``unit``: "km/s" for the overflux, "cMpc" for the density
     along the skewers), the origin at the bottom-left corner, equal comoving lengths (aspect), and the reference axes in
     km/s through u: the perpendicular on top, and the parallel on the right in the other unit. kind "r": cMpc and km/s;
@@ -4519,15 +4827,19 @@ def _native_map_axes(ax, u: float, kind: str, x_max: float, y_max: float, y_min:
 
 def echo_curves(r_bao: float, delta: float, box: float, *, n: int = 400) -> dict:
     """The BAO ring and its two echoes in the (r_perp, r_par) plane of the overflux of two lines Delta apart along the line
-    of sight (notebook 09, D2), comoving [the units of the inputs], for r_perp <= min(r_bao, box / 2). The cross term
-    copies the correlation shifted by -+ Delta along the line of sight; folded, r_par -> |r_par|, both copies lie on the
-    ring re-centred on (0, Delta), r_perp^2 + (r_par - Delta)^2 = r_bao^2, with the two branches
+    of sight (notebooks 10 and 11, D2), comoving [the units of the inputs], for r_perp <= min(r_bao, box / 2), in a periodic
+    box: xi_box(r) = sum_n xi(|r + n L|). The cross term copies the correlation shifted by -+ Delta along the line of
+    sight; with r_par -> |r_par| (xi is even) both copies lie on the ring re-centred on (0, Delta), r_perp^2 +
+    (r_par - Delta)^2 = r_bao^2, with the two branches
 
         r_par^+- (r_perp) = | sqrt(r_bao^2 - r_perp^2) +- Delta |,
 
-    from r_bao +- Delta at r_perp = 0 to their meeting point (r_bao, Delta). Every r_par is folded with the period of
-    the line of sight, ``fold_periodic(r_par, box)`` (a branch beyond box / 2 re-enters closer to 0), as is the ring
-    itself, r_par = sqrt(r_bao^2 - r_perp^2). Returns dict(r_perp, ring, plus, minus) (arrays of n points)."""
+    from r_bao +- Delta at r_perp = 0 to their meeting point (r_bao, Delta). Every r_par is folded into [0, L / 2] with
+    the period of the line of sight, ``fold_periodic(r_par, box)``: the folded branches are exactly the arcs of the
+    images with n_perp = 0, the rings about (0, n L) and (0, n L +- Delta) clipped to the domain (``ring_crossings``),
+    for any r_bao (also > L / 2: then only image arcs remain); as is the ring itself, r_par = sqrt(r_bao^2 - r_perp^2)
+    folded. The images across the line of sight (n_perp != 0) are smeared by the azimuthal average in r_perp and are not
+    drawn. Returns dict(r_perp, ring, plus, minus) (arrays of n points)."""
     r0, d, L = float(r_bao), float(delta), float(box)
     rp = np.linspace(0.0, min(r0, 0.5 * L), int(n))
     s = np.sqrt(np.maximum(r0**2 - rp**2, 0.0))
@@ -4559,8 +4871,9 @@ def plot_overflux_rpar_rperp(
     kms_per_cMpc: float | None = None,
     rperp_edges=None,
     r_bao: float | None = None,
-    delta_v: float | None = None,
-    line_ids=("HI-LyA", "SiIII-1206"),
+    delta_v=None,
+    line_ids=None,
+    pairs="reference",
     box: float | None = None,
     mu_edges=None,
     n_sigma: float = 1.0,
@@ -4579,7 +4892,7 @@ def plot_overflux_rpar_rperp(
     figsize=(14, 12.5),
 ):
     """r^2 xi(r_perp, r_par) (``quantity="r2xi"``) or xi (``"xi"``) of one overflux on the exact lattice of skewers
-    (notebook 09, D2), or of the density at the points of the skewers (B1, ``unit="cMpc"``): the measured panel of
+    (notebook 10, D2), or of the density at the points of the skewers (B1, ``unit="cMpc"``): the measured panel of
     ``plot_rpar_rperp_maps``, with its options: a diverging colour scale centred on 0 (``cmap``, default
     ``CMAPS["diverging"]``; ``color_scale`` "linear" or "symlog" with ``linthresh``, ``linthresh_frac``, ``linscale``:
     ``_map_scale``, the same colour limits in both), contours at ``levels`` (default three) in green with the band where
@@ -4589,7 +4902,7 @@ def plot_overflux_rpar_rperp(
     no title. ``show``: "measured" (default) or "expected" (the map of ``theory``, with its dashed contours only: the
     expected panel of ``plot_rpar_rperp_maps``, which shares one ``norm`` and ``levels`` between the two); ``norm``: a
     colour norm to use instead of ``_map_scale``'s; ``legend``: the legend of ``_map_legend`` (default none: the curves
-    are labelled on the panel). The single-panel map of every (r_perp, r_par) figure of notebook 09.
+    are labelled on the panel). The single-panel map of every (r_perp, r_par) figure of notebook 10.
 
     Axes: r_perp across in cMpc and r_par upwards in its native unit (``unit``: km/s for the overflux, cMpc for the
     density), the origin at the bottom-left corner, equal comoving lengths; reference axes in km/s through u =
@@ -4602,14 +4915,20 @@ def plot_overflux_rpar_rperp(
     cell. res : the ``ensemble_mean`` of ``measure_lattice`` of one field (or one entry of ``density3d``) with
     ``res["axes"]`` = the bins of its ``lattice_grid`` (``density_axes3d``).
 
-    Curves, labelled on the panel, every line-of-sight separation folded with the period ``box`` [cMpc] (default: twice
-    the last row, L) and nothing beyond r_perp = L / 2 (``echo_curves``): ``r_bao`` [cMpc], the BAO ring (dotted);
-    with ``delta_v`` [km/s] (the separation of the two lines ``line_ids``, line 1 the reference line, folded into
-    [0, period / 2]; Delta = delta_v / u in cMpc), the diamond of their cross term on the line of sight at r_par = Delta,
-    labelled with the pair (``line_pair_label``), and with ``r_bao`` the two echo branches of the ring, r_par^+- =
-    |sqrt(r_bao^2 - r_perp^2) +- Delta| (dashed), labelled "echo +-Delta v_{pair}". Without ``delta_v`` (the density):
-    the ring alone. Returns (fig, ax, drawn {"ring", "spot", "echo +", "echo -": dict(r_perp, r_par)} of the curves and
-    the diamond drawn, r_par in the units of the y axis)."""
+    Curves, every line-of-sight separation folded with the period ``box`` [cMpc] (default: twice the last row, L), so
+    each curve is the set of arcs of the periodic images with n_perp = 0 (rings about (0, n L), clipped to the domain;
+    the images across the line of sight are smeared by the average over r_perp and are not drawn), nothing beyond
+    r_perp = L / 2 (``echo_curves``; any r_bao, also > L / 2): ``r_bao`` [cMpc], the BAO ring (dotted, labelled on the
+    curve); with ``delta_v`` [km/s], the offsets of the lines ``line_ids`` from the reference (``LineBundle.delta_v``,
+    any number of lines; or one number, the separation of the two lines of ``line_ids``): a diamond for the cross term of
+    every pair (i, j) on the line of sight at r_par = Delta_ij = |delta_v_j - delta_v_i| / u folded into [0, L / 2]
+    (``line_pairs``), each labelled with its pair (``line_pair_label``; labels of nearby diamonds stacked), and with
+    ``r_bao`` the two echo branches of the ring, r_par^+- = |sqrt(r_bao^2 - r_perp^2) +- Delta_ij|, for the pairs
+    ``pairs`` ("reference": those with the reference line (default), "all", or a list of pairs), each pair in its line
+    style (``line_style`` of line j): labelled on the curves for one pair, named in a legend for several. Without
+    ``delta_v`` (the density): the ring alone. Returns (fig, ax, drawn {"ring", "spots" [dict(pair, r_perp, r_par)],
+    "echoes" {pair text: dict(r_perp, plus, minus)}, and for the first pair "spot", "echo +", "echo -": dict(r_perp,
+    r_par)} of the curves and diamonds drawn, r_par in the units of the y axis)."""
     _check_option("quantity", quantity, tuple(_MAP_QUANTITY))
     _check_option("unit", unit, ("km/s", "cMpc"))
     _check_option("show", show, ("measured", "expected"))
@@ -4646,41 +4965,67 @@ def plot_overflux_rpar_rperp(
     r_max = min(float(rcp[-1]), float(eq[-1]))  # the last row is centred on half the box
     _mu_rays(ax, a["mu_edges"] if mu_edges is None else mu_edges, r_max, y_scale=ys)
     drawn = {}
+    _native_map_axes(ax, u, "r", eq[-1], ys * ep[-1], y_min=ys * ep[0], unit=unit)
     if r_bao is not None:
-        c = echo_curves(r_bao, 0.0 if delta_v is None else abs(float(delta_v)) / u, L)
+        c = echo_curves(r_bao, 0.0, L)
         ax.plot(c["r_perp"], ys * c["ring"], color=FG, ls=":", lw=1.8, zorder=10)
-        _circle_label(ax, r_bao, r"$r_{\rm BAO}$", y_scale=ys)
+        if float(r_bao) <= 0.5 * L:
+            _circle_label(ax, r_bao, r"$r_{\rm BAO}$", y_scale=ys)
+        else:  # only the arcs of the images: the label on the curve
+            _curve_label(ax, c["r_perp"], ys * c["ring"], r"$r_{\rm BAO}$ ($nL$ images)", color=FG, at=0.6)
         drawn["ring"] = dict(r_perp=c["r_perp"], r_par=ys * c["ring"])
     if delta_v is not None:
-        d = float(fold_periodic(abs(float(delta_v)) / u, L))  # [cMpc]
-        ax.plot([0.0], [ys * d], marker="D", ms=14, mfc="none", mec=FG, mew=2.4, zorder=11, clip_on=False, ls="none")
-        ax.annotate(
-            line_pair_label(line_ids, math=False),
-            (0.0, ys * d),
-            xytext=(14, 0),
-            textcoords="offset points",
-            ha="left",
-            va="center",
-            color=FG,
-            fontsize=FONT_MIN["annotation"],
-            path_effects=_halo(),
-            zorder=12,
-        )
-        drawn["spot"] = dict(r_perp=np.array([0.0]), r_par=np.array([ys * d]))
+        ids, offs = _pair_inputs(delta_v, line_ids)
+        prs = line_pairs(ids, offs / u, L, "all")
+        drawn["spots"] = []
+        y0, y1 = ax.get_ylim()
+        h_pt = ax.get_window_extent().height * 72.0 / fig.dpi
+        last = -np.inf
+        for pr in sorted(prs, key=lambda q: q["fold"]):  # the diamonds, their labels stacked when they crowd
+            yd = ys * pr["fold"]
+            ax.plot([0.0], [yd], marker="D", ms=14, mfc="none", mec=FG, mew=2.4, zorder=11, clip_on=False, ls="none")
+            f = (yd - y0) / (y1 - y0)
+            f_lab = max(f, last + 0.045)
+            last = f_lab
+            ax.annotate(
+                pr["text"],
+                (0.0, yd),
+                xytext=(18, (f_lab - f) * h_pt),
+                textcoords="offset points",
+                ha="left",
+                va="center",
+                color=FG,
+                fontsize=FONT_MIN["annotation"],
+                path_effects=_halo(),
+                zorder=12,
+                arrowprops=dict(arrowstyle="-", color=FG, lw=0.8, shrinkA=0, shrinkB=7) if f_lab > f + 1e-9 else None,
+            )
+            drawn["spots"].append(dict(pair=pr["text"], r_perp=np.array([0.0]), r_par=np.array([yd])))
+        first = sorted(prs, key=lambda q: (q["i"], q["j"]))[0]
+        drawn["spot"] = dict(r_perp=np.array([0.0]), r_par=np.array([ys * first["fold"]]))
         if r_bao is not None:
-            dv_lab = line_pair_label(line_ids)
-            for key, sign, at in (("plus", "+", 0.35), ("minus", "-", 0.75)):
-                ax.plot(c["r_perp"], ys * c[key], zorder=10, path_effects=_halo(4.0), **_ECHO)
-                _curve_label(
-                    ax,
-                    c["r_perp"],
-                    ys * c[key],
-                    "echo " + dv_lab.replace(r"$\Delta", "$" + sign + r"\Delta"),
-                    color=_ECHO["color"],
-                    at=at,
-                )
-                drawn["echo " + sign] = dict(r_perp=c["r_perp"], r_par=ys * c[key])
-    _native_map_axes(ax, u, "r", eq[-1], ys * ep[-1], y_min=ys * ep[0], unit=unit)
+            sel = line_pairs(ids, offs / u, L, pairs)
+            drawn["echoes"], handles = {}, []
+            for q, pr in enumerate(sel):
+                e = echo_curves(r_bao, pr["dv"], L)
+                sty = dict(color=FG, lw=2.2, ls=pr["ls"] if len(sel) > 1 else _ECHO["ls"])
+                for key, sign, at in (("plus", "+", 0.35), ("minus", "-", 0.75)):
+                    ax.plot(e["r_perp"], ys * e[key], zorder=10, path_effects=_halo(4.0), **sty)
+                    if len(sel) == 1:
+                        _curve_label(
+                            ax,
+                            e["r_perp"],
+                            ys * e[key],
+                            "echo " + pr["label"].replace(r"$\Delta", "$" + sign + r"\Delta"),
+                            color=FG,
+                            at=at,
+                        )
+                    if q == 0:
+                        drawn["echo " + sign] = dict(r_perp=e["r_perp"], r_par=ys * e[key])
+                drawn["echoes"][pr["text"]] = dict(r_perp=e["r_perp"], plus=ys * e["plus"], minus=ys * e["minus"])
+                handles.append(mpl.lines.Line2D([], [], **sty, label="echoes " + pr["text"]))
+            if len(sel) > 1:
+                ax.add_artist(_legend(ax, handles=handles, loc="upper right", fontsize=FONT_MIN["legend"], framealpha=0.9))
     fig.colorbar(im, ax=ax, label=rf"{sym}$(r_\perp, r_\parallel)$ {sym_unit}".rstrip(), shrink=0.9, pad=0.04, extend=extend)
     if legend:
         empty = bool(np.any(np.all(~np.isfinite(X), axis=0)))
@@ -4714,7 +5059,7 @@ def plot_overflux_kpar_kperp(
     legend: bool = False,
     figsize=(14, 12.5),
 ):
-    """P(k_perp, k_par) of one overflux on the exact lattice of skewers (notebook 09, D2), or of the density at the
+    """P(k_perp, k_par) of one overflux on the exact lattice of skewers (notebook 10, D2), or of the density at the
     points of the skewers (B1, ``unit="cMpc"``): the measured panel of ``plot_kpar_kperp_maps``, derived from it as
     ``plot_overflux_rpar_rperp`` from ``plot_rpar_rperp_maps``, with its options: P (not k P) on a logarithmic colour
     scale (``cmap``, default ``CMAPS["diverging"]``; the limits of the expectation with ``theory``, else of the
@@ -4725,7 +5070,7 @@ def plot_overflux_kpar_kperp(
     vertical lines. No title. ``show``: "measured" (default) or "expected" (the map of ``theory`` with its dashed
     contours only: the expected panel of ``plot_kpar_kperp_maps``, which shares one ``norm`` and ``levels`` between the
     two); ``norm``: a colour norm instead of the default; ``legend``: the legend of ``_map_legend`` (default none). The
-    single-panel map of every (k_perp, k_par) figure of notebook 09.
+    single-panel map of every (k_perp, k_par) figure of notebook 10.
 
     Axes in native units: k_perp across in cMpc^-1 and k_par upwards in s/km (``unit="km/s"``, the overflux: k_par =
     k_x / u) or in cMpc^-1 (``"cMpc"``, the density along the skewers); reference axes through u = ``kms_per_cMpc``
@@ -4826,7 +5171,7 @@ def plot_p1d_reference(
     figsize=(12, 10),
 ):
     """k P1D(k) / pi against k, linear k and logarithmic P, the convention of Fig. 1 of the reference (Chaves-Montero et
-    al., DESI DR1 P1D; notebook 09, D4): the P1D of each overflux of the toy boxes (the ``ensemble_mean`` of ``skewer_p1d``, k in
+    al., DESI DR1 P1D; notebook 10, D4): the P1D of each overflux of the toy boxes (the ``ensemble_mean`` of ``skewer_p1d``, k in
     s/km, ``unit="km/s"``) or of each density along the skewers (``skewer_density_statistics``'s ``density_p1d``, k in cMpc^-1, ``unit="cMpc"``), binned
     in k: every box faint (``each``), the mean over the boxes with the error of the mean as small points joined by thin
     lines (one colour and one marker shape per field, open after the first; the total ``FG``); with ``p1d["theory"]``
@@ -4835,8 +5180,8 @@ def plot_p1d_reference(
     ``kP_pi_err``) as small grey squares; k P / pi is dimensionless, so with ``unit="cMpc"`` only its k becomes u k
     [cMpc^-1]. The legend inside the panel; ``each_label`` the legend of the faint realisations (``EACH_LABEL``).
 
-    fields : the rows of ``p1d["p1d"]`` (default ``(*simulations.LINE_IDS, "total")``); names : {field: legend
-    label}; k_max : the right end of the k axis, in the units of the axis (default 1.6 times the largest reference k);
+    fields : the rows of ``p1d["p1d"]`` (default the first lines of ``simulations.LINE_IDS``, as many as the rows but
+    one, and "total"); names : {field: legend label} (default ``field_names``); k_max : the right end of the k axis, in the units of the axis (default 1.6 times the largest reference k);
     k_edges : the k bins, in the units of the axis (default linear bins of the reference's spacing from half the first
     mode); k_limits : (k_min, k_max) of the line of sight (2 pi / v_per and pi / dv), shaded outside and labelled inside
     the grey bands; x_bin : where each bin is drawn ("weighted" default: the mean of its modes; "linear", "log";
@@ -4847,8 +5192,9 @@ def plot_p1d_reference(
     _check_option("unit", unit, ("km/s", "cMpc"))
     if unit == "cMpc" and kms_per_cMpc is None:
         raise ValueError("unit='cMpc' needs kms_per_cMpc (u) to draw the reference.")
-    fields = list(fields or (*LINE_IDS, "total"))
-    names = names or {}
+    n_rows = np.shape(p1d["p1d"])[0]
+    fields = list(fields or (*LINE_IDS[: n_rows - 1], "total"))
+    names = {**field_names(fields), **(names or {})}
     ku = float(kms_per_cMpc) if unit == "cMpc" else 1.0  # reference k [s/km] -> the units of the axis
     k_ref, y_ref = ku * np.asarray(reference["k"]), np.asarray(reference["kP_pi"])
     k_max = float(k_max or 1.6 * k_ref.max())
@@ -4859,14 +5205,14 @@ def plot_p1d_reference(
     else:
         edges = np.asarray(k_edges, dtype=float)
     fig, ax = plt.subplots(figsize=figsize, layout="constrained")
-    markers = ("o", "s", "D")
     for j, f in enumerate(fields):
         kc, m, e, b = _binned_ensemble(k, np.asarray(p1d["p1d_each"])[:, j], edges, per_box=True, x_bin=x_bin)
-        c = FG if f == fields[-1] else ENTITY_COLORS.get(f, PALETTE_CYCLE[j])
+        st = line_style("total" if f == fields[-1] else f, j)
+        c = st["color"]
         if each:
             for y in b:
                 ax.plot(kc, kc * y / np.pi, color=c, **_EACH)
-        style = dict(_MEAN, ms=_MS_SMALL, mew=1.3, capsize=3, fmt=markers[j % 3] + "-", mfc=c if j == 0 else "none", zorder=6 + j)
+        style = dict(_MEAN, ms=_MS_SMALL, mew=1.3, capsize=3, fmt=st["marker"] + "-", mfc=c if j == 0 else "none", zorder=6 + j)
         ax.errorbar(kc, kc * m / np.pi, kc * e / np.pi, color=c, label=names.get(f, f), **style)
     if p1d.get("theory") is not None:
         sel = (k > 0) & (k <= k_max)

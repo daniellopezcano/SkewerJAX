@@ -1,4 +1,4 @@
-"""The lattice of skewers through a periodic box (``skewerjax.skewers``): the columns (every stride-th, through the cell
+"""The lattice of skewers through a periodic box (``skewerjax.core.skewers``): the columns (every stride-th, through the cell
 centres), the points of the paths and the bundle built from them (the exact frame, z at y = 0), the Hubble velocity of
 the line centres, and the 3D grid of the statistics on exactly that lattice in comoving units (``summary_stats.lattice_grid``,
 ``lattice_limits``: a cube of side L, the line of sight converted with u = period / L, transverse spacing s dx)."""
@@ -7,9 +7,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from skewerjax.core import SkewerBundle, phys, velocity_span
+from skewerjax.core import SkewerBundle, hubble_velocity, lattice_columns, lattice_points, phys, velocity_span
 from skewerjax.simulations import ToyBoxes
-from skewerjax.skewers import hubble_velocity, lattice_columns, lattice_points
 from skewerjax.summary_stats import bao_k_edges, lattice_grid, lattice_limits
 
 BOXES = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3, bao_ratio=1e-3)

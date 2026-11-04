@@ -129,6 +129,11 @@ class SnapshotHeader:
         return nbins, self.vmax_kms / nbins
 
 
+# The cosmology of IllustrisTNG (Planck 2015, https://www.tng-project.org/data/docs/background/): the header holds
+# Omega_m (Omega0), Omega_Lambda and h; Omega_b, sigma_8 and n_s are taken from this table (notebooks 09 and 11).
+TNG_COSMOLOGY = dict(Omega_Lambda=0.6911, Omega_m=0.3089, Omega_b=0.0486, h=0.6774, sigma_8=0.8159, n_s=0.9667)
+
+
 def _attr(d, key, default=None):
     if key not in d:
         if default is None:

@@ -200,6 +200,24 @@ class Cells:
         return int(sum(np.asarray(x).nbytes for x in tree_util.tree_leaves(self)))
 
 
+def redshift_space_cells(cells: Cells, axis: int, aH: float, species: str | None = None) -> Cells:
+    """The same cells in redshift space along ``axis`` (0, 1, 2): every generating point moved by its peculiar velocity
+    along that axis over a H, x_axis -> x_axis + v_axis / (a H) [cMpc] (v [km/s, physical], a H [km/s per cMpc]: the
+    plane-parallel mapping of the Hubble flow), wrapped into the periodic box. The volumes and the per-species fields
+    are kept, so every cell carries the same number of particles n V (the Voronoi volumes of the moved points are not
+    recomputed: the cells serve as tracers of the mass, e.g. ``summary_stats.field_statistics``). ``species``: the
+    species whose velocity moves the cells (default the first; every species of one gas shares the gas velocity)."""
+    if axis not in (0, 1, 2):
+        raise ValueError(f"axis must be 0, 1 or 2, got {axis!r}.")
+    sp = cells.species_keys[0] if species is None else species
+    v = np.asarray(cells.species[sp]["velocity"], dtype=np.float64)[:, axis]
+    pos = np.array(cells.positions, dtype=np.float64)
+    pos[:, axis] += v / float(aH)
+    if cells.box is not None:
+        pos = wrap_positions(pos, cells.box)
+    return Cells(pos, cells.volumes, cells.species, cells.box, cells.ids, None, validate=False)
+
+
 # --------------------------------------------------------------------------- builders
 Value = float | np.ndarray | Callable | dict
 

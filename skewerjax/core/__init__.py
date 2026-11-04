@@ -27,9 +27,9 @@ from skewerjax.core.absorbers import (
     tau_by_path_bins,
     velocity_span,
 )
-from skewerjax.core.cells import Cells, cells_from_values, cells_on_grid, grid_points, voronoi_volumes
+from skewerjax.core.cells import Cells, cells_from_values, cells_on_grid, grid_points, redshift_space_cells, voronoi_volumes
 from skewerjax.core.constants import PhysicalConstants, phys
-from skewerjax.core.cosmology import Cosmology
+from skewerjax.core.cosmology import Cosmology, sound_horizon_drag
 from skewerjax.core.deposition import (
     CellCrossings,
     SegmentComponents,
@@ -58,6 +58,9 @@ from skewerjax.core.skewers import (
     SkewerBundle,
     axis_aligned_skewer_points,
     grid_skewer_points,
+    hubble_velocity,
+    lattice_columns,
+    lattice_points,
     line_elements,
     path_geometry,
     plane_points,

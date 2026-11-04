@@ -1,7 +1,7 @@
 """The summary statistics of the flux: the overflux of each line and of their product, and its 1D and 3D two-point
 statistics, total, term by term and order by order; and the statistics of 3D fields and of the density along skewers.
-From arrays and geometry only: imports ``skewerjax.core`` at most, nothing from ``skewerjax.simulations`` or
-``skewerjax.skewers`` (``tests/test_import_graph.py``); nothing in ``core`` imports it.
+From arrays, geometry and ``core.Cells`` only: imports ``skewerjax.core`` at most, nothing from ``skewerjax.simulations``
+(``tests/test_import_graph.py``); nothing in ``core`` imports it.
 
 * ``overflux``: ``DeltaFieldBuilder`` (delta_j = T_j / T_bar_j - 1 with T = e^-tau the transmission and T_bar_j its
   mean, ``mean`` = "redshift" (default, T_bar(z)), "global", "box" or "skewer", the subset products delta_A, the total
@@ -13,14 +13,14 @@ From arrays and geometry only: imports ``skewerjax.core`` at most, nothing from 
 * ``lattice``: the statistics of an ensemble of periodic skewers from arrays and geometry only: P1D and xi1D by one 1D
   FFT per skewer (``skewer_p1d``, ``skewer_xi1d``), and the 3D statistics on the lattice of skewers (``lattice_grid``,
   ``lattice_limits``, ``on_lattice``, ``measure_lattice``), and the cell values at the points of the skewers (``on_points``);
-* ``field_stats``: P and xi of periodic 3D fields over an ensemble of realisations, on their own grid or from points
-  through a mesh, from arrays and an optional expectation P(k) (``box_grid``, ``grid_limits``, ``grid_power``,
-  ``field_statistics``, ``point_statistics``, ``xi_chi2``, ``xi_subset_offsets``, ``bao_height``);
+* ``field_stats``: P and xi of the density of gas cells (``core.Cells``, any source: toy grids and snapshots alike)
+  over an ensemble of realisations, through a mesh, against an optional expectation P(k) (``box_grid``, ``grid_limits``,
+  ``grid_power``, ``field_statistics``, ``cell_weights``, ``xi_chi2``, ``xi_subset_offsets``, ``bao_height``);
 * ``mesh``: points on a periodic mesh in 1D, 2D, 3D (Sefusatti et al. 2016): mass assignment ``paint`` (NGP, CIC, TSC,
-  PCS), its window ``mas_window``, the interlaced and deconvolved Fourier field ``fourier_mesh`` (and ``fourier_grid``,
-  the exact path of a field already on the mesh), the alias sum ``aliased_power``; the statistics take ``mas`` /
-  ``interlace`` on the point path (``point_statistics``, ``GridStatistics3D.measure_points``) and ``mas=None`` only on
-  grid- and lattice-native inputs (``field_statistics``, ``measure_lattice``, ``skewer_density_statistics``);
+  PCS; chunked), its window ``mas_window``, the interlaced and deconvolved Fourier field ``fourier_mesh``, the alias sum
+  ``aliased_power``, the transfer of fields given at the nodes ``node_transfer``; ``mas`` / ``interlace`` on the mesh
+  path of the cells (``field_statistics``, ``GridStatistics3D.measure_points``), ``mas=None`` only on the lattice path
+  of the skewer samples (``measure_lattice``, ``skewer_density_statistics``);
 * ``density``: the density along a lattice of skewers through the same 3D estimator, and its exact expectation on that
   lattice from P(k) (``skewer_density_statistics``, ``lattice_density_theory``);
 * ``stats_3d``: P3D and xi3D of the overflux on a grid of skewers, by term and order (``OverfluxStatistics3D``);
@@ -62,10 +62,10 @@ from skewerjax.summary_stats.density import lattice_density_theory, skewer_densi
 from skewerjax.summary_stats.field_stats import (
     bao_height,
     box_grid,
+    cell_weights,
     field_statistics,
     grid_limits,
     grid_power,
-    point_statistics,
     xi_chi2,
     xi_subset_offsets,
 )
@@ -83,9 +83,9 @@ from skewerjax.summary_stats.lattice import (
 from skewerjax.summary_stats.mesh import (
     MAS_SCHEMES,
     aliased_power,
-    fourier_grid,
     fourier_mesh,
     mas_window,
+    node_transfer,
     paint,
 )
 from skewerjax.summary_stats.orders import ZERO_ORDER_KEY, order_sum
@@ -129,11 +129,11 @@ __all__ = [
     "grid_limits",
     "grid_power",
     "field_statistics",
-    "point_statistics",
+    "cell_weights",
     "paint",
     "mas_window",
     "fourier_mesh",
-    "fourier_grid",
+    "node_transfer",
     "aliased_power",
     "MAS_SCHEMES",
     "xi_chi2",

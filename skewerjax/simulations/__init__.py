@@ -2,8 +2,8 @@
 
 Toy fields: ``grf`` (``PowerLawGRF``, Gaussian random fields with optional anisotropy and BAO), ``toy_cells``
 (``grf_cells``: the realisation on the cells of its grid, cubes centred on the nodes) and ``toy_boxes`` (``ToyBoxes``: many
-realisations regenerated from their seeds and their gas, recomputed at every call; notebooks 08 and 09). The skewers
-through them are ``skewerjax.skewers`` and their statistics ``skewerjax.summary_stats``, which this block does not import.
+realisations regenerated from their seeds and their gas, recomputed at every call; notebooks 08 and 10). The skewers
+through them are ``skewerjax.core`` (``lattice_columns``, ``lattice_points``) and their statistics ``skewerjax.summary_stats``, which this block does not import.
 
 Snapshots: read hydro (or FGPA-painted N-body) snapshots and turn them into the gas cells of the core. Layers:
 ``readers`` (HDF5 I/O, NumPy) -> ``gas_cells`` (``GasCells``: the raw per-cell data of the snapshot) -> ``gas_physics``
@@ -13,7 +13,7 @@ skewers) or for the cells within reach of a set of skewers (``selection``, strea
 ``SimulationSkewers.to_cells``). ``snapshot_skewers`` (``SimulationSkewers``) then runs the core's route (deposition,
 ``core.absorbers``, ``core.compute_optical_depth``) for any options; ``maps`` projects slabs of the gas and cuts the Voronoi cells by a plane, for figures.
 
-Depends on ``skewerjax.core`` only (not on ``skewers`` or ``summary_stats``: ``tests/test_import_graph.py``); the
+Depends on ``skewerjax.core`` only (not on ``summary_stats``: ``tests/test_import_graph.py``); the
 boundary with the core is ``core.Cells``.
 """
 
@@ -21,9 +21,9 @@ from skewerjax.simulations.gas_cells import GasCells
 from skewerjax.simulations.gas_physics import HI, CloudyIonTable, Ion, ion_from_species, ion_properties
 from skewerjax.simulations.grf import PowerLawGRF
 from skewerjax.simulations.maps import slab_projection, voronoi_slice
-from skewerjax.simulations.readers import ArepoHDF5Reader, SnapshotHeader
+from skewerjax.simulations.readers import TNG_COSMOLOGY, ArepoHDF5Reader, SnapshotHeader
 from skewerjax.simulations.selection import select_cells_near_paths
-from skewerjax.simulations.snapshot_cells import gas_to_cells, select_cells_in_region, snapshot_cells
+from skewerjax.simulations.snapshot_cells import GAS_SPECIES, gas_to_cells, select_cells_in_region, snapshot_cells
 from skewerjax.simulations.snapshot_skewers import ExtractionOptions, IntegrationOptions, SimulationSkewers, cached
 from skewerjax.simulations.toy_boxes import LINE_IDS, ToyBoxes
 from skewerjax.simulations.toy_cells import grf_cells, interpolate_periodic

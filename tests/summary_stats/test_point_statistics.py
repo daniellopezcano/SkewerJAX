@@ -1,31 +1,46 @@
-"""The two paths of the 3D statistics: grid-native inputs (a field on its own grid, the lattice of skewer samples) take
-the exact FFT and refuse a mass-assignment scheme; fields known at points go through a mesh (``mesh.fourier_mesh``:
-assignment, interlacing, the window divided; Sefusatti et al. 2016) in ``GridStatistics3D.measure_points`` and
-``point_statistics``, against the expectation with its alias images (``mesh.aliased_power``)."""
+"""The one path of the field statistics: the gas of every source (``core.Cells``: toy grids through ``grf_cells``,
+snapshots through ``gas_to_cells``) is deposited on a mesh (``field_stats.field_statistics``: n_X V at the generating
+points, ``mesh.fourier_mesh``: assignment, interlacing, the window divided; Sefusatti et al. 2016) and measured by
+``GridStatistics3D.measure_points``; the lattice path of the skewer samples (``GridStatistics3D.measure``,
+``measure_lattice``, ``skewer_density_statistics``) takes the exact FFT and refuses a scheme.
+
+* the defaults (interlaced PCS) and the guards (arrays are not cells; a scheme on the lattice path raises);
+* the toy cells and Voronoi-like cells go through the same calls (no branch on the source; ``measure`` never called);
+* the mesh path converges to the exact grid FFT (the validation reference, kept here only) at k << k_Nyq, and equals
+  it times ``mesh.node_transfer`` on every mode for a toy grid of the mesh's shape;
+* mass conservation of the deposit; redshift-space cells (``core.redshift_space_cells``);
+* a plane wave and the shot noise; fields at points against the alias-sum expectation (``mesh.aliased_power``)."""
 
 import inspect
 
 import numpy as np
 import pytest
 
+from skewerjax.core import Cells, cells_from_values, redshift_space_cells
 from skewerjax.simulations import ToyBoxes
 from skewerjax.summary_stats import (
     GRID_KEYS,
     GridStatistics3D,
+    aliased_power,
     box_grid,
+    cell_weights,
     field_statistics,
     fourier_mesh,
     grid_limits,
+    grid_power,
     lattice_grid,
     measure_lattice,
+    node_transfer,
     paint,
-    point_statistics,
     skewer_density_statistics,
 )
+from skewerjax.summary_stats import grid3d as G3
+from skewerjax.summary_stats import mesh as M
 
 from helpers import raises
 
 BOXES = ToyBoxes(box_cMpc=64.0, n_cells=64, n_real=4, r_bao=20.0, sigma_bao=2.0, bao_ratio=0.01)
+SMALL = ToyBoxes(box_cMpc=32.0, n_cells=32, n_real=3, r_bao=10.0, sigma_bao=2.0, bao_ratio=0.01)
 
 
 def _grid(n=16, L=64.0):
@@ -35,29 +50,125 @@ def _grid(n=16, L=64.0):
     )
 
 
-def test_the_point_path_defaults_to_interlaced_pcs():
-    for fn in (paint, fourier_mesh, point_statistics, GridStatistics3D.measure_points):
+def _voronoi_like(n=4000, L=32.0, seed=3):
+    """Cells at random generating points with random volumes (a stand-in for a snapshot's cells): two species."""
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0, L, (n, 3))
+    vol = rng.uniform(0.5, 1.5, n) * L**3 / n
+    nh = rng.lognormal(0.0, 0.5, n)
+    v = rng.normal(0, 100.0, (n, 3))
+    return cells_from_values(x, L, {"HI": nh, "SiIII": 0.1 * nh}, temperature=1e4, velocity=v, volumes=vol)
+
+
+def test_the_mesh_path_defaults_to_interlaced_pcs():
+    for fn in (paint, fourier_mesh, field_statistics, GridStatistics3D.measure_points, node_transfer):
         par = inspect.signature(fn).parameters
         assert par["mas"].default == "pcs", fn.__name__
         assert "interlace" not in par or par["interlace"].default is True, fn.__name__
 
 
-def test_grid_native_inputs_refuse_a_scheme():
+def test_the_lattice_path_refuses_a_scheme_and_the_fields_enter_as_cells():
     gs = _grid()
     d = np.random.default_rng(0).normal(size=gs.shape)
-    for fn, args in (
-        (gs.measure, (d,)),
-        (field_statistics, ([d], gs)),
-        (measure_lattice, (d.transpose(0, 2, 1).reshape(-1, 16), gs)),
-    ):
-        raises(ValueError, "grid-native", fn, *args, mas="tsc")
+    for fn, args in ((gs.measure, (d,)), (measure_lattice, (d.transpose(0, 2, 1).reshape(-1, 16), gs))):
+        raises(ValueError, "lattice", fn, *args, mas="tsc")
     lat = lattice_grid(4, 4, 32, 64.0, 16.0, k_edges=np.linspace(0.05, 0.2, 4))
     cols = [{"HI": np.ones((4, 16, 4)), "SiIII": np.ones((4, 16, 4))}]
-    raises(ValueError, "grid-native", skewer_density_statistics, cols, 2, lat, 64.0, mas="cic")
+    raises(ValueError, "lattice", skewer_density_statistics, cols, 2, lat, 64.0, mas="cic")
     a, b = gs.measure(d), gs.measure(d, mas=None)
     assert all(np.array_equal(a[k], b[k], equal_nan=True) for k in GRID_KEYS), "mas=None is the exact path, unchanged"
     raises(ValueError, "mas must be one of", gs.measure_points, np.zeros((5, 3)), np.ones(5), mas="sph")
     raises(ValueError, "(N, 3)", gs.measure_points, np.zeros((5, 2)), np.ones(5))
+    raises(TypeError, "core.Cells", field_statistics, d, gs, species="HI")
+    raises(ValueError, "not in the cells", field_statistics, SMALL.cells(0), _grid(16, 32.0), species="CIV", log=None)
+    raises(ValueError, "box", field_statistics, SMALL.cells(0), _grid(16, 64.0), species="HI", log=None)
+    assert not hasattr(M, "fourier_grid"), "the exact grid FFT is a test reference only"
+
+
+def test_toy_and_simulation_cells_take_the_same_calls():
+    """One path, no branch on the source: the same functions, with the same options, for the toy grid cells and for
+    Voronoi-like cells; the grid-native estimator is never called."""
+    calls = []
+    real_mp, real_fm, real_m = G3.GridStatistics3D.measure_points, G3.fourier_mesh, G3.GridStatistics3D.measure
+
+    def spy_mp(self, x, v, **kw):
+        calls.append(("measure_points", tuple(sorted(kw.items()))))
+        return real_mp(self, x, v, **kw)
+
+    def spy_fm(x, w, n, L, **kw):
+        calls.append(("fourier_mesh", tuple(sorted(kw.items()))))
+        return real_fm(x, w, n, L, **kw)
+
+    def spy_m(self, *a, **kw):
+        calls.append(("measure",))
+        return real_m(self, *a, **kw)
+
+    G3.GridStatistics3D.measure_points, G3.fourier_mesh, G3.GridStatistics3D.measure = spy_mp, spy_fm, spy_m
+    try:
+        gs = _grid(16, 32.0)
+        toy = field_statistics(SMALL.cells(0), gs, species=["HI", "SiIII"], log=None)
+        toy_calls, calls[:] = list(calls), []
+        sim = field_statistics(_voronoi_like(), gs, species=["HI", "SiIII"], log=None)
+    finally:
+        G3.GridStatistics3D.measure_points, G3.fourier_mesh, G3.GridStatistics3D.measure = real_mp, real_fm, real_m
+    assert toy_calls == calls and len(calls) == 4 and ("measure",) not in calls
+    assert set(toy) == set(sim) == {"HI", "SiIII"} and toy["HI"]["mas"] == "pcs" and toy["HI"]["interlace"] is True
+    np.testing.assert_allclose(toy["HI"]["P_iso"], toy["SiIII"]["P_iso"], rtol=1e-13)  # n_SiIII = r n_HI: one delta
+
+
+def test_the_mesh_path_converges_to_the_exact_grid_fft():
+    """Toy cells at the nodes of a grid of the mesh's shape: on every mode, |F_mesh|^2 = node_transfer x |F_grid|^2
+    (the exact FFT of the grid, the validation reference); binned, |P_mesh / P_grid - 1| < 2e-3 below k_Nyq / 2 and
+    < 3e-2 below k_Nyq (interlaced PCS), larger without interlacing; the field statistics carry the same."""
+    b, gs = SMALL, _grid(32, 32.0)
+    T = np.asarray(node_transfer(32, 32.0, mas="pcs", interlace=True))
+    c, d = b.cells(0), b.delta(0)
+    F, _ = fourier_mesh(np.asarray(c.positions), cell_weights(c, "HI"), 32, 32.0)
+    G = np.fft.rfftn(d / (1 + d.mean()))  # the mesh holds n / mean(n) = (1 + delta) / (1 + mean(delta))
+    live = np.ones(G.shape, bool)
+    live[0, 0, 0] = False
+    np.testing.assert_allclose(np.abs(np.asarray(F)[live]) ** 2, T[live] * np.abs(G[live]) ** 2, rtol=1e-9)
+    exact = gs.measure(d / (1 + d.mean()))  # reference (the lattice estimator on the grid's own nodes)
+    mesh = field_statistics(c, gs, species="HI", log=None)
+    k = mesh["axes"]["k_iso"]
+    r = mesh["P_iso"] / exact["P_iso"] - 1
+    knyq = np.pi / b.dx
+    assert np.all(np.abs(r[k < knyq / 2]) < 2e-3) and np.all(np.abs(r[k < knyq]) < 3e-2), r
+    assert np.max(np.abs(r[k < knyq / 2])) > 1e-7, "a bias, not an identity: the mesh differs from the grid"
+    plain = gs.measure_points(np.asarray(c.positions), cell_weights(c, "HI"), interlace=False)
+    assert np.nanmax(np.abs(plain["P_iso"] / exact["P_iso"] - 1)[k < knyq]) > np.nanmax(np.abs(r[k < knyq])), "interlacing helps"
+    th = gs.theory(grid_power(b.grf().power, gs.shape, gs.L))  # the expectation the statistics carry
+    res = field_statistics((b.cells(i) for i in range(b.n_real)), gs, species="HI", power=b.grf().power, log=None)
+    np.testing.assert_array_equal(res["theory"]["P_iso"], th["P_iso"])
+    assert res["n_real"] == 3 and res["n_mesh"] == (32,) * 3 and res["k_nyq"] == pytest.approx(knyq)
+
+
+def test_mass_conservation_of_the_deposit():
+    """The mesh holds every particle: sum(paint(n V)) = sum(n V), for the toy cells and for Voronoi-like cells, with
+    every scheme, chunked or not; the deposit of each cell is n V over its mean."""
+    for c in (SMALL.cells(1), _voronoi_like()):
+        nV = np.asarray(c.species["HI"]["number_density"]) * np.asarray(c.volumes)
+        w = cell_weights(c, "HI")
+        assert w.mean() == pytest.approx(1.0, rel=1e-14) and np.allclose(w * nV.mean(), nV, rtol=1e-14)
+        for mas in M.MAS_SCHEMES:
+            for chunk in (None, 997):
+                m = np.asarray(paint(np.asarray(c.positions), nV, 16, c.box, mas, chunk=chunk))
+                assert abs(m.sum() / nV.sum() - 1) < 1e-13, (mas, chunk)
+
+
+def test_redshift_space_cells():
+    c = _voronoi_like(500)
+    aH = 100.0
+    for ax in range(3):
+        s = redshift_space_cells(c, ax, aH)
+        want = np.mod(np.asarray(c.positions)[:, ax] + np.asarray(c.species["HI"]["velocity"])[:, ax] / aH, c.box)
+        np.testing.assert_allclose(np.asarray(s.positions)[:, ax], want, rtol=0, atol=1e-12)
+        others = [j for j in range(3) if j != ax]
+        np.testing.assert_array_equal(np.asarray(s.positions)[:, others], np.asarray(c.positions)[:, others])
+        assert s.volumes is c.volumes and isinstance(s, Cells) and s.grid is None
+    zero = redshift_space_cells(SMALL.cells(0), 1, aH)  # zero velocities: the same points
+    np.testing.assert_array_equal(np.asarray(zero.positions), np.asarray(SMALL.cells(0).positions))
+    raises(ValueError, "axis", redshift_space_cells, c, 3, aH)
 
 
 def test_a_plane_wave_through_the_mesh_and_the_shot_noise():
@@ -82,26 +193,29 @@ def test_a_plane_wave_through_the_mesh_and_the_shot_noise():
             np.testing.assert_allclose(less[key][ok], got[key][ok] - 0.75, rtol=0, atol=1e-9 * np.nanmax(np.abs(got[key])))
 
 
-def test_point_statistics_against_the_aliased_expectation():
+def test_points_against_the_aliased_expectation():
     """Fields of a toy GRF known at the 64^3 nodes of their grid, measured through a 16^3 mesh: with every scheme and
     with or without interlacing, P(|k|) follows the alias-sum expectation within its errors (|pull| < 3.5 in every
-    bin for TSC and PCS, below k_Nyq / 2 for NGP and CIC), while the same fields decimated to the 16^3 nodes (grid-native, no assignment) carry the aliased power."""
+    bin for TSC and PCS, below k_Nyq / 2 for NGP and CIC), while the same fields decimated to the 16^3 nodes (no
+    assignment) carry the aliased power."""
     b, g = BOXES, BOXES.grf()
     gs = _grid()
     x1 = np.arange(b.n_cells) * b.dx
     X = np.stack(np.meshgrid(x1, x1, x1, indexing="ij"), -1).reshape(-1, 3)
+    th = {}
     for mas in ("ngp", "cic", "tsc", "pcs"):
         for interlace in (False, True):
-            ps = point_statistics(
-                ((X, b.delta(i).ravel()) for i in range(b.n_real)), gs, mas=mas, interlace=interlace, power=g.power, log=None
+            P = np.stack(
+                [gs.measure_points(X, b.delta(i).ravel(), mas=mas, interlace=interlace)["P_iso"] for i in range(b.n_real)]
             )
-            assert ps["mas"] == mas and ps["interlace"] is interlace and ps["n_real"] == b.n_real
-            pull = (ps["P_iso"] - ps["theory"]["P_iso"]) / ps["P_iso_err"]
+            m, e = P.mean(0), P.std(0, ddof=1) / np.sqrt(b.n_real)
+            th = gs.theory(aliased_power(g.power, gs.shape, gs.L, mas=mas, interlace=interlace))["P_iso"]
+            pull = (m - th) / e
             # The points sit at 4 fixed offsets in every node's cell: their kernel is W aliased at 4 k_s, W(k) +
             # W(k -+ 4 k_s) + ..., a few % above W near k_Nyq for the kinked NGP and CIC (|W(k_Nyq - 4 k_s) / W(k_Nyq)|
             # = 1/7 per order), < 0.5 % for TSC and PCS: NGP and CIC are checked below k_Nyq / 2 only
-            low = ps["axes"]["k_iso"] < (np.inf if mas in ("tsc", "pcs") else 0.5 * np.pi / gs.dx[0])
+            low = gs.k_iso < (np.inf if mas in ("tsc", "pcs") else 0.5 * np.pi / gs.dx[0])
             assert np.all(np.abs(pull[low]) < 3.5), (mas, interlace, pull)
-            assert np.all(np.isfinite(ps["cov_xi_iso"][1:, 1:]))
-    dec = field_statistics((b.delta(i)[::4, ::4, ::4] for i in range(b.n_real)), gs, power=g.power, log=None)
-    assert np.max(np.abs(dec["P_iso"] - dec["theory"]["P_iso"]) / dec["P_iso_err"]) > 5, "decimation aliases"
+    dec = np.stack([gs.measure(b.delta(i)[::4, ::4, ::4])["P_iso"] for i in range(b.n_real)])
+    th = gs.theory(grid_power(g.power, gs.shape, gs.L))["P_iso"]
+    assert np.max(np.abs(dec.mean(0) - th) / (dec.std(0, ddof=1) / np.sqrt(b.n_real))) > 5, "decimation aliases"

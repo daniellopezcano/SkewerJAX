@@ -11,6 +11,19 @@ from skewerjax.core.constants import phys
 from skewerjax.core.validation import check_values
 
 
+def sound_horizon_drag(omega_b, omega_cb, omega_nu=0.0):
+    """The sound horizon at the drag epoch r_d [Mpc] from the physical densities omega_b = Omega_b h^2, omega_cb =
+    (Omega_c + Omega_b) h^2 and omega_nu = Omega_nu h^2 (default 0, massless neutrinos), by the fit of Aubourg et al.
+    2015 (PRD 92, 123516, eq. 16; 0.02 % against CAMB near Planck):
+
+        r_d = 55.154 exp[-72.3 (omega_nu + 0.0006)^2] / (omega_cb^0.25351 omega_b^0.12807) Mpc.
+
+    Planck 2015 (IllustrisTNG: Omega_b = 0.0486, Omega_m = 0.3089, h = 0.6774): r_d = 147.3 Mpc = 99.8 h^-1 Mpc. Works
+    on arrays and under jit."""
+    wb, wcb, wnu = jnp.asarray(omega_b), jnp.asarray(omega_cb), jnp.asarray(omega_nu)
+    return 55.154 * jnp.exp(-72.3 * (wnu + 0.0006) ** 2) / (wcb**0.25351 * wb**0.12807)
+
+
 def da_dx(xx, aa, params, cc=phys.cc_Gpc_per_Gyr):
     """Photon geodesic da/dx = (H0 / c) sqrt(Om_r + Om_m a + Om_k a^2 + Om_L a^4) / sqrt(1 - k x^2) (notes Eq. dadx_general).
 

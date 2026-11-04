@@ -317,7 +317,7 @@ def ensemble_1d(summaries) -> dict:
     return out
 
 
-def decompose_1d(tau, dv: float, mean_transmission=None, *, mean: str = "redshift", labels=("1", "2")) -> dict:
+def decompose_1d(tau, dv: float, mean_transmission=None, *, mean: str = "redshift", labels=None) -> dict:
     """The order-by-order (and term-by-term) decomposition of the 1D statistics of the total overflux of one set of
     skewers (``OverfluxStatistics1D.summary``: P1D and xi1D of the total, of every pair of subset terms (A, B) and of
     every order |A| + |B|), opt-in: the plain P1D and xi1D need only ``summary_stats.lattice.skewer_p1d`` / ``skewer_xi1d``.
@@ -325,11 +325,12 @@ def decompose_1d(tau, dv: float, mean_transmission=None, *, mean: str = "redshif
     tau : (N_lines, N_sk, N_pix); dv : the pixel width [km/s]; mean_transmission : the means T_bar_j and T_bar of the
     ensemble (``DeltaFieldBuilder``): (N_lines + 1, N_pix), or (N_lines + 1, N_sk, N_pix), e.g. one realisation of
     ``overflux.ensemble_mean_transmissions`` (a mean shared by the skewers is used as one row); None: the mean over these
-    skewers (``mean``). labels : one per line. Returns the summary dict (one record of ``ensemble_1d``)."""
+    skewers (``mean``). labels : one per line (default "1", "2", ..., "N_lines": every order up to N_lines). Returns the
+    summary dict (one record of ``ensemble_1d``)."""
     Tb = None if mean_transmission is None else np.asarray(mean_transmission)
     if Tb is not None and Tb.ndim == 3 and (Tb.strides[1] == 0 or np.all(Tb == Tb[:, :1])):
         Tb = Tb[:, 0]  # shared by the skewers: one row per line (the shared C of p1d_kernel)
-    ov = DeltaFieldBuilder(tau, labels=list(labels), mean=mean, mean_transmission=Tb).build()
+    ov = DeltaFieldBuilder(tau, labels=None if labels is None else list(labels), mean=mean, mean_transmission=Tb).build()
     return OverfluxStatistics1D(ov, dv).summary()
 
 

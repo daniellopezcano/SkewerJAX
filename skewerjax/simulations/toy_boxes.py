@@ -1,15 +1,15 @@
-"""Toy boxes (notebooks 08 and 09): periodic 3D Gaussian fields of known spectrum and their gas, regenerated from their
+"""Toy boxes (notebooks 08 and 10): periodic 3D Gaussian fields of known spectrum and their gas, regenerated from their
 seeds whenever they are needed: nothing is stored, every call recomputes.
 
 ``ToyBoxes``: the configuration and realisation i, regenerated from its seed ``base_seed + i`` (``delta``, ``fields``,
 ``cells``). The spectrum is a power law plus a BAO term (a Gaussian bump in xi, its exact transform A_bao W(k) in P,
 ``PowerLawGRF``; valid for bao_ratio <= R_max), isotropic (no Kaiser or Fingers-of-God term), normalised to
-``sigma_delta``; the gas of every cell, both species being the same gas (one temperature, one velocity):
+``sigma_delta``; the gas of every cell, every species being the same gas (one temperature, one velocity):
 
-    n_HI = n_bar_HI (1 + delta),   n_SiIII = r n_HI,   T = T0 (1 + delta)^(gamma - 1),
+    n_HI = n_bar_HI (1 + delta),   n_X = r_X n_HI (one ratio per metal species X),   T = T0 (1 + delta)^(gamma - 1),
     v = 0 (``velocity="zero"``, the default)  or  v_k = i a H f (k / k^2) delta_k (``"linear"``: linear theory, notebook 04).
 
-The gas only: the skewers through the boxes are ``skewerjax.skewers`` (``lattice_columns``, ``lattice_points``, then a
+The gas only: the skewers through the boxes are ``skewerjax.core`` (``lattice_columns``, ``lattice_points``, then a
 ``core.SkewerBundle`` with ``ToyBoxes.cosmology`` and a0 = 1 / (1 + z)), and their statistics ``skewerjax.summary_stats``
 (``field_statistics``, ``skewer_density_statistics``, ``lattice_density_theory`` with ``grf().power`` as the
 expectation). Notebooks compose the three.
@@ -28,22 +28,26 @@ from skewerjax.core import Cosmology, phys
 from skewerjax.simulations.grf import PowerLawGRF, _bao_ratio_max
 from skewerjax.simulations.toy_cells import grf_cells
 
-LINE_IDS = ("HI-LyA", "SiIII-1206")  # the lines of the two species (HI, SiIII): line 1, line 2 of the terms "1", "2", "12"
+LINE_IDS = ("HI-LyA", "SiIII-1206", "SiII-1193", "SiII-1190")  # the default lines (HI, SiIII, SiII): lines 1 .. 4 of the terms
+# Toy ratios n_X / n_HI per metal species (``ToyBoxes.metal_to_hi``): Si III as before (0.2); Si II an illustrative toy
+# choice, half of Si III, so that its two lines (f = 0.58 and 0.29, against 1.63 for Si III 1206) stay weaker than Si III
+METAL_TO_HI = {"SiIII": 0.2, "SiII": 0.1}
 VELOCITY_MODES = ("zero", "linear")  # ToyBoxes.velocity
 
 
 @dataclass(frozen=True)
 class ToyBoxes:
-    """The toy boxes of notebooks 08 and 09: ``n_real`` periodic cubes of side ``box_cMpc`` on ``n_cells``^3 grids.
+    """The toy boxes of notebooks 08 and 10: ``n_real`` periodic cubes of side ``box_cMpc`` on ``n_cells``^3 grids.
 
     Spectrum: P(k) = A_s (k / k_0)^(n_s - 1) + A_bao W(k), isotropic (``PowerLawGRF`` with A_bao = bao_ratio A_s,
     r_bao, sigma_bao [cMpc]): ``bao_ratio`` = R_bao is the height of the BAO bump in xi in units of A_s [cMpc^-3], and
     W the exact transform of the bump, which changes sign: the spectrum is valid (P >= 0 at every mode of the grid) for
     bao_ratio <= R_max (``bao_ratio_max``, independent of sigma_delta); a larger ratio raises a ``ValueError`` quoting
     R_max. A_s is set by ``sigma_delta`` = sqrt(variance on the grid). Gas: the module
-    docstring, with n_bar_HI [comoving cm^-3], ``siiii_to_hi`` = r, T0 [K], ``gamma_minus_1``. ``z`` and ``Omega_m``
+    docstring, with n_bar_HI [comoving cm^-3], ``metal_to_hi`` = {species X: r_X} (default ``METAL_TO_HI``; every species
+    of the lines of a ``LineBundle`` but HI needs its ratio), T0 [K], ``gamma_minus_1``. ``z`` and ``Omega_m``
     (a flat cosmology, H0 = ``phys.H0_km_s_mpc``: ``cosmology``, ``aH``) set a(z) H(z), the Hubble flow of skewers through
-    the boxes (``skewerjax.skewers``): in notebook 09 they are in the exact frame, ``z`` at y = 0 (their first point,
+    the boxes (``core.lattice_points``): in notebook 10 they are in the exact frame, ``z`` at y = 0 (their first point,
     a0 = 1 / (1 + z)), a(y) decreasing along y from the cosmology (Delta ln a = v_per / c over one box), wrapped as
     periodic by ``velocity_period=True``.
     Realisation i is ``grf().sample(jax.random.PRNGKey(base_seed + i))``.
@@ -65,7 +69,7 @@ class ToyBoxes:
     sigma_bao: float = 1.0
     bao_ratio: float = 0.002
     n_bar_HI: float = 4e-13
-    siiii_to_hi: float = 0.2
+    metal_to_hi: dict | None = None
     T0: float = 1.5e4
     gamma_minus_1: float = 0.6
     z: float = 3.0
@@ -74,6 +78,11 @@ class ToyBoxes:
     velocity: str = "zero"
 
     def __post_init__(self):
+        if self.metal_to_hi is None:
+            object.__setattr__(self, "metal_to_hi", dict(METAL_TO_HI))
+        bad = {k: v for k, v in self.metal_to_hi.items() if k == "HI" or not float(v) > 0}
+        if bad:
+            raise ValueError(f"metal_to_hi holds one ratio n_X / n_HI > 0 per metal species, got {bad}.")
         if self.velocity not in VELOCITY_MODES:
             raise ValueError(f"velocity must be one of {VELOCITY_MODES}, got {self.velocity!r}.")
         r_max = self.bao_ratio_max
@@ -137,9 +146,19 @@ class ToyBoxes:
     def cosmology(self) -> Cosmology:
         return Cosmology(H0=phys.H0, Omega_r_0=0.0, Omega_m_0=self.Omega_m, Omega_k_0=0.0, Omega_lambda_0=1.0 - self.Omega_m)
 
+    @property
+    def species(self) -> tuple:
+        """The species of the gas: HI and every metal species of ``metal_to_hi``."""
+        return ("HI", *self.metal_to_hi)
+
+    @property
+    def n_bar(self) -> dict:
+        """The mean density of every species {species: comoving cm^-3}: n_bar_HI, r_X n_bar_HI."""
+        return {"HI": self.n_bar_HI, **{x: float(r) * self.n_bar_HI for x, r in self.metal_to_hi.items()}}
+
     def fields(self, i: int) -> dict:
         """The gas of realisation i on the grid (NumPy): delta, n {species: comoving cm^-3}, T [K], v (N, N, N, 3) [km/s]
-        (zeros, or linear theory: ``velocity``). Both species are the same gas: one T and one v."""
+        (zeros, or linear theory: ``velocity``). Every species is the same gas: one T and one v."""
         g = self.grf()
         d = g.sample(self.key(i))
         if self.velocity == "linear":
@@ -157,13 +176,12 @@ class ToyBoxes:
         n_HI = self.n_bar_HI * (1.0 + d)
         return dict(
             delta=d,
-            n={"HI": n_HI, "SiIII": self.siiii_to_hi * n_HI},
+            n={"HI": n_HI, **{x: float(r) * n_HI for x, r in self.metal_to_hi.items()}},
             T=self.T0 * (1.0 + d) ** self.gamma_minus_1,
             v=np.asarray(v),
         )
 
     def cells(self, i: int, fields: dict | None = None):
-        """``core.Cells`` of realisation i: the grid cells (``grf_cells``), n of both species, the shared T and v."""
+        """``core.Cells`` of realisation i: the grid cells (``grf_cells``), n of every species, the shared T and v."""
         f = self.fields(i) if fields is None else fields
-        n_bar = {"HI": self.n_bar_HI, "SiIII": self.siiii_to_hi * self.n_bar_HI}
-        return grf_cells(f["delta"], self.grf(), n_bar, temperature=f["T"], velocity=f["v"])
+        return grf_cells(f["delta"], self.grf(), self.n_bar, temperature=f["T"], velocity=f["v"])

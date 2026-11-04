@@ -1,9 +1,9 @@
-"""The density sampled along a lattice of periodic skewers (notebook 09, Part B), from arrays and geometry only: its 3D
+"""The density sampled along a lattice of periodic skewers (notebook 10, Part B), from arrays and geometry only: its 3D
 statistics through the estimator of the overflux on the lattice of the points (``lattice.lattice_grid``), its 1D
 statistics along the skewers, and the exact expectation of both on that lattice from the spectrum of the field, passed
 as a callable P(k).
 
-* ``skewer_density_statistics``: the overdensity of two species and of their sum along the skewers of every
+* ``skewer_density_statistics``: the overdensity of every species and of their sum along the skewers of every
   realisation, against its global mean, through the 3D estimator and along each skewer;
 * ``lattice_density_theory``: the exact expectation of those statistics, xi_grid at the separations of the lattice
   (interpolated linearly between the cells along the line of sight, exactly) and its aliased spectrum.
@@ -22,8 +22,6 @@ from skewerjax.summary_stats.grid3d import GRID_KEYS, GridStatistics3D, _rfft_we
 from skewerjax.summary_stats.lattice import on_points
 from skewerjax.summary_stats.mesh import check_grid_native
 from skewerjax.summary_stats.stats_1d import OverfluxStatistics1D, ensemble_1d
-
-_TERMS = ("1", "2")  # the term labels of the two species (``OverfluxStatistics1D``)
 
 
 # ---------------------------------------------------------------------- the exact expectation on the lattice
@@ -100,27 +98,29 @@ def lattice_density_theory(
 class _LinearTerms:
     """The density counterpart of a built ``DeltaFieldBuilder`` for ``OverfluxStatistics1D``: the total overdensity of a
     sum of species, delta_tot = sum_j w_j delta_j (w_j = the mean of species j over the mean of the sum), is linear, so
-    its terms are the weighted single species, "1", "2", with no product and C = 0 (every pair (j, l) has order 2)."""
+    its terms are the weighted single species, "1", "2", ..., with no product and C = 0 (every pair (j, l) has order
+    2)."""
 
     def __init__(self, terms, total):
-        self.labels, self.key_joiner = list(_TERMS), ""
-        self.subset_keys = list(_TERMS)
-        self.delta_terms = dict(zip(_TERMS, terms))
+        labels = [str(j + 1) for j in range(len(terms))]
+        self.labels, self.key_joiner = labels, ""
+        self.subset_keys = list(labels)
+        self.delta_terms = dict(zip(labels, terms))
         self.total = total
         self.C_per_pixel = np.zeros((1, total.shape[-1]))
 
 
 def _density_statistics(cols: dict, means: dict, gs: GridStatistics3D, points_per_cell: int, L: float) -> dict:
     """The 3D and 1D statistics of one realisation's density skewers at their points (``on_points``): the overdensity of
-    each of the two species and of their sum against its global mean, delta_X = n_X / <n_X> - 1 (``means``, absolute), on
-    the lattice of the points (``gs``) and along every skewer (P1D, and the 1D summary with the weighted species as
-    terms). Returns dict(flux3d {field: GRID_KEYS}, flux (``OverfluxStatistics1D.summary``), p1d (3, N_k) [cMpc], k1d
-    [cMpc^-1], identity: max |delta_1 - delta_2|, max |delta_1 - delta_tot|)."""
+    each species and of their sum against its global mean, delta_X = n_X / <n_X> - 1 (``means``, absolute), on the
+    lattice of the points (``gs``) and along every skewer (P1D, and the 1D summary with the weighted species as terms).
+    Returns dict(flux3d {field: GRID_KEYS}, flux (``OverfluxStatistics1D.summary``), p1d (n_species + 1, N_k) [cMpc],
+    k1d [cMpc^-1], identity: max |delta_1 - delta_j| over the other species, max |delta_1 - delta_tot|)."""
     p = int(points_per_cell)
     species = list(cols)
     fields = (*species, "total")
     n = {sp: on_points(cols[sp], p) for sp in species}
-    n["total"] = n[species[0]] + n[species[1]]
+    n["total"] = sum(n[sp] for sp in species)
     delta = {f: n[f] / means[f] - 1.0 for f in fields}
     n_los = delta[species[0]].shape[1]
     dx = float(L) / n_los
@@ -134,20 +134,23 @@ def _density_statistics(cols: dict, means: dict, gs: GridStatistics3D, points_pe
         k1d=2 * np.pi * np.fft.rfftfreq(n_los, dx),
         p1d=(dx / n_los) * np.mean(np.abs(np.fft.rfft(D, axis=-1)) ** 2, axis=1),
         identity=np.array(
-            [np.abs(delta[species[0]] - delta[species[1]]).max(), np.abs(delta[species[0]] - delta["total"]).max()]
+            [
+                max((np.abs(delta[species[0]] - delta[sp]).max() for sp in species[1:]), default=0.0),
+                np.abs(delta[species[0]] - delta["total"]).max(),
+            ]
         ),
     )
 
 
 def skewer_density_statistics(columns, points_per_cell: int, grid: GridStatistics3D, L: float, *, n_bar=None, mas=None) -> dict:
-    """The density of two species along the skewers of every realisation, sampled at the points of the skewers
+    """The density of every species along the skewers of every realisation, sampled at the points of the skewers
     (``on_points``: the end point dropped, spacing dx / points_per_cell, every cell holding points_per_cell points),
     against its global mean over every point of every skewer of every realisation, delta_X = n_X / <n_X> - 1, through
     the 3D estimator of the overflux on the lattice of the points (``grid``: ``lattice_grid`` with n_los = n_cells
-    points_per_cell) and the 1D statistics along the skewers (notebook 09, Part B). Arrays and geometry only.
+    points_per_cell) and the 1D statistics along the skewers (notebook 10, Part B). Arrays and geometry only.
 
-    columns : [{species: (n_x, n_cells, n_z)}] per realisation, two species (their order: the terms "1", "2" and the
-        fields (species_1, species_2, "total")), the number densities of the cells the lattice of skewers crosses
+    columns : [{species: (n_x, n_cells, n_z)}] per realisation, one or more species (their order: the terms "1", "2", ...
+        and the fields (species_1, species_2, ..., "total")), the number densities of the cells the lattice of skewers crosses
         [comoving cm^-3]; L : the box side [cMpc]; n_bar : {species: n_bar} (optional): the mean densities of the
         model, for density_mean and density_scale; mas : None (the only value): the points of the skewers are the nodes
         of the lattice of ``grid`` (lattice-native), so the FFT is exact, with no window and no alias images of an
@@ -156,16 +159,16 @@ def skewer_density_statistics(columns, points_per_cell: int, grid: GridStatistic
     Returns dict(density3d {field: ``ensemble_mean`` of the ``GRID_KEYS``}, density_axes3d, density_flux (``ensemble_1d``
     of the 1D summary with the weighted species as terms), density_p1d (``ensemble_mean`` of "p1d", with "k"
     [cMpc^-1]), density_means {field: <n_X>} [comoving cm^-3], density_identity (max over the realisations of
-    |delta_1 - delta_2| and |delta_1 - delta_total|), time_s (n,); with ``n_bar``: density_mean {field: <n_X> /
+    |delta_1 - delta_j| over the other species, and of |delta_1 - delta_total|), time_s (n,); with ``n_bar``: density_mean {field: <n_X> /
     n_bar_X} and density_scale = (n_bar / <n>)^2 of the total (delta_X = (n_bar_X / <n_X>)(1 + delta) - 1: the factor of
     the expected spectrum, ``lattice_density_theory(scale=)``))."""
     check_grid_native(mas, "skewer_density_statistics")
     species = list(columns[0])
-    if len(species) != 2:
-        raise ValueError(f"skewer_density_statistics takes two species, got {species}.")
+    if not species:
+        raise ValueError("skewer_density_statistics needs at least one species.")
     fields = (*species, "total")
     means = {sp: float(np.mean([c[sp].mean() for c in columns])) for sp in species}
-    means["total"] = means[species[0]] + means[species[1]]
+    means["total"] = sum(means[sp] for sp in species)
     dens, ts = [], []
     for c in columns:
         t0 = time.perf_counter()
@@ -181,6 +184,6 @@ def skewer_density_statistics(columns, points_per_cell: int, grid: GridStatistic
         time_s=np.array(ts),
     )
     if n_bar is not None:
-        nb = dict(n_bar, total=n_bar[species[0]] + n_bar[species[1]])
+        nb = dict(n_bar, total=sum(n_bar[sp] for sp in species))
         out.update(density_mean={f: means[f] / nb[f] for f in fields}, density_scale=(nb["total"] / means["total"]) ** 2)
     return out

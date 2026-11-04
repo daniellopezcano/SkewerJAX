@@ -1,8 +1,9 @@
 # SkewerJAX
 
 SkewerJAX computes the optical depth τ(v) and the transmitted flux F = e^{−τ} of the Lyman-α forest and of metal
-lines (Si III λ1206 and any other transition in its line table) along arbitrary skewers, together with their summary
-statistics: the overflux decomposition by line, P1D, ξ1D, P3D and ξ3D. It is written in JAX, so the whole chain can
+lines (Si III λ1206, Si II λ1193 and λ1190, and any other transition in its line table: any number of lines at once) along
+arbitrary skewers, together with their summary statistics: the overflux decomposition by line and order, P1D, ξ1D, P3D
+and ξ3D, and P and ξ of the density of the gas cells themselves. It is written in JAX, so the whole chain can
 be compiled, vectorised and differentiated, and it runs on CPUs and GPUs. The gas is one container for every source,
 Voronoi gas cells (`core.Cells`): built from Gaussian random fields (toy fields, isotropic or with a Kaiser-like
 anisotropy, Fingers of God and a BAO feature) or from hydrodynamical snapshots (Arepo/IllustrisTNG HDF5). A dedicated subpackage
@@ -36,11 +37,11 @@ The diagrams, the tree and the table below are generated from one specification,
 draws the dependency graph of the notebooks (`plot_dag`): `python scripts/dev/make_diagrams.py` rewrites them, and
 `tests/utils/test_dag.py` checks the specification against the code and this README against the specification.
 
-**(a) Layers.** Dependencies run one way only. `core` imports nothing from the other subpackages, and three realms sit
-around it, none importing another (`tests/test_import_graph.py`): `simulations` (the gas: every source of gas cells,
-the toy fields and the snapshots; the boundary with `core` is `core.Cells`), `skewers` (the paths: lattices of skewers
-for a `core.SkewerBundle`) and `summary_stats` (the overflux and every statistic, from arrays and geometry only, an
-expectation passed as a callable P(k)). `comparison` and `utils` (plotting) build on them; notebooks compose them. An
+**(a) Layers.** Dependencies run one way only. `core` (lines, cosmology, the paths: `SkewerBundle` and lattices of
+skewers, gas cells, τ) imports nothing from the other subpackages, and two realms sit on it, neither importing the other
+(`tests/test_import_graph.py`): `simulations` (the gas: every source of gas cells, the toy fields and the snapshots; the
+boundary with `core` is `core.Cells`) and `summary_stats` (the overflux and every statistic, from arrays, geometry and
+`core.Cells`, an expectation passed as a callable P(k)). `comparison` and `utils` (plotting) build on them; notebooks compose them. An
 arrow points from the importer to what it imports.
 
 <!-- BEGIN generated:layers -->
@@ -50,13 +51,11 @@ flowchart TB
     utils["utils: plotting, dag, paths"]
     comparison["comparison: fake_spectra"]
     simulations["simulations: the gas"]
-    skewers["skewers: the paths"]
     summary_stats["summary_stats: statistics from arrays"]
-    core["core: lines, cosmology, cells, τ"]
+    core["core: lines, cosmology, skewers, cells, τ"]
     notebooks --> utils
     notebooks --> comparison
     notebooks --> simulations
-    notebooks --> skewers
     notebooks --> summary_stats
     notebooks --> core
     utils --> comparison
@@ -67,7 +66,7 @@ flowchart TB
     comparison --> summary_stats
     comparison --> core
     simulations --> core
-    skewers --> core
+    summary_stats --> core
 ```
 <!-- END generated:layers -->
 
@@ -83,6 +82,7 @@ flowchart LR
     subgraph core_band["core"]
         lines["<b>lines</b><br/>LineBundle<br/><code>core.lines</code>"]
         cosmology["<b>cosmology</b><br/>Cosmology, a(x)<br/><code>core.cosmology</code>"]
+        skewers["<b>skewers</b><br/>SkewerBundle; lattice of paths<br/><code>core.skewers</code>"]
         fields["<b>gas cells</b><br/>Cells: n, T, v<br/><code>core.cells</code>"]
         deposition["<b>deposition</b><br/>cells → pieces<br/><code>core.absorbers, core.deposition</code>"]
         profiles["<b>line profiles</b><br/>Voigt φ_j(v) per piece<br/><code>core.line_profiles</code>"]
@@ -92,15 +92,12 @@ flowchart LR
         samplers["<b>toy fields</b><br/>PowerLawGRF → cells<br/><code>simulations.grf, simulations.toy_cells</code>"]
         simulation["<b>simulation outputs</b><br/>TNG snapshot → cells<br/><code>simulations.snapshot_cells</code>"]
     end
-    subgraph skewers_band["skewers"]
-        skewers["<b>skewers</b><br/>SkewerBundle; lattice of paths<br/><code>core.skewers, skewers.lattice</code>"]
-    end
     subgraph summary_stats_band["summary_stats"]
         normalisation["<b>mean transmission</b><br/>T̄ = ⟨T⟩ over a set of pixels<br/><code>summary_stats.overflux</code>"]
         overflux["<b>overflux</b><br/>δ = T/T̄ − 1, per line and total<br/><code>summary_stats.overflux</code>"]
         stats_1d["<b>1D statistics</b><br/>P1D, ξ1D (by order and term)<br/><code>summary_stats.lattice, summary_stats.stats_1d</code>"]
         stats_3d["<b>3D statistics</b><br/>P3D, ξ3D on the lattice of skewers<br/><code>summary_stats.lattice, summary_stats.grid3d</code>"]
-        field_stats["<b>field statistics</b><br/>P, ξ of 3D fields: grid, or mesh (MAS + interlacing)<br/><code>summary_stats.field_stats, summary_stats.mesh</code>"]
+        field_stats["<b>field statistics</b><br/>P, ξ of the cells' density: mesh (MAS + interlacing)<br/><code>summary_stats.field_stats, summary_stats.mesh</code>"]
     end
     cosmology -.->|"SkewerBundle<br/>a(x)"| skewers
     lines -.->|"Ion, get_mass_amu"| simulation
@@ -117,7 +114,7 @@ flowchart LR
     normalisation -->|"DeltaFieldBuilder<br/>T̄ (N_lines + 1, N_sk, N_v)"| overflux
     overflux -->|"skewer_p1d, skewer_xi1d, decompose_1d<br/>δ (N_lines + 1, N_sk, N_v)"| stats_1d
     overflux -->|"measure_lattice<br/>δ on (n_x, N_v, n_z)"| stats_3d
-    samplers -->|"field_statistics, GridStatistics3D<br/>δ (N, N, N)"| field_stats
+    fields -->|"cell_weights, fourier_mesh<br/>n_X V (N_cells) → mesh (N_mesh³)"| field_stats
 ```
 <!-- END generated:pipeline -->
 
@@ -157,18 +154,15 @@ skewerjax/                    # SkewerJAX: absorption along skewers (tau, F = ex
 │   ├── selection.py          # Cell selection (layer 4): streaming k-d tree selection of the gas cells of a …
 │   ├── snapshot_cells.py     # The snapshot as gas cells, without skewers: the cells of a region of the box after …
 │   ├── snapshot_skewers.py   # Skewers through a simulation snapshot: the gas cells, columns and tau for any …
-│   ├── toy_boxes.py          # Toy boxes (notebooks 08 and 09): periodic 3D Gaussian fields of known spectrum and …
+│   ├── toy_boxes.py          # Toy boxes (notebooks 08 and 10): periodic 3D Gaussian fields of known spectrum and …
 │   └── toy_cells.py          # Toy field source: the gas cells of a Gaussian random field (``grf_cells``)
-├── skewers/                  # The paths: skewers through a periodic box, their geometry and their frame (imports …
-│   ├── frame.py              # The frame of a bundle of skewers: the Hubble velocity of the line centres along …
-│   └── lattice.py            # A regular lattice of straight skewers along y through the centres of the cell …
 ├── summary_stats/            # The summary statistics of the flux: the overflux of each line and of their …
 │   ├── binning.py            # Binning of the two-point statistics: bin indices, jitted weighted bin means, bin …
 │   ├── contaminants.py       # P1D metal-contamination models (McDonald et al. 2006; Ma et al.) and their fits to …
-│   ├── density.py            # The density sampled along a lattice of periodic skewers (notebook 09, Part B) …
-│   ├── field_stats.py        # P and xi of periodic 3D fields on their own grid, over an ensemble of …
+│   ├── density.py            # The density sampled along a lattice of periodic skewers (notebook 10, Part B) …
+│   ├── field_stats.py        # P and xi of the density of gas cells in a periodic box, over an ensemble of …
 │   ├── fourier.py            # The Fourier conventions of the two-point statistics: lag and mode axes, and the …
-│   ├── grid3d.py             # Two-point statistics of a periodic 3D field on its own grid, and their exact …
+│   ├── grid3d.py             # Two-point statistics of a periodic 3D field on a grid, and their exact …
 │   ├── lattice.py            # Two-point statistics of an ensemble of periodic skewers, from arrays and geometry …
 │   ├── mesh.py               # Points on a periodic mesh: mass assignment, interlacing and the window correction …
 │   ├── orders.py             # The order-by-order decomposition of the total overflux into its subset terms
@@ -191,19 +185,19 @@ subpackage.
 |---|---|---|---|
 | lines: LineBundle | `core.lines` | `LineBundle`, `get_line`, `get_mass_amu` | 01 |
 | cosmology: Cosmology, a(x) | `core.cosmology` | `Cosmology` | 02 |
-| skewers: SkewerBundle; lattice of paths | `core.skewers`, `skewers.lattice` | `SkewerBundle`, `lattice_columns`, `lattice_points` | 03, 09, 10 |
+| skewers: SkewerBundle; lattice of paths | `core.skewers` | `SkewerBundle`, `lattice_columns`, `lattice_points` | 03, 10, 11 |
 | toy fields: PowerLawGRF → cells | `simulations.grf`, `simulations.toy_cells` | `PowerLawGRF`, `grf_cells` | 04, 08 |
-| simulation outputs: TNG snapshot → cells | `simulations.snapshot_cells` | `snapshot_cells`, `select_cells_in_region` | 05, 10 |
-| gas cells: Cells: n, T, v | `core.cells` | `Cells`, `cells_on_grid` | 04, 05, 10 |
+| simulation outputs: TNG snapshot → cells | `simulations.snapshot_cells` | `snapshot_cells`, `select_cells_in_region` | 05, 09, 11 |
+| gas cells: Cells: n, T, v | `core.cells` | `Cells`, `cells_on_grid` | 04, 05, 08, 09, 11 |
 | deposition: cells → pieces | `core.absorbers`, `core.deposition` | `cell_pieces`, `voronoi_segments`, `absorber_pieces` | 07 |
 | line profiles: Voigt φ_j(v) per piece | `core.line_profiles` | `line_profiles`, `voigt_widths_GHz` | 06 |
-| optical depth: τ(v), T = e^−τ | `core.optical_depth` | `compute_optical_depth`, `Pieces` | 07, 09, 10 |
-| mean transmission: T̄ = ⟨T⟩ over a set of pixels | `summary_stats.overflux` | `ensemble_mean_transmissions`, `mean_transmissions` | 09, 10 |
-| overflux: δ = T/T̄ − 1, per line and total | `summary_stats.overflux` | `DeltaFieldBuilder`, `overflux_check` | 09, 10 |
-| 1D statistics: P1D, ξ1D (by order and term) | `summary_stats.lattice`, `summary_stats.stats_1d` | `skewer_p1d`, `skewer_xi1d`, `decompose_1d` | 09, 10 |
-| 3D statistics: P3D, ξ3D on the lattice of skewers | `summary_stats.lattice`, `summary_stats.grid3d` | `lattice_grid`, `measure_lattice`, `GridStatistics3D` | 09, 10 |
-| field statistics: P, ξ of 3D fields: grid, or mesh (MAS + interlacing) | `summary_stats.field_stats`, `summary_stats.mesh` | `field_statistics`, `point_statistics`, `fourier_mesh` | 08, 10 |
-| fake_spectra: external reference | `comparison.source` | `FakeSpectraSource` | 11, 12 |
+| optical depth: τ(v), T = e^−τ | `core.optical_depth` | `compute_optical_depth`, `Pieces` | 07, 10, 11 |
+| mean transmission: T̄ = ⟨T⟩ over a set of pixels | `summary_stats.overflux` | `ensemble_mean_transmissions`, `mean_transmissions` | 10, 11 |
+| overflux: δ = T/T̄ − 1, per line and total | `summary_stats.overflux` | `DeltaFieldBuilder`, `overflux_check` | 10, 11 |
+| 1D statistics: P1D, ξ1D (by order and term) | `summary_stats.lattice`, `summary_stats.stats_1d` | `skewer_p1d`, `skewer_xi1d`, `decompose_1d` | 10, 11 |
+| 3D statistics: P3D, ξ3D on the lattice of skewers | `summary_stats.lattice`, `summary_stats.grid3d` | `lattice_grid`, `measure_lattice`, `GridStatistics3D` | 10, 11 |
+| field statistics: P, ξ of the cells' density: mesh (MAS + interlacing) | `summary_stats.field_stats`, `summary_stats.mesh` | `field_statistics`, `cell_weights`, `fourier_mesh` | 08, 09, 11 |
+| fake_spectra: external reference | `comparison.source` | `FakeSpectraSource` | 12, 13 |
 <!-- END generated:concepts -->
 
 ## Quickstart
@@ -268,7 +262,8 @@ venv/conda environments, the JAX CPU/GPU builds, the data paths and troubleshoot
 
 Two entry points: `00_quickstart` (the whole chain on a toy box, compact) and `00_quickstart_step_by_step` (one
 simulated skewer followed from the snapshot to the statistics, one figure and the equations per step). Notebooks
-01–08 then open one ingredient each, 09 and 10 measure the summary statistics on skewers (toy boxes, TNG50-4), 11 and 12 compare with fake_spectra, in the order of the dependency graph (derived from the code; an arrow points
+01–07 then open one ingredient each, 08 and 09 measure the statistics of the gas cells (toy boxes, TNG50-4), 10 and 11 the
+summary statistics on skewers (toy boxes, TNG50-4), 12 and 13 compare with fake_spectra, in the order of the dependency graph (derived from the code; an arrow points
 to what needs an ingredient; dashed: optional input or data only; the two field sources are interchangeable):
 
 ```mermaid
@@ -286,10 +281,11 @@ flowchart LR
     F --> D["deposition: cells → pieces (07)"]
     K -- "points, a(x)" --> D
     D -- pieces --> T
-    T --> O["overflux δ_F (09, 10)"]
+    F --> FS["P, ξ of the cells: mesh (08, 09)"]
+    T --> O["overflux δ_F (10, 11)"]
     L -. "line offsets Δv" .-> O
-    O --> P["P1D, ξ1D, P3D, ξ3D (08, 09, 10)"]
-    SIM -. "fake_spectra, external (11, 12)" .-> T
+    O --> P["P1D, ξ1D, P3D, ξ3D (10, 11)"]
+    SIM -. "fake_spectra, external (12, 13)" .-> T
 ```
 
 | notebook | content |
@@ -303,16 +299,17 @@ flowchart LR
 | `05_simulation_outputs` | from a TNG50-4 snapshot to gas cells: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, and a region of the snapshot as `core.Cells` without skewers (`snapshot_cells`: H I and Si III on the Voronoi cells along one skewer, in 3D), the container of the toy fields |
 | `06_voigt_and_line_profiles` | the Voigt function (ExoJAX, FFT convolution, SciPy's Faddeeva function; Gaussian and Lorentzian limits) and the line profiles of gas elements (`core.line_profiles`) |
 | `07_deposition_and_optical_depth` | the τ integral as a sum over pieces; from cells to τ step by step on one TNG50-4 skewer through the box centre (selection → deposition into pieces → τ, with the package's own route): the cells in 3D, the pieces, and the same pieces on the ring of s, on the ring of v (periodicity as an option, `velocity_period`) and as their dτ; line-centred frames, the global axis, the observed wavelength and `wrap_to_ref_line` for Lyα and Si III on the same skewer |
-| `08_toy_field_statistics` | the toy boxes (`ToyBoxes`: periodic boxes, power law + Gaussian BAO bump (valid below R_max), isotropic, zero or linear-theory velocities; the model written out once; regenerated from their seeds, everything recomputed every run) and their statistics: A, the fields and their P and ξ in explicit bins (isotropic, (⊥, ∥) planes on the grid's own modes and separations, μ wedges as DESI DR2) against the exact expectation and the continuous P(k) and closed-form ξ(r), with the exact covariance of ξ |
-| `09_skewer_statistics` | the summary statistics on skewers through the toy boxes of 08 (regenerated with the same configuration): A, skewers through every box, step by step (`SkewerBundle`, cells, pieces, τ); B, the (k⊥, k∥) and (r⊥, r∥) planes of the density on the same skewers against their exact expectation; C, the normalisation (the statistics from arrays), where the skewers run and one from the gas to the overflux δ = T / T̄ − 1 (the mean transmission of the ensemble per redshift, `mean="redshift"`; also "global", "box", "skewer"); D, P and ξ of the total overflux in the (k⊥, k∥) and (r⊥, r∥) planes on the lattice's own modes and separations (the Si III–Lyα spot at Δv_{Lyα–Si III}/u and the echoes of the BAO ring), the 3D P and ξ of the Lyα, Si III and total overflux on the lattice of skewers in comoving units (the BAO peak), ξ in μ wedges with r_BAO, the spot and the echoes per wedge; E, the relations of P1D and ξ1D to the 3D statistics, P1D next to DESI DR1, and P1D and ξ1D of the total overflux by term and order |
-| `10_skewer_statistics_tng` | the statistics of 09 on TNG50-4 (snapshot 25, z = 3.008, L = 51.7 cMpc): 32 × 32 periodic skewers along each axis in the snapshot frame (the three lines of sight as the ensemble, not independent), points every 0.5 km/s (the resolution check passes), 256 pixels; B, the density of H I, Si III and their sum on the skewers against the whole box through a mesh (PCS, interlaced); C, the transmission and overflux (one mean: one snapshot); D, the (k⊥, k∥) and (r⊥, r∥) planes with the Si III spot, P, r²ξ and wedges, P1D next to DESI DR1 at z = 3.0, by order and term by term; no BAO (r_BAO > L/2) |
-| `11_comparison_fake_spectra_results` | what the two codes compute on the same TNG50-4 skewer (the gas, τ and above all the flux): the matched mode against fake_spectra, the differences one switch at a time, their root causes and the effect chain |
-| `12_comparison_fake_spectra_performance` | speed and memory against fake_spectra: scaling with the number of skewers (1–1024) and the simulation size (TNG50-4, -3, -2), CPU and GPU, the time per stage, host and GPU memory, threads and one core (reads the results file of `scripts/benchmarks/benchmark_fake_spectra.py`, presets `quick` and `full`; `RUN_BENCHMARKS = True` re-runs it) |
+| `08_toy_field_statistics` | the toy boxes (`ToyBoxes`: periodic boxes, power law + Gaussian BAO bump (valid below R_max), isotropic, zero or linear-theory velocities; the model written out once; regenerated from their seeds, everything recomputed every run) and their statistics: A, the fields and their P and ξ in explicit bins (isotropic, (⊥, ∥) planes on the grid's own modes and separations, μ wedges as DESI DR2), the cells through a mesh (`field_statistics`: PCS, interlaced; the trusted range k < k_Nyq/2, r ≥ 6H), against the exact expectation and the continuous P(k) and closed-form ξ(r), with the exact covariance of ξ |
+| `09_field_statistics_tng` | the statistics of 08 on the cells of TNG50-4 (snapshot 25): the total gas, H I, Si III and Si II through the same mesh, real space and redshift space along each axis (the three orientations as the ensemble), the header's cosmology against IllustrisTNG's, r_d (Aubourg et al. 2015) and its periodic images (r_d > L/2) |
+| `10_skewer_statistics` | the summary statistics on skewers through the toy boxes of 08 (regenerated with the same configuration): A, skewers through every box, step by step (`SkewerBundle`, cells, pieces, τ); B, the (k⊥, k∥) and (r⊥, r∥) planes of the density on the same skewers against their exact expectation; C, the normalisation (the statistics from arrays), where the skewers run and one from the gas to the overflux δ = T / T̄ − 1 (the mean transmission of the ensemble per redshift, `mean="redshift"`; also "global", "box", "skewer"); D, P and ξ of the total overflux in the (k⊥, k∥) and (r⊥, r∥) planes on the lattice's own modes and separations (the Si III–Lyα spot at Δv_{Lyα–Si III}/u and the echoes of the BAO ring; four lines: a spot for every pair), the 3D P and ξ of the overflux of every line and of the total on the lattice of skewers in comoving units (the BAO peak), ξ in μ wedges with r_BAO, the spot and the echoes per wedge; E, the relations of P1D and ξ1D to the 3D statistics, P1D next to DESI DR1, and P1D and ξ1D of the total overflux by term and order |
+| `11_skewer_statistics_tng` | the statistics of 10 on TNG50-4 (snapshot 25, z = 3.008, L = 51.7 cMpc): 32 × 32 periodic skewers along each axis in the snapshot frame (the three lines of sight as the ensemble, not independent), points every 0.5 km/s (the resolution check passes), 256 pixels; four lines (Lyα, Si III, Si II 1193, 1190); B, the density of H I, Si III, Si II and their sum on the skewers against the whole box through a mesh (`field_statistics`, PCS, interlaced); C, the transmission and overflux (one mean: one snapshot); D, the (k⊥, k∥) and (r⊥, r∥) planes with a spot for every pair of lines, P, r²ξ and wedges, the BAO scale r_d through its periodic images, P1D next to DESI DR1 at z = 3.0, by order (0 to 8) and term by term |
+| `12_comparison_fake_spectra_results` | what the two codes compute on the same TNG50-4 skewer (the gas, τ and above all the flux): the matched mode against fake_spectra, the differences one switch at a time, their root causes and the effect chain |
+| `13_comparison_fake_spectra_performance` | speed and memory against fake_spectra: scaling with the number of skewers (1–1024) and the simulation size (TNG50-4, -3, -2), CPU and GPU, the time per stage, host and GPU memory, threads and one core (reads the results file of `scripts/benchmarks/benchmark_fake_spectra.py`, presets `quick` and `full`; `RUN_BENCHMARKS = True` re-runs it) |
 
 Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: the white "paper" style by default,
 `use_style("dark")` for the dark one; Paul Tol's colour-blind-safe "bright" colours and colour maps in both, minimum
 font sizes). `use_backend()` (interactive ipympl figures in a live notebook) is left commented out in the setup cell.
-Every notebook opens with the dependency graph highlighting the ingredients it uses. Notebooks `00_quickstart_step_by_step`, 05, 07, 10 and 11 need TNG50 snapshots, and 12 to re-run its benchmark (see
+Every notebook opens with the dependency graph highlighting the ingredients it uses. Notebooks `00_quickstart_step_by_step`, 05, 07, 09, 11 and 12 need TNG50 snapshots, and 13 to re-run its benchmark (see
 "Simulation data" in `docs/installation.md`).
 
 ## Tests
@@ -344,7 +341,7 @@ shows the package's log messages (see `docs/usage.md`, "Debugging and input chec
 ## Benchmark
 
 The two codes run on identical skewers of TNG50 snapshot 25 (z = 3), computing Lyα and Si III λ1206 at 1 km/s
-pixels (`scripts/benchmarks/benchmark_fake_spectra.py`, notebook `12_comparison_fake_spectra_performance`, which reads
+pixels (`scripts/benchmarks/benchmark_fake_spectra.py`, notebook `13_comparison_fake_spectra_performance`, which reads
 the summary `benchmarks/results/fake_spectra_benchmark.json`; the raw per-run records go to `benchmarks/raw/`,
 git-ignored). The numbers were measured before the revision checkpoint of 2026-10-26, whose streamed selection is about
 2.4× faster: SkewerJAX's selection stage and totals are now smaller.
@@ -402,7 +399,7 @@ notebooks/            00-12 tutorials (committed with outputs cleared)
 tests/                one pytest suite: core/, summary_stats/, skewers/, simulations/, utils/, comparison/, regression/ (+ data/),
                       test_import_graph.py, test_mesh.py; README.md
 benchmarks/
-  results/            the benchmark summary read by notebook 12 (committed)
+  results/            the benchmark summary read by notebook 13 (committed)
   raw/                the per-run records (git-ignored)
 scripts/
   benchmarks/         benchmark_fake_spectra.py

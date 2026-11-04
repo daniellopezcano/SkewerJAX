@@ -1,14 +1,13 @@
 """SkewerJAX: absorption along skewers (tau, F = exp(-tau)) for many transitions, and their summary statistics, in JAX.
 
-The core and three realms around it, with dependencies in one direction only (each realm imports ``core`` at most and
-none imports another; ``tests/test_import_graph.py`` checks it):
+The core and two realms on it, with dependencies in one direction only (each realm imports ``core`` at most and
+neither imports the other; ``tests/test_import_graph.py`` checks it):
 
-* ``skewerjax.core`` (A): lines, cosmology, ``SkewerBundle``, the gas cells (``Cells``), the deposition, line profiles
-  and the tau integral; self-contained.
+* ``skewerjax.core`` (A): lines, cosmology, the paths (``SkewerBundle``, lattices of skewers through a box:
+  ``lattice_columns``, ``lattice_points``, ``hubble_velocity``), the gas cells (``Cells``), the deposition, line
+  profiles and the tau integral; self-contained.
 * ``skewerjax.simulations`` (B): the gas: toy fields (``PowerLawGRF``, ``ToyBoxes``) and hydrodynamical (or N-body)
   snapshots, turned into the inputs of the core.
-* ``skewerjax.skewers``: the paths: lattices of skewers through a box, their points and frame (``lattice_columns``,
-  ``lattice_points``, ``hubble_velocity``), for a ``core.SkewerBundle``.
 * ``skewerjax.summary_stats``: the statistics, from arrays and geometry only: the overflux and its 1D and 3D statistics
   (P1D, xi1D, P3D, xi3D, the (par, perp) plane and the wedges of mu), term by term and order by order; P and xi of 3D
   fields and of the density along skewers, against an expectation P(k).
@@ -33,7 +32,7 @@ simulation and comparison blocks hold host arrays in float64 NumPy.
 import importlib as _importlib
 import logging as _logging
 
-_SUBPACKAGES = ("core", "summary_stats", "skewers", "simulations", "comparison", "utils")
+_SUBPACKAGES = ("core", "summary_stats", "simulations", "comparison", "utils")
 
 __version__ = "0.0.1"
 _logging.getLogger("skewerjax").addHandler(_logging.NullHandler())  # silent unless configured (core.enable_logging)

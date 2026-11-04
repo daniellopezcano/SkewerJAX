@@ -61,9 +61,9 @@ def ramp_pieces(n_skewers: int = 7, L: float = 1e-3):
 
 
 # ---------------------------------------------------------------------- toy boxes along skewers (test-only fixtures)
-def toy_tau(boxes, i, columns, points_per_cell: int, n_pix: int, *, fields=None, batch: int = 256, **opts) -> dict:
-    """tau (2, N_sk, n_pix) of Lya and Si III along skewers through the cell ``columns`` of realisation i of a
-    ``ToyBoxes``, by the explicit pipeline of notebook 09: ``SkewerBundle(lattice_points)`` in the exact frame (z at
+def toy_tau(boxes, i, columns, points_per_cell: int, n_pix: int, *, fields=None, batch: int = 256, line_ids=None, **opts) -> dict:
+    """tau (N_lines, N_sk, n_pix) of the lines ``line_ids`` (default ``simulations.LINE_IDS``) along skewers through the cell ``columns`` of realisation i of a
+    ``ToyBoxes``, by the explicit pipeline of notebook 10: ``SkewerBundle(lattice_points)`` in the exact frame (z at
     y = 0) -> ``cell_pieces`` -> ``compute_optical_depth`` (periodic over one box, both lines on the Lya axis);
     ``opts``: a_eff, detuning, hubble_flow, aH_ref. ``fields``: the gas instead of ``boxes.fields(i)``. Returns
     dict(tau, v, period, dv, a_pix (the scale factor of the pixels), bundle (of the first batch), resolution
@@ -72,11 +72,20 @@ def toy_tau(boxes, i, columns, points_per_cell: int, n_pix: int, *, fields=None,
 
     import jax.numpy as jnp
 
-    from skewerjax.core import LineBundle, SkewerBundle, bundle_frame, cell_pieces, compute_optical_depth, phys, velocity_span
+    from skewerjax.core import (
+        LineBundle,
+        SkewerBundle,
+        bundle_frame,
+        cell_pieces,
+        compute_optical_depth,
+        lattice_points,
+        phys,
+        velocity_span,
+    )
     from skewerjax.simulations import LINE_IDS
-    from skewerjax.skewers import lattice_points
 
-    lines = LineBundle(list(LINE_IDS), ref_line_id=LINE_IDS[0])
+    ids = list(LINE_IDS if line_ids is None else line_ids)
+    lines = LineBundle(ids, ref_line_id=ids[0])
     f = boxes.fields(i) if fields is None else fields
     cells = boxes.cells(i, f)
     cols = np.atleast_2d(columns)
@@ -117,17 +126,19 @@ def toy_tau(boxes, i, columns, points_per_cell: int, n_pix: int, *, fields=None,
     )
 
 
-def toy_lattice_statistics(boxes, idx, stride, points_per_cell: int, n_pix: int, *, mean="redshift", decompose=False) -> dict:
-    """The statistics of notebook 09 on a lattice of skewers through realisations ``idx`` of a ``ToyBoxes``, composed of
+def toy_lattice_statistics(
+    boxes, idx, stride, points_per_cell: int, n_pix: int, *, mean="redshift", decompose=False, line_ids=None
+) -> dict:
+    """The statistics of notebook 10 on a lattice of skewers through realisations ``idx`` of a ``ToyBoxes``, composed of
     the public functions (``toy_tau``; ``ensemble_mean_transmissions``, delta = T / T_bar - 1, ``overflux_check``;
     ``skewer_p1d``, ``skewer_xi1d``, ``lattice_grid`` + ``measure_lattice``; ``decompose_1d`` with ``decompose``; the
     density at the points, ``skewer_density_statistics``, against ``lattice_density_theory``). |k| bins: ``bao_k_edges``
-    up to the smallest Nyquist frequency of the lattice. Returns dict(tau (n, 2, N_sk, n_pix), T (n, 2, N_sk, n_pix),
-    T_bar (n, 3, N_sk, n_pix), delta (n, 3, N_sk, n_pix), check, v, period, dv, a_pix, mean_transmission (3, n_pix),
+    up to the smallest Nyquist frequency of the lattice. Returns dict(tau (n, N_lines, N_sk, n_pix), T (n, N_lines, N_sk,
+    n_pix), T_bar and delta (n, N_lines + 1, N_sk, n_pix), check, v, period, dv, a_pix, mean_transmission (N_lines + 1, n_pix),
     resolution, warnings, p1d, xi1d, flux3d, axes3d, grid, flux (None without ``decompose``), and the density entries of
     ``skewer_density_statistics`` with density_theory and density_p1d["theory"])."""
+    from skewerjax.core import lattice_columns
     from skewerjax.simulations import LINE_IDS
-    from skewerjax.skewers import lattice_columns
     from skewerjax.summary_stats import (
         GRID_KEYS,
         bao_k_edges,
@@ -147,7 +158,8 @@ def toy_lattice_statistics(boxes, idx, stride, points_per_cell: int, n_pix: int,
     sx, sz = stride
     N, L, p = boxes.n_cells, float(boxes.box_cMpc), int(points_per_cell)
     cols = lattice_columns(N, stride)
-    runs = [toy_tau(boxes, int(i), cols, p, n_pix) for i in idx]
+    ids = tuple(LINE_IDS if line_ids is None else line_ids)
+    runs = [toy_tau(boxes, int(i), cols, p, n_pix, line_ids=ids) for i in idx]
     tau = np.stack([r["tau"] for r in runs])
     r0 = runs[0]
     T = np.exp(-tau)
@@ -156,7 +168,7 @@ def toy_lattice_statistics(boxes, idx, stride, points_per_cell: int, n_pix: int,
     d_perp = np.array(stride, dtype=float) * boxes.dx
     k_edges = bao_k_edges(2 * np.pi / L, float(min(np.pi * n_pix / L, *(np.pi / d_perp))), 3.0 / boxes.sigma_bao)
     gs = lattice_grid(N // sx, N // sz, n_pix, L, d_perp, k_edges=k_edges)
-    fields = (*LINE_IDS, "total")
+    fields = (*ids, "total")
     p1d, xi1d, f3d = [], [], []
     for d in delta:
         k1d, P = skewer_p1d(d, r0["dv"])
@@ -186,8 +198,7 @@ def toy_lattice_statistics(boxes, idx, stride, points_per_cell: int, n_pix: int,
     )
     dens = [{sp: n[::sx, :, ::sz] for sp, n in r["fields"]["n"].items()} for r in runs]
     gs_rho = lattice_grid(N // sx, N // sz, N * p, L, d_perp, k_edges=k_edges)
-    n_bar = {"HI": boxes.n_bar_HI, "SiIII": boxes.siiii_to_hi * boxes.n_bar_HI}
-    ds = skewer_density_statistics(dens, p, gs_rho, L, n_bar=n_bar)
+    ds = skewer_density_statistics(dens, p, gs_rho, L, n_bar=boxes.n_bar)
     th, p1d_th = lattice_density_theory(
         boxes.grf().power, gs_rho, N, stride, points_per_cell=p, p1d=True, scale=ds["density_scale"]
     )

@@ -14,13 +14,19 @@ Scoccimarro & Couchman 2016 (arXiv:1512.07295, "S16"; equation numbers counted f
   shifted points sample the field at the nodes x_j - H/2), which cancels every alias image k - n k_s with odd
   n_1 + ... + n_D (S16 eqs. 33-36; k_s = 2 pi / H); with ``deconvolve`` divided by W(k) (S16 eq. 24). What remains is
   the alias sum of S16 eq. 37 (``aliased_power``).
-* ``fourier_grid``: a field that already is the field on the mesh (grid-native): its rfftn, exact; no window and no
-  interlacing apply (``mas`` = None in the statistics, ``GridStatistics3D.measure``).
+* ``node_transfer``: the exact transfer |F_mesh / F|^2 of a field given at the nodes of the mesh (e.g. the cells of a
+  toy grid: lattice-like points, no alias images, but a discrete kernel instead of the window): the bias of the mesh
+  path for such points, ~1e-3 at k < k_Nyq / 2 for interlaced PCS (``field_stats.field_statistics``).
+
+The fields of every source (toy grids and simulation cells, ``core.Cells``) take this one path; ``check_grid_native``
+guards the lattice path of the skewer samples (``GridStatistics3D.measure``: the samples are the field on their
+lattice, so no scheme applies there).
 
 Conventions: positions [cMpc] (any length unit, the same as L), wrapped periodically; the rfft layout (last axis
 halved); k = 2 pi fftfreq(N, H) [1/cMpc]. Everything is jitted with ``n_mesh`` and ``mas`` static (no recompilation
 for new positions, weights or L), and differentiable in the weights (and in the positions, where the kernel is
-continuous: p >= 2). Memory: N_points p^D indices and weights (PCS in 3D: 64 per point).
+continuous: p >= 2). Memory: ``chunk`` points at a time (default 2^21), p^D indices and weights each (PCS in 3D: 64 per
+point, ~1.6 GB per chunk); the mesh is accumulated over the chunks (one compilation per chunk size).
 """
 
 from __future__ import annotations
@@ -42,20 +48,21 @@ def mas_order(mas: str) -> int:
     return MAS_ORDERS[mas]
 
 
-GRID_NATIVE_NOTE = (
-    "Grid-native inputs (a field given on its own grid, or on the regular lattice of skewer samples) are the field on the "
-    "mesh: their FFT is exact, with no window to divide and no alias images of an assignment to cancel, so ``mas`` must "
-    "be None there (Sefusatti et al. 2016, §2.3: the window and its aliases arise only from assigning points to a mesh)."
-)
+PAINT_CHUNK = 1 << 21  # points painted at a time (memory: chunk p^D indices and weights)
+# The trusted range of the mesh path (interlaced PCS, fields at the nodes: ``node_transfer``): k < k_Nyq / 2, where the
+# bias of P is < 1e-3, and r >= 6 H, beyond the reach of the scheme's kernel (the bias of xi < 0.3 sigma there for the
+# toy boxes of notebook 08; within 2 H it is many sigma, since every mode up to the corners of the cube enters xi).
+TRUSTED_K_NYQ = 0.5
+TRUSTED_R_H = 6.0
 
 
 def check_grid_native(mas, where: str) -> None:
-    """Raise if a mass-assignment scheme is requested for a grid-native input (``mas`` must be None there)."""
+    """Raise if a mass-assignment scheme is requested on the lattice path (the skewer samples are the field on their
+    lattice: their FFT is exact, no window and no alias images of an assignment; S16 §2.3), where ``mas`` must be None."""
     if mas is not None:
         raise ValueError(
-            f"{where}: the input is already the field on its grid (grid-native): its FFT is exact and no mass "
-            f"assignment applies, so mas must be None (got {mas!r}). Points take the point path "
-            "(GridStatistics3D.measure_points, point_statistics)."
+            f"{where}: the skewer samples are the field on their lattice: their FFT is exact and no mass assignment "
+            f"applies, so mas must be None (got {mas!r}). Fields of cells take field_stats.field_statistics."
         )
 
 
@@ -114,15 +121,27 @@ def _paint(positions, weights, n_mesh, L, mas, shift):
     return mesh.reshape(n_mesh)
 
 
-def paint(positions, weights, n_mesh, L, mas: str = "pcs", shift: float = 0.0):
+def _paint_chunked(x, w, n, Ls, mas, shift, chunk):
+    """``_paint`` over consecutive chunks of ``chunk`` points, accumulated (one call when N <= chunk: bit for bit the
+    unchunked mesh)."""
+    chunk = x.shape[0] if chunk is None else max(1, int(chunk))
+    mesh = None
+    for i in range(0, max(x.shape[0], 1), chunk):
+        part = _paint(x[i : i + chunk], w[i : i + chunk], n, Ls, mas, shift)
+        mesh = part if mesh is None else mesh + part
+    return mesh
+
+
+def paint(positions, weights, n_mesh, L, mas: str = "pcs", shift: float = 0.0, *, chunk: int | None = PAINT_CHUNK):
     """Periodic deposition of points with weights onto a mesh (module docstring; S16 eqs. 13-18).
 
     positions : (N, D) [cMpc] (D = 1, 2, 3; (N,) for D = 1), wrapped into the box; weights : (N,) (or a scalar);
     n_mesh : int or (D,) ints, the nodes per axis; L : the box side(s) [cMpc], scalar or (D,); mas : "ngp", "cic",
-    "tsc", "pcs"; shift : a displacement of every point in units of the spacing H (1/2: the interlaced mesh).
+    "tsc", "pcs"; shift : a displacement of every point in units of the spacing H (1/2: the interlaced mesh);
+    chunk : points painted at a time (memory bound; None: all at once).
 
     Returns the mesh (n_1, ..., n_D): the sum over the points of weight x W(x_j / H - node). Sum(mesh) = sum(weights)
-    (to rounding). Node j sits at x = j H."""
+    (to rounding). Node j sits at x = j H; the deposits wrap periodically (indices modulo n)."""
     mas_order(mas)
     x = jnp.asarray(positions, dtype=float)
     x = x[:, None] if x.ndim == 1 else x
@@ -130,7 +149,7 @@ def paint(positions, weights, n_mesh, L, mas: str = "pcs", shift: float = 0.0):
         raise ValueError(f"positions must be (N, D) with D = 1, 2 or 3, got shape {tuple(np.shape(positions))}.")
     n, Ls, _ = _geometry(n_mesh, L, x.shape[1])
     w = jnp.broadcast_to(jnp.asarray(weights), (x.shape[0],))
-    return _paint(x, w, n, Ls, mas, jnp.asarray(shift, dtype=x.dtype))
+    return _paint_chunked(x, w, n, Ls, mas, jnp.asarray(shift, dtype=x.dtype), chunk)
 
 
 def mesh_k_axes(n_mesh, L, D: int | None = None) -> list:
@@ -175,27 +194,49 @@ def _interlace_phase(axes, H, sign: float = 1.0):
     return jnp.exp(sign * 1j * arg)
 
 
-@partial(jax.jit, static_argnames=("n_mesh", "mas", "interlace", "deconvolve"))
-def _fourier_mesh(positions, weights, n_mesh, L, mas, interlace, deconvolve, sign):
+def _mesh_axes(n_mesh, H):
     D = len(n_mesh)
-    H = L / jnp.asarray(n_mesh, dtype=L.dtype)
     axes = [2 * jnp.pi * jnp.fft.fftfreq(m) / H[i] for i, m in enumerate(n_mesh[:-1])]
     axes.append(2 * jnp.pi * jnp.fft.rfftfreq(n_mesh[-1]) / H[D - 1])
-    F = jnp.fft.rfftn(_paint(positions, weights, n_mesh, L, mas, 0.0))
+    return axes
+
+
+@partial(jax.jit, static_argnames=("n_mesh", "mas", "interlace", "deconvolve"))
+def _finish(mesh, mesh2, n_mesh, L, mas, interlace, deconvolve, sign):
+    """rfftn of the painted mesh(es), the interlaced average (``mesh2``: the mesh of the points shifted by H/2) and the
+    window divided."""
+    H = L / jnp.asarray(n_mesh, dtype=L.dtype)
+    axes = _mesh_axes(n_mesh, H)
+    F = jnp.fft.rfftn(mesh)
     if interlace:
-        F2 = jnp.fft.rfftn(_paint(positions, weights, n_mesh, L, mas, 0.5))
-        F = 0.5 * (F + _interlace_phase(axes, H, sign) * F2)
+        F = 0.5 * (F + _interlace_phase(axes, H, sign) * jnp.fft.rfftn(mesh2))
     if deconvolve:
         F = F / mas_window(axes, H, mas)
     return F
 
 
-def fourier_mesh(positions, weights, n_mesh, L, *, mas: str = "pcs", interlace: bool = True, deconvolve: bool = True):
+def _fourier_mesh(positions, weights, n_mesh, L, mas, interlace, deconvolve, sign, chunk=None):
+    mesh = _paint_chunked(positions, weights, n_mesh, L, mas, 0.0, chunk)
+    mesh2 = _paint_chunked(positions, weights, n_mesh, L, mas, 0.5, chunk) if interlace else mesh
+    return _finish(mesh, mesh2, n_mesh, L, mas, interlace, deconvolve, sign)
+
+
+def fourier_mesh(
+    positions,
+    weights,
+    n_mesh,
+    L,
+    *,
+    mas: str = "pcs",
+    interlace: bool = True,
+    deconvolve: bool = True,
+    chunk: int | None = PAINT_CHUNK,
+):
     """The Fourier field (rfft layout) of points with weights on a periodic mesh (module docstring; S16 §§2.3, 3.1).
 
     positions : (N, D) [cMpc]; weights : (N,); n_mesh : int or (D,); L : scalar or (D,) [cMpc]; mas : "ngp", "cic",
     "tsc", "pcs"; interlace : average with the mesh shifted by H/2 along every axis (the odd images cancel, S16 eq. 36);
-    deconvolve : divide by ``mas_window`` (S16 eq. 24).
+    deconvolve : divide by ``mas_window`` (S16 eq. 24); chunk : points painted at a time (``paint``).
 
     Returns (F, meta): F = rfftn of the mesh of ``paint`` (the sum of the weights times the window: divide by the mean
     number of points per node for a field, e.g. the values of a field at the points), meta = dict(mas, interlace,
@@ -207,7 +248,7 @@ def fourier_mesh(positions, weights, n_mesh, L, *, mas: str = "pcs", interlace: 
         raise ValueError(f"positions must be (N, D) with D = 1, 2 or 3, got shape {tuple(np.shape(positions))}.")
     n, Ls, H = _geometry(n_mesh, L, x.shape[1])
     w = jnp.broadcast_to(jnp.asarray(weights), (x.shape[0],))
-    F = _fourier_mesh(x, w, n, Ls, mas, bool(interlace), bool(deconvolve), 1.0)
+    F = _fourier_mesh(x, w, n, Ls, mas, bool(interlace), bool(deconvolve), 1.0, chunk)
     Hn = np.asarray(H)
     meta = dict(
         mas=mas, interlace=bool(interlace), deconvolve=bool(deconvolve), n_mesh=n, L=np.asarray(Ls), H=Hn, k_nyq=np.pi / Hn
@@ -215,14 +256,16 @@ def fourier_mesh(positions, weights, n_mesh, L, *, mas: str = "pcs", interlace: 
     return F, meta
 
 
-def fourier_grid(field, L):
-    """The Fourier field (rfft layout) of a field that already is the field on the mesh (grid-native): rfftn(field),
-    exact, with no window and no interlacing (mas = None). Returns (F, meta) as ``fourier_mesh``."""
-    f = jnp.asarray(field)
-    n, Ls, H = _geometry(f.shape, L, f.ndim)
-    Hn = np.asarray(H)
-    meta = dict(mas=None, interlace=False, deconvolve=False, n_mesh=n, L=np.asarray(Ls), H=Hn, k_nyq=np.pi / Hn)
-    return jnp.fft.rfftn(f), meta
+def node_transfer(n_mesh, L, *, mas: str = "pcs", interlace: bool = True):
+    """The exact transfer T(k) = |F_mesh(k) / F(k)|^2 on the rfft modes of the mesh for a field given at its nodes (one
+    point per node, e.g. the cells of a toy grid of the mesh's shape): such points form the mesh's own lattice, so there
+    are no alias images, but the scheme spreads each over p^D nodes with a discrete kernel K(k) that the continuous
+    window W(k) does not divide exactly. T = |K / W|^2 is the same for every node (a translate): the deconvolved,
+    interlaced mesh of one point at the origin. The expectation of the mesh path for such fields is T(k) P(k); T - 1 is
+    the bias (interlaced PCS: < 1e-6 below 0.1 k_Nyq, ~3e-4 at k_Nyq / 2, ~2e-2 at k_Nyq along the axes)."""
+    n = (int(n_mesh),) * 3 if np.ndim(n_mesh) == 0 else tuple(int(m) for m in n_mesh)  # an int: a 3D mesh
+    F, _ = fourier_mesh(np.zeros((1, len(n))), np.ones(1), n, L, mas=mas, interlace=interlace)
+    return jnp.abs(F) ** 2
 
 
 def aliased_power(power, n_mesh, L, *, mas: str, interlace: bool, n_images: int = 3):

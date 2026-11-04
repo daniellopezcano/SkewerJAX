@@ -1,10 +1,10 @@
-"""The toy boxes of notebooks 08 and 09 (``simulations.ToyBoxes``) on a small grid: realisations regenerated from their
-seeds, the gas (n_SiIII = r n_HI, T = T0 (1 + delta)^(gamma - 1), zero or linear-theory velocities, no clipping), the
-continuous xi(r); and the boxes along skewers by the explicit pipeline of notebook 09 (``helpers.toy_tau``,
-``helpers.toy_lattice_statistics``: ``skewers.lattice_points`` -> ``core.SkewerBundle`` -> ``cell_pieces`` ->
+"""The toy boxes of notebooks 08 and 10 (``simulations.ToyBoxes``) on a small grid: realisations regenerated from their
+seeds, the gas (n_X = r_X n_HI per metal species, T = T0 (1 + delta)^(gamma - 1), zero or linear-theory velocities, no clipping), the
+continuous xi(r); and the boxes along skewers by the explicit pipeline of notebook 10 (``helpers.toy_tau``,
+``helpers.toy_lattice_statistics``: ``core.lattice_points`` -> ``core.SkewerBundle`` -> ``cell_pieces`` ->
 ``compute_optical_depth`` -> ``summary_stats``): one realisation (tau, the resolution check, the 1D statistics by order,
 the 3D statistics and P1D of the overfluxes), the ensemble normalisation of the overflux in every mode of the mean
-transmission (<delta> = 0 over the sets of the mode, C = <delta_1 delta_2>, the exact decomposition), the density
+transmission (<delta> = 0 over the sets of the mode, C = sum_{|A| >= 2} <delta_A>, the exact decomposition), the density
 conversion a_eff and the Jacobian of the exact frame on a uniform gas, and the linear Hubble flow."""
 
 from dataclasses import replace
@@ -12,8 +12,8 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from skewerjax.core import hubble_velocity, lattice_columns
 from skewerjax.simulations import LINE_IDS, ToyBoxes
-from skewerjax.skewers import hubble_velocity, lattice_columns
 
 from helpers import toy_lattice_statistics, toy_tau
 
@@ -24,7 +24,7 @@ STRIDE, P, N_PIX = (4, 4), 80, 64  # 16 skewers; cells of 40 km/s: pieces of W =
 def _uniform(boxes):
     """The gas of realisation 0 made uniform: n = n_bar, T = T0, v = 0."""
     f = boxes.fields(0)
-    n_bar = {"HI": boxes.n_bar_HI, "SiIII": boxes.siiii_to_hi * boxes.n_bar_HI}
+    n_bar = boxes.n_bar
     return dict(
         delta=np.zeros_like(f["delta"]),
         n={sp: np.full_like(f["delta"], n) for sp, n in n_bar.items()},
@@ -42,7 +42,11 @@ def test_realisations_and_gas():
     assert not b.grf().anisotropic and b.grf().A_bao == pytest.approx(b.bao_ratio * b.A_s)
     f = b.fields(0)
     np.testing.assert_allclose(f["n"]["HI"], b.n_bar_HI * (1 + f["delta"]), rtol=1e-14)
-    np.testing.assert_allclose(f["n"]["SiIII"], b.siiii_to_hi * f["n"]["HI"], rtol=1e-14)
+    assert b.species == ("HI", "SiIII", "SiII") and b.metal_to_hi == {"SiIII": 0.2, "SiII": 0.1}, "the toy ratios"
+    for x, r in b.metal_to_hi.items():
+        np.testing.assert_allclose(f["n"][x], r * f["n"]["HI"], rtol=1e-14)
+    with pytest.raises(ValueError, match="metal_to_hi"):
+        ToyBoxes(box_cMpc=8.0, bao_ratio=1e-3, metal_to_hi={"SiIII": 0.0})
     np.testing.assert_allclose(f["T"], b.T0 * (1 + f["delta"]) ** b.gamma_minus_1, rtol=1e-14)
     assert b.velocity == "zero" and f["v"].shape == f["delta"].shape + (3,) and not np.any(f["v"]), "zero velocities by default"
     with pytest.raises(ValueError, match="velocity"):
@@ -60,7 +64,7 @@ def test_realisations_and_gas():
     np.testing.assert_allclose(div[inner], -b.aHf * np.fft.rfftn(f["delta"])[inner], rtol=1e-8, atol=1e-8)
     assert b.aH == pytest.approx(70.0 * np.sqrt(0.31 * 64 + 0.69) / 4) and b.aHf == b.aH * b.f_growth  # notebook 04, z = 3
     cells = b.cells(0, f)
-    assert len(cells) == b.n_cells**3 and set(cells.species_keys) == {"HI", "SiIII"}
+    assert len(cells) == b.n_cells**3 and set(cells.species_keys) == {"HI", "SiIII", "SiII"}
     with pytest.raises(ValueError, match="1 \\+ delta"):  # no clipping: a negative density is an error
         ToyBoxes(box_cMpc=8.0, n_cells=16, sigma_delta=0.8, bao_ratio=1e-3).fields(0)
 
@@ -73,7 +77,8 @@ def test_one_box_along_its_skewers():
 
     r = toy_lattice_statistics(BOXES, [0], STRIDE, P, N_PIX, decompose=True)  # the order-by-order decomposition: opt-in
     n_sk = lattice_columns(BOXES.n_cells, STRIDE).shape[0]
-    assert r["tau"].shape == (1, 2, n_sk, N_PIX)
+    m = len(LINE_IDS)
+    assert m == 4 and r["tau"].shape == (1, m, n_sk, N_PIX)
     assert r["warnings"] == [[]] and np.all(r["resolution"][..., 1] < 1e-3), "the resolution check passes"
     F = r["T"][0]
     assert 0 < F.prod(0).mean() < F.mean(axis=(1, 2)).min() < 1
@@ -81,26 +86,27 @@ def test_one_box_along_its_skewers():
     assert np.max(np.abs(s["P_order"].sum(0) - s["P_total"])) < 1e-10 * np.max(np.abs(s["P_total"]))
     sb = toy_tau(BOXES, 0, [[0, 0]], P, N_PIX)["bundle"]
     assert r["period"] == pytest.approx(float(velocity_span(sb, "exact")[0]), rel=1e-12)
-    assert set(r["flux3d"]) == {*LINE_IDS, "total"} and r["p1d"]["p1d"].shape == (3, N_PIX // 2 + 1)
+    assert set(r["flux3d"]) == {*LINE_IDS, "total"} and r["p1d"]["p1d"].shape == (m + 1, N_PIX // 2 + 1)
+    assert s["P_order"].shape[0] == 2 * m + 1, "orders 0 .. 2 N_lines"
     delta = F.prod(0) / F.prod(0).mean(axis=0) - 1
-    np.testing.assert_allclose(r["delta"][0, 2], delta, atol=1e-12)
+    np.testing.assert_allclose(r["delta"][0, -1], delta, atol=1e-12)
     assert abs(delta.mean()) < 1e-14 and r["check"]["decomposition_error"] < 1e-14
     w = np.r_[1.0, np.full(N_PIX // 2 - 1, 2.0), 1.0]  # rfft modes -> full grid
-    assert np.sum(w * r["p1d"]["p1d"][2]) / (N_PIX * r["dv"]) == pytest.approx(np.mean(delta**2), rel=1e-10)
+    assert np.sum(w * r["p1d"]["p1d"][-1]) / (N_PIX * r["dv"]) == pytest.approx(np.mean(delta**2), rel=1e-10)
     xi = r["flux3d"]["total"]["xi_iso"]
     assert np.isfinite(xi[0]) and xi[0] <= np.mean(delta**2) * (1 + 1e-12)  # bin 0 holds lag 0 and its neighbours
 
 
 @pytest.mark.parametrize("mean", ["redshift", "global", "box", "skewer"])
 def test_ensemble_normalisation_of_the_overflux(mean):
-    """The explicit pipeline of notebook 09 in every mode of the mean transmission: T_bar over the pixels at the same
+    """The explicit pipeline of notebook 10 in every mode of the mean transmission: T_bar over the pixels at the same
     redshift of every skewer of every box ("redshift", the default: the per-pixel ensemble mean on the shared grid of the
     lattice), over every pixel of every skewer of every box ("global"), of each box ("box") or along each skewer
     ("skewer"), so <delta> = 0 over the sets of the mode (``mean_delta_level``); C = T_bar / prod_j T_bar_j - 1 =
-    <delta_1 delta_2> over the same sets (``C_error``), the decomposition delta_tot = [sum_A delta_A - C] / (1 + C) is
+    sum_{|A| >= 2} <delta_A> over the same sets (``C_error``), the decomposition delta_tot = [sum_A delta_A - C] / (1 + C) is
     exact and order 1 vanishes; only "redshift" removes the pattern shared by every skewer (``mean_delta``)."""
     r = toy_lattice_statistics(BOXES, [0, 1, 2], STRIDE, P, N_PIX, mean=mean, decompose=True)
-    T = np.moveaxis(r["T"], 1, 0)  # (2, 3 boxes, N_sk, n_pix)
+    T = np.moveaxis(r["T"], 1, 0)  # (N_lines, 3 boxes, N_sk, n_pix)
     T = np.concatenate([T, T.prod(0)[None]])  # the lines and the total
     axes = {"redshift": (1, 2), "global": (1, 2, 3), "box": (2, 3), "skewer": 3}[mean]
     T_bar = np.broadcast_to(T.mean(axis=axes, keepdims=True), T.shape)  # the known means of the mode
@@ -113,8 +119,8 @@ def test_ensemble_normalisation_of_the_overflux(mean):
     assert np.max(np.abs(delta.mean(axis=axes))) < 1e-14
     shared = np.max(np.abs(chk["mean_delta"]))
     assert (shared < 1e-14) if mean == "redshift" else (shared > 1e-4), "only 'redshift' removes the shared pattern"
-    assert chk["C_error"] < 1e-14 and chk["decomposition_error"] < 1e-14, "C = <delta_1 delta_2>, the decomposition exact"
-    C = T_bar[2] / (T_bar[0] * T_bar[1]) - 1
+    assert chk["C_error"] < 1e-14 and chk["decomposition_error"] < 1e-14, "C = sum <delta_A>, the decomposition exact"
+    C = T_bar[-1] / np.prod(T_bar[:-1], axis=0) - 1
     assert chk["C"] == pytest.approx(C.mean(), rel=1e-10)
     e = r["flux"]
     for kind in ("P", "xi"):

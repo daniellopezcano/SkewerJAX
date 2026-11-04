@@ -48,7 +48,6 @@ class DagEdge(NamedTuple):
 REALMS = {  # realm: (label, PALETTE key of its band)
     "core": ("core", "grey"),
     "simulations": ("simulations", "green"),
-    "skewers": ("skewers", "yellow"),
     "summary_stats": ("summary_stats", "blue"),
 }
 
@@ -61,8 +60,8 @@ DAG_NODES = {
         "skewers",
         "SkewerBundle, lattice",
         "SkewerBundle; lattice of paths",
-        "core.skewers, skewers.lattice",
-        "skewers",
+        "core.skewers",
+        "core",
         "SkewerBundle, lattice_columns, lattice_points",
     ),
     "samplers": DagNode(
@@ -160,11 +159,11 @@ DAG_NODES = {
         9.6,
         1.85,
         "field statistics",
-        "P, ξ: grid or mesh",
-        "P, ξ of 3D fields: grid, or mesh (MAS + interlacing)",
+        "P, ξ of the cells (mesh)",
+        "P, ξ of the cells' density: mesh (MAS + interlacing)",
         "summary_stats.field_stats, summary_stats.mesh",
         "summary_stats",
-        "field_statistics, point_statistics, fourier_mesh",
+        "field_statistics, cell_weights, fourier_mesh",
     ),
     "fake_spectra": DagNode(
         4.0,
@@ -190,7 +189,7 @@ DAG_EDGES = (
         "solid",
         "points, a(x)",
         "h",
-        ("core.absorbers:bundle_frame", "skewers.lattice:lattice_points"),
+        ("core.absorbers:bundle_frame", "core.skewers:lattice_points"),
         "points (N_sk, N_pt, 3)",
     ),
     DagEdge("deposition", "profiles", "solid", r"T, $v_\parallel$, a", None, ("core.optical_depth:optical_depth_kernel",)),
@@ -250,13 +249,13 @@ DAG_EDGES = (
         "δ on (n_x, N_v, n_z)",
     ),
     DagEdge(
-        "samplers",
+        "fields",
         "field_stats",
         "solid",
-        "on its grid (exact)",
-        "over",
-        ("summary_stats.field_stats:field_statistics", "summary_stats.grid3d:GridStatistics3D"),
-        "δ (N, N, N)",
+        r"$n_X V$ at the generators",
+        "t",
+        ("summary_stats.field_stats:cell_weights", "summary_stats.mesh:fourier_mesh"),
+        "n_X V (N_cells) → mesh (N_mesh³)",
     ),
 )
 DAG_EXTERNAL = (
@@ -266,19 +265,19 @@ DAG_EXTERNAL = (
 DAG_NOTEBOOKS = {
     "lines": "01",
     "cosmology": "02",
-    "skewers": "03, 09, 10",
+    "skewers": "03, 10, 11",
     "samplers": "04, 08",
-    "fields": "04, 05, 10",
-    "simulation": "05, 10",
+    "fields": "04, 05, 08, 09, 11",
+    "simulation": "05, 09, 11",
     "profiles": "06",
     "deposition": "07",
-    "tau": "07, 09, 10",
-    "normalisation": "09, 10",
-    "overflux": "09, 10",
-    "stats_1d": "09, 10",
-    "stats_3d": "09, 10",
-    "field_stats": "08, 10",
-    "fake_spectra": "11, 12",
+    "tau": "07, 10, 11",
+    "normalisation": "10, 11",
+    "overflux": "10, 11",
+    "stats_1d": "10, 11",
+    "stats_3d": "10, 11",
+    "field_stats": "08, 09, 11",
+    "fake_spectra": "12, 13",
 }
 
 # The layers: the subpackages and the notebooks, and who imports whom (``tests/test_import_graph.py``)
@@ -287,15 +286,13 @@ LAYERS = {
     "utils": "utils: plotting, dag, paths",
     "comparison": "comparison: fake_spectra",
     "simulations": "simulations: the gas",
-    "skewers": "skewers: the paths",
     "summary_stats": "summary_stats: statistics from arrays",
-    "core": "core: lines, cosmology, cells, τ",
+    "core": "core: lines, cosmology, skewers, cells, τ",
 }
 LAYER_EDGES = (  # (importer, imported)
     ("notebooks", "utils"),
     ("notebooks", "comparison"),
     ("notebooks", "simulations"),
-    ("notebooks", "skewers"),
     ("notebooks", "summary_stats"),
     ("notebooks", "core"),
     ("utils", "comparison"),
@@ -306,7 +303,7 @@ LAYER_EDGES = (  # (importer, imported)
     ("comparison", "summary_stats"),
     ("comparison", "core"),
     ("simulations", "core"),
-    ("skewers", "core"),
+    ("summary_stats", "core"),
 )
 
 

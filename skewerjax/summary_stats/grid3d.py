@@ -1,4 +1,4 @@
-"""Two-point statistics of a periodic 3D field on its own grid, and their exact expectations (notebook 08, Part A).
+"""Two-point statistics of a periodic 3D field on a grid, and their exact expectations (notebooks 08 to 11).
 
 One realisation delta on an (N_x, N_y, N_z) grid of a box of sides L, the line of sight along ``los_axis``:
 
@@ -36,7 +36,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from skewerjax.summary_stats.binning import bin_index, binned_mean, hybrid_k_edges, occupied_edges
-from skewerjax.summary_stats.mesh import check_grid_native, fourier_mesh
+from skewerjax.summary_stats.mesh import PAINT_CHUNK, check_grid_native, fourier_mesh
 
 MU_WEDGES = (0.0, 0.5, 0.8, 0.95, 1.0)  # mu = r_par / r: the wedges of DESI DR2 Lya BAO (arXiv:2503.14739, Fig. 3)
 GRID_KEYS = ("P_iso", "P_map", "P_mu", "xi_iso", "xi_map", "xi_mu")
@@ -224,12 +224,14 @@ class GridStatistics3D:
         return out
 
     def measure(self, delta, *, mas=None) -> dict:
-        """The binned P and xi of one realisation ``delta`` (``shape``): dict keyed by ``GRID_KEYS`` (P [L^3], xi
-        dimensionless; NaN in empty bins), without the k = 0 mode (module docstring). One rfftn and one irfftn.
+        """The binned P and xi of a field sampled on the regular lattice of this grid (``shape``): dict keyed by
+        ``GRID_KEYS`` (P [L^3], xi dimensionless; NaN in empty bins), without the k = 0 mode (module docstring). One
+        rfftn and one irfftn.
 
-        ``delta`` is the field on the grid (grid-native): the exact path, no mass assignment, so ``mas`` must be None
-        (a scheme raises; points take ``measure_points``). The window W(k) and its alias images arise only when points
-        are assigned to a mesh (Sefusatti et al. 2016, §2.3); a field given on its own grid has neither."""
+        The lattice path: the skewer samples (``lattice.measure_lattice``, ``density.skewer_density_statistics``) are the
+        field on their lattice, so their FFT is exact, with no window and no alias images of an assignment (Sefusatti et
+        al. 2016, §2.3), and ``mas`` must be None (a scheme raises). The fields of gas cells take the mesh path
+        (``measure_points``, ``field_stats.field_statistics``)."""
         check_grid_native(mas, "GridStatistics3D.measure")
         d = jnp.asarray(delta)
         if d.shape != self.shape:
@@ -239,23 +241,24 @@ class GridStatistics3D:
         xi = jnp.fft.irfftn(f2, s=self.shape) / self.N
         return self._bin(P, xi)
 
-    def measure_points(self, positions, values, *, mas: str = "pcs", interlace: bool = True, shot_noise=None) -> dict:
+    def measure_points(
+        self, positions, values, *, mas: str = "pcs", interlace: bool = True, shot_noise=None, chunk: int | None = PAINT_CHUNK
+    ) -> dict:
         """The binned P and xi (``GRID_KEYS``, as ``measure``) of a field known at points, through a mesh of the grid's
         shape (``mesh.fourier_mesh``): the values assigned with the scheme ``mas`` ("ngp", "cic", "tsc", "pcs"),
         interlaced (``interlace``: the odd alias images cancel) and divided by the window (Sefusatti et al. 2016,
-        eqs. 24, 35-37).
+        eqs. 24, 35-37); ``chunk`` points painted at a time.
 
-        positions : (N, 3) [cMpc] in the box of sides ``L`` (wrapped); values : (N,) the field at the points (e.g. the
-        overdensity; unit values for discrete tracers, whose mesh is then 1 + delta). The mesh holds the sum of the
-        values times the window divided by the mean number of points per node, N / prod(shape): the estimate of the
-        field. P = (dV / N_nodes) |F|^2 without the k = 0 mode, minus ``shot_noise`` [cMpc^3] if given (a constant: for
-        discrete tracers 1/n_bar, for values sampled at independent uniform points <v^2> / n_bar = V sum v^2 / N^2; S16
-        eq. 9 and §3.2; nothing by default, as the inputs here are fields); xi = irfftn(P) / dV, the Fourier pair of the
-        corrected P on the same modes (the expectation: ``theory`` of ``mesh.aliased_power``)."""
+        positions : (N, 3) [cMpc] in the box of sides ``L`` (wrapped); values : (N,) the field at the points, e.g. the
+        number of particles of every cell over its mean (``field_stats.cell_weights``: the mesh then holds 1 + delta).
+        The mesh holds the sum of the values times the window divided by the mean number of points per node,
+        N / prod(shape): the estimate of the field. P = (dV / N_nodes) |F|^2 without the k = 0 mode, minus
+        ``shot_noise`` [cMpc^3] if given (a constant, S16 eq. 9; nothing by default); xi = irfftn(P) / dV, the Fourier
+        pair of the corrected P on the same modes."""
         x = jnp.asarray(positions, dtype=float)
         if x.ndim != 2 or x.shape[1] != 3:
             raise ValueError(f"positions must be (N, 3), got shape {tuple(x.shape)}.")
-        F, _ = fourier_mesh(x, values, self.shape, self.L, mas=mas, interlace=interlace, deconvolve=True)
+        F, _ = fourier_mesh(x, values, self.shape, self.L, mas=mas, interlace=interlace, deconvolve=True, chunk=chunk)
         per_node = x.shape[0] / self.N
         P = ((self.dV / self.N) * jnp.abs(F / per_node) ** 2).at[0, 0, 0].set(0.0)
         if shot_noise is not None:

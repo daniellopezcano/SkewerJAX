@@ -20,7 +20,7 @@ the toy lattice, where all skewers share one v -> a grid) give T_bar(v) at each 
 scale factor (to ``GRID_RTOL``) share one mean (``redshift_groups``: in one snapshot every pixel has the same a, so
 T_bar(z) is the global mean); samples whose grids differ raise a ``ValueError`` (``check_shared_grid``). Without
 ``grid`` every pixel is its own redshift. On one array of samples "global" and "box" are the same mean; an ensemble
-split over realisations (``ensemble_mean_transmissions``, notebook 09) distinguishes them, and ``overflux_check`` checks
+split over realisations (``ensemble_mean_transmissions``, notebook 10) distinguishes them, and ``overflux_check`` checks
 the normalisation over the sets of the mode.
 
 Per line j, delta_j = T_j / T_bar_j - 1; for the total, T = prod_j T_j and T_bar = <prod_j T_j> != prod_j T_bar_j. The

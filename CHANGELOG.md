@@ -3,6 +3,51 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — any number of lines; one statistics path for toy and simulation; TNG50-4 field notebook; skewers in core; periodicity audit (2026-11-03)
+
+### Added
+- Notebook `09_field_statistics_tng`: the field statistics of 08 on the cells of TNG50-4 (snapshot 25): the total gas,
+  H I, Si III and Si II through the same mesh (PCS, interlaced), real space and redshift space along each axis (the three
+  orientations as the ensemble), the header's cosmology against IllustrisTNG's, r_d and its periodic images.
+- `summary_stats.field_statistics(cells, grid, species=, mas="pcs", interlace=True, power=, power_nw=, chunk=)`: the one
+  path of the field statistics, on `core.Cells` of any source (every cell deposits n_X V at its generating point;
+  `cell_weights`), with `trusted` (k < k_Nyq / 2, r ≥ 6 H); `mesh.node_transfer` (the exact transfer of fields given at
+  the mesh nodes), chunked `paint` / `fourier_mesh` (`chunk`, 2^21 points; bounded memory).
+- `core.redshift_space_cells(cells, axis, aH)`; `simulations.GAS_SPECIES` (`gas_to_cells(..., "gas")`: the total gas,
+  ρ / m_u); `simulations.voronoi_slice` returns the velocity of the cells too.
+- `core.sound_horizon_drag(omega_b, omega_cb, omega_nu=0)` (Aubourg et al. 2015, eq. 16; 147.30 Mpc for
+  IllustrisTNG); `simulations.TNG_COSMOLOGY` (Planck 2015).
+- Any number of lines in the figures (`utils.plotting`): `LINE_STYLES` / `line_style` (one colour, marker and line style
+  per line and species), `line_names`, `species_name`, `field_names`, `line_pairs` (every pair, folded; `pairs=`
+  "all" | "reference" | a list; `PAIR_STYLES`), `line_pair_label(all_ids=)`; spots for every pair and echoes of the
+  selected pairs (`plot_overflux_rpar_rperp`, `plot_xi_mu_wedges(pairs=)`); `max_terms`, `terms=` and `line_ids=` on
+  the term figures; `ORDER_MARKERS`.
+- The periodic images of the BAO ring: `image_centres`, `ring_crossings`; `wedge_echoes` returns the crossings of the
+  images n L and n L ± Δ in each wedge and the positions on the line of sight (`los`); `echo_curves` documented as the
+  image arcs (n⊥ = 0) for any r_BAO.
+- The 08 figures without an expectation (`plot_isotropic_recovery`: one row; `plot_kpar_kperp_maps`,
+  `plot_rpar_rperp_maps`: the measured figure); `plot_toy_fields(centres="pixels")`.
+- Tests: `test_point_statistics` rewritten (the same calls for toy and Voronoi cells, convergence to the exact grid FFT,
+  mass conservation, redshift-space cells); `test_statistics` (the decomposition of 3 and 4 lines, the periodic ranges);
+  `test_optical_depth` (a line shift beyond the period); `test_cosmology` (r_d); `test_mesh` (chunks, `node_transfer`);
+  `test_plotting` (N-line figures, BAO images).
+
+### Changed
+- `skewerjax.skewers` removed: `lattice_columns`, `lattice_points`, `hubble_velocity` are in `core.skewers` (from
+  `skewerjax.core`); `tests/skewers/test_lattice.py` → `tests/core/test_skewer_lattice.py`. Layers: core at the bottom,
+  `simulations` and `summary_stats` on it (`summary_stats` imports `core.Cells`).
+- Removed from the public statistics API: `point_statistics`, `mesh.fourier_grid` and the grid-native `field_statistics`
+  of arrays (the exact grid FFT is a validation reference of the tests). `GridStatistics3D.measure` is the lattice path
+  of the skewer samples. The DAG: toy fields → gas cells → field statistics, as the simulation.
+- `ToyBoxes(metal_to_hi={"SiIII": 0.2, "SiII": 0.1})` replaces `siiii_to_hi`; `simulations.LINE_IDS` = Lyα, Si III
+  1206, Si II 1193, Si II 1190; `ToyBoxes.species`, `n_bar`. `skewer_density_statistics` takes any number of species;
+  `decompose_1d(labels=None)`.
+- Notebooks: 08 on the cells path (N_MESH, MAS, INTERLACE explicit; the trusted range and the residual against the
+  expectation printed); 10 and 11 with four lines; 11 with r_d as the BAO scale (its images). Renumbered (`mv`):
+  `09_skewer_statistics` → `10_skewer_statistics`, `10_skewer_statistics_tng` → `11_skewer_statistics_tng`,
+  `11_comparison_fake_spectra_results` → `12_…`, `12_comparison_fake_spectra_performance` → `13_…`; references updated
+  (README, docs, `utils.dag.DAG_NOTEBOOKS`, `utils.paths`, the benchmark script, docstrings, tests, notebooks).
+
 ## Unreleased — PCS by default; notebook 10: the skewer statistics on TNG50-4; notebooks 10, 11 → 11, 12 (2026-11-03)
 
 ### Added

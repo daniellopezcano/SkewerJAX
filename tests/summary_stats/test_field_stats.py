@@ -1,7 +1,7 @@
-"""P and xi of periodic 3D fields on their grid (``summary_stats.field_stats``), from arrays and an expectation P(k):
+"""P and xi of the density of gas cells through a mesh (``summary_stats.field_stats``), with an expectation P(k):
 ``grid_power`` = ``PowerLawGRF.power_grid`` bit for bit; ``grid_limits``, ``box_grid`` (the map rows on the grid's own
 modes and separations, every bin beyond the full-coverage limits cut) and the |k| bins of ``bao_k_edges``;
-``field_statistics`` over an iterable of fields (streamed, recomputed identically), with the expectation, the
+``field_statistics`` over an iterable of ``core.Cells`` (streamed, recomputed identically), with the expectation, the
 expectation without the BAO bump and the exact covariance of xi; ``xi_chi2``, ``xi_subset_offsets``; ``bao_height``."""
 
 import numpy as np
@@ -26,8 +26,8 @@ BOXES = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3, bao_ratio=1e-3)  # below R_
 def _stats(b, k_edges, r_edges, **kw):
     g = b.grf()
     gs = box_grid(b.n_cells, b.box_cMpc, k_edges=k_edges, r_edges=r_edges, log=kw.pop("log", None))
-    fields = (b.delta(i) for i in range(b.n_real))
-    return field_statistics(fields, gs, power=g.power, power_nw=lambda k: g.power(k, bao=False), log=None), gs
+    cells = (b.cells(i) for i in range(b.n_real))
+    return field_statistics(cells, gs, species="HI", power=g.power, power_nw=lambda k: g.power(k, bao=False), log=None), gs
 
 
 def test_grid_power_is_the_spectrum_on_the_modes():
@@ -92,7 +92,8 @@ def test_field_statistics_and_the_chi2_of_xi():
     k_edges, r_edges = bao_k_edges(lim["k_min"], lim["k_max"], 3.0), np.arange(0, b.box_cMpc / 2 + b.dx, b.dx)
     res, gs = _stats(b, k_edges, r_edges)
     assert res["n_real"] == 3 and np.all(res["min_one_plus_delta"] > 0) and res["limits"] == lim
-    np.testing.assert_allclose(res["min_one_plus_delta"], [1 + b.delta(i).min() for i in range(3)], rtol=0)
+    want = [(1 + b.delta(i).min()) / (1 + b.delta(i).mean()) for i in range(3)]  # n / n_bar, n_bar the mean of the cells
+    np.testing.assert_allclose(res["min_one_plus_delta"], want, rtol=1e-12)
     nr = res["axes"]["r_iso"].size
     assert res["cov_xi_iso"].shape == (nr, nr) and set(res["theory_nw"]) == set(res["theory"])
     c = xi_chi2(res)
@@ -103,12 +104,12 @@ def test_field_statistics_and_the_chi2_of_xi():
     assert offs[1]["sigma"] == pytest.approx(offs[0]["sigma"] / np.sqrt(3))
     again, _ = _stats(b, k_edges, r_edges)
     np.testing.assert_array_equal(again["P_iso_each"], res["P_iso_each"])  # recomputed, identical
-    bare = field_statistics([b.delta(0), b.delta(1)], gs, log=None)
+    bare = field_statistics([b.cells(0), b.cells(1)], gs, species="HI", log=None)
     assert bare["n_real"] == 2 and "theory" not in bare and "cov_xi_iso" not in bare
     np.testing.assert_array_equal(bare["P_iso_each"], res["P_iso_each"][:2])
     edges = np.geomspace(0.5, 6.0, 9)
     other = field_statistics(
-        (b.delta(i) for i in range(3)), GridStatistics3D((16,) * 3, 8.0, los_axis=1, k_edges=edges), log=None
+        (b.cells(i) for i in range(3)), GridStatistics3D((16,) * 3, 8.0, los_axis=1, k_edges=edges), species="HI", log=None
     )
     np.testing.assert_array_equal(other["axes"]["k_edges"], edges)
 

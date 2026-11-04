@@ -1,4 +1,4 @@
-"""Two-point statistics of an ensemble of periodic skewers, from arrays and geometry only (notebook 09, Part D):
+"""Two-point statistics of an ensemble of periodic skewers, from arrays and geometry only (notebook 10, Part D):
 no box or set-up class enters, only the fields along the skewers, the pixel width, the lattice spacing and the bins.
 
 **1D, along each skewer** (review notes, P1D and xi1D sections; the conventions of ``stats_1d``): N pixels of width dv
@@ -127,7 +127,7 @@ def lattice_limits(L: float, d_perp, n_los: int, period: float) -> dict:
 
 
 def on_lattice(delta, n_x: int, n_z: int) -> np.ndarray:
-    """The fields of the skewers (..., N_sk, n_los), the skewers x-major (``skewers.lattice_columns``: i_x outer, i_z inner),
+    """The fields of the skewers (..., N_sk, n_los), the skewers x-major (``core.lattice_columns``: i_x outer, i_z inner),
     on the lattice (..., n_x, n_los, n_z), the line of sight along the middle axis."""
     d = np.asarray(delta)
     return d.reshape(d.shape[:-2] + (int(n_x), int(n_z), d.shape[-1])).swapaxes(-1, -2)

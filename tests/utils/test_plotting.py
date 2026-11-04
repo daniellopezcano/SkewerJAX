@@ -104,7 +104,7 @@ def test_fifth_pass_figures():
 
 
 def test_toy_box_figures():
-    """The figures of notebooks 08 and 09 on a small toy box: the fields (08 A2), the 3D statistics of the realisations
+    """The figures of notebooks 08 and 10 on a small toy box: the fields (08 A2), the 3D statistics of the realisations
     against their expectation and the continuum (08 A3), one skewer (09 C1), the 3D statistics of the overfluxes (09 D:
     maps in native units, isotropic quantities in comoving units, the echo curves, the wedges with their characteristic
     scales), the 1D statistics of the overflux by order and term (09 E), and the density along the skewers through the
@@ -112,9 +112,8 @@ def test_toy_box_figures():
     maps; the options cmap, quantity, color_scale, levels and the axis scales."""
     from dataclasses import replace
 
-    from skewerjax.core import LineBundle
-    from skewerjax.simulations import ToyBoxes
-    from skewerjax.skewers import lattice_columns
+    from skewerjax.core import LineBundle, lattice_columns
+    from skewerjax.simulations import LINE_IDS, ToyBoxes
     from skewerjax.summary_stats import bao_k_edges, box_grid, field_statistics, grid_limits
     from skewerjax.utils.reference_data import P1D_DESI_DR1_Z22
 
@@ -123,7 +122,9 @@ def test_toy_box_figures():
     b = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3, bao_ratio=1e-3)
     fig, axs, info = pl.plot_toy_fields(replace(b, velocity="linear").fields(0), b.box_cMpc, arrow_every=4)
     fig.canvas.draw()
-    assert axs.shape == (2, 2) and info["arrow_scale"] > 0, "density and velocity rows (no temperature)"
+    assert axs.shape == (2, len(b.species)) and info["arrow_scale"] > 0, (
+        "density and velocity rows (no temperature), every species"
+    )
     fig, axs, info = pl.plot_toy_fields(
         b.fields(0), b.box_cMpc, arrow_every=4, cmap="tol_iridescent"
     )  # zero velocities: no arrows
@@ -139,9 +140,9 @@ def test_toy_box_figures():
         log=None,
     )
     res = field_statistics(
-        (b.delta(i) for i in range(b.n_real)), gs, power=g.power, power_nw=lambda k: g.power(k, bao=False), log=None
+        (b.cells(i) for i in range(b.n_real)), gs, species="HI", power=g.power, power_nw=lambda k: g.power(k, bao=False), log=None
     )
-    run = toy_lattice_statistics(b, range(b.n_real), (4, 4), p, n_pix, decompose=True)
+    run = toy_lattice_statistics(b, range(b.n_real), (4, 4), p, n_pix, decompose=True, line_ids=LINE_IDS[:2])  # two lines here
     for quantity, k_scale in (("xi", "linear"), ("r2xi", "log")):
         fig, axs, out = pl.plot_isotropic_recovery(
             res, quantity=quantity, r_bao=2.0, grf=b.grf(), k_scale=k_scale, k_marks={"$k_1$": 1.0, "$k_2$": 50.0}
@@ -243,7 +244,13 @@ def test_toy_box_figures():
     fl = b.fields(0)
     n = {sp: fl["n"][sp][ix, :, iz] for sp in ("HI", "SiIII")}
     fig, axs, info = pl.plot_toy_skewer(
-        b.box_cMpc, n, sk["v"], sk["tau"][:, 0], mean_transmission=run["mean_transmission"], points_per_cell=p
+        b.box_cMpc,
+        n,
+        sk["v"],
+        sk["tau"][:, 0],
+        mean_transmission=run["mean_transmission"],
+        points_per_cell=p,
+        line_ids=LINE_IDS[:2],
     )
     fig.canvas.draw()
     assert len(axs) == 5 and axs[0].get_xlabel().startswith("position") and axs[2].get_xlabel() == pl.LABELS["v_ref"]
@@ -275,7 +282,7 @@ def test_toy_box_figures():
     period = float(run["period"])
     fig, ax, drawn = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, n_sigma=1.5, cmap="tol_BuRd")
     fig.canvas.draw()
-    assert not fig.legends and ax.get_legend() is None, "no legend: the curves and the diamond are labelled"
+    assert not fig.legends and ax.get_legend() is None, "no legend: one pair, the curves and the diamond are labelled"
     texts = [t.get_text() for t in ax.texts]
     assert pl.line_pair_label(math=False) in texts, "the pair next to the diamond"
     assert any(t.strip() == "echo " + pl.line_pair_label().replace("$\\Delta", "$+\\Delta") for t in texts), "G4 labels"
@@ -297,7 +304,8 @@ def test_toy_box_figures():
     s_ = np.sqrt(2.0**2 - c["r_perp"] ** 2)
     np.testing.assert_allclose(c["plus"], pl.fold_periodic(s_ + d, L)) and np.all(c["plus"] <= L / 2)
     np.testing.assert_allclose(drawn["echo -"]["r_par"], u * pl.fold_periodic(np.abs(s_ - d), L))
-    assert drawn["spot"]["r_par"][0] == pytest.approx(100.0) and set(drawn) == {"ring", "spot", "echo +", "echo -"}
+    assert drawn["spot"]["r_par"][0] == pytest.approx(100.0)
+    assert set(drawn) == {"ring", "spots", "spot", "echoes", "echo +", "echo -"} and len(drawn["spots"]) == 1
     np.testing.assert_allclose(pl.fold_periodic([0.3, 0.7, 1.2, -0.2], 1.0), [0.3, 0.3, 0.2, 0.2])
     sc = pl.echo_scales(40.0, 28.0, 150.0)
     np.testing.assert_allclose(list(sc.values()), [40.0, 28.0, 12.0, 68.0, np.hypot(40.0, 28.0)])
@@ -315,32 +323,30 @@ def test_toy_box_figures():
     fig.canvas.draw()
     assert chi2 is None and len(axs) == 1 and "cMpc" in axs[0].get_xlabel() and "km" in axs[0].child_axes[0].get_xlabel()
     legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
-    assert not fig.legends and len(legs) == 3, "the echoes, the wedges and the styles, inside the panel"
+    assert not fig.legends and len(legs) == 3, "the spots and echoes, the wedges and the styles, inside the panel"
     texts = [[t.get_text() for t in g.get_texts()] for g in legs]
     assert ["measured", "per realisation"] in texts
-    echo = [t for t in texts if t[0].startswith("echo")][0]
-    assert len(echo) == 2 and "+" in echo[0] and "-" in echo[1] and "Delta v" in echo[0]
+    pairs_leg = [t for t in texts if t[0].startswith("spot")][0]
+    assert pairs_leg == ["spot " + pl.line_pair_label(comoving=True), "echoes " + pl.line_pair_label(math=False)]
     assert all(g.get_zorder() == pl.LEGEND_ZORDER for g in legs)
     assert not any("ticks at the top" in t.get_text() for t in axs[0].texts), "no note"
     ec = pl.wedge_echoes(2.0, 100.0 / u, pl.MU_WEDGES, L)
     mu_ = np.asarray(ec["mu"])
-    root = np.sqrt(2.0**2 - (100.0 / u) ** 2 * (1 - mu_**2))
-    np.testing.assert_allclose(ec["plus"], pl.fold_periodic(root + mu_ * 100.0 / u, L))
+    d_ = 100.0 / u
+    root = np.sqrt(2.0**2 - d_**2 * (1 - mu_**2))
+    for w in range(len(mu_)):  # the n = 0 echoes, r = mu Delta +- sqrt(r_BAO^2 - Delta^2 (1 - mu^2)), among the crossings
+        assert np.any(np.isclose(ec["echo"][w], root[w] + mu_[w] * d_)), w
     assert ec["spot_wedge"] == len(pl.MU_WEDGES) - 2, "the spot in the wedge that holds mu = 1"
     drawn_x = {round(t.get_position()[0], 9) for t in axs[0].texts}
-    assert round(ec["r_bao"], 9) in drawn_x and round(ec["delta"], 9) in drawn_x
-    spot = [ln for ln in axs[0].lines if ln.get_linestyle() == "--" and np.allclose(ln.get_xdata(), ec["delta"])]
+    assert round(ec["r_bao"], 9) in drawn_x
+    spot = [ln for ln in axs[0].lines if np.allclose(ln.get_xdata(), ec["delta"]) and ln.get_linewidth() == 2.2]
     assert len(spot) == 1 and spot[0].get_color() == pl.PALETTE[pl.MU_COLORS[ec["spot_wedge"]]]
     lo, hi = axs[0].get_xlim()
-    dashes = {}
-    for w in range(len(pl.MU_WEDGES) - 1):  # the echoes: vertical lines in the wedge colour, + dashed, - dotted
-        for key in ("plus", "minus"):
-            if lo <= ec[key][w] <= hi:
-                col = pl.PALETTE[pl.MU_COLORS[w]]
-                ln = [x for x in axs[0].lines if np.allclose(x.get_xdata(), ec[key][w]) and x.get_color() == col]
-                assert ln, (w, key)
-                dashes.setdefault(key, set()).add(tuple(ln[0]._unscaled_dash_pattern[1]))
-    assert set(dashes) == {"plus", "minus"} and dashes["plus"].isdisjoint(dashes["minus"]), "two styles"
+    for w in range(len(pl.MU_WEDGES) - 1):  # the echoes: vertical lines in the wedge colour
+        col = pl.PALETTE[pl.MU_COLORS[w]]
+        for x in ec["echo"][w]:
+            if lo <= x <= hi:
+                assert [ln for ln in axs[0].lines if np.allclose(ln.get_xdata(), x) and ln.get_color() == col], (w, x)
     with pytest.raises(TypeError):
         pl.plot_xi_mu_wedges(tot, reference={})
     # the density along the skewers (E, F): comoving line of sight, km/s for reference, with its exact expectation
@@ -368,8 +374,12 @@ def test_toy_box_figures():
         run["density_p1d"], P1D_DESI_DR1_Z22, fields=list(run["density3d"]), unit="cMpc", kms_per_cMpc=u, k_max=3.0
     )
     fig.canvas.draw()
-    assert "cMpc" in ax.get_xlabel() and "km" in ax.child_axes[0].get_xlabel() and len(ax.get_legend().get_texts()) == 6
-    # the options of notebook 10 (one simulation): the legend of the ensemble, one reference per field, the spot without
+    assert (
+        "cMpc" in ax.get_xlabel()
+        and "km" in ax.child_axes[0].get_xlabel()
+        and len(ax.get_legend().get_texts()) == len(run["density3d"]) + 3
+    )
+    # the options of notebook 11 (one simulation): the legend of the ensemble, one reference per field, the spot without
     # r_BAO, a density map under the skewers, the error bars of the reference
     lab = "each of the 3 lines of sight (not independent)"
     ref = {f: {k: 1.1 * np.asarray(run["density3d"][f][k]) for k in ("P_iso", "xi_iso")} for f in run["density3d"]}
@@ -380,10 +390,11 @@ def test_toy_box_figures():
     assert len(dashed) == len(ref) and len({ln.get_color() for ln in dashed}) == len(ref), "one reference per field, its colour"
     fig, axs, _ = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, r_bao=None, delta_v=100.0, box=L, each_label=lab)
     legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
-    assert len(legs) == 2, "no echoes without r_BAO"
-    assert [t.get_text() for t in axs[0].get_legend().get_texts()] == ["measured", lab]
+    assert len(legs) == 3, "the spot without r_BAO (no echoes)"
+    texts = [[t.get_text() for t in g.get_texts()] for g in legs]
+    assert ["measured", lab] in texts and axs[0].get_legend().get_texts()[0].get_text().startswith("spot")
     sep = pl.fold_periodic(100.0 / u, L)
-    spot = [ln for ln in axs[0].lines if ln.get_linestyle() == "--" and np.allclose(ln.get_xdata(), sep)]
+    spot = [ln for ln in axs[0].lines if ln.get_linewidth() == 2.2 and np.allclose(ln.get_xdata(), sep)]
     assert len(spot) == 1, "the spot of the two lines, without r_BAO"
     ref_err = dict(P1D_DESI_DR1_Z22, kP_pi_err=0.1 * P1D_DESI_DR1_Z22["kP_pi"])
     fig, ax = pl.plot_p1d_reference(run["p1d"], ref_err, kms_per_cMpc=u, each_label=lab)
@@ -442,7 +453,7 @@ def test_toy_box_figures():
 
 
 def test_comoving_axis():
-    """comoving_axis: v = aH x and k_v = k_x / (aH) on the secondary axes (notebook 09, Part D)."""
+    """comoving_axis: v = aH x and k_v = k_x / (aH) on the secondary axes (notebook 10, Part D)."""
     u = 80.0  # km/s per cMpc
     fig, (a, b) = plt.subplots(1, 2)
     a.set_xlim(0.0, 800.0)
@@ -762,3 +773,123 @@ def test_benchmark_figures():
     fig.canvas.draw()
     assert len(axs[1, 1].patches) == 3 * len(B.STAGES) and np.isclose(pl.bench_value(rows[0], "throughput")[0], 1 / 0.6)
     assert [l.get_ydata()[0] for l in axs[1, 2].get_lines()[:2]] == [2e-5, 3e-6]  # max and rms |dF| of the matched mode
+
+
+def test_n_line_figures():
+    """Any number of lines (the default four, ``simulations.LINE_IDS``): one style per line from the registry
+    (``line_style``: distinct colours and markers, the same in every figure), names from the line table with the
+    wavelength when a species repeats (``line_names``), every pair (i, j) with its folded separation and label
+    (``line_pairs``: "all", "reference", a list); the (r_perp, r_par) map with a diamond per pair and the echoes of the
+    selected pairs, the wedges with a spot per pair, the decomposition by term readable for N = 4 (``max_terms``,
+    ``terms``, the numbering of the lines)."""
+    from skewerjax.core import LineBundle
+    from skewerjax.simulations import LINE_IDS, ToyBoxes
+
+    from helpers import toy_lattice_statistics
+
+    ids = list(LINE_IDS)
+    assert ids == ["HI-LyA", "SiIII-1206", "SiII-1193", "SiII-1190"]
+    st = [pl.line_style(i, j) for j, i in enumerate(ids)]
+    assert len({s["color"] for s in st}) == 4 and len({s["marker"] for s in st}) == 4 and len({str(s["ls"]) for s in st}) == 4
+    assert pl.line_style("HI-LyA")["color"] == pl.ENTITY_COLORS["HI-LyA"] == pl.line_style("HI")["color"]
+    assert pl.line_style("total")["color"] == pl.FG and pl.line_style("CIV-1548", 5)["marker"] == pl._MARKER_CYCLE[5]
+    assert pl.line_names(ids) == ["Lyα", "Si III", "Si II 1193", "Si II 1190"]
+    assert pl.line_names(["HI-LyA", "SiII-1193"]) == ["Lyα", "Si II"], "the wavelength only when the species repeats"
+    assert pl.field_names(["HI", "SiII", "gas", "total"]) == {"HI": "H I", "SiII": "Si II", "gas": "gas", "total": "total"}
+    lb = LineBundle(ids, ref_line_id=ids[0])
+    dv = np.asarray(lb.delta_v)
+    period = 3961.5
+    allp = pl.line_pairs(ids, dv, period)
+    assert [(p["i"], p["j"]) for p in allp] == [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    assert all(0 <= p["fold"] <= period / 2 for p in allp) and len({p["label"] for p in allp}) == 6
+    assert allp[3]["dv"] == pytest.approx(abs(dv[2] - dv[1])) and allp[3]["fold"] == pytest.approx(
+        pl.fold_periodic(dv[2] - dv[1], period)
+    )
+    assert [(p["i"], p["j"]) for p in pl.line_pairs(ids, dv, period, "reference")] == [(0, 1), (0, 2), (0, 3)]
+    assert [(p["i"], p["j"]) for p in pl.line_pairs(ids, dv, period, [("SiII-1190", "SiII-1193")])] == [(2, 3)]
+    assert len({str(p["ls"]) for p in allp}) == 6, "one style per pair"
+    assert pl.line_pairs(ids, dv, period, [(2, 3)])[0]["ls"] == allp[5]["ls"], "a pair keeps its style in any selection"
+    with pytest.raises(ValueError, match="pairs"):
+        pl.line_pairs(ids, dv, period, "some")
+
+    b = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=2, bao_ratio=1e-3)
+    run = toy_lattice_statistics(b, range(b.n_real), (4, 4), 40, 64, decompose=True)
+    period = float(run["period"])
+    u, L = period / b.box_cMpc, b.box_cMpc
+    tot = dict(run["flux3d"]["total"], axes=run["axes3d"])
+    for pairs, n_echo in (("reference", 3), ("all", 6)):
+        fig, ax, drawn = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=dv, pairs=pairs)
+        fig.canvas.draw()
+        diamonds = [ln for ln in ax.lines if ln.get_marker() == "D"]
+        assert len(diamonds) == 6 and len(drawn["spots"]) == 6, "a diamond for every pair"
+        np.testing.assert_allclose(
+            sorted(d["r_par"][0] for d in drawn["spots"]), sorted(u * pl.fold_periodic(p["dv"] / u, L) for p in allp), rtol=1e-9
+        )
+        assert len(drawn["echoes"]) == n_echo and len(ax.get_legend().get_texts()) == n_echo, "one legend entry per pair"
+        assert {t.get_text() for t in ax.texts} >= {p["text"] for p in pl.line_pairs(ids, dv, period)}, "every diamond labelled"
+        plt.close(fig)
+    fig, axs, _ = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=dv, box=L)
+    legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
+    texts = [t.get_text() for g in legs for t in g.get_texts()]
+    assert sum(t.startswith("spot") for t in texts) == 6 and sum(t.startswith("echoes") for t in texts) == 3
+    plt.close(fig)
+    fig, axs = pl.plot_overflux_3d(run["flux3d"], run["axes3d"], kms_per_cMpc=u)
+    labels = [t.get_text() for t in axs["P"].get_legend().get_texts()]
+    assert [x for x in labels if not x.startswith("each")][:5] == ["Lyα", "Si III", "Si II 1193", "Si II 1190", "total"], labels
+    markers = [c.lines[0].get_marker() for c in axs["P"].containers][:5]
+    assert markers == [pl.line_style(i)["marker"] for i in ids] + ["*"], "the registry's markers"
+    plt.close(fig)
+    ens = run["flux"]
+    assert ens["P_order"].shape[0] == 9, "orders 0 .. 8 for four lines"
+    fig, axs = pl.plot_p1d_orders(ens, kms_per_cMpc=u)
+    plt.close(fig)
+    fig, axs = pl.plot_xi1d_terms(ens, kms_per_cMpc=u, max_terms=4, line_ids=ids, delta_v_list=dv)
+    for ax in axs:
+        names = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert sum(not (n.startswith("other") or "total" in n) for n in names) <= 4
+    assert axs[0].get_legend().get_title().get_text().startswith("lines: 1 = Lyα")
+    o2 = [t.get_text() for t in axs[1].get_legend().get_texts()]
+    assert any(n.startswith("other terms") for n in o2), "the rest of order 2 summed"
+    plt.close(fig)
+    fig, axs = pl.plot_p1d_terms(ens, kms_per_cMpc=u, orders=[2], terms=["1–2", "1–3"])
+    shown = [t.get_text() for t in axs[0].get_legend().get_texts()]
+    assert [x for x in shown if "–" in x] == ["1–2", "1–3"] and any(x.startswith("other") for x in shown), shown
+    plt.close(fig)
+    fig, axs, info = pl.plot_toy_skewer(
+        L,
+        {sp: np.ones(16) * (j + 1) for j, sp in enumerate(b.species)},
+        run["v"],
+        run["tau"][0][:, 0],
+        mean_transmission=run["mean_transmission"],
+    )
+    assert [t.get_text() for t in axs[2].get_legend().get_texts()][:2] == ["Lyα", "Si III (on the Lyα axis)"]
+    assert len(axs[2].lines) >= 5, "four lines and the total"
+    plt.close(fig)
+
+
+def test_bao_images_in_a_periodic_box():
+    """xi_box(r) = sum_n xi(|r + n L|): the ring and its echoes appear as the rings about (0, n L) and (0, n L +- Delta)
+    (n_perp = 0). ``echo_curves`` (any r_BAO, also > L / 2): every point of the folded curves lies on one of those image
+    rings; ``wedge_echoes``: on the line of sight the ring crosses at |r_BAO - n L| and the echoes at |r_BAO +- Delta -
+    n L|, folded into [0, L / 2]; along a direction mu at the roots of r^2 - 2 c mu r + c^2 - r_BAO^2 = 0."""
+    L, r0, d = 51.7, 147.0, 21.0  # TNG50-4-like: r_BAO ~ 2.8 L
+    c = pl.echo_curves(r0, d, L)
+    assert np.all(c["ring"] <= L / 2 + 1e-12) and np.all(c["plus"] <= L / 2 + 1e-12)
+    for key, shift in (("ring", 0.0), ("plus", d), ("minus", d)):
+        y = c[key]
+        cen = pl.image_centres(L, r0 + L, shift)
+        cen = np.concatenate([cen, -cen, pl.image_centres(L, r0 + L, -shift)])
+        resid = np.min(np.abs(c["r_perp"][:, None] ** 2 + (y[:, None] - cen[None]) ** 2 - r0**2), axis=1)
+        assert np.max(resid) < 1e-6 * r0**2, key
+    ec = pl.wedge_echoes(r0, d, pl.MU_WEDGES, L)
+    n = np.arange(-6, 7)
+    los_ring = np.unique(np.round(pl.fold_periodic(np.abs(r0 - n * L), L), 9))
+    los_echo = np.unique(np.round(pl.fold_periodic(np.concatenate([np.abs(r0 + d - n * L), np.abs(r0 - d - n * L)]), L), 9))
+    np.testing.assert_allclose(ec["los"]["ring"], los_ring[(los_ring > 0) & (los_ring <= L / 2)])
+    np.testing.assert_allclose(ec["los"]["echo"], los_echo[(los_echo > 0) & (los_echo <= L / 2)])
+    assert ec["r_bao"] == pytest.approx(pl.fold_periodic(r0, L)) and ec["delta"] == pytest.approx(d)
+    for m, rs in zip(ec["mu"], ec["ring"]):
+        for r in rs:  # each crossing on an image ring
+            assert np.min(np.abs((r * np.sqrt(1 - m**2)) ** 2 + (r * m - n * L) ** 2 - r0**2)) < 1e-6 * r0**2
+    small = pl.wedge_echoes(2.0, 0.5, pl.MU_WEDGES, 8.0)  # r_BAO < L / 2: the ring at r_BAO in every wedge
+    assert all(np.any(np.isclose(rs, 2.0)) for rs in small["ring"])

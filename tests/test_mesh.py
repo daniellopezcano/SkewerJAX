@@ -11,7 +11,7 @@ e. a plane wave at 1.31 k_Nyq: without interlacing it aliases to k_s - k with th
    with interlacing that odd image cancels (< 1e-12);
 f. the sign of the interlacing phase: + (numpy's forward FFT) matches the direct sum, the opposite sign fails;
 g. jit (no recompilation for new values) and the gradient in the weights against finite differences;
-plus ``aliased_power`` (S16 eqs. 29, 37) and ``fourier_grid``."""
+plus ``aliased_power`` (S16 eqs. 29, 37), ``node_transfer`` and the chunked deposit."""
 
 import jax
 import jax.numpy as jnp
@@ -23,10 +23,10 @@ from skewerjax.summary_stats.mesh import (
     MAS_ORDERS,
     MAS_SCHEMES,
     aliased_power,
-    fourier_grid,
     fourier_mesh,
     mas_window,
     mesh_k_axes,
+    node_transfer,
     paint,
 )
 
@@ -64,10 +64,10 @@ def test_ngp_on_the_nodes_is_the_fft_of_the_grid(D):
     H = np.asarray(L) / np.asarray(n)
     nodes = np.stack(np.meshgrid(*[np.arange(m) * h for m, h in zip(n, H)], indexing="ij"), -1).reshape(-1, D)
     F, meta = fourier_mesh(nodes, field.ravel(), n, L, mas="ngp", interlace=False, deconvolve=False)
-    G, gmeta = fourier_grid(field, L)
+    G = jnp.fft.rfftn(jnp.asarray(field))  # the exact FFT of the grid: the reference
     assert np.array_equal(np.asarray(F), np.asarray(G)), "bit for bit"
     assert np.array_equal(np.asarray(paint(nodes, field.ravel(), n, L, "ngp")), field)
-    assert meta["mas"] == "ngp" and gmeta["mas"] is None and not gmeta["interlace"]
+    assert meta["mas"] == "ngp" and not meta["interlace"]
     np.testing.assert_allclose(meta["k_nyq"], np.pi / H)
 
 
@@ -162,10 +162,10 @@ def test_jit_and_gradients():
     x = rng.uniform(0, L, (300, 3))
     w = rng.normal(size=300)
     fourier_mesh(x, w, n, L, mas="tsc")
-    sizes = (M._paint._cache_size(), M._fourier_mesh._cache_size())
+    sizes = (M._paint._cache_size(), M._finish._cache_size())
     for s in range(3):  # new positions, weights and box side: no new compilation
         fourier_mesh(rng.uniform(0, L, (300, 3)), rng.normal(size=300), n, L + s, mas="tsc")
-    assert (M._paint._cache_size(), M._fourier_mesh._cache_size()) == sizes
+    assert (M._paint._cache_size(), M._finish._cache_size()) == sizes
 
     def loss(weights, pos):
         F, _ = fourier_mesh(pos, weights, n, L, mas="pcs", interlace=True)
@@ -204,3 +204,23 @@ def test_aliased_power():
     P1 = np.asarray(aliased_power(lambda k: jnp.ones_like(k), 32, 1.0, mas="ngp", interlace=False, n_images=2000))
     k = np.asarray(mesh_k_axes(32, 1.0, 1)[0])
     np.testing.assert_allclose(P1[1:], 1 / np.sinc(k[1:] / (2 * np.pi * 32)) ** 2, rtol=1e-3)
+
+
+def test_chunked_deposit_and_node_transfer():
+    """``chunk``: the mesh accumulated over chunks equals the mesh of one call (to rounding; bit for bit when the chunk
+    holds every point); ``node_transfer``: the deposit of a grid field given at the mesh nodes is the field times the
+    transfer on every mode (one point at a node: |F|^2 = T), T = 1 for NGP without interlacing, T -> 1 at k << k_Nyq."""
+    rng = np.random.default_rng(7)
+    x, w = rng.uniform(0, 10.0, (5000, 3)), rng.normal(size=5000)
+    whole = np.asarray(paint(x, w, 12, 10.0, "pcs", chunk=None))
+    np.testing.assert_array_equal(np.asarray(paint(x, w, 12, 10.0, "pcs", chunk=5000)), whole)
+    np.testing.assert_allclose(np.asarray(paint(x, w, 12, 10.0, "pcs", chunk=777)), whole, rtol=0, atol=1e-12)
+    F1, _ = fourier_mesh(x, w, 12, 10.0, chunk=None)
+    F2, _ = fourier_mesh(x, w, 12, 10.0, chunk=1000)
+    np.testing.assert_allclose(np.asarray(F2), np.asarray(F1), rtol=0, atol=1e-10)
+    W = np.asarray(mas_window(mesh_k_axes(8, 4.0, 3), 4.0 / 8, "ngp"))  # NGP at a node: K = 1, so T = 1 / W^2
+    np.testing.assert_allclose(np.asarray(node_transfer(8, 4.0, mas="ngp", interlace=False)) * W**2, 1.0, rtol=1e-12)
+    T = np.asarray(node_transfer(32, 32.0))
+    k = np.sqrt(sum(a**2 for a in np.meshgrid(*[np.asarray(v) for v in mesh_k_axes(32, 32.0, 3)], indexing="ij")))
+    low, half = (k > 0) & (k < 0.1 * np.pi), (k > 0) & (k < 0.5 * np.pi)
+    assert np.max(np.abs(T[low] - 1)) < 2e-6 and np.max(np.abs(T[half] - 1)) < 2e-3 and np.max(np.abs(T[half] - 1)) > 1e-4

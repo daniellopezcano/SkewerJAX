@@ -1,4 +1,8 @@
-"""Skewers: the sampling points of a set of sightlines, their geometry and their scale factors a(x)."""
+"""Skewers: the sampling points of a set of sightlines, their geometry and their scale factors a(x).
+
+The paths of any source of gas: the point layouts (planes, grids, axis-aligned skewers as fake_spectra's, and a regular
+lattice of skewers through the cell columns of a periodic N^3 grid: ``lattice_columns``, ``lattice_points``), the
+``SkewerBundle`` built on them, and the Hubble velocity of the line centres along a bundle (``hubble_velocity``)."""
 
 from __future__ import annotations
 
@@ -9,6 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.typing import ArrayLike
 
+from skewerjax.core.constants import phys
 from skewerjax.core.cosmology import Cosmology
 from skewerjax.core.validation import check_values
 
@@ -98,6 +103,30 @@ def axis_aligned_skewer_points(cofm, axis, box: float, spacing: float) -> np.nda
     pts = np.repeat(cofm[:, None, :], n + 1, axis=1)
     for k, ax in enumerate(axis):
         pts[k, :, ax - 1] = np.arange(n + 1) * ds
+    return pts
+
+
+def lattice_columns(n_cells: int, stride) -> np.ndarray:
+    """(N_sk, 2) node indices (i_x, i_z) of the skewer columns of an ``n_cells``^3 grid: every stride[0]-th column in x,
+    every stride[1]-th in z, from column 0 (row-major, x outer: the order of ``summary_stats.on_lattice``).
+    ceil(N / s_x) ceil(N / s_z) skewers; a periodic lattice (the 3D statistics) needs N to be a multiple of both strides."""
+    n = int(n_cells)
+    ix, iz = np.arange(0, n, stride[0]), np.arange(0, n, stride[1])
+    return np.stack(np.meshgrid(ix, iz, indexing="ij"), -1).reshape(-1, 2)
+
+
+def lattice_points(columns, dx: float, L: float, n_cells: int, points_per_cell: int) -> np.ndarray:
+    """(N_sk, n_cells points_per_cell + 1, 3) points [cMpc] of skewers along y through the centres x = i_x dx,
+    z = i_z dx of the cell columns ``columns`` ((N_sk, 2) node indices, ``lattice_columns``; the nodes of
+    ``simulations.grf_cells``), from y = 0 to y = L, ``points_per_cell`` points per cell: the first and the last point are
+    the same place of the periodic box, so ``velocity_period=True`` is one box. The points of a ``SkewerBundle``
+    (``spatial_points``), with the cosmology and the frame passed to it."""
+    cols = np.atleast_2d(columns)
+    y = np.linspace(0.0, L, int(n_cells) * int(points_per_cell) + 1)
+    pts = np.empty((cols.shape[0], y.size, 3))
+    pts[..., 0] = cols[:, :1] * dx
+    pts[..., 1] = y
+    pts[..., 2] = cols[:, 1:] * dx
     return pts
 
 
@@ -288,3 +317,10 @@ class SkewerBundle:
         """(m_{i-1/2}, m_{i+1/2}), each (N_sk, N_ppsk, 3) [cMpc]: the dual segment of every point."""
         g = path_geometry(self.spatial_points)
         return g["mid_lo"], g["mid_hi"]
+
+
+def hubble_velocity(bundle: SkewerBundle) -> np.ndarray:
+    """v_c = c ln(a_dagger / a) [km/s] of the points of the first skewer (the line centre without peculiar velocity,
+    ``core.spectral.line_centre_velocity_kms``), a_dagger = the bundle's a0."""
+    a = np.asarray(bundle.scale_factors[0, 0], dtype=np.float64)
+    return phys.c_kms * np.log(float(np.ravel(bundle.a0)[0]) / a)

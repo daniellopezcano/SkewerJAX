@@ -107,6 +107,53 @@ def test_reference_frame_is_the_shifted_evaluation():
     assert np.array_equal(t_ref[0], t_ly), "the reference line is unchanged"
 
 
+def test_reference_frame_wraps_a_shift_beyond_the_period():
+    """``line_frame="reference"`` with ``velocity_period``: every line is evaluated at v + delta_v_j and the detuning
+    takes its nearest periodic image, so a line whose offset exceeds the period (Lya-Si II 1193 and 1190, 5571 and 6294
+    km/s, against a period of 1000 km/s here, 3962 km/s in TNG50-4) lands at delta_v_j mod P: delta_v_j and delta_v_j + n
+    P give the same tau (to rounding), for every line of the default bundle (``simulations.LINE_IDS``)."""
+    from skewerjax.simulations import LINE_IDS
+
+    lb = LineBundle(list(LINE_IDS), ref_line_id=LINE_IDS[0])
+    P = 1000.0
+    one = one_piece(40.0, P)
+    tile = lambda x: jnp.repeat(x, lb.n_lines, axis=0)  # the same piece for every line
+    pieces = Pieces(
+        **{
+            k: (
+                tile(getattr(one, k))
+                if k in ("temperature", "turbulence", "collisional", "los_velocity", "number_density", "width_kms")
+                else getattr(one, k)
+            )
+            for k in (
+                "a_dagger",
+                "scale_factor",
+                "length_m",
+                "temperature",
+                "turbulence",
+                "collisional",
+                "los_velocity",
+                "number_density",
+                "width_kms",
+                "velocity_span_kms",
+            )
+        }
+    )
+    v = (np.arange(2000) + 0.5) * P / 2000
+    dv = np.asarray(lb.delta_v)
+    assert np.all(np.abs(dv[2:]) > P), "the Si II offsets exceed the period"
+    ref = np.asarray(
+        compute_optical_depth(pieces, v, lb, line_frame="reference", velocity_period=True, resolution_tolerance=None)
+    )
+    for n in (-3, 0, 2, 7):  # each line on its own axis, shifted by delta_v_j + n P
+        grids = jnp.asarray(v[None, :] + dv[:, None] + n * P)
+        own = np.asarray(compute_optical_depth(pieces, grids, lb, velocity_period=True, resolution_tolerance=None))
+        np.testing.assert_allclose(own, ref, rtol=1e-9, atol=1e-12 * ref.max())
+    for j in range(lb.n_lines):  # the centre at v_c - delta_v_j folded into the period
+        want = np.mod(40.0 - dv[j], P)
+        assert abs(v[np.argmax(ref[j, 0])] - want) < 1.0, (j, want)
+
+
 # --------------------------------------------------------------------------- closed forms of uniform gas
 def _max_dF(tau, ref):
     return float(np.max(np.abs(np.exp(-np.asarray(tau)) - np.exp(-np.asarray(ref)))))

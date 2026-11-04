@@ -80,8 +80,8 @@ def voronoi_slice(cells, species: str, normal_axis: int, centre_cMpc: float, n_p
     the largest cell size, the radius within which the selection of the deposition finds every cell a point can lie in).
 
     Returns dict(n (n_pix, n_pix) [comoving cm^-3] indexed [i, j] = (first, second in-plane axis), pixel i centred on
-    (i + 1/2) L / n_pix; axes (the two in-plane axes, 1-based); extent [cMpc] for ``imshow(n.T, origin="lower",
-    extent=extent)``; n_cells searched)."""
+    (i + 1/2) L / n_pix; v (n_pix, n_pix, 3) the peculiar velocity of the same cells [km/s]; axes (the two in-plane
+    axes, 1-based); extent [cMpc] for ``imshow(n.T, origin="lower", extent=extent)``; n_cells searched)."""
     if normal_axis not in (1, 2, 3):
         raise ValueError(f"normal_axis must be 1, 2 or 3 (x, y, z), got {normal_axis}.")
     if cells.box is None:
@@ -99,4 +99,11 @@ def voronoi_slice(cells, species: str, normal_axis: int, centre_cMpc: float, n_p
     q[:, ax_n] = np.mod(centre_cMpc, box)
     owner = cKDTree(pos[near], boxsize=box).query(np.minimum(q, np.nextafter(box, 0.0)), workers=-1)[1]
     n = np.asarray(cells.species[species]["number_density"], dtype=np.float64)[near[owner]]
-    return dict(n=n.reshape(n_pix, n_pix), axes=(ax_a + 1, ax_b + 1), extent=(0.0, box, 0.0, box), n_cells=int(near.size))
+    v = np.asarray(cells.species[species]["velocity"], dtype=np.float64)[near[owner]]
+    return dict(
+        n=n.reshape(n_pix, n_pix),
+        v=v.reshape(n_pix, n_pix, 3),
+        axes=(ax_a + 1, ax_b + 1),
+        extent=(0.0, box, 0.0, box),
+        n_cells=int(near.size),
+    )

@@ -1,17 +1,16 @@
-"""P and xi of periodic 3D fields on their own grid, over an ensemble of realisations, against an exact expectation
-(notebook 08, Part A), from arrays and geometry only: no box or model class enters, only the fields, the grid (its
-shape, side L [cMpc] and bins) and, optionally, the expected spectrum as a callable P(k).
+"""P and xi of the density of gas cells in a periodic box, over an ensemble of realisations, against an optional
+expectation (notebooks 08 and 09): the gas of every source is ``core.Cells`` (generating points, volumes, number
+densities per species), deposited on a mesh (mass assignment, interlacing, the window divided; Sefusatti et al. 2016);
+no box or model class enters, only the cells, the grid (its shape, side L [cMpc] and bins) and, optionally, the expected
+spectrum as a callable P(k).
 
-* ``box_grid``, ``grid_limits``: ``GridStatistics3D`` on an N^3 grid of side L with explicit bins, every bin inside the
+* ``box_grid``, ``grid_limits``: ``GridStatistics3D`` on an N^3 mesh of side L with explicit bins, every bin inside the
   full-coverage limits (k_min = 2 pi / L, k_max = pi / dx, r_min = dx, r_max = L / 2);
 * ``grid_power``: an isotropic spectrum P(k) on the rfft modes of a grid (what ``GridStatistics3D.theory`` and
   ``xi_iso_covariance`` take);
-* ``field_statistics``: the statistics of every field of an iterable (each one measured and discarded), their mean over
-  the ensemble, the expectation and the exact Gaussian covariance of the isotropic xi bins; the fields are given on the
-  grid (grid-native: the exact FFT, ``mas`` = None);
-* ``point_statistics``: the same for fields known at points, through a mesh of the grid (mass assignment ``mas``,
-  interlacing, the window divided; Sefusatti et al. 2016), against the expectation with its alias images
-  (``mesh.aliased_power``);
+* ``field_statistics``: the statistics of the density of each species of every ``Cells`` of an iterable (each one
+  measured and discarded) through the mesh, their mean over the ensemble, the expectation and the exact Gaussian
+  covariance of the isotropic xi bins; ``cell_weights``: the deposit of every cell, n_X V over its mean;
 * ``xi_chi2``, ``xi_subset_offsets``: the chi^2 and the offset of the mean xi from its expectation;
 * ``bao_height``: the height of the BAO peak of a curve r^2 xi(r) above its sidebands.
 """
@@ -19,14 +18,15 @@ shape, side L [cMpc] and bins) and, optionally, the expected spectrum as a calla
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 
 import jax.numpy as jnp
 import numpy as np
 
+from skewerjax.core.cells import Cells
 from skewerjax.summary_stats.binning import ensemble_mean, full_coverage, native_edges
 from skewerjax.summary_stats.grid3d import GRID_KEYS, GridStatistics3D
-from skewerjax.summary_stats.mesh import aliased_power, check_grid_native
+from skewerjax.summary_stats.mesh import PAINT_CHUNK, TRUSTED_K_NYQ, TRUSTED_R_H
 
 
 def grid_limits(n_cells: int, L: float) -> dict:
@@ -83,84 +83,101 @@ def grid_power(power: Callable, shape, L):
     return power(jnp.sqrt(sum(k**2 for k in k_vec)))
 
 
+def _as_cells_iter(cells):
+    """An iterable of ``core.Cells`` (one Cells: a list of one); anything else raises (the fields enter as cells)."""
+    if isinstance(cells, Cells):
+        return [cells]
+    if isinstance(cells, (np.ndarray, jnp.ndarray)):
+        raise TypeError(
+            "field_statistics takes core.Cells (generating points, volumes, number densities), one or an iterable of them, "
+            "not arrays: a toy field enters through simulations.grf_cells (or ToyBoxes.cells), a snapshot through gas_to_cells."
+        )
+    return cells
+
+
+def cell_weights(cells: Cells, species: str) -> np.ndarray:
+    """The number of particles of ``species`` in every cell, n_X V (comoving cm^-3 x cMpc^3: a constant factor apart),
+    normalised by its mean over the cells: (M,) values whose mesh holds 1 + delta of the species
+    (``GridStatistics3D.measure_points`` divides by the mean number of points per node)."""
+    if species not in cells.species:
+        raise ValueError(f"species {species!r} not in the cells (species {cells.species_keys}).")
+    w = np.asarray(cells.species[species]["number_density"], dtype=np.float64) * np.asarray(cells.volumes, dtype=np.float64)
+    m = w.mean()
+    if not m > 0:
+        raise ValueError(f"species {species!r}: the mean number per cell is {m}, not > 0.")
+    return w / m
+
+
 def field_statistics(
-    fields: Iterable,
+    cells,
     grid: GridStatistics3D,
     *,
-    mas=None,
-    power: Callable | None = None,
-    power_nw: Callable | None = None,
-    log=print,
-) -> dict:
-    """P and xi of every field of ``fields`` (an iterable of arrays of ``grid.shape``, e.g. the overdensities of the
-    realisations, generated one at a time: ``(boxes.delta(i) for i in idx)``) on ``grid`` (``box_grid``), streamed: each
-    field is measured and discarded. Nothing is stored.
-
-    mas : None (the only value): the fields are given on the grid itself (grid-native), so their FFT is exact, with no
-        window and no alias images of an assignment (Sefusatti et al. 2016, §2.3); a scheme raises. Fields known at
-        points take ``point_statistics``.
-
-    power : callable P(k) [cMpc^3] of |k| [1/cMpc], optional: the expected spectrum (``grid_power``), for the expectation
-        ``theory`` {key: array} of every statistic on the grid (``GridStatistics3D.theory``) and the exact Gaussian
-        covariance of the isotropic xi bins of one field, ``cov_xi_iso`` (``GridStatistics3D.xi_iso_covariance``).
-    power_nw : callable, optional: a second expectation, ``theory_nw`` (e.g. the power law without the BAO bump, so
-        ``theory - theory_nw`` is the bump on the grid).
-
-    Returns ``ensemble_mean`` over the fields of every ``GRID_KEYS`` statistic (mean, ``_err``: the error of the mean,
-    std / sqrt(n) with ddof = 1, of each bin alone; ``_each``), ``theory``, ``theory_nw`` and ``cov_xi_iso`` (with
-    ``power`` / ``power_nw``), the bin ``axes`` (``GridStatistics3D.axes``), ``min_one_plus_delta`` (n,) (1 + min of
-    every field), ``limits`` (``grid_limits``, a cubic grid), ``time_s`` (the measurements) and ``time_cov_s`` (the
-    covariance)."""
-    check_grid_native(mas, "field_statistics")
-    gs = grid
-    t0 = time.perf_counter()
-    recs, mins = [], []
-    for n, d in enumerate(fields):
-        mins.append(float(1.0 + np.min(d)))
-        recs.append(gs.measure(d))
-        if log and (n + 1) % 16 == 0:
-            log(f"field statistics: {n + 1} fields, {time.perf_counter() - t0:.0f} s")
-    return _ensemble(recs, mins, gs, power, power_nw, lambda f: grid_power(f, gs.shape, gs.L), time.perf_counter() - t0)
-
-
-def point_statistics(
-    samples: Iterable,
-    grid: GridStatistics3D,
-    *,
+    species,
     mas: str = "pcs",
     interlace: bool = True,
-    shot_noise=None,
     power: Callable | None = None,
     power_nw: Callable | None = None,
+    chunk: int | None = PAINT_CHUNK,
     log=print,
 ) -> dict:
-    """P and xi of fields known at points, one realisation per item of ``samples`` (an iterable of (positions (N, 3)
-    [cMpc], values (N,)) pairs, streamed), through a mesh of ``grid``'s shape (``GridStatistics3D.measure_points``):
-    the values assigned with ``mas`` ("ngp", "cic", "tsc", "pcs"), interlaced (``interlace``), the window divided, ``shot_noise``
-    (a constant [cMpc^3]) subtracted if given (none by default: the inputs are fields, not discrete tracers).
+    """P and xi of the density of every species of ``species`` in the gas cells ``cells`` (one ``core.Cells`` or an
+    iterable of them, one per realisation, streamed: each one is measured and discarded), through a mesh of ``grid``'s
+    shape (``box_grid``; S16). The one path of every source of gas (toy grids through ``grf_cells``, snapshots through
+    ``gas_to_cells``), with no branch on the source:
 
-    The expectations (``power``, ``power_nw``: callables P(|k|)) are those of this estimator: the alias sum of the
-    spectrum on the mesh modes, sum_n theta_n |W(k - n k_s) / W(k)|^2 P(|k - n k_s|) (``mesh.aliased_power``;
-    Sefusatti et al. 2016, eqs. 29, 37), binned by ``GridStatistics3D.theory``; ``cov_xi_iso`` from the same aliased
-    spectrum (Gaussian, without the shot noise of the sampling). Returns the keys of ``field_statistics``, plus ``mas``
-    and ``interlace``; ``min_one_plus_delta`` is 1 + the smallest value of every realisation."""
+    1. every cell deposits its number of particles n_X V at its generating point (``cell_weights``) on the mesh with
+       the scheme ``mas`` (default "pcs"), interlaced (``interlace``, default True): ``mesh.fourier_mesh``, periodic;
+    2. the mesh is normalised by its mean (1 + delta; the k = 0 mode is dropped), the window divided;
+    3. P and xi binned as ``GridStatistics3D`` (isotropic, (par, perp), wedges of mu).
+
+    species : a key of the cells' species (e.g. "HI") or a sequence of them (the result is then {species: result}).
+    power : callable P(k) [cMpc^3] of |k| [1/cMpc], optional: the spectrum of the field (e.g. ``PowerLawGRF.power``),
+        on the mesh modes (``grid_power``) and binned like the measurement (``GridStatistics3D.theory``): the expectation
+        ``theory`` and the exact Gaussian covariance of the isotropic xi bins ``cov_xi_iso``. Through the mesh the
+        measurement approaches it at k << k_Nyq: for fields given at the nodes of the mesh (a toy grid of the mesh's
+        shape) the exact expectation is ``mesh.node_transfer`` x P, a bias ~3e-4 at k_Nyq / 2 for interlaced PCS.
+    power_nw : callable, optional: a second expectation, ``theory_nw`` (e.g. the power law without the BAO bump).
+    chunk : cells painted at a time (memory, ``mesh.paint``).
+
+    Returns (per species) ``ensemble_mean`` over the realisations of every ``GRID_KEYS`` statistic (mean, ``_err``: the
+    error of the mean, std / sqrt(n) with ddof = 1, of each bin alone; ``_each``), ``theory``, ``theory_nw`` and
+    ``cov_xi_iso`` (with ``power`` / ``power_nw``), the bin ``axes``, ``min_one_plus_delta`` (n,) (the smallest n_X / n_bar
+    of the cells of every realisation, n_bar the volume-weighted mean), ``limits`` (``grid_limits``), ``mas``,
+    ``interlace``, ``n_mesh``, ``k_nyq`` (pi / H), ``trusted`` (the trusted range of the mesh path: k_max = k_Nyq / 2,
+    r_min = 6 H; ``mesh.TRUSTED_K_NYQ``, ``TRUSTED_R_H``), ``n_cells`` (the cells of the last realisation), ``time_s`` and
+    ``time_cov_s``."""
     gs = grid
+    names = [species] if isinstance(species, str) else list(species)
     t0 = time.perf_counter()
-    recs, mins = [], []
-    for n, (x, v) in enumerate(samples):
-        mins.append(float(1.0 + np.min(v)))
-        recs.append(gs.measure_points(x, v, mas=mas, interlace=interlace, shot_noise=shot_noise))
+    recs, mins, n_cells = {sp: [] for sp in names}, {sp: [] for sp in names}, 0
+    for n, c in enumerate(_as_cells_iter(cells)):
+        if c.box is not None and not np.allclose(c.box, gs.L):
+            raise ValueError(f"the cells' box ({c.box} cMpc) is not the grid's ({gs.L} cMpc).")
+        x = np.asarray(c.positions, dtype=np.float64)
+        V = np.asarray(c.volumes, dtype=np.float64)
+        n_cells = len(c)
+        for sp in names:
+            w = cell_weights(c, sp)
+            n_sp = np.asarray(c.species[sp]["number_density"], dtype=np.float64)
+            mins[sp].append(float(n_sp.min() / (np.sum(n_sp * V) / V.sum())))
+            recs[sp].append(gs.measure_points(x, w, mas=mas, interlace=interlace, chunk=chunk))
         if log and (n + 1) % 16 == 0:
-            log(f"point statistics: {n + 1} realisations, {time.perf_counter() - t0:.0f} s")
-    on_modes = lambda f: aliased_power(f, gs.shape, gs.L, mas=mas, interlace=interlace)  # noqa: E731
-    res = _ensemble(recs, mins, gs, power, power_nw, on_modes, time.perf_counter() - t0)
-    res.update(mas=mas, interlace=bool(interlace))
-    return res
+            log(f"field statistics: {n + 1} realisations, {time.perf_counter() - t0:.0f} s")
+    t_meas = time.perf_counter() - t0
+    on_modes = lambda f: grid_power(f, gs.shape, gs.L)  # noqa: E731
+    out = {}
+    for sp in names:
+        res = _ensemble(recs[sp], mins[sp], gs, power, power_nw, on_modes, t_meas)
+        k_nyq = float(np.min(np.pi / gs.dx))
+        trusted = dict(k_max=TRUSTED_K_NYQ * k_nyq, r_min=TRUSTED_R_H * float(np.max(gs.dx)))
+        res.update(mas=mas, interlace=bool(interlace), n_mesh=gs.shape, k_nyq=k_nyq, trusted=trusted, n_cells=n_cells)
+        out[sp] = res
+    return out[names[0]] if isinstance(species, str) else out
 
 
 def _ensemble(recs, mins, gs, power, power_nw, on_modes, t_meas) -> dict:
-    """The ensemble mean of the measurements, the expectations (``on_modes``: a callable P(k) -> P on the rfft modes),
-    the covariance of the isotropic xi and the axes (``field_statistics``)."""
+    """The ensemble mean of the measurements of one field, the expectations (``on_modes``: a callable P(k) -> P on the
+    rfft modes), the covariance of the isotropic xi and the axes (``field_statistics``)."""
     res = ensemble_mean(recs, GRID_KEYS)
     P = None if power is None else on_modes(power)
     if P is not None:
