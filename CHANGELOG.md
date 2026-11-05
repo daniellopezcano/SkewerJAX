@@ -3,6 +3,74 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — skewer statistics without mass assignment; one style for the BAO and the line features; figure aspects; P1D references
+
+### Added
+- `summary_stats.mesh.lattice_only`: the statistics of skewer samples (`GridStatistics3D.measure`, `measure_lattice`,
+  `skewer_density_statistics`, `skewer_p1d`, `skewer_xi1d`, `decompose_1d`) refuse `mas` and `interlace`, whatever their value.
+- `summary_stats.theory.pair_imprint(separation, k_max, kind="p1d" | "iso", period=, n_harmonics=, k_min=)`: the maxima in k of
+  the cross term of two lines, k = 2 pi n / Delta in P1D and the maxima of j_0(k Delta) in P(|k|), the separation folded.
+- `plotting`: one registry of characteristic scales, `SCALE_STYLES`, `scale_style`, `PAIR_COLORS`, `pair_color` (the BAO grey,
+  dotted, lw 2.2; each pair in its colour, lw 1.4, spot solid, echo + dashed, echo - dotted);
+  `add_panel_letters(labels="grid")`; `plot_overflux_3d(delta_v=, line_ids=, pairs=, box=, n_harmonics=)`,
+  `plot_p1d_reference(delta_v=, line_ids=, n_harmonics=)`, `plot_p1d_orders` and `plot_p1d_terms(delta_v_list=, n_harmonics=)`.
+
+### Changed
+- Every colour map defaults to the theme's again (`cmap=None` -> `CMAPS`): "seismic" is gone from the 10 defaults that held it.
+- `color_scale="symlog"`: symmetric colour limits, +- max |data|, 0 at the centre of the map (a two-sided norm from the data
+  minimum to the maximum was tried in this set of changes and reverted).
+- The maps and `plot_skewer_slice` keep the physical aspect, at fixed places of the figure: equal comoving spans at equal
+  lengths (r_par through u), a colour bar as tall as the panel that cannot deform it. `plot_toy_fields`: true squares of
+  one size, the reference arrow in a text box inside its panel, axis labels on the outer panels only.
+- `plot_overflux_rpar_rperp`: one legend inside the panel, top right, one column, naming the pairs in their colours (no echo
+  entries, no labels on the map); `plot_p1d_reference`: every redshift alike, joined by a thin line (`z=` removed);
+  `plot_xi1d_orders`, `plot_xi1d_terms`: the spots solid in the pairs' colours, named without "Delta v".
+- `plot_isotropic_recovery`: the BAO in its style, no "BAO maxima" entry; `r_bao` beyond L / 2 by its folded image, also in
+  `plot_overflux_3d` (09, 11). Other labelled lines (`_mark_lines`) are dash-dot.
+- Notebooks 08, 09: k_max = pi / H replaces k_Nyq in the markdown, labels and prints; the k_Nyq / 2 lines removed; the
+  paragraph "How far the mesh can be trusted".
+
+### Removed
+- `mesh.check_grid_native` and the `mas=None` keyword of the lattice path; `plotting.PAIR_STYLES`, `_ECHO`, `_ECHO_STYLES`,
+  `_BAO_K`, `_map_legend` (`_map_legend_entries`, `_pair_key`).
+
+### Fixed
+- `plot_skewer_slice` with two skewers in the layer (an index error in the spacing mark).
+
+## Unreleased — the L/2 corner of the map; plot_dag by stage; the integral constraint; BAO marks; echoes of every pair; P1D at every z; ξ1D options (2026-11-04)
+
+### Added
+- `summary_stats.theory`: `integral_constraint(xi, L)` (the mean of ξ over the box, the term of the k = 0 mode; a 1D integral
+  with the exact area of the sphere inside the cube, `sphere_area_in_cube`), `bao_maxima(k_max, window=, r_bao=,
+  kms_per_cMpc=)` (the positive maxima of the bump term W(k), or of j₀(k r_d)).
+- `field_stats.xi_corner` (the corner r∥ ≈ L/2, r⊥ ≈ 0 of the map: its offset, the scatter, the exact error and the (−1)^j
+  part of the column r⊥ = 0), `GridStatistics3D.xi_map_sigma` (the exact Gaussian error of a combination of the map's cells).
+- `plot_isotropic_recovery`: ξ − ξ̄_V with `grf` (panel (b) and its residual), `bao_k`; `plot_overflux_3d(bao_k=)`;
+  `plot_p1d_reference`: `reference` may be {z: measurement} (every z, one colour each, a colour key, the nearest to `z=`
+  highlighted), `bao_k=`, `bao_label=`; `reference_data.nearest_reference`.
+- `plot_xi_mu_wedges(limits=)`: shaded outside the full coverage as `plot_isotropic_recovery`.
+- `plot_xi1d_orders`, `plot_xi1d_terms`, `plot_orders_superimposed`, `plot_terms_by_order`: `quantity="xi" | "r2xi"`, `y_scale`;
+  every dashed Δv line named in a small box (`line_ids`).
+- `plotting.los_scales` (the line-of-sight positions of r_BAO, the spot and the echoes of every pair, folded); `line_pairs`:
+  one colour per pair.
+- Notebooks: 08 and 09 the corner of the map (a markdown cell and `xi_corner`); 08 A3 the integral constraint, printed; 10
+  Part B ξ − ξ̄_V against the expectation on the lattice; the BAO marks in 08–11.
+- Tests: `tests/summary_stats/test_theory.py`; `test_point_statistics` (the row at L/2, the exact sigma, the interlacing phase at
+  the Nyquist mode, the (−1)^j term); `test_plotting`, `test_dag`.
+
+### Changed
+- `plot_dag`: left to right by stage, the realms as horizontal bands, boxes with the name and the module, numbered edges
+  with a key, half the area (`FIGSIZES["dag"]` = 17.6 × 6.4 in); `utils.dag` keeps the one specification (new positions and
+  routes), the README blocks regenerated.
+- `plot_xi_mu_wedges`: only line-of-sight scales as vertical lines, coloured by pair (`pairs` default "all").
+- `plot_overflux_rpar_rperp`: with several pairs, one colour and style per pair, the legend below the axis; notebooks 10 and
+  11 draw `pairs="all"`.
+- `plot_xi1d_terms`: no legend title naming the lines (kept in `plot_p1d_terms`).
+- Notebooks 10 and 11 D4: every redshift of DESI DR1 (`P1D_DESI_DR1`). Notebooks 12, 13: titles; 12: an obsolete script removed.
+
+### Removed
+- `plotting.wedge_echoes`, `image_centres`, `ring_crossings` (the per-wedge echoes at the mean μ).
+
 ## Unreleased — any number of lines; one statistics path for toy and simulation; TNG50-4 field notebook; skewers in core; periodicity audit (2026-11-03)
 
 ### Added

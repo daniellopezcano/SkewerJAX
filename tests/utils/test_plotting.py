@@ -10,7 +10,7 @@ import numpy as np  # noqa: E402
 import pytest  # noqa: E402
 
 from skewerjax.core import Cosmology, LineBundle, SkewerBundle, phys  # noqa: E402
-from skewerjax.simulations import PowerLawGRF  # noqa: E402
+from skewerjax.simulations import PowerLawGRF, ToyBoxes  # noqa: E402
 from skewerjax.utils import plotting as pl  # noqa: E402
 
 
@@ -199,7 +199,8 @@ def test_toy_box_figures():
         assert not any(ax.get_title() for ax in axs), "no titles"
         if f is not pl.plot_xi_mu_wedges:  # two figures, expected then measured, in the single-panel format
             assert len(figs) == 2 and figs[0] is not figs[1] and len(axs) == 2
-            assert tuple(figs[0].get_size_inches()) == tuple(figs[1].get_size_inches()) == (14, 12.5)
+            assert tuple(figs[0].get_size_inches()) == tuple(figs[1].get_size_inches()), "the two figures alike"
+            assert figs[0].get_size_inches()[0] <= 14 and figs[0].get_size_inches()[1] <= 12.5, "trimmed to the panel"
             assert "perp" in axs[0].get_xlabel() and "parallel" in axs[0].get_ylabel(), "perpendicular across, parallel up"
             n0, n1 = axs[0].collections[0].norm, axs[1].collections[0].norm
             assert (n0.vmin, n0.vmax) == (n1.vmin, n1.vmax), "one colour norm for the pair"
@@ -214,7 +215,16 @@ def test_toy_box_figures():
             assert len(legs) == 2, "two legends inside the panel: the wedges and the styles"
             assert [t.get_text() for t in legs[1].get_texts()] == ["measured", "expected", "per realisation"]
             assert legs[0].get_title().get_text() == "", "no title on the wedge legend"
-            assert [t.get_text() for t in axs[0].texts] == ["$a$ "], "the marks inside the range only, labelled"
+            marks = [t.get_text() for t in axs[0].texts if "_{\\" not in t.get_text()]
+            assert marks == ["$a$ "], "the marks inside the range only, labelled"
+            spans = [q for q in axs[0].patches if isinstance(q, matplotlib.patches.Rectangle)]
+            edges = sorted(x for q in spans for x in (q.get_x(), q.get_x() + q.get_width()))
+            assert len(spans) == 2 and np.isclose(edges[1], lim["r_min"]) and np.isclose(edges[2], lim["r_max"]), (
+                "shaded outside the full coverage, as panel (b) of plot_isotropic_recovery"
+            )
+            assert any("r_{\\min}" in t.get_text() for t in axs[0].texts) and any(
+                "r_{\\max}" in t.get_text() for t in axs[0].texts
+            )
         if f is pl.plot_kpar_kperp_maps:  # P on the grid's own k_par: one row per mode, centred on it
             assert "P(k_" in figs[0].axes[-1].get_ylabel() and "k\\," not in figs[0].axes[-1].get_ylabel()
             assert axs[0].get_ylim()[0] == pytest.approx(0.5 * lim["k_min"])
@@ -282,10 +292,8 @@ def test_toy_box_figures():
     period = float(run["period"])
     fig, ax, drawn = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, n_sigma=1.5, cmap="tol_BuRd")
     fig.canvas.draw()
-    assert not fig.legends and ax.get_legend() is None, "no legend: one pair, the curves and the diamond are labelled"
-    texts = [t.get_text() for t in ax.texts]
-    assert pl.line_pair_label(math=False) in texts, "the pair next to the diamond"
-    assert any(t.strip() == "echo " + pl.line_pair_label().replace("$\\Delta", "$+\\Delta") for t in texts), "G4 labels"
+    assert not fig.legends and [t.get_text() for t in ax.get_legend().get_texts()] == [pl.line_pair_label(math=False)]
+    assert not any("echo" in t.get_text() or "Delta" in t.get_text() for t in ax.texts), "the pair's name, in the legend only"
     assert np.all(np.asarray(ax.collections[0].get_edgecolor())[..., 3] == 0) or ax.collections[0].get_linewidth()[0] == 0
     assert len(ax.child_axes) == 2 and "cMpc" in ax.get_xlabel() and "perp" in ax.get_xlabel() and not ax.get_title()
     assert all("reference" not in c.get_xlabel() + c.get_ylabel() for c in ax.child_axes), (
@@ -318,35 +326,32 @@ def test_toy_box_figures():
     assert "cMpc" in ax.get_xlabel() and "s km" in ax.get_ylabel() and "parallel" in ax.get_ylabel()
     np.testing.assert_allclose(ax.get_ylim(), np.array(run["axes3d"]["kpar_edges"])[[0, -1]] / u)
     assert "P(k_" in fig.axes[-1].get_ylabel() and "cMpc$^3$" in fig.axes[-1].get_ylabel(), "P, not k P"
-    # the wedges: r_BAO, the spot in the wedge of mu = 1 only, the echoes per wedge at its mean mu, every scale folded
+    # the wedges: only the line-of-sight scales, each folded into [0, L / 2]: r_BAO, the spot and the echoes of every pair
     fig, axs, chi2 = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, box=L)
     fig.canvas.draw()
     assert chi2 is None and len(axs) == 1 and "cMpc" in axs[0].get_xlabel() and "km" in axs[0].child_axes[0].get_xlabel()
     legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
-    assert not fig.legends and len(legs) == 3, "the spots and echoes, the wedges and the styles, inside the panel"
+    assert not fig.legends and len(legs) == 3, "the line-of-sight scales, the wedges and the styles"
     texts = [[t.get_text() for t in g.get_texts()] for g in legs]
     assert ["measured", "per realisation"] in texts
-    pairs_leg = [t for t in texts if t[0].startswith("spot")][0]
-    assert pairs_leg == ["spot " + pl.line_pair_label(comoving=True), "echoes " + pl.line_pair_label(math=False)]
+    pairs_leg = [g for g in legs if "line-of-sight" in g.get_title().get_text()][0]
+    assert [t.get_text() for t in pairs_leg.get_texts()][0] == pl.line_pair_label(math=False)
     assert all(g.get_zorder() == pl.LEGEND_ZORDER for g in legs)
     assert not any("ticks at the top" in t.get_text() for t in axs[0].texts), "no note"
-    ec = pl.wedge_echoes(2.0, 100.0 / u, pl.MU_WEDGES, L)
-    mu_ = np.asarray(ec["mu"])
-    d_ = 100.0 / u
-    root = np.sqrt(2.0**2 - d_**2 * (1 - mu_**2))
-    for w in range(len(mu_)):  # the n = 0 echoes, r = mu Delta +- sqrt(r_BAO^2 - Delta^2 (1 - mu^2)), among the crossings
-        assert np.any(np.isclose(ec["echo"][w], root[w] + mu_[w] * d_)), w
-    assert ec["spot_wedge"] == len(pl.MU_WEDGES) - 2, "the spot in the wedge that holds mu = 1"
+    sc = pl.los_scales(2.0, list(pl.LINE_STYLES)[:2], np.array([0.0, 100.0 / u]), L)
+    pr = sc["pairs"][0]
+    assert sc["ring"] == pytest.approx(pl.fold_periodic(2.0, L))
+    assert pr["spot"] == pytest.approx(pl.fold_periodic(100.0 / u, L))
+    assert pr["plus"] == pytest.approx(pl.fold_periodic(2.0 + 100.0 / u, L))
+    assert pr["minus"] == pytest.approx(pl.fold_periodic(abs(2.0 - 100.0 / u), L))
     drawn_x = {round(t.get_position()[0], 9) for t in axs[0].texts}
-    assert round(ec["r_bao"], 9) in drawn_x
-    spot = [ln for ln in axs[0].lines if np.allclose(ln.get_xdata(), ec["delta"]) and ln.get_linewidth() == 2.2]
-    assert len(spot) == 1 and spot[0].get_color() == pl.PALETTE[pl.MU_COLORS[ec["spot_wedge"]]]
+    assert round(sc["ring"], 9) in drawn_x
     lo, hi = axs[0].get_xlim()
-    for w in range(len(pl.MU_WEDGES) - 1):  # the echoes: vertical lines in the wedge colour
-        col = pl.PALETTE[pl.MU_COLORS[w]]
-        for x in ec["echo"][w]:
-            if lo <= x <= hi:
-                assert [ln for ln in axs[0].lines if np.allclose(ln.get_xdata(), x) and ln.get_color() == col], (w, x)
+    for key, ls in (("spot", "-"), ("plus", "--"), ("minus", ":")):
+        if lo <= pr[key] <= hi:
+            found = [ln for ln in axs[0].lines if np.allclose(ln.get_xdata(), pr[key]) and ln.get_color() == pr["color"]]
+            assert found and found[0].get_linestyle() == ls, key
+    assert not hasattr(pl, "wedge_echoes"), "the per-wedge echoes at the mean mu are gone"
     with pytest.raises(TypeError):
         pl.plot_xi_mu_wedges(tot, reference={})
     # the density along the skewers (E, F): comoving line of sight, km/s for reference, with its exact expectation
@@ -392,9 +397,9 @@ def test_toy_box_figures():
     legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
     assert len(legs) == 3, "the spot without r_BAO (no echoes)"
     texts = [[t.get_text() for t in g.get_texts()] for g in legs]
-    assert ["measured", lab] in texts and axs[0].get_legend().get_texts()[0].get_text().startswith("spot")
+    assert ["measured", lab] in texts and not any("echo" in t for g in texts for t in g)
     sep = pl.fold_periodic(100.0 / u, L)
-    spot = [ln for ln in axs[0].lines if ln.get_linewidth() == 2.2 and np.allclose(ln.get_xdata(), sep)]
+    spot = [ln for ln in axs[0].lines if ln.get_linestyle() == "-" and np.allclose(ln.get_xdata(), sep)]
     assert len(spot) == 1, "the spot of the two lines, without r_BAO"
     ref_err = dict(P1D_DESI_DR1_Z22, kP_pi_err=0.1 * P1D_DESI_DR1_Z22["kP_pi"])
     fig, ax = pl.plot_p1d_reference(run["p1d"], ref_err, kms_per_cMpc=u, each_label=lab)
@@ -433,8 +438,12 @@ def test_toy_box_figures():
                 (p.get_x(), p.get_x() + p.get_width()) for p in axs[0].patches if isinstance(p, matplotlib.patches.Rectangle)
             )
             assert np.isclose(spans[0][1], k_lim[0]) and np.isclose(spans[-1][0], k_lim[1])
-        else:  # the separation folded into half the period, dashed, on every row
-            assert all(any(ln.get_linestyle() == "--" for ln in ax.lines) for ax in axs)
+        else:  # the separation folded into half the period, solid in the pair's colour, on every row
+            spot = pl.line_pairs(("HI-LyA", "SiIII-1206"), dv, period)[0]
+            assert all(
+                any(np.allclose(ln.get_xdata(), spot["fold"]) and ln.get_color() == spot["color"] for ln in ax.lines)
+                for ax in axs
+            )
     xi_lines = [c for c in pl.plot_xi1d_orders(ens)[1][0].lines if c.get_marker() == "o"]
     assert xi_lines, "xi1D: points with error bars too"
     line = [c for c in pl.plot_p1d_orders(ens)[1][0].lines if c.get_marker() == "o"][0]
@@ -807,8 +816,8 @@ def test_n_line_figures():
     )
     assert [(p["i"], p["j"]) for p in pl.line_pairs(ids, dv, period, "reference")] == [(0, 1), (0, 2), (0, 3)]
     assert [(p["i"], p["j"]) for p in pl.line_pairs(ids, dv, period, [("SiII-1190", "SiII-1193")])] == [(2, 3)]
-    assert len({str(p["ls"]) for p in allp}) == 6, "one style per pair"
-    assert pl.line_pairs(ids, dv, period, [(2, 3)])[0]["ls"] == allp[5]["ls"], "a pair keeps its style in any selection"
+    assert pl.line_pairs(ids, dv, period, [(2, 3)])[0]["color"] == allp[5]["color"], "a pair keeps its colour in any selection"
+    assert pl.line_pairs(ids[1:3], dv[1:3], period)[0]["color"] == allp[3]["color"], "and in any bundle"
     with pytest.raises(ValueError, match="pairs"):
         pl.line_pairs(ids, dv, period, "some")
 
@@ -825,13 +834,42 @@ def test_n_line_figures():
         np.testing.assert_allclose(
             sorted(d["r_par"][0] for d in drawn["spots"]), sorted(u * pl.fold_periodic(p["dv"] / u, L) for p in allp), rtol=1e-9
         )
-        assert len(drawn["echoes"]) == n_echo and len(ax.get_legend().get_texts()) == n_echo, "one legend entry per pair"
-        assert {t.get_text() for t in ax.texts} >= {p["text"] for p in pl.line_pairs(ids, dv, period)}, "every diamond labelled"
+        assert len(drawn["echoes"]) == n_echo, "the echoes of the pairs asked for"
+        leg = ax.get_legend()
+        assert [t.get_text() for t in leg.get_texts()] == [p["text"] for p in allp], "every diamond named, no echo entry"
+        assert [t.get_color() for t in leg.get_texts()] == [p["color"] for p in allp], "the names in the pairs' colours"
+        assert leg._ncols == 1 and leg._loc == matplotlib.legend.Legend.codes["upper right"], "one column, top right"
+        bb, la = leg.get_window_extent(), ax.get_window_extent()
+        assert la.x0 <= bb.x0 and bb.x1 <= la.x1 and la.y0 <= bb.y0 and bb.y1 <= la.y1, "inside the panel"
+        for d, p in zip(diamonds, allp):
+            assert d.get_markeredgecolor() == p["color"], "the diamond in the pair's colour"
         plt.close(fig)
-    fig, axs, _ = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=dv, box=L)
-    legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
-    texts = [t.get_text() for g in legs for t in g.get_texts()]
-    assert sum(t.startswith("spot") for t in texts) == 6 and sum(t.startswith("echoes") for t in texts) == 3
+    assert len({p["color"] for p in allp}) == 6, "one colour per pair"
+    fig, ax, drawn = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=dv, pairs="all")
+    fig.canvas.draw()
+    for pr in pl.line_pairs(ids, dv / u, L):  # every pair, metal-metal included, folded with the period, in its colour
+        e = drawn["echoes"][pr["text"]]
+        np.testing.assert_allclose(e["plus"], u * pl.fold_periodic(np.abs(np.sqrt(2.0**2 - e["r_perp"] ** 2) + pr["dv"]), L))
+        curves = [ln for ln in ax.lines if ln.get_color() == pr["color"] and len(ln.get_xdata()) == len(e["r_perp"])]
+        assert [(ln.get_linestyle(), ln.get_linewidth()) for ln in curves] == [("--", 1.4), (":", 1.4)], pr["text"]
+    plt.close(fig)
+    fig, axs, _ = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=dv, box=L, line_ids=ids)
+    fig.canvas.draw()
+    leg = [
+        g
+        for g in axs[0].get_children()
+        if isinstance(g, matplotlib.legend.Legend) and "line-of-sight" in g.get_title().get_text()
+    ]
+    assert len(leg) == 1 and len(leg[0].get_texts()) == 6 + 3, "one colour per pair and the three styles"
+    assert [t.get_color() for t in leg[0].get_texts()[:6]] == [p["color"] for p in allp], "the names in the pairs' colours"
+    assert all(ln.get_color() != pl.DIM for ln in leg[0].get_lines()), "dotted grey is the BAO's alone"
+    sc = pl.los_scales(2.0, ids, dv / u, L)
+    lo, hi = axs[0].get_xlim()
+    vertical = {round(float(ln.get_xdata()[0]), 9) for ln in axs[0].lines if len(set(ln.get_xdata())) == 1}
+    for pr in sc["pairs"]:
+        for key in ("spot", "plus", "minus"):
+            assert 0 <= pr[key] <= L / 2
+            assert not lo <= pr[key] <= hi or round(pr[key], 9) in vertical, (pr["text"], key)
     plt.close(fig)
     fig, axs = pl.plot_overflux_3d(run["flux3d"], run["axes3d"], kms_per_cMpc=u)
     labels = [t.get_text() for t in axs["P"].get_legend().get_texts()]
@@ -847,9 +885,71 @@ def test_n_line_figures():
     for ax in axs:
         names = [t.get_text() for t in ax.get_legend().get_texts()]
         assert sum(not (n.startswith("other") or "total" in n) for n in names) <= 4
-    assert axs[0].get_legend().get_title().get_text().startswith("lines: 1 = Lyα")
+    assert axs[0].get_legend().get_title().get_text() == "", "no legend title that names the lines"
     o2 = [t.get_text() for t in axs[1].get_legend().get_texts()]
     assert any(n.startswith("other terms") for n in o2), "the rest of order 2 summed"
+    named = {t.get_text(): t for t in axs[0].texts}
+    for p in pl.line_pairs(ids, dv, period):
+        assert p["text"] in named and "Delta" not in p["text"], "every pair named, without Delta v"
+        assert named[p["text"]].get_color() == p["color"] and named[p["text"]].get_fontsize() > pl.FONT_MIN["annotation"]
+        assert [ln for ln in axs[1].lines if np.allclose(ln.get_xdata(), p["fold"]) and ln.get_color() == p["color"]], (
+            "the spot, solid"
+        )
+    plt.close(fig)
+    fig, axs = pl.plot_p1d_terms(ens, kms_per_cMpc=u, line_ids=ids, max_terms=4)
+    assert axs[0].get_legend().get_title().get_text().startswith("lines: 1 = Lyα"), "the numbering stays in P1D"
+    plt.close(fig)
+    # quantity and y_scale of xi1D: r^2 xi with r = lag / u
+    fig, axs = pl.plot_xi1d_orders(ens, kms_per_cMpc=u)
+    plain = [c for c in axs[0].lines if c.get_marker() in pl.ORDER_MARKERS][0]
+    x0, y0 = plain.get_xdata().copy(), plain.get_ydata().copy()
+    plt.close(fig)
+    fig, axs = pl.plot_xi1d_orders(ens, kms_per_cMpc=u, delta_v_list=dv, line_ids=ids, quantity="r2xi", y_scale="symlog")
+    fig.canvas.draw()
+    assert axs[0].get_yscale() == "symlog" and "r^2" in axs[0].get_ylabel() and "cMpc$^2$" in axs[0].get_ylabel()
+    weighted = [c for c in axs[0].lines if c.get_marker() in pl.ORDER_MARKERS][0]
+    np.testing.assert_allclose(weighted.get_ydata(), (x0 / u) ** 2 * y0, atol=1e-14)
+    assert {t.get_text() for t in axs[0].texts} >= {pl.line_pairs(ids, dv, period)[0]["text"]}
+    plt.close(fig)
+    fig, axs = pl.plot_xi1d_terms(ens, kms_per_cMpc=u, max_terms=2, quantity="r2xi", y_scale="symlog")
+    fig.canvas.draw()
+    assert all(ax.get_yscale() == "symlog" and "r^2" in ax.get_ylabel() for ax in axs)
+    plt.close(fig)
+    with pytest.raises(ValueError, match="quantity"):
+        pl.plot_xi1d_orders(ens, quantity="r3")
+    with pytest.raises(ValueError, match="y_scale"):
+        pl.plot_xi1d_orders(ens, y_scale="log2")
+    # the BAO maxima: in the BAO style, in the drawn range only, one legend entry
+    k_f = 2 * np.pi / L
+    bao = np.array([0.5 * k_f, 3.0 * k_f, 5.0 * k_f, 1e3 * k_f])
+    fig, axs = pl.plot_overflux_3d(
+        run["flux3d"], run["axes3d"], kms_per_cMpc=u, bao_k=bao, limits=dict(k_min=k_f, k_max=6 * k_f, r_min=1.0, r_max=L / 2)
+    )
+    thin = [ln for ln in axs["P"].lines if ln.get_linewidth() == pl.SCALE_STYLES["bao"]["lw"] and ln.get_linestyle() == ":"]
+    np.testing.assert_allclose(sorted(float(ln.get_xdata()[0]) for ln in thin), [3.0 * k_f, 5.0 * k_f])
+    assert all(ln.get_color() == pl.DIM for ln in thin)
+    assert [t.get_text() for t in axs["P"].get_legend().get_texts()].count("BAO maxima") == 1
+    plt.close(fig)
+    # every redshift of the reference alike, joined by a thin line, one colour key
+    from skewerjax.utils.reference_data import P1D_DESI_DR1, nearest_reference
+
+    assert nearest_reference(P1D_DESI_DR1, 3.008)["z"] == 3.0 and nearest_reference(P1D_DESI_DR1, 2.2)["z"] == 2.2
+    fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1, kms_per_cMpc=u, k_max=0.042, bao_k=np.array([0.01, 0.02, 1.0]))
+    fig.canvas.draw()
+    assert len(fig.axes) == 2 and "DESI DR1" in fig.axes[1].get_ylabel(), "a colour key naming the reference once"
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert not any("Chaves" in x or "nearest" in x for x in labels), labels
+    assert labels.count("BAO maxima (3D, reference)") == 1
+    small = [ln for ln in ax.lines if ln.get_marker() == "s" and ln.get_linewidth() < 1.0]  # (Si III's points are squares too)
+    assert len(small) == len(P1D_DESI_DR1) and len({str(ln.get_color()) for ln in small}) == len(P1D_DESI_DR1), "a colour per z"
+    assert len({(ln.get_markersize(), ln.get_linewidth(), ln.get_linestyle()) for ln in small}) == 1, "every z alike"
+    assert small[0].get_linestyle() == "-" and small[0].get_linewidth() < 1.0, "joined by a thin line"
+    assert not ax.containers[len(run["p1d"]["p1d"]) :], "no error bars of one z"
+    assert (
+        len([ln for ln in ax.lines if ln.get_linestyle() == ":" and ln.get_linewidth() == pl.SCALE_STYLES["bao"]["lw"]]) == 2
+    ), "inside the axis only"
+    with pytest.raises(TypeError):
+        pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1, z=3.0)
     plt.close(fig)
     fig, axs = pl.plot_p1d_terms(ens, kms_per_cMpc=u, orders=[2], terms=["1–2", "1–3"])
     shown = [t.get_text() for t in axs[0].get_legend().get_texts()]
@@ -870,26 +970,275 @@ def test_n_line_figures():
 def test_bao_images_in_a_periodic_box():
     """xi_box(r) = sum_n xi(|r + n L|): the ring and its echoes appear as the rings about (0, n L) and (0, n L +- Delta)
     (n_perp = 0). ``echo_curves`` (any r_BAO, also > L / 2): every point of the folded curves lies on one of those image
-    rings; ``wedge_echoes``: on the line of sight the ring crosses at |r_BAO - n L| and the echoes at |r_BAO +- Delta -
-    n L|, folded into [0, L / 2]; along a direction mu at the roots of r^2 - 2 c mu r + c^2 - r_BAO^2 = 0."""
+    rings; ``los_scales``: on the line of sight the ring is at |r_BAO - n L| and the echoes at |r_BAO +- Delta - n L|,
+    folded into [0, L / 2]."""
     L, r0, d = 51.7, 147.0, 21.0  # TNG50-4-like: r_BAO ~ 2.8 L
     c = pl.echo_curves(r0, d, L)
     assert np.all(c["ring"] <= L / 2 + 1e-12) and np.all(c["plus"] <= L / 2 + 1e-12)
+    n = np.arange(-8, 9)
     for key, shift in (("ring", 0.0), ("plus", d), ("minus", d)):
-        y = c[key]
-        cen = pl.image_centres(L, r0 + L, shift)
-        cen = np.concatenate([cen, -cen, pl.image_centres(L, r0 + L, -shift)])
-        resid = np.min(np.abs(c["r_perp"][:, None] ** 2 + (y[:, None] - cen[None]) ** 2 - r0**2), axis=1)
+        cen = np.concatenate([n * L + shift, -(n * L + shift), n * L - shift, -(n * L - shift)])
+        resid = np.min(np.abs(c["r_perp"][:, None] ** 2 + (c[key][:, None] - cen[None]) ** 2 - r0**2), axis=1)
         assert np.max(resid) < 1e-6 * r0**2, key
-    ec = pl.wedge_echoes(r0, d, pl.MU_WEDGES, L)
-    n = np.arange(-6, 7)
-    los_ring = np.unique(np.round(pl.fold_periodic(np.abs(r0 - n * L), L), 9))
-    los_echo = np.unique(np.round(pl.fold_periodic(np.concatenate([np.abs(r0 + d - n * L), np.abs(r0 - d - n * L)]), L), 9))
-    np.testing.assert_allclose(ec["los"]["ring"], los_ring[(los_ring > 0) & (los_ring <= L / 2)])
-    np.testing.assert_allclose(ec["los"]["echo"], los_echo[(los_echo > 0) & (los_echo <= L / 2)])
-    assert ec["r_bao"] == pytest.approx(pl.fold_periodic(r0, L)) and ec["delta"] == pytest.approx(d)
-    for m, rs in zip(ec["mu"], ec["ring"]):
-        for r in rs:  # each crossing on an image ring
-            assert np.min(np.abs((r * np.sqrt(1 - m**2)) ** 2 + (r * m - n * L) ** 2 - r0**2)) < 1e-6 * r0**2
-    small = pl.wedge_echoes(2.0, 0.5, pl.MU_WEDGES, 8.0)  # r_BAO < L / 2: the ring at r_BAO in every wedge
-    assert all(np.any(np.isclose(rs, 2.0)) for rs in small["ring"])
+    sc = pl.los_scales(r0, ["HI-LyA", "SiIII-1206"], np.array([0.0, d]), L)
+    fold = lambda x: float(pl.fold_periodic(x, L))  # noqa: E731
+    pr = sc["pairs"][0]
+    assert sc["ring"] == pytest.approx(np.min(np.abs(r0 - n * L))) and sc["ring"] <= L / 2
+    assert (
+        pr["spot"] == pytest.approx(d)
+        and pr["plus"] == pytest.approx(fold(r0 + d))
+        and pr["minus"] == pytest.approx(fold(r0 - d))
+    )
+    assert pr["plus"] == pytest.approx(np.min(np.abs(r0 + d - n * L))), "the nearest image of the echo"
+    far = pl.los_scales(2.0, ["HI-LyA", "SiIII-1206"], np.array([0.0, 7.0]), 8.0)["pairs"][0]  # Delta > L / 2
+    assert far["spot"] == pytest.approx(1.0) and far["plus"] == pytest.approx(1.0) and far["minus"] == pytest.approx(3.0)
+    none = pl.los_scales(None, ["HI-LyA", "SiIII-1206"], np.array([0.0, 7.0]), 8.0)
+    assert none["ring"] is None and none["pairs"][0]["plus"] is None
+
+
+def test_the_styles_of_the_characteristic_scales():
+    """One registry: the BAO grey, dotted and broad; a pair of lines thinner, in one colour in every figure, spot solid, echo +
+    dashed, echo - dotted; nothing else dotted grey, and no pair grey."""
+    bao = pl.scale_style("bao")
+    r, g, b = matplotlib.colors.to_rgb(bao["color"])
+    assert r == g == b and bao["ls"] == ":" and bao["lw"] == 2.2, "grey, dotted, broad"
+    assert all(pl.SCALE_STYLES[k]["lw"] < bao["lw"] for k in ("spot", "plus", "minus")), "the pairs thinner"
+    assert [pl.scale_style(k, "#123456")["ls"] for k in ("spot", "plus", "minus")] == ["-", "--", ":"]
+    assert pl.scale_style("spot", "#123456")["color"] == "#123456"
+    with pytest.raises(ValueError, match="kind"):
+        pl.scale_style("ring")
+    assert pl.PALETTE["grey"] not in {pl.PALETTE[c] for c in pl.PAIR_COLORS.values()} and "grey" not in pl.PAIR_COLOR_ORDER
+    assert len(set(pl.PAIR_COLORS.values())) == len(pl.PAIR_COLORS), "one colour per pair"
+    assert pl.pair_color(("HI-LyA", "SiIII-1206")) == pl.pair_color(("SiIII-1206", "HI-LyA")), "either order"
+    ax = plt.figure().add_subplot()
+    ax.set_xlim(0, 3)
+    assert pl._mark_lines(ax, {"$a$": 1.0}) == {"$a$": 1.0}
+    assert ax.lines[0].get_linestyle() != ":", "the other marks are not dotted"
+    assert pl._bao_mark(ax, 8.0, 6.0) == {"$|r_{\\rm BAO} - nL|$": 2.0}, "a scale beyond L / 2 by its folded image"
+    assert ax.lines[1].get_linestyle() == ":" and ax.lines[1].get_color() == bao["color"]
+    plt.close(ax.figure)
+
+
+def test_the_symlog_colour_limits_are_symmetric():
+    """color_scale="symlog": symmetric limits +- max |data|, 0 at the centre of the colours, whichever side is the larger."""
+    for values, top in ((np.array([-3.0, -0.01, 0.0, 0.5, 40.0]), 40.0), (np.array([-40.0, 0.0, 3.0]), 40.0)):
+        m, levels, extend = pl._map_scale(values, color_scale="symlog")
+        assert isinstance(m, matplotlib.colors.SymLogNorm) and (m.vmin, m.vmax) == (-top, top) and extend == "neither"
+        assert m(0.0) == pytest.approx(0.5) and m.linthresh == pytest.approx(0.01 * top)
+        assert np.array_equal(levels, pl._map_scale(values)[1]), "the contours do not depend on the colour scale"
+    assert pl._map_scale(np.array([1.0, 2.0]), color_scale="symlog", linthresh=0.5)[0].linthresh == 0.5
+    linear = pl._map_scale(np.array([-3.0, 0.5, 40.0]))[0]
+    assert (linear.vmin, linear.vmax) == (-40.0, 40.0) and not isinstance(linear, matplotlib.colors.SymLogNorm)
+    for gone in ("TwoSidedSymLogNorm", "_map_colorbar", "_extend_of"):
+        assert not hasattr(pl, gone), gone
+
+
+def _map_inputs(n_cells=16, L=8.0):
+    from skewerjax.summary_stats import bao_k_edges, box_grid, field_statistics, grid_limits
+
+    b = ToyBoxes(box_cMpc=L, n_cells=n_cells, n_real=2, r_bao=2.5, sigma_bao=0.5, bao_ratio=1e-4, n_s=-0.4)
+    lim = grid_limits(n_cells, L)
+    k = bao_k_edges(lim["k_min"], lim["k_max"], lim["k_max"], k_1=None, dk_factor=1.0)
+    r = np.arange(0, L / 2 + L / n_cells, L / n_cells)
+    grid = box_grid(n_cells, L, k_edges=k, r_edges=r, log=None)
+    return b, field_statistics((b.cells(i) for i in range(2)), grid, species="HI", power=b.grf().power, log=None)
+
+
+def _physical_ratio(ax):
+    ax.figure.canvas.draw()
+    bb = ax.get_window_extent()
+    return bb.height / bb.width
+
+
+def test_the_maps_keep_the_physical_aspect_and_the_theme_colormaps():
+    """Equal comoving spans at equal lengths, not deformed by the colour bar (as tall as the panel), and the theme's colour maps
+    by default in every map."""
+    b, res = _map_inputs()
+    u = 100.0
+    a = res["axes"]
+    figs, axs, _ = pl.plot_rpar_rperp_maps(res, r_bao=2.5, quantity="xi", color_scale="symlog", kms_per_cMpc=u)
+    for fig, ax in zip(figs, axs):
+        ratio = (a["rpar_edges"][-1] - a["rpar_edges"][0]) / (a["rperp_edges"][-1] - a["rperp_edges"][0])
+        assert ax.get_box_aspect() == pytest.approx(ratio) and _physical_ratio(ax) == pytest.approx(ratio, rel=1e-3)
+        cax = fig.axes[1]
+        assert cax.get_position().height == pytest.approx(ax.get_position().height), "the colour bar as tall as the panel"
+        assert ax.collections[0].get_cmap().name == pl.CMAPS["diverging"]
+    ring = [ln for ln in axs[1].lines if ln.get_linestyle() == ":"]
+    assert ring and all(ln.get_color() == pl.scale_style("bao")["color"] for ln in ring), "the BAO circle in the BAO style"
+    norm = axs[1].collections[0].norm
+    expected = res["theory"]["xi_map"][np.isfinite(res["xi_map"]) & np.isfinite(res["theory"]["xi_map"])]
+    assert norm.vmax == pytest.approx(np.abs(expected).max()) and norm.vmin == -norm.vmax, "symmetric, from the expectation"
+    assert norm(0.0) == pytest.approx(0.5)
+    for f in figs:
+        plt.close(f)
+    # r_par in km/s: the spans are compared in comoving units, through u
+    tot = dict(res, axes=a)
+    fig, ax, _ = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, r_bao=2.5, delta_v=100.0)
+    ymin, ymax, xmin, xmax = *ax.get_ylim(), *ax.get_xlim()
+    assert _physical_ratio(ax) == pytest.approx(((ymax - ymin) / u) / (xmax - xmin), rel=1e-3), "r_par through u"
+    plt.close(fig)
+    figs, axs, _ = pl.plot_kpar_kperp_maps(res, kpar_scale="linear", kperp_scale="linear", kms_per_cMpc=u)
+    ymin, ymax, xmin, xmax = *axs[1].get_ylim(), *axs[1].get_xlim()
+    assert _physical_ratio(axs[1]) == pytest.approx((ymax - ymin) / (xmax - xmin), rel=1e-3)
+    assert axs[1].collections[0].get_cmap().name == pl.CMAPS["diverging"]
+    for f in figs:
+        plt.close(f)
+    figs, axs, _ = pl.plot_kpar_kperp_maps(res, kms_per_cMpc=u)
+    assert _physical_ratio(axs[1]) == pytest.approx(1.0, rel=1e-3), "a logarithmic map: a square"
+    for f in figs:
+        plt.close(f)
+    fl = b.fields(0)
+    fig, ax, _ = pl.plot_skewer_slice(fl, 8.0, np.array([[0, 0], [8, 0]]))
+    assert _physical_ratio(ax) == pytest.approx(1.0, rel=1e-3) and fig.axes[1].get_position().height == pytest.approx(
+        ax.get_position().height
+    )
+    assert ax.images[0].get_cmap().name == pl.CMAPS["density"]
+    plt.close(fig)
+    # no default colour map outside the theme, and the dark theme follows
+    import inspect
+
+    for name, fn in inspect.getmembers(pl, inspect.isfunction):
+        for key, par in inspect.signature(fn).parameters.items():
+            if "cmap" in key:
+                assert par.default is None or str(par.default).startswith("tol_"), (name, key, par.default)
+    try:
+        pl.use_style("dark")
+        fig, ax, _ = pl.plot_skewer_slice(fl, 8.0, np.array([[0, 0], [8, 0]]))
+        assert ax.images[0].get_cmap().name == pl.CMAPS["density"] == "tol_rainbow_WhBr_r", "following use_style"
+        plt.close(fig)
+    finally:
+        pl.use_style()
+
+
+def test_plot_toy_fields_true_squares_letters_and_the_arrow_key():
+    b, _ = _map_inputs()
+    fl = b.fields(0)
+    fig, axs, info = pl.plot_toy_fields(fl, 8.0, arrow_every=4)
+    pl.add_panel_letters(axs, labels="grid")
+    fig.canvas.draw()
+    assert axs.shape == (2, 3)
+    sizes = {(round(ax.get_window_extent().width, 3), round(ax.get_window_extent().height, 3)) for ax in axs.ravel()}
+    assert len(sizes) == 1 and next(iter(sizes))[0] == pytest.approx(next(iter(sizes))[1]), "true squares of one size"
+    letters = [t.get_text() for ax in axs.ravel() for t in ax.texts if t.get_text().startswith("(")]
+    assert letters == ["(a1)", "(a2)", "(a3)", "(b1)", "(b2)", "(b3)"], "the row's letter, the column's number"
+    assert pl.check_fonts(fig) == []
+    plt.close(fig)
+    # with velocities: the key in a box inside its panel
+    v = np.zeros_like(np.asarray(fl["v"]))
+    v[..., 1] = 100.0 * np.sin(np.arange(16) * 2 * np.pi / 16)[None, :, None]
+    fig, axs, info = pl.plot_toy_fields(dict(fl, v=v), 8.0, arrow_every=4)
+    fig.canvas.draw()
+    assert info["key_kms"] > 0
+    for ax in axs[1]:
+        box = [p for p in ax.patches if isinstance(p, matplotlib.patches.Rectangle) and p.get_zorder() == 12]
+        assert len(box) == 1
+        x0, y0, w, h = box[0].get_x(), box[0].get_y(), box[0].get_width(), box[0].get_height()
+        assert 0 < x0 and x0 + w < 1 and 0 < y0 and y0 + h < 1, "inside the panel"
+        key = [t for t in ax.texts if "km/s" in t.get_text()][0]
+        tb = key.get_window_extent().transformed(ax.transAxes.inverted())
+        assert x0 <= tb.x0 and tb.x1 <= x0 + w and y0 <= tb.y0 and tb.y1 <= y0 + h, "the speed inside its box"
+    plt.close(fig)
+
+
+def test_the_bao_and_the_imprints_in_the_figures():
+    from skewerjax.summary_stats import pair_imprint
+
+    b, res = _map_inputs()
+    bao = np.array([1.0, 2.0])
+    fig, axs, _ = pl.plot_isotropic_recovery(res, r_bao=2.5, bao_k=bao, k_scale="linear", k_marks={"$k_2$": 3.0})
+    dotted = [ln for ln in axs[0, 0].lines if ln.get_linestyle() == ":"]
+    assert len(dotted) == 2 and all(ln.get_linewidth() == 2.2 and ln.get_color() == pl.DIM for ln in dotted), "BAO maxima in (a)"
+    assert len([ln for ln in axs[1, 0].lines if ln.get_linestyle() == ":"]) == 2, "and in its residuals"
+    assert not any("BAO" in t.get_text() for t in axs[0, 0].get_legend().get_texts()), "no legend entry"
+    for ax in axs[:, 1]:
+        ring = [ln for ln in ax.lines if ln.get_linestyle() == ":" and ln.get_linewidth() == 2.2]
+        assert len(ring) == 1 and ring[0].get_xdata()[0] == pytest.approx(2.5), "r_BAO in (b) and its residuals"
+    assert any(ln.get_linestyle() == "-." for ln in axs[0, 0].lines), "the other marks, not dotted"
+    plt.close(fig)
+    fig, axs, _ = pl.plot_isotropic_recovery(
+        dict(res, theory=None) if False else {k: v for k, v in res.items() if k != "theory"}, r_bao=13.0
+    )
+    assert axs[0, 1].lines[-1].get_xdata()[0] == pytest.approx(3.0), "beyond L / 2: its folded image"
+    plt.close(fig)
+    # the isotropic imprint in plot_overflux_3d: the maxima of j_0(k Delta_ij), solid, with a key in the pairs' colours
+    ids = ("HI-LyA", "SiIII-1206", "SiII-1193")
+    dv = np.array([0.0, 250.0, 330.0])
+    u, L = 100.0, 8.0
+    flux = {f: res for f in (*ids, "total")}
+    fig, axs3 = pl.plot_overflux_3d(flux, res["axes"], kms_per_cMpc=u, delta_v=dv, line_ids=ids, box=L, bao_k=bao)
+    lo, hi = axs3["P"].get_xlim()
+    prs = pl.line_pairs(ids, dv / u, L)
+    for pr in prs:
+        lines = [ln for ln in axs3["P"].lines if ln.get_color() == pr["color"] and len(ln.get_xdata()) == 2]
+        want = pair_imprint(pr["fold"], hi, kind="iso", k_min=lo)
+        np.testing.assert_allclose(sorted(ln.get_xdata()[0] for ln in lines), want)
+        assert all(ln.get_linestyle() == "-" and ln.get_linewidth() == 1.4 for ln in lines), "solid and thin"
+        spot = [ln for ln in axs3["xi"].lines if ln.get_color() == pr["color"] and len(ln.get_xdata()) == 2]
+        assert len(spot) == 1 and spot[0].get_xdata()[0] == pytest.approx(pr["fold"]) and spot[0].get_linestyle() == "-"
+    key = axs3["P"].get_legend()
+    assert [t.get_text() for t in key.get_texts()] == [p["text"] for p in prs], "the key names the pairs, no Delta v"
+    assert [t.get_color() for t in key.get_texts()] == [p["color"] for p in prs]
+    plt.close(fig)
+    fig, axs3 = pl.plot_overflux_3d(flux, res["axes"], kms_per_cMpc=u, delta_v=dv, line_ids=ids, box=L, n_harmonics=1)
+    assert len([ln for ln in axs3["P"].lines if ln.get_color() == prs[0]["color"] and len(ln.get_xdata()) == 2]) == 1, "the cap"
+    plt.close(fig)
+
+
+def test_the_imprints_of_the_pairs_on_the_p1d_figures():
+    """k_par = 2 pi n / Delta v_fold, solid in the pair's colour, within the drawn range; ``n_harmonics`` the cap; a key below the
+    panels names the pairs in their colours, at a larger size, without "Delta v"."""
+    from skewerjax.simulations import LINE_IDS
+    from skewerjax.summary_stats import pair_imprint
+    from skewerjax.utils.reference_data import P1D_DESI_DR1
+
+    from helpers import toy_lattice_statistics
+
+    b = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=2, bao_ratio=1e-3)
+    run = toy_lattice_statistics(b, range(b.n_real), (4, 4), 40, 64, decompose=True)
+    period, ens = float(run["period"]), run["flux"]
+    ids = list(LINE_IDS)
+    dv = np.asarray(LineBundle(ids, ref_line_id=ids[0]).delta_v)
+    prs = pl.line_pairs(ids, dv, period)
+    prs = [p for p in prs if p["fold"] > 0]
+    u = period / b.box_cMpc
+    k_lim = (2 * np.pi / period, np.pi / (period / 64))
+    fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1, kms_per_cMpc=u, delta_v=dv, line_ids=ids, k_max=0.5)
+    fig.canvas.draw()
+    lo, hi = ax.get_xlim()
+    for p in prs:
+        lines = [ln for ln in ax.lines if ln.get_color() == p["color"] and ln.get_linewidth() == 1.4]
+        np.testing.assert_allclose(sorted(ln.get_xdata()[0] for ln in lines), pair_imprint(p["fold"], hi, k_min=lo))
+        assert all(ln.get_linestyle() == "-" for ln in lines), "solid"
+
+    def key_of(axis):
+        return next(
+            g
+            for g in axis.get_children()
+            if isinstance(g, matplotlib.legend.Legend) and g.get_texts()[0].get_text() == prs[0]["text"]
+        )
+
+    key = key_of(ax)
+    assert [t.get_text() for t in key.get_texts()] == [p["text"] for p in prs] and all("Delta" not in p["text"] for p in prs)
+    assert [t.get_color() for t in key.get_texts()] == [p["color"] for p in prs], "the names in the pairs' colours"
+    assert key.get_texts()[0].get_fontsize() > pl.FONT_MIN["annotation"], "larger labels"
+    assert key.get_window_extent().y1 < ax.get_tightbbox().y0 + key.get_window_extent().height + 1, "below the axis"
+    plt.close(fig)
+    fig, axs = pl.plot_p1d_orders(
+        ens, kms_per_cMpc=u, k_limits=k_lim, k_scale="linear", delta_v_list=dv, line_ids=ids, n_harmonics=2
+    )
+    fig.canvas.draw()
+    for a in axs:
+        for p in prs:
+            lines = [ln for ln in a.lines if ln.get_color() == p["color"] and ln.get_linewidth() == 1.4]
+            assert len(lines) <= 2, "the cap"
+            np.testing.assert_allclose(
+                sorted(ln.get_xdata()[0] for ln in lines),
+                pair_imprint(p["fold"], a.get_xlim()[1], k_min=a.get_xlim()[0], n_harmonics=2),
+            )
+    assert key_of(axs[-1]) is not None
+    plt.close(fig)
+    fig, axs = pl.plot_p1d_terms(
+        ens, kms_per_cMpc=u, k_limits=k_lim, k_scale="linear", delta_v_list=dv, line_ids=ids, n_harmonics=1, orders=[2, 3]
+    )
+    assert all(len([ln for ln in a.lines if ln.get_linewidth() == 1.4]) <= len(prs) for a in axs) and key_of(axs[-1]) is not None
+    plt.close(fig)

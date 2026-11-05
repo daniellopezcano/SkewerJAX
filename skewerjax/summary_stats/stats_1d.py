@@ -13,6 +13,7 @@ import numpy as np
 
 from skewerjax.summary_stats.binning import bin_index, binned_mean, ensemble_mean
 from skewerjax.summary_stats.fourier import lag_axis, rfft_multiplicity, xi_from_power
+from skewerjax.summary_stats.mesh import lattice_only
 from skewerjax.summary_stats.orders import ZERO_ORDER_KEY, _C_rows, order_sum, subset_orders
 from skewerjax.summary_stats.overflux import DeltaFieldBuilder
 
@@ -317,6 +318,7 @@ def ensemble_1d(summaries) -> dict:
     return out
 
 
+@lattice_only
 def decompose_1d(tau, dv: float, mean_transmission=None, *, mean: str = "redshift", labels=None) -> dict:
     """The order-by-order (and term-by-term) decomposition of the 1D statistics of the total overflux of one set of
     skewers (``OverfluxStatistics1D.summary``: P1D and xi1D of the total, of every pair of subset terms (A, B) and of

@@ -12,7 +12,8 @@ spectrum as a callable P(k).
   measured and discarded) through the mesh, their mean over the ensemble, the expectation and the exact Gaussian
   covariance of the isotropic xi bins; ``cell_weights``: the deposit of every cell, n_X V over its mean;
 * ``xi_chi2``, ``xi_subset_offsets``: the chi^2 and the offset of the mean xi from its expectation;
-* ``bao_height``: the height of the BAO peak of a curve r^2 xi(r) above its sidebands.
+* ``bao_height``: the height of the BAO peak of a curve r^2 xi(r) above its sidebands;
+* ``xi_corner``: the corner r_par ~ L / 2, r_perp ~ 0 of the (r_perp, r_par) map, its offset and its error.
 """
 
 from __future__ import annotations
@@ -265,3 +266,52 @@ def bao_height(r, r2xi, r_bao: float, sigma_bao: float, err=None) -> dict:
     h = y[j] - (y[lo] + t * (y[hi] - y[lo]))
     he = np.nan if err is None else float(np.sqrt(err[j] ** 2 + ((1 - t) * err[lo]) ** 2 + (t * err[hi]) ** 2))
     return dict(r=float(r[j]), value=float(y[j]), height=float(h), height_err=he)
+
+
+def xi_corner(
+    res, *, grid: GridStatistics3D | None = None, power: Callable | None = None, r_perp_max=None, n_rows=3, n_alt=16
+) -> dict:
+    """The corner of the (r_perp, r_par) map of a ``field_statistics`` result: the last ``n_rows`` rows (r_par up to
+    L / 2) and the columns with r_perp < ``r_perp_max`` [cMpc] (default L / 15). Near L / 2 on the line of sight r^2 is at
+    its largest and the noise of a lag is largest (2 r = 0 modulo L, ``GridStatistics3D.xi_map_sigma``), so a fluctuation
+    of the few largest modes shows here first (notebooks 08 and 09).
+
+    Returns dict(rows (r_par), columns (r_perp), value (the mean of r^2 xi over the cells [cMpc^2]), expected (the same for
+    ``res["theory"]``, NaN without), offset (value - expected, or value), each (n,) (the offset of every realisation), error
+    (its error of the mean, from their scatter), sigma (with ``grid`` and ``power``, a callable P(k): the exact Gaussian error
+    of the mean of the n realisations; NaN without), alternating (the mean over the last ``n_alt`` rows of (-1)^j r^2 xi in
+    the column r_perp = 0, j the row, minus the same for the expectation: a (-1)^j pattern along the line of sight, e.g. of
+    the kernel of the mass assignment) and alternating_err)."""
+    a = res["axes"]
+    rpar, rperp, each = a["rpar"], a["rperp"], np.asarray(res["xi_map_each"], dtype=float)
+    L = 2.0 * float(rpar[-1])
+    r_perp_max = L / 15.0 if r_perp_max is None else float(r_perp_max)
+    rows, cols = np.arange(rpar.size - int(n_rows), rpar.size), np.flatnonzero(rperp < r_perp_max)
+    r2 = np.nan_to_num(a["rpar_map"]) ** 2 + np.nan_to_num(a["rperp_map"]) ** 2
+    sel = np.ix_(rows, cols)
+    has_th = "theory" in res
+    th = res["theory"]["xi_map"] if has_th else np.zeros_like(r2)
+    mean = lambda x: np.nanmean(r2[sel] * x[..., sel[0], sel[1]], axis=(-2, -1))  # noqa: E731
+    per_real = mean(each - th)
+    n = per_real.size
+    sigma = np.nan
+    if grid is not None and power is not None:
+        weights = np.zeros_like(r2)
+        weights[sel] = r2[sel] / (rows.size * cols.size)
+        sigma = grid.xi_map_sigma(grid_power(power, grid.shape, grid.L), weights) / np.sqrt(n)
+    last = np.arange(rpar.size - int(n_alt), rpar.size)
+    sign = (-1.0) ** last
+    alt = np.mean(sign * r2[last, 0] * (each[:, last, 0] - th[last, 0]), axis=1)
+    err = lambda x: float(x.std(ddof=1) / np.sqrt(x.size)) if x.size > 1 else np.nan  # noqa: E731
+    return dict(
+        rows=rpar[rows],
+        columns=rperp[cols],
+        value=float(mean(np.asarray(res["xi_map"]))),
+        expected=float(mean(np.asarray(th))) if has_th else np.nan,
+        offset=float(per_real.mean()),
+        each=per_real,
+        error=err(per_real),
+        sigma=float(sigma),
+        alternating=float(alt.mean()),
+        alternating_err=err(alt),
+    )

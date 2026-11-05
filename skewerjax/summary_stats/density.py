@@ -20,7 +20,7 @@ from skewerjax.summary_stats.binning import ensemble_mean
 from skewerjax.summary_stats.field_stats import grid_power
 from skewerjax.summary_stats.grid3d import GRID_KEYS, GridStatistics3D, _rfft_weights
 from skewerjax.summary_stats.lattice import on_points
-from skewerjax.summary_stats.mesh import check_grid_native
+from skewerjax.summary_stats.mesh import lattice_only
 from skewerjax.summary_stats.stats_1d import OverfluxStatistics1D, ensemble_1d
 
 
@@ -142,7 +142,8 @@ def _density_statistics(cols: dict, means: dict, gs: GridStatistics3D, points_pe
     )
 
 
-def skewer_density_statistics(columns, points_per_cell: int, grid: GridStatistics3D, L: float, *, n_bar=None, mas=None) -> dict:
+@lattice_only
+def skewer_density_statistics(columns, points_per_cell: int, grid: GridStatistics3D, L: float, *, n_bar=None) -> dict:
     """The density of every species along the skewers of every realisation, sampled at the points of the skewers
     (``on_points``: the end point dropped, spacing dx / points_per_cell, every cell holding points_per_cell points),
     against its global mean over every point of every skewer of every realisation, delta_X = n_X / <n_X> - 1, through
@@ -152,9 +153,9 @@ def skewer_density_statistics(columns, points_per_cell: int, grid: GridStatistic
     columns : [{species: (n_x, n_cells, n_z)}] per realisation, one or more species (their order: the terms "1", "2", ...
         and the fields (species_1, species_2, ..., "total")), the number densities of the cells the lattice of skewers crosses
         [comoving cm^-3]; L : the box side [cMpc]; n_bar : {species: n_bar} (optional): the mean densities of the
-        model, for density_mean and density_scale; mas : None (the only value): the points of the skewers are the nodes
-        of the lattice of ``grid`` (lattice-native), so the FFT is exact, with no window and no alias images of an
-        assignment (Sefusatti et al. 2016, §2.3); a scheme raises.
+        model, for density_mean and density_scale. The points of the skewers are the nodes of the lattice of ``grid``, so
+        the FFT is exact, with no mass assignment, window or interlacing (Sefusatti et al. 2016, §2.3); ``mas`` or
+        ``interlace`` raise (``mesh.lattice_only``).
 
     Returns dict(density3d {field: ``ensemble_mean`` of the ``GRID_KEYS``}, density_axes3d, density_flux (``ensemble_1d``
     of the 1D summary with the weighted species as terms), density_p1d (``ensemble_mean`` of "p1d", with "k"
@@ -162,7 +163,6 @@ def skewer_density_statistics(columns, points_per_cell: int, grid: GridStatistic
     |delta_1 - delta_j| over the other species, and of |delta_1 - delta_total|), time_s (n,); with ``n_bar``: density_mean {field: <n_X> /
     n_bar_X} and density_scale = (n_bar / <n>)^2 of the total (delta_X = (n_bar_X / <n_X>)(1 + delta) - 1: the factor of
     the expected spectrum, ``lattice_density_theory(scale=)``))."""
-    check_grid_native(mas, "skewer_density_statistics")
     species = list(columns[0])
     if not species:
         raise ValueError("skewer_density_statistics needs at least one species.")

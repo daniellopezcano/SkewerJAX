@@ -25,10 +25,10 @@ PACKAGE = Path(__file__).resolve().parents[1]  # skewerjax/
 
 
 class DagNode(NamedTuple):
-    x: float  # column of the figure
-    y: float  # row of the figure
+    x: float  # the column of the figure: the stage of the pipeline, left to right
+    y: float  # the row of the figure, inside the band of its realm
     name: str
-    detail: str  # mathtext (the figure)
+    detail: str  # mathtext (a short description; the figure draws the name and the module only)
     text: str  # plain text (Mermaid, tables)
     module: str  # the module(s) under skewerjax, comma separated
     realm: str  # REALMS key: the background band; "external" for none
@@ -39,7 +39,7 @@ class DagEdge(NamedTuple):
     a: str
     b: str
     kind: str  # "solid": a required input | "optional": optional input or data only | "external"
-    label: str | None  # the label of the figure (mathtext)
+    label: str | None  # what the edge carries (mathtext): numbered on the figure, in its key
     route: str | None  # the route of the figure (``plotting._dag_route``)
     impl: tuple  # "module:name": the functions or classes that implement the dependency
     shape: str | None = None  # the array (or object) the edge carries (Mermaid)
@@ -52,11 +52,11 @@ REALMS = {  # realm: (label, PALETTE key of its band)
 }
 
 DAG_NODES = {
-    "lines": DagNode(0.0, 0.85, "lines", "LineBundle", "LineBundle", "core.lines", "core", "LineBundle, get_line, get_mass_amu"),
-    "cosmology": DagNode(0.0, -0.3, "cosmology", "Cosmology, a(x)", "Cosmology, a(x)", "core.cosmology", "core", "Cosmology"),
+    "lines": DagNode(4.5, 0.3, "lines", "LineBundle", "LineBundle", "core.lines", "core", "LineBundle, get_line, get_mass_amu"),
+    "cosmology": DagNode(3.2, 0.3, "cosmology", "Cosmology, a(x)", "Cosmology, a(x)", "core.cosmology", "core", "Cosmology"),
     "skewers": DagNode(
-        1.2,
-        -1.4,
+        1.9,
+        0.3,
         "skewers",
         "SkewerBundle, lattice",
         "SkewerBundle; lattice of paths",
@@ -65,8 +65,8 @@ DAG_NODES = {
         "SkewerBundle, lattice_columns, lattice_points",
     ),
     "samplers": DagNode(
-        1.6,
-        1.85,
+        1.25,
+        2.14,
         "toy fields",
         "PowerLawGRF → cells",
         "PowerLawGRF → cells",
@@ -75,8 +75,8 @@ DAG_NODES = {
         "PowerLawGRF, grf_cells",
     ),
     "simulation": DagNode(
-        2.8,
-        1.85,
+        0.0,
+        2.14,
         "simulation outputs",
         "snapshot → cells",
         "TNG snapshot → cells",
@@ -84,10 +84,10 @@ DAG_NODES = {
         "simulations",
         "snapshot_cells, select_cells_in_region",
     ),
-    "fields": DagNode(2.4, 0.15, "gas cells", "Cells: n, T, v", "Cells: n, T, v", "core.cells", "core", "Cells, cells_on_grid"),
+    "fields": DagNode(0.625, 1.15, "gas cells", "Cells: n, T, v", "Cells: n, T, v", "core.cells", "core", "Cells, cells_on_grid"),
     "deposition": DagNode(
-        3.6,
-        0.15,
+        1.9,
+        1.15,
         "deposition",
         "cells → pieces",
         "cells → pieces",
@@ -96,8 +96,8 @@ DAG_NODES = {
         "cell_pieces, voronoi_segments, absorber_pieces",
     ),
     "profiles": DagNode(
-        4.8,
-        0.15,
+        3.2,
+        1.15,
         "line profiles",
         r"Voigt $\phi_j(v)$ per piece",
         "Voigt φ_j(v) per piece",
@@ -106,8 +106,8 @@ DAG_NODES = {
         "line_profiles, voigt_widths_GHz",
     ),
     "tau": DagNode(
-        6.0,
-        0.15,
+        4.5,
+        1.15,
         "optical depth",
         r"$\tau(v)$, $T=e^{-\tau}$",
         "τ(v), T = e^−τ",
@@ -116,8 +116,8 @@ DAG_NODES = {
         "compute_optical_depth, Pieces",
     ),
     "normalisation": DagNode(
-        7.2,
-        0.15,
+        5.8,
+        -1.27,
         "mean transmission",
         r"$\bar T = \langle T\rangle$",
         "T̄ = ⟨T⟩ over a set of pixels",
@@ -126,8 +126,8 @@ DAG_NODES = {
         "ensemble_mean_transmissions, mean_transmissions",
     ),
     "overflux": DagNode(
-        8.4,
-        0.15,
+        7.1,
+        -1.27,
         "overflux",
         r"$\delta = T/\bar T - 1$",
         "δ = T/T̄ − 1, per line and total",
@@ -136,8 +136,8 @@ DAG_NODES = {
         "DeltaFieldBuilder, overflux_check",
     ),
     "stats_1d": DagNode(
-        9.6,
-        0.7,
+        8.4,
+        -0.6,
         "1D statistics",
         "P1D, ξ1D, by order",
         "P1D, ξ1D (by order and term)",
@@ -146,8 +146,8 @@ DAG_NODES = {
         "skewer_p1d, skewer_xi1d, decompose_1d",
     ),
     "stats_3d": DagNode(
-        9.6,
-        -0.4,
+        8.4,
+        -1.27,
         "3D statistics",
         "P3D, ξ3D on the lattice",
         "P3D, ξ3D on the lattice of skewers",
@@ -156,8 +156,8 @@ DAG_NODES = {
         "lattice_grid, measure_lattice, GridStatistics3D",
     ),
     "field_stats": DagNode(
-        9.6,
-        1.85,
+        8.4,
+        -1.94,
         "field statistics",
         "P, ξ of the cells (mesh)",
         "P, ξ of the cells' density: mesh (MAS + interlacing)",
@@ -166,8 +166,8 @@ DAG_NODES = {
         "field_statistics, cell_weights, fourier_mesh",
     ),
     "fake_spectra": DagNode(
-        4.0,
-        1.85,
+        4.5,
+        2.14,
         "fake_spectra",
         "external reference",
         "external reference",
@@ -178,8 +178,8 @@ DAG_NODES = {
 }
 
 DAG_EDGES = (
-    DagEdge("cosmology", "skewers", "optional", "a(x) (or manual)", "d", ("core.skewers:SkewerBundle",), "a(x)"),
-    DagEdge("lines", "simulation", "optional", "ion masses", "over", ("simulations.gas_physics:Ion", "core.lines:get_mass_amu")),
+    DagEdge("cosmology", "skewers", "optional", "a(x) (or manual)", "l", ("core.skewers:SkewerBundle",), "a(x)"),
+    DagEdge("lines", "simulation", "optional", "ion masses", "wrap", ("simulations.gas_physics:Ion", "core.lines:get_mass_amu")),
     DagEdge("samplers", "fields", "solid", None, "d", ("simulations.toy_cells:grf_cells",), "Cells (N³)"),
     DagEdge("simulation", "fields", "solid", None, "d", ("simulations.snapshot_cells:snapshot_cells",), "Cells (N_cells)"),
     DagEdge("fields", "deposition", "solid", None, None, ("core.absorbers:cell_pieces", "core.deposition:voronoi_segments")),
@@ -188,7 +188,7 @@ DAG_EDGES = (
         "deposition",
         "solid",
         "points, a(x)",
-        "h",
+        "d",
         ("core.absorbers:bundle_frame", "core.skewers:lattice_points"),
         "points (N_sk, N_pt, 3)",
     ),
@@ -198,17 +198,17 @@ DAG_EDGES = (
         "tau",
         "solid",
         r"$n\,\ell/a^2$ of the pieces",
-        "u",
+        "over",
         ("core.optical_depth:compute_optical_depth",),
         "Pieces (N_lines, N_sk, N_p)",
     ),
-    DagEdge("lines", "profiles", "solid", "atomic data: λ, A₂₁, m", "h", ("core.line_profiles:voigt_widths_GHz",)),
+    DagEdge("lines", "profiles", "solid", "atomic data: λ, A₂₁, m", "elbow", ("core.line_profiles:voigt_widths_GHz",)),
     DagEdge(
         "lines",
         "tau",
         "solid",
         "f, λ, line offsets Δv",
-        "h",
+        "d",
         ("core.spectral:frequency_offset_GHz", "core.optical_depth:wrap_to_ref_line"),
     ),
     DagEdge("profiles", "tau", "solid", None, None, ("core.line_profiles:line_profiles",)),
@@ -217,7 +217,7 @@ DAG_EDGES = (
         "normalisation",
         "solid",
         None,
-        None,
+        "s",
         ("summary_stats.overflux:ensemble_mean_transmissions",),
         "τ (N_lines, N_sk, N_v)",
     ),
@@ -244,7 +244,7 @@ DAG_EDGES = (
         "stats_3d",
         "solid",
         None,
-        "s",
+        None,
         ("summary_stats.lattice:measure_lattice",),
         "δ on (n_x, N_v, n_z)",
     ),
@@ -253,14 +253,14 @@ DAG_EDGES = (
         "field_stats",
         "solid",
         r"$n_X V$ at the generators",
-        "t",
+        "under",
         ("summary_stats.field_stats:cell_weights", "summary_stats.mesh:fourier_mesh"),
         "n_X V (N_cells) → mesh (N_mesh³)",
     ),
 )
 DAG_EXTERNAL = (
-    DagEdge("simulation", "fake_spectra", "external", None, None, ("comparison.source:FakeSpectraSource",)),
-    DagEdge("fake_spectra", "tau", "external", "compared", "h", ("comparison.emulation:matched_tau",)),
+    DagEdge("simulation", "fake_spectra", "external", None, "over", ("comparison.source:FakeSpectraSource",)),
+    DagEdge("fake_spectra", "tau", "external", "compared", "d", ("comparison.emulation:matched_tau",)),
 )
 DAG_NOTEBOOKS = {
     "lines": "01",

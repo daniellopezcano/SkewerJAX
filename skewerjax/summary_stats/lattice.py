@@ -28,9 +28,10 @@ import numpy as np
 
 from skewerjax.summary_stats.binning import full_coverage, native_edges
 from skewerjax.summary_stats.grid3d import GridStatistics3D
-from skewerjax.summary_stats.mesh import check_grid_native
+from skewerjax.summary_stats.mesh import lattice_only
 
 
+@lattice_only
 def skewer_p1d(delta, dv: float):
     """P1D along each skewer, averaged over the skewers (module docstring), every mode including k = 0.
 
@@ -41,6 +42,7 @@ def skewer_p1d(delta, dv: float):
     return 2 * np.pi * np.fft.rfftfreq(n, dv), (dv / n) * np.mean(np.abs(np.fft.rfft(d, axis=-1)) ** 2, axis=-2)
 
 
+@lattice_only
 def skewer_xi1d(delta, dv: float):
     """xi1D along each skewer, averaged over the skewers (module docstring), at every lag j dv, j = 0 .. N / 2 (a
     periodic skewer: the lags beyond half the period repeat those below).
@@ -133,14 +135,13 @@ def on_lattice(delta, n_x: int, n_z: int) -> np.ndarray:
     return d.reshape(d.shape[:-2] + (int(n_x), int(n_z), d.shape[-1])).swapaxes(-1, -2)
 
 
-def measure_lattice(delta, grid: GridStatistics3D, *, mas=None) -> dict:
+@lattice_only
+def measure_lattice(delta, grid: GridStatistics3D) -> dict:
     """The 3D statistics (``GridStatistics3D.measure``: the ``GRID_KEYS``) of one field along the skewers of a lattice,
-    delta (N_sk, n_los) x-major, on ``grid`` (``lattice_grid``).
-
-    mas : None (the only value): the samples of the skewers are the nodes of the lattice, so the field is already on
-    the mesh (lattice-native) and its FFT is exact, with no window and no alias images of an assignment (Sefusatti et
-    al. 2016, §2.3); a scheme raises."""
-    check_grid_native(mas, "measure_lattice")
+    delta (N_sk, n_los) x-major, on ``grid`` (``lattice_grid``). The samples of the skewers are the nodes of the lattice,
+    so the FFT is exact, with no mass assignment, window or interlacing (Sefusatti et al. 2016, §2.3); ``mas`` or
+    ``interlace`` raise (``mesh.lattice_only``). Along the line of sight: N_pix pixels (transmission, overflux) or n_cells
+    points_per_cell points (the density); across it: the skewer spacing."""
     return grid.measure(on_lattice(delta, grid.shape[0], grid.shape[2]))
 
 

@@ -18,9 +18,9 @@ Scoccimarro & Couchman 2016 (arXiv:1512.07295, "S16"; equation numbers counted f
   toy grid: lattice-like points, no alias images, but a discrete kernel instead of the window): the bias of the mesh
   path for such points, ~1e-3 at k < k_Nyq / 2 for interlaced PCS (``field_stats.field_statistics``).
 
-The fields of every source (toy grids and simulation cells, ``core.Cells``) take this one path; ``check_grid_native``
-guards the lattice path of the skewer samples (``GridStatistics3D.measure``: the samples are the field on their
-lattice, so no scheme applies there).
+The fields of every source (toy grids and simulation cells, ``core.Cells``) take this one path; ``lattice_only`` guards
+the path of the skewer samples (``GridStatistics3D.measure``, ``lattice.measure_lattice``, ``lattice.skewer_p1d``, ...):
+the samples are the field on their own lattice, so these take neither ``mas`` nor ``interlace``.
 
 Conventions: positions [cMpc] (any length unit, the same as L), wrapped periodically; the rfft layout (last axis
 halved); k = 2 pi fftfreq(N, H) [1/cMpc]. Everything is jitted with ``n_mesh`` and ``mas`` static (no recompilation
@@ -31,7 +31,7 @@ point, ~1.6 GB per chunk); the mesh is accumulated over the chunks (one compilat
 
 from __future__ import annotations
 
-from functools import partial
+from functools import partial, wraps
 
 import jax
 import jax.numpy as jnp
@@ -56,14 +56,24 @@ TRUSTED_K_NYQ = 0.5
 TRUSTED_R_H = 6.0
 
 
-def check_grid_native(mas, where: str) -> None:
-    """Raise if a mass-assignment scheme is requested on the lattice path (the skewer samples are the field on their
-    lattice: their FFT is exact, no window and no alias images of an assignment; S16 §2.3), where ``mas`` must be None."""
-    if mas is not None:
-        raise ValueError(
-            f"{where}: the skewer samples are the field on their lattice: their FFT is exact and no mass assignment "
-            f"applies, so mas must be None (got {mas!r}). Fields of cells take field_stats.field_statistics."
-        )
+def lattice_only(func):
+    """Mark a statistic of skewer samples: it runs on the skewers' own lattice and takes no mass assignment. The samples
+    are the field at the nodes of that lattice, so their FFT is exact, with no window, no alias images of an assignment
+    and nothing to interlace (S16 §2.3). ``mas`` or ``interlace``, whatever their value, raise a ValueError that says so;
+    the signature of ``func`` is kept, and holds neither."""
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        given = sorted({"mas", "interlace"} & set(kwargs))
+        if given:
+            raise ValueError(
+                f"{func.__qualname__} does not take {' or '.join(given)}: the skewer samples are the field on their own "
+                "lattice, so their FFT is exact, with no mass assignment, window or interlacing. Fields of cells take "
+                "field_stats.field_statistics."
+            )
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 def _geometry(n_mesh, L, D: int | None = None):

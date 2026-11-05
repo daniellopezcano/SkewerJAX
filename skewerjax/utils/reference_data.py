@@ -1,5 +1,8 @@
 """Reference measurements for visual comparisons in the notebooks (not used in any computation).
 
+``P1D_DESI_DR1``: the DESI DR1 Lya P1D at every redshift of Fig. 1 of Chaves-Montero et al., z = 2.2, 2.4, ..., 4.2, keyed
+by z (``nearest_reference``: the one nearest to a box; notebooks 10 and 11, D4, draw them all).
+
 ``P1D_DESI_DR1_Z22``: the DESI DR1 Lya P1D at z = 2.2 as k_par P1D(k_par) / pi against k_par [s/km], read from Fig. 1 of
 Chaves-Montero et al., "Cosmological analysis of the DESI DR1 Lyman-alpha 1D power spectrum" (QMLE measurements of
 forests with SNR > 3 per pixel; ``.project_material/Chaves-Montero``, ``data_journal.tex``, Fig. ``p1d_qmle3``). The
@@ -485,6 +488,12 @@ P1D_DESI_DR1 = {
 }
 # fmt: on
 """DESI DR1 Lya P1D keyed by z: k [s/km], kP_pi = k P1D / pi, kP_pi_err (1-sigma, symmetric), z, label, k_max_figure [s/km]."""
+
+
+def nearest_reference(references: dict, z: float) -> dict:
+    """The measurement of {z: measurement} (``P1D_DESI_DR1``) at the redshift nearest to ``z``."""
+    return references[min(references, key=lambda zz: abs(float(zz) - float(z)))]
+
 
 P1D_DESI_DR1_Z22 = P1D_DESI_DR1[2.2]  # backward-compatible alias
 """DESI DR1 Lya P1D at z = 2.2 (alias of ``P1D_DESI_DR1[2.2]``)."""

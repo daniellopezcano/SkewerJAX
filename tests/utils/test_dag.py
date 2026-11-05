@@ -122,3 +122,25 @@ def test_plot_dag_routes_and_keys():
     assert {"core", "simulations", "summary_stats"} <= texts, "the bands, labelled"
     assert "overflux.py" in texts and "skewers.py" in texts, "the module under every name"
     assert pl.check_fonts(fig) == []
+    assert np.prod(fig.get_size_inches()) <= 0.51 * 26 * 8.6, "about half the area of the previous figure"
+    assert "1  a(x) (or manual)" in texts, "the edges numbered, in the key"
+    assert not any(n.detail in texts for n in nodes.values()), "compact boxes: the name and the module"
+    band = {k: pl._DAG_BANDS[n.realm] for k, n in nodes.items() if n.realm in dag.REALMS}
+    for k, (y0, y1) in band.items():  # the realms as horizontal bands
+        assert y0 < nodes[k].y - pl._DAG_H / 2 and nodes[k].y + pl._DAG_H / 2 < y1, k
+    order = ["fields", "deposition", "tau", "normalisation", "overflux", "stats_1d"]
+    assert all(nodes[a].x < nodes[b].x for a, b in zip(order, order[1:])), "left to right by stage of the pipeline"
+    segs = []
+    for e in dag.DAG_EDGES:
+        pts = pl._dag_route(e.a, e.b, e.route, nodes, pl._DAG_LANES.get((e.a, e.b), 0.0), pl._DAG_END_DX.get((e.a, e.b), 0.0))
+        segs += [(e.a, e.b, p, q) for p, q in zip(pts, pts[1:])]
+
+    def crossing(s1, s2):
+        (a, b), (c, d) = s1[2:], s2[2:]
+        o = lambda p, q, r: (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])  # noqa: E731
+        return o(a, b, c) * o(a, b, d) < 0 and o(c, d, a) * o(c, d, b) < 0
+
+    n_cross = sum(crossing(u, v) for i, u in enumerate(segs) for v in segs[i + 1 :] if u[:2] != v[:2])
+    assert n_cross <= 1, f"few crossings: {n_cross}"
+    with pytest.raises(ValueError, match="unknown route"):
+        pl._dag_route("lines", "tau", "zigzag", nodes, 0.0)

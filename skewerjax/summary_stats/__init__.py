@@ -15,17 +15,19 @@ From arrays, geometry and ``core.Cells`` only: imports ``skewerjax.core`` at mos
   ``lattice_limits``, ``on_lattice``, ``measure_lattice``), and the cell values at the points of the skewers (``on_points``);
 * ``field_stats``: P and xi of the density of gas cells (``core.Cells``, any source: toy grids and snapshots alike)
   over an ensemble of realisations, through a mesh, against an optional expectation P(k) (``box_grid``, ``grid_limits``,
-  ``grid_power``, ``field_statistics``, ``cell_weights``, ``xi_chi2``, ``xi_subset_offsets``, ``bao_height``);
+  ``grid_power``, ``field_statistics``, ``cell_weights``, ``xi_chi2``, ``xi_subset_offsets``, ``bao_height``, ``xi_corner``);
 * ``mesh``: points on a periodic mesh in 1D, 2D, 3D (Sefusatti et al. 2016): mass assignment ``paint`` (NGP, CIC, TSC,
   PCS; chunked), its window ``mas_window``, the interlaced and deconvolved Fourier field ``fourier_mesh``, the alias sum
-  ``aliased_power``, the transfer of fields given at the nodes ``node_transfer``; ``mas`` / ``interlace`` on the mesh
-  path of the cells (``field_statistics``, ``GridStatistics3D.measure_points``), ``mas=None`` only on the lattice path
-  of the skewer samples (``measure_lattice``, ``skewer_density_statistics``);
+  ``aliased_power``, the transfer of fields given at the nodes ``node_transfer``; ``mas`` / ``interlace`` only on the mesh
+  path of the cells (``field_statistics``, ``GridStatistics3D.measure_points``); the skewer samples stay on their own
+  lattice and refuse both (``mesh.lattice_only``: ``measure_lattice``, ``skewer_density_statistics``, ``skewer_p1d``, ...);
 * ``density``: the density along a lattice of skewers through the same 3D estimator, and its exact expectation on that
   lattice from P(k) (``skewer_density_statistics``, ``lattice_density_theory``);
 * ``stats_3d``: P3D and xi3D of the overflux on a grid of skewers, by term and order (``OverfluxStatistics3D``);
 * ``grid3d``: P and xi of a periodic 3D field on its grid, isotropic, in the (par, perp) plane and in wedges of mu, with
   exact expectations and covariance (``GridStatistics3D``, ``MU_WEDGES``);
+* ``theory``: the mean of xi over the box, the term of the k = 0 mode (``integral_constraint``), and the positions of the
+  BAO maxima in k (``bao_maxima``), and the Fourier imprint of the separation of two lines (``pair_imprint``);
 * ``fourier``, ``binning``: the shared conventions (lag axes, the Wiener-Khinchin pair) and binning (bin indices, jitted
   bin means, bin edges (``bao_k_edges``, ``native_edges``, ``full_coverage``), the mean over realisations
   ``ensemble_mean``);
@@ -45,6 +47,7 @@ from skewerjax.summary_stats import (
     overflux,
     stats_1d,
     stats_3d,
+    theory,
 )
 from skewerjax.summary_stats.binning import (
     X_BIN_MODES,
@@ -67,6 +70,7 @@ from skewerjax.summary_stats.field_stats import (
     grid_limits,
     grid_power,
     xi_chi2,
+    xi_corner,
     xi_subset_offsets,
 )
 from skewerjax.summary_stats.fourier import lag_axis, xi3d_from_power, xi_from_power
@@ -102,6 +106,7 @@ from skewerjax.summary_stats.overflux import (
 )
 from skewerjax.summary_stats.stats_1d import OverfluxStatistics1D, decompose_1d, ensemble_1d, p1d_from_tau
 from skewerjax.summary_stats.stats_3d import OverfluxStatistics3D
+from skewerjax.summary_stats.theory import bao_maxima, integral_constraint, pair_imprint, sphere_area_in_cube
 
 __all__ = [
     "DeltaFieldBuilder",
@@ -138,6 +143,11 @@ __all__ = [
     "MAS_SCHEMES",
     "xi_chi2",
     "xi_subset_offsets",
+    "xi_corner",
+    "integral_constraint",
+    "sphere_area_in_cube",
+    "bao_maxima",
+    "pair_imprint",
     "bao_height",
     "skewer_density_statistics",
     "lattice_density_theory",

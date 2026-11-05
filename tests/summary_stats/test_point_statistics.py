@@ -9,9 +9,12 @@ points, ``mesh.fourier_mesh``: assignment, interlacing, the window divided; Sefu
 * the mesh path converges to the exact grid FFT (the validation reference, kept here only) at k << k_Nyq, and equals
   it times ``mesh.node_transfer`` on every mode for a toy grid of the mesh's shape;
 * mass conservation of the deposit; redshift-space cells (``core.redshift_space_cells``);
-* a plane wave and the shot noise; fields at points against the alias-sum expectation (``mesh.aliased_power``)."""
+* a plane wave and the shot noise; fields at points against the alias-sum expectation (``mesh.aliased_power``);
+* the corner r_par = L / 2 of the map (notebook 08): the bookkeeping of its row, the exact sigma of its cells, the
+  interlacing phase at the Nyquist mode and the (-1)^j term of the kernel (``xi_corner``, ``xi_map_sigma``)."""
 
 import inspect
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -19,11 +22,11 @@ import pytest
 from skewerjax.core import Cells, cells_from_values, redshift_space_cells
 from skewerjax.simulations import ToyBoxes
 from skewerjax.summary_stats import (
-    GRID_KEYS,
     GridStatistics3D,
     aliased_power,
     box_grid,
     cell_weights,
+    decompose_1d,
     field_statistics,
     fourier_mesh,
     grid_limits,
@@ -31,8 +34,13 @@ from skewerjax.summary_stats import (
     lattice_grid,
     measure_lattice,
     node_transfer,
+    on_lattice,
+    on_points,
     paint,
     skewer_density_statistics,
+    skewer_p1d,
+    skewer_xi1d,
+    xi_corner,
 )
 from skewerjax.summary_stats import grid3d as G3
 from skewerjax.summary_stats import mesh as M
@@ -67,16 +75,84 @@ def test_the_mesh_path_defaults_to_interlaced_pcs():
         assert "interlace" not in par or par["interlace"].default is True, fn.__name__
 
 
-def test_the_lattice_path_refuses_a_scheme_and_the_fields_enter_as_cells():
+def test_the_skewer_statistics_refuse_mass_assignment():
+    """The statistics of skewer samples take neither mas nor interlace, whatever the value, and say why."""
     gs = _grid()
     d = np.random.default_rng(0).normal(size=gs.shape)
-    for fn, args in ((gs.measure, (d,)), (measure_lattice, (d.transpose(0, 2, 1).reshape(-1, 16), gs))):
-        raises(ValueError, "lattice", fn, *args, mas="tsc")
     lat = lattice_grid(4, 4, 32, 64.0, 16.0, k_edges=np.linspace(0.05, 0.2, 4))
     cols = [{"HI": np.ones((4, 16, 4)), "SiIII": np.ones((4, 16, 4))}]
-    raises(ValueError, "lattice", skewer_density_statistics, cols, 2, lat, 64.0, mas="cic")
-    a, b = gs.measure(d), gs.measure(d, mas=None)
-    assert all(np.array_equal(a[k], b[k], equal_nan=True) for k in GRID_KEYS), "mas=None is the exact path, unchanged"
+    tau = np.full((2, 3, 16), 0.1)
+    calls = (
+        (gs.measure, (d,)),
+        (measure_lattice, (d.transpose(0, 2, 1).reshape(-1, 16), gs)),
+        (skewer_density_statistics, (cols, 2, lat, 64.0)),
+        (skewer_p1d, (tau, 1.0)),
+        (skewer_xi1d, (tau, 1.0)),
+        (decompose_1d, (tau, 1.0)),
+    )
+    for fn, args in calls:
+        for option in (
+            dict(mas="tsc"),
+            dict(mas=None),
+            dict(interlace=True),
+            dict(interlace=False),
+            dict(mas="pcs", interlace=True),
+        ):
+            raises(ValueError, "no mass assignment", fn, *args, **option)
+        par = inspect.signature(fn).parameters
+        assert "mas" not in par and "interlace" not in par, fn.__name__
+
+
+def test_the_skewer_path_never_calls_the_mesh():
+    """Every statistic of notebooks 10 and 11 on skewer samples, with the mesh replaced by a spy: nothing is deposited. The
+    positive control shows that the spy does catch the mesh path. The line-of-sight sizes: n_cells points_per_cell points (the
+    density, the periodic end point dropped) and N_pix pixels (the overflux); across, the skewer spacing."""
+    N, p, s, n_pix, L = 16, 4, 2, 32, 64.0
+    n_t, d_perp = N // s, s * L / N
+    rng = np.random.default_rng(5)
+    n_hi = np.exp(0.3 * rng.normal(size=(n_t, N, n_t)))
+    cols = [{"HI": n_hi, "SiIII": 0.1 * n_hi}]
+    k_edges = np.linspace(2 * np.pi / L, np.pi / d_perp, 5)
+    g_dens, g_flux = (lattice_grid(n_t, n_t, n, L, d_perp, k_edges=k_edges) for n in (N * p, n_pix))
+    tau = rng.uniform(0.01, 1.0, (2, n_t * n_t, n_pix))
+    delta = np.exp(-tau) / np.exp(-tau).mean(axis=-1, keepdims=True) - 1.0
+
+    calls = []
+
+    def spy(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("the mesh was called")
+
+    names = ("paint", "fourier_mesh", "_paint", "_paint_chunked", "_fourier_mesh", "_finish", "mas_window")
+    with patch.multiple(M, **{n: spy for n in names}), patch.object(G3, "fourier_mesh", spy):
+        dens = skewer_density_statistics(cols, p, g_dens, L)
+        flux = measure_lattice(delta[0], g_flux)
+        skewer_p1d(delta, 1.0)
+        skewer_xi1d(delta, 1.0)
+        decompose_1d(tau, 1.0)
+        assert not calls, "the skewer path never calls the mesh"
+        raises(AssertionError, "the mesh was called", g_flux.measure_points, np.zeros((4, 3)), np.ones(4))
+        assert calls, "the control: the spy catches the mesh path"
+
+    assert on_points(n_hi, p).shape == (n_t, N * p, n_t), "n_cells x points_per_cell points, the end point dropped"
+    assert g_dens.shape == (n_t, N * p, n_t) and g_flux.shape == (n_t, n_pix, n_t)
+    for grid, n_los in ((g_dens, N * p), (g_flux, n_pix)):
+        np.testing.assert_allclose(np.asarray(grid.dx), [d_perp, L / n_los, d_perp], err_msg="the spacings of the lattice")
+        rows = grid.axes()["rpar"]
+        assert rows.size == n_los // 2 + 1, "one row per separation"
+        np.testing.assert_allclose(np.diff(rows), L / n_los)
+    assert dens["density_p1d"]["k"].size == N * p // 2 + 1
+    # the samples themselves, with no window: the line-of-sight column of xi is the plain pair average
+    d = on_lattice(delta[0], n_t, n_t)
+    d = d - d.mean()
+    for j in (1, 5, n_pix // 2):
+        assert flux["xi_map"][j, 0] == pytest.approx(np.mean(d * np.roll(d, -j, axis=1)), rel=1e-10), j
+    assert flux["xi_iso"].shape == g_flux.axes()["r_iso"].shape
+
+
+def test_the_fields_enter_as_cells():
+    gs = _grid()
+    d = np.random.default_rng(0).normal(size=gs.shape)
     raises(ValueError, "mas must be one of", gs.measure_points, np.zeros((5, 3)), np.ones(5), mas="sph")
     raises(ValueError, "(N, 3)", gs.measure_points, np.zeros((5, 2)), np.ones(5))
     raises(TypeError, "core.Cells", field_statistics, d, gs, species="HI")
@@ -219,3 +295,117 @@ def test_points_against_the_aliased_expectation():
     dec = np.stack([gs.measure(b.delta(i)[::4, ::4, ::4])["P_iso"] for i in range(b.n_real)])
     th = gs.theory(grid_power(g.power, gs.shape, gs.L))["P_iso"]
     assert np.max(np.abs(dec.mean(0) - th) / (dec.std(0, ddof=1) / np.sqrt(b.n_real))) > 5, "decimation aliases"
+
+
+def test_the_row_at_half_the_box_is_counted_once():
+    """r_par = L / 2 (the separations +- N / 2 are one): one row of half the lags, in the measurement and the expectation
+    alike, the pair count and the direct sum over the modes agreeing with the inverse transform (notebook 08, the corner)."""
+    n, L = 16, 64.0
+    grid = _grid(n, L)
+    d = np.random.default_rng(1).normal(size=(n, n, n))
+    d -= d.mean()
+    F2 = np.abs(np.fft.rfftn(d)) ** 2
+    F2[0, 0, 0] = 0.0
+    xi = np.fft.irfftn(F2, s=(n, n, n)) / n**3
+    assert xi[0, n // 2, 0] == pytest.approx(np.mean(d * np.roll(d, -n // 2, axis=1)), rel=1e-12), (
+        "the lag (0, N / 2, 0): the pairs"
+    )
+    mult = np.broadcast_to(G3._rfft_weights(n), F2.shape)
+    my = (-1.0) ** np.arange(n)
+    direct = np.sum(mult * F2 * my[None, :, None]) / n**6
+    assert xi[0, n // 2, 0] == pytest.approx(direct, rel=1e-12), "(1 / V) sum_k P(k) (-1)^m_y"
+    idx = np.asarray(grid._idx_r["map"])
+    a = box_grid(n, L, k_edges=grid.k_edges, r_edges=grid.r_edges, log=None)
+    rows = np.bincount(idx[idx >= 0] // (a.rperp_edges.size - 1), minlength=a.rpar_edges.size - 1)
+    assert rows[-1] * 2 == rows[-2] and a.rpar[-1] == pytest.approx(L / 2), "the last row holds half the lags of the others"
+    assert np.asarray(grid.axes()["n_lags_xi_map"])[-1, 0] * 2 == np.asarray(grid.axes()["n_lags_xi_map"])[-2, 0]
+
+
+def test_the_exact_sigma_of_the_map_cells():
+    """``xi_map_sigma`` against the covariance of the isotropic bins and a Monte Carlo; a lag at L / 2 has twice the
+    variance of a generic lag (2 r = 0 modulo L)."""
+    n, L = 16, 64.0
+    k_edges = np.linspace(2 * np.pi / L * 0.5, np.pi * n / L, 9)
+    grid = box_grid(n, L, k_edges=k_edges, r_edges=np.arange(0, L / 2 + L / n, L / n), log=None)
+    power = lambda k: 500.0 * np.maximum(k, 1e-3) ** -1.4  # noqa: E731
+    P = np.asarray(grid_power(power, grid.shape, grid.L)).copy()
+    P[0, 0, 0] = 0.0
+    nr, nc = grid.rpar_edges.size - 1, grid.rperp_edges.size - 1
+
+    def cell(jr, ic):
+        w = np.zeros((nr, nc))
+        w[jr, ic] = 1.0
+        return grid.xi_map_sigma(P, w)
+
+    assert cell(nr - 1, 0) ** 2 == pytest.approx(2.0 * np.sum(np.broadcast_to(G3._rfft_weights(n), P.shape) * P**2) / grid.V**2)
+    rng = np.random.default_rng(5)
+    samples = []
+    for _ in range(600):
+        f = np.fft.rfftn(rng.normal(size=grid.shape)) * np.sqrt(P / grid.dV)
+        samples.append(np.fft.irfftn(np.abs(f) ** 2, s=grid.shape) * grid.dV / grid.N / grid.dV)
+    mc = np.array(samples)
+    idx = np.asarray(grid._idx_r["map"]).reshape(grid.shape)
+    for jr, ic in ((nr - 1, 0), (nr - 3, 2), (nr // 2, 1)):
+        vals = mc[:, idx == jr * nc + ic].mean(axis=1)
+        assert vals.std(ddof=1) == pytest.approx(cell(jr, ic), rel=0.12), (jr, ic)
+    with pytest.raises(ValueError, match="shape of the map"):
+        grid.xi_map_sigma(P, np.zeros(3))
+
+
+def test_the_corner_of_the_map_is_read_the_same_for_toy_and_simulation():
+    """``xi_corner``: the offset against the expectation, its error and its exact sigma; through the mesh at the nodes the
+    (-1)^j term of the column r_perp = 0 is the one of ``node_transfer``; without an expectation the value itself."""
+    box = SMALL
+    grid = box_grid(box.n_cells, box.box_cMpc, k_edges=np.linspace(0.3, 2.9, 9), r_edges=np.arange(0, 16.5, 1.0), log=None)
+    g = box.grf()
+    res = field_statistics((box.cells(i) for i in range(3)), grid, species="HI", power=g.power, log=None)
+    c = xi_corner(res, grid=grid, power=g.power)
+    assert c["offset"] == pytest.approx(c["value"] - c["expected"], rel=1e-9) and c["each"].shape == (3,)
+    assert c["offset"] == pytest.approx(c["each"].mean()) and c["sigma"] > 0 and c["error"] > 0
+    assert c["rows"][-1] == pytest.approx(16.0) and np.all(c["columns"] < 32.0 / 15.0)
+    no_th = {k: v for k, v in res.items() if k != "theory"}
+    d = xi_corner(no_th)
+    assert np.isnan(d["expected"]) and np.isnan(d["sigma"]) and d["offset"] == pytest.approx(d["value"])
+
+
+def test_interlacing_at_the_nyquist_mode():
+    """numpy keeps only k = -pi / H, where the phase of the interlaced mesh is -i (S16 eq. 36 with the odd image +pi / H).
+    A wave cos(pi x / H + phi) sampled by points off the nodes gives the amplitude of the k = -pi / H component, a / 2
+    e^{-i phi}, whatever phi; the mesh alone sees only cos(phi). On the nodes the shifted PCS mesh vanishes there (K = 0),
+    and the mode is the unshifted one over two."""
+    n, L = 32, 32.0
+    H = L / n
+    rng = np.random.default_rng(3)
+    x = rng.uniform(0, L, 2_000_000)
+    k_ny = -np.pi / H
+    a = 0.1
+    for phi in (0.0, 0.7, np.pi / 2):
+        w = 1.0 + a * np.cos(k_ny * x + phi)
+        F, _ = fourier_mesh(x, w, n, L, mas="pcs", interlace=True)
+        got = complex(F[n // 2]) / x.size
+        assert abs(got - 0.5 * a * np.exp(-1j * phi)) < 3e-3, phi
+        F0, _ = fourier_mesh(x, w, n, L, mas="pcs", interlace=False)
+        assert abs(abs(complex(F0[n // 2]) / x.size) - a * abs(np.cos(phi))) < 3e-3, phi
+    nodes = np.arange(n) * H
+    F1 = np.fft.rfft(np.asarray(paint(nodes, (-1.0) ** np.arange(n), n, L, mas="pcs", shift=0.5)))
+    assert abs(F1[n // 2]) < 1e-12 * n, "the PCS kernel on half nodes vanishes at the Nyquist mode"
+
+
+def test_the_kernel_of_the_nodes_alternates_and_zeroing_the_nyquist_planes_does_not_help():
+    """Through the mesh at the nodes, xi - xi_exact = (1/V) sum_k (T - 1) P cos(k.r) alternates as (-1)^j along r_perp = 0
+    (the kink of T across k_y = pi / H), small next to the expectation; removing the Nyquist planes adds a far larger
+    (-1)^j term to the expectation itself (the sum of P over the plane), so it is not a remedy."""
+    n, L = 64, 150.0
+    box = ToyBoxes(box_cMpc=L, n_s=-0.4, n_cells=n, n_real=1, r_bao=40.0, sigma_bao=1.0, bao_ratio=0.001)
+    P = np.asarray(grid_power(box.grf().power, (n, n, n), L)).copy()
+    P[0, 0, 0] = 0.0
+    T = np.asarray(node_transfer(n, L, mas="pcs", interlace=True))
+    dV = (L / n) ** 3
+    col = lambda Q: np.fft.irfftn(Q, s=(n, n, n))[0, : n // 2 + 1, 0] / dV  # noqa: E731
+    d = col((T - 1) * P)
+    tail = d[n // 2 - 8 :]
+    assert np.all(np.sign(tail) == (-1.0) ** np.arange(n // 2 - 8, n // 2 + 1) * np.sign(tail[-1])), "(-1)^j"
+    Z = P.copy()
+    Z[:, n // 2, :] = 0.0
+    z = col(Z) - col(P)
+    assert np.abs(z[-8:]).min() > 5 * np.abs(tail).max(), "the plane removed: a larger alternating term"

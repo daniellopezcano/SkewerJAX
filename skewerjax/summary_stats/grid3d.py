@@ -36,7 +36,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from skewerjax.summary_stats.binning import bin_index, binned_mean, hybrid_k_edges, occupied_edges
-from skewerjax.summary_stats.mesh import PAINT_CHUNK, check_grid_native, fourier_mesh
+from skewerjax.summary_stats.mesh import PAINT_CHUNK, fourier_mesh, lattice_only
 
 MU_WEDGES = (0.0, 0.5, 0.8, 0.95, 1.0)  # mu = r_par / r: the wedges of DESI DR2 Lya BAO (arXiv:2503.14739, Fig. 3)
 GRID_KEYS = ("P_iso", "P_map", "P_mu", "xi_iso", "xi_map", "xi_mu")
@@ -223,16 +223,16 @@ class GridStatistics3D:
             out["xi_ell"] = np.einsum("bij,jb->ib", self._ell_inv, np.nan_to_num(v))
         return out
 
-    def measure(self, delta, *, mas=None) -> dict:
+    @lattice_only
+    def measure(self, delta) -> dict:
         """The binned P and xi of a field sampled on the regular lattice of this grid (``shape``): dict keyed by
         ``GRID_KEYS`` (P [L^3], xi dimensionless; NaN in empty bins), without the k = 0 mode (module docstring). One
         rfftn and one irfftn.
 
         The lattice path: the skewer samples (``lattice.measure_lattice``, ``density.skewer_density_statistics``) are the
-        field on their lattice, so their FFT is exact, with no window and no alias images of an assignment (Sefusatti et
-        al. 2016, §2.3), and ``mas`` must be None (a scheme raises). The fields of gas cells take the mesh path
-        (``measure_points``, ``field_stats.field_statistics``)."""
-        check_grid_native(mas, "GridStatistics3D.measure")
+        field on their lattice, so their FFT is exact, with no window, no alias images of an assignment and no interlacing
+        (Sefusatti et al. 2016, §2.3); ``mas`` or ``interlace`` raise (``mesh.lattice_only``). The fields of gas cells take
+        the mesh path (``measure_points``, ``field_stats.field_statistics``)."""
         d = jnp.asarray(delta)
         if d.shape != self.shape:
             raise ValueError(f"delta must have the grid shape {self.shape}, got {d.shape}.")
@@ -301,6 +301,28 @@ class GridStatistics3D:
         n = np.where(cnt > 0, cnt, np.nan)
         C = 2.0 * C / (self.V**2 * np.outer(n, n))
         return 0.5 * (C + C.T)
+
+    def xi_map_sigma(self, power_modes, weights) -> float:
+        """The exact standard deviation, for one realisation of a Gaussian field with spectrum ``power_modes`` (rfft layout,
+        as ``theory``), of the linear combination sum_ab ``weights``[a, b] xi_map[a, b] of the cells of the (r_par, r_perp)
+        map. xi_hat(r) = (1/V) sum_k P_hat(k) cos(k.r) and Cov[P_hat(k), P_hat(k')] = P(k)^2 (delta_{k,k'} + delta_{k,-k'}),
+        so Var = 2 V^-2 sum_k w_k^2 P(k)^2, with w_k = sum_r w(r) cos(k.r) and w(r) = weights / (lags of its cell) on the lag
+        grid. A single lag r has Var = [S(0) + S(2 r)] / V^2 (``xi_iso_covariance``), so a lag with 2 r = 0 modulo L, such
+        as (0, L / 2, 0), has twice the variance of a generic lag."""
+        P = np.array(power_modes, dtype=float)
+        if P.shape != self._rfft_shape:
+            raise ValueError(f"power_modes must have the rfft shape {self._rfft_shape}, got {P.shape}.")
+        P[0, 0, 0] = 0.0  # the estimators drop the k = 0 mode
+        c = np.asarray(weights, dtype=float)
+        if c.shape != self._shape_r["map"]:
+            raise ValueError(f"weights must have the shape of the map {self._shape_r['map']}, got {c.shape}.")
+        idx = np.asarray(self._idx_r["map"])
+        cnt = np.bincount(idx[idx >= 0], minlength=c.size).astype(float)
+        per_lag = c.ravel() / np.where(cnt > 0, cnt, 1.0)
+        w_lag = np.where(idx >= 0, per_lag[np.where(idx >= 0, idx, 0)], 0.0).reshape(self.shape)
+        w_k = np.fft.rfftn(w_lag).real  # the real part: w symmetrised under r -> -r
+        mult = np.broadcast_to(_rfft_weights(self.shape[-1]), self._rfft_shape)
+        return float(np.sqrt(2.0 * np.sum(mult * w_k**2 * P**2)) / self.V)
 
     @property
     def _rfft_shape(self) -> tuple:
