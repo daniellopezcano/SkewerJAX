@@ -71,7 +71,7 @@ pip install -e .                    # the core (JAX for the CPU included): toy f
 pip install -e ".[simulations]"     # + h5py: the snapshot readers and the result cache
 pip install -e ".[plots]"           # + tol-colors, ipympl (optional figure extras)
 pip install -e ".[notebooks]"       # + Jupyter, ipympl, ipywidgets, nbconvert for the notebooks
-pip install -e ".[comparison]"      # + h5py, fake-spectra (PyPI), psutil: the comparison with fake_spectra and the benchmark
+pip install -e ".[comparison]"      # + h5py, fake-spectra (PyPI), psutil: the benchmark; for notebook 12 see below
 pip install -e ".[dev]"             # + pytest, pytest-cov, ruff, pre-commit, nbstripout, nbconvert, psutil
 pip install -e ".[gpu]"             # + jax[cuda12]
 ```
@@ -82,11 +82,9 @@ development install, run `pre-commit install` once (ruff, nbstripout and the fil
 
 ### Optional dependencies
 
-- **fake_spectra** is needed only by `skewerjax.comparison`: its live mode, the tests with the `fake_spectra` marker
-  (`tests/comparison/test_fake_spectra.py`) and the benchmark. It is published on PyPI as `fake-spectra` (2.3.1 at the time of writing; the development
-  environment uses an editable 2.2.4 clone).
-  - Without it, the comparison subpackage still works from a reference HDF5 file (`FakeSpectraSource(reference=...)`).
-  - The rest of the package never imports it.
+- **fake_spectra** is needed only by notebook 12, the tests with the `fake_spectra` marker
+  (`tests/comparison/test_fake_spectra.py`, `tests/core/test_fake_spectra_options.py`) and the benchmark; the package never
+  imports it elsewhere. Install it as in the next section, in one environment with SkewerJAX.
 - **jztree** (JZ-TREE, CUDA-only neighbour search with periodic boxes) is optional: the GPU back end of the cell
   selection (`select_cells_near_paths(..., backend="jztree" | "auto")`). It is not installed by default, and CPU-only
   installations never import it; the default is SciPy's `cKDTree`. Its CUDA 12 wheels (`pip install "jztree[cuda12]"`,
@@ -99,6 +97,35 @@ development install, run `pre-commit install` once (ruff, nbstripout and the fil
   - the tables are expected in `skewerjax/simulations/cloudy_tables/ion_out_photo_atten`;
   - `cloudy_tables` is a git submodule (sbird/cloudy_tables, the same tables as fake_spectra's): clone with
     `--recurse-submodules` or run `git submodule update --init`; the package data of `pyproject.toml` includes them.
+
+## fake_spectra in one environment (notebook 12)
+
+Notebook 12 and the benchmark run fake_spectra natively next to SkewerJAX. The recipe is `envs/skewerjax-fs.yml`
+(Python 3.11, JAX 0.6.2 with the CUDA 12 plugin, the validated versions of the scientific stack), then, from the
+repository root:
+
+```bash
+conda env create -f envs/skewerjax-fs.yml
+conda activate skewerjax-fs
+git -C .project_material/fake_spectra submodule update --init --recursive   # its CLOUDY tables, 121 MB
+pip install .project_material/fake_spectra                                  # non-editable: builds with gcc and OpenMP
+pip install -e ".[simulations,notebooks,dev]"                               # not ".[comparison]": that takes fake-spectra from PyPI
+python -m ipykernel install --user --name skewerjax-fs --display-name skewerjax-fs
+```
+
+`.project_material/fake_spectra` is any clone of [sbird/fake_spectra](https://github.com/sbird/fake_spectra) (validated:
+`ff5844d`, version 2.3.0). The first `pip install` fails with `package directory 'fake_spectra/cloudy_tables/ion_out_no_atten'
+does not exist` until the submodule is initialised; the `project.license` message before it is only a deprecation
+warning. The build needs a C++ compiler with OpenMP: it found the system `gcc` here (`setup.py` falls back to one thread
+without OpenMP, with a warning). HDF5 comes with h5py: its C reader (`cextract`) is not built.
+
+Check it:
+
+```bash
+python -c "import skewerjax, fake_spectra"
+python -m pytest "$(python -c 'import fake_spectra, os; print(os.path.dirname(fake_spectra.__file__))')/tests" -o addopts=""   # 33 tests
+JAX_PLATFORMS=cpu python -m pytest -m "slow or not slow"                    # from the repository root
+```
 
 ## 4. Simulation data
 
@@ -128,7 +155,7 @@ pytest                                                            # the fast tes
 pytest -m "slow or not slow"                                      # every test, incl. the slow physics checks
 ```
 
-The tests that need the TNG50-4 snapshots (`tng`), a GPU (`gpu`) or fake_spectra (`fake_spectra`) skip themselves
+The tests that need the TNG50-4 snapshots (`tng`), a GPU (`gpu`) or fake_spectra (`fake_spectra`, environment `skewerjax-fs`) skip themselves
 when those are missing (`tests/README.md`).
 
 ## Troubleshooting

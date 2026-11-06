@@ -14,8 +14,9 @@ skewers and tau(v), for
 
 The defaults of both are SkewerJAX's (the physically most accurate choices); every other value is an isolated,
 named option. Periodicity is not one of them: a periodic spectrum is the opt-in ``velocity_period`` of
-``core.compute_optical_depth``, which ``tau``, ``optical_depth`` and ``compute_tau`` pass through (default: none). fake_spectra's per-cell integration scheme and the option sets that reproduce it are in
-``skewerjax.comparison`` (which depends on this module, not the other way round).
+``core.compute_optical_depth``, which ``tau``, ``optical_depth`` and ``compute_tau`` pass through (default: none).
+fake_spectra's choices are options of the functions they belong to (``snapshot_cells.gas_to_cells``,
+``core.absorbers.cell_pieces``, ``core.compute_optical_depth``); notebook 12 compares them with fake_spectra itself.
 """
 
 from __future__ import annotations
@@ -50,8 +51,6 @@ class ExtractionOptions:
         velocity width is <= 0.25 b; ``absorbers.absorbers_from_crossings``).
     mass_unit : "amu" (A m_u) or "proton" (A m_p, fake_spectra) in n_X = rho X / (A m).
     T_constants : "codata" or "fake_spectra" (its m_p, k_B) in T = (gamma - 1) mu m_p u / k_B.
-    b_constants : "codata" (b^2 = 2 k_B T / (A m_u)) or "fake_spectra" (2 k T / (A m_p) with the C
-        engine's constants; applied as T x FAKE_SPECTRA_B2_RATIO inside the profile only).
     x_HI_model : "stored_sf" (stored; star-forming cells recomputed), "stored", "fake_sf"
         (fake_spectra's default, ``sf_neutral=True``) or "rahmati_all" (``gas_physics.neutral_fraction``).
     cloudy_density : "hydrogen" (hden = n_H) or "fake_spectra" (0.774132 rho / m_p); metals only.
@@ -61,7 +60,6 @@ class ExtractionOptions:
     deposition: str = "voronoi"
     mass_unit: str = "amu"
     T_constants: str = "codata"
-    b_constants: str = "codata"
     x_HI_model: str = "stored_sf"
     cloudy_density: str = "hydrogen"
     cloudy_interpolation: str = "linear"
@@ -74,8 +72,8 @@ class ExtractionOptions:
 class IntegrationOptions:
     """Evaluation of the optical-depth integral (layer 6). Defaults: SkewerJAX.
 
-    frame : "exact" (a(x) along the path from the cosmology) or "snapshot" (one a, linear Hubble flow; matched).
-    normalisation : multiplies every density (matched mode: 8/7 or 7/8 of fake_spectra's chords).
+    frame : "exact" (a(x) along the path from the cosmology) or "snapshot" (one a, linear Hubble flow, fake_spectra's).
+    b_constants : the constants of the thermal width, "codata" or "fake_spectra" (``core.compute_optical_depth``).
     detuning : "exact" (nu = (c / lambda) expm1(-dv / c)) or "linear" (fake_spectra).
     dtype : None (the input precision, float64 under x64) or "float32": opt-in faster kernel.
     a_eff : None (default: a_p^-2 of every piece) or a scalar, the effective scale factor of the comoving-to-physical
@@ -87,7 +85,7 @@ class IntegrationOptions:
     """
 
     frame: str = "exact"
-    normalisation: float = 1.0
+    b_constants: str = "codata"
     detuning: str = "exact"
     dtype: str | None = None
     a_eff: float | None = None
@@ -484,9 +482,8 @@ class SimulationSkewers:
         """The deposited pieces of ``ion`` as ``core.Pieces`` for the lines of ``line_bundle`` (that species only), in
         the frame ``integ.frame``: what ``core.compute_optical_depth`` sums, e.g.
         ``compute_optical_depth(sk.pieces(HI, lya), v, lya, velocity_period=True, a_eff=integ.a_eff)`` (the pieces keep
-        a_p; ``integ.a_eff`` acts in the optical depth)."""
+        a_p; ``integ.a_eff`` and ``integ.b_constants`` act in the optical depth)."""
         fr = self.frame(integ.frame)
-        T_scale = gp.FAKE_SPECTRA_B2_RATIO if ext.b_constants == "fake_spectra" else 1.0
         seg = self.segments("voronoi" if ext.deposition == "voronoi_crossings" else ext.deposition)
         return ab_.cell_pieces(
             self.to_cells(ion, ext),
@@ -496,8 +493,6 @@ class SimulationSkewers:
             deposition=ext.deposition,
             segments=seg,
             a_data=self.header.a,
-            T_scale=T_scale,
-            n_scale=integ.normalisation,
             skewers=skewers,
         )
 
@@ -513,7 +508,11 @@ class SimulationSkewers:
     ) -> str:
         """Cache key of a tau result: skewers, ion, lines, velocity grid, override name and every option."""
         v = np.asarray(velocities_kms, dtype=np.float64)
-        new = {"hubble_flow": "exact", "aH_ref": None}  # options added later: in the key only when not at their defaults
+        new = {
+            "hubble_flow": "exact",
+            "aH_ref": None,
+            "b_constants": "codata",
+        }  # options added later: in the key only when not at their defaults
         integ_d = {k: w for k, w in asdict(integ).items() if not (k in new and w == new[k])}
         opts = {**asdict(relevant_options(ext, ion)), **integ_d, "velocity_period": velocity_period}
         geo = hashlib.md5(
@@ -574,7 +573,6 @@ class SimulationSkewers:
         velocity_period=False,
     ) -> np.ndarray:
         """``tau`` without the cache: the deposited absorbers through ``absorbers.tau_absorbers``."""
-        T_scale = gp.FAKE_SPECTRA_B2_RATIO if ext.b_constants == "fake_spectra" else 1.0
         fr = self.frame(integ.frame)
         A = self.absorbers(ion, ext, override, frame=fr)
         return ab_.tau_absorbers(
@@ -583,8 +581,7 @@ class SimulationSkewers:
             np.asarray(velocities_kms, dtype=np.float64),
             fr,
             velocity_period=velocity_period,
-            T_scale=T_scale,
-            n_scale=integ.normalisation,
+            b_constants=integ.b_constants,
             detuning=integ.detuning,
             check=check,
             dtype=integ.dtype,

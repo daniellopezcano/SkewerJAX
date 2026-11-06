@@ -25,6 +25,23 @@ from skewerjax.core.constants import phys
 from skewerjax.core.spectral import frequency_offset_GHz
 from skewerjax.core.voigt import log10_voigt, voigt_harris
 
+# The constants of the thermal width b^2 = 2 k_B T / m: (b / b_CODATA)^2 at equal T and mass number A. "codata" (default):
+# k_B / (A m_u). "fake_spectra": its C engine's k_B / (A m_p) (absorption.cpp L24, L158; absorption.h L4 labels PROTONMASS
+# "1 a.m.u"): 0.992777 of the default, applied as a factor of T inside the profile only (``b_constants`` of
+# ``core.compute_optical_depth``).
+_FAKE_SPECTRA_BOLTZMANN, _FAKE_SPECTRA_PROTONMASS = 1.3806504e-16, 1.67262178e-24  # [erg / K], [g]
+B2_RATIOS = {
+    "codata": 1.0,
+    "fake_spectra": (_FAKE_SPECTRA_BOLTZMANN / _FAKE_SPECTRA_PROTONMASS) / (phys.kB_erg_per_K * phys.g_to_amu),
+}
+
+
+def check_b_constants(b_constants: str) -> float:
+    """The factor of T of ``b_constants`` (``B2_RATIOS``), or ``ValueError`` naming the values."""
+    if b_constants not in B2_RATIOS:
+        raise ValueError(f"b_constants must be one of {tuple(B2_RATIOS)}, got {b_constants!r}.")
+    return B2_RATIOS[b_constants]
+
 
 def voigt_widths_GHz(temperature, turbulence, collisional, lambda0_A, A21_GHz, mass_amu):
     """Gaussian sigma and Lorentzian gamma [GHz] per (line, point).

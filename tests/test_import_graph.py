@@ -60,7 +60,7 @@ def test_static_import_graph():
 def test_the_checker_sees_lazy_imports():
     """The static check catches an import inside a function, absolute or relative, and ``from skewerjax import x``."""
     src = (
-        "def f():\n    from skewerjax.simulations import ToyBoxes\n    import skewerjax.comparison.source\n"
+        "def f():\n    from skewerjax.simulations import ToyBoxes\n    import skewerjax.comparison.benchmark\n"
         "from ..comparison import x\nfrom skewerjax import utils\nfrom . import grid3d\n"
     )
     assert _imported_subpackages(src, ("summary_stats", "probe.py"), "summary_stats") == {"simulations", "comparison", "utils"}

@@ -2,7 +2,7 @@
 
 Self-contained (imports nothing from ``skewerjax.summary_stats``, ``skewerjax.simulations`` or ``skewerjax.comparison``). The gas of every source
 (the toy fields and the snapshots of ``skewerjax.simulations``) is one container, ``Cells`` (Voronoi cells); one route
-takes it to tau: ``select_cells`` -> deposition (``voronoi_segments`` / ``grid_segments`` / ``tophat_segments``) ->
+takes it to tau: ``select_cells`` -> deposition (``voronoi_segments`` / ``grid_segments`` / ``tophat_segments`` / ``tophat_chord_segments``) ->
 ``cell_pieces`` (``Pieces``) -> ``compute_optical_depth``, with the profiles of ``line_profiles``. Every numerical
 function of the tau sum is written in ``jax.numpy`` and works under ``jit`` and ``vmap``; the containers
 (``Cosmology``, ``LineBundle``, ``SkewerBundle``, ``Cells``, ``Pieces``) are pytrees; the geometry (selection,
@@ -20,6 +20,7 @@ from skewerjax.core.absorbers import (
     bundle_frame,
     cell_pieces,
     column_per_pixel,
+    density_per_pixel,
     deposit,
     sampling_check,
     scale_factors_along_paths,
@@ -36,6 +37,7 @@ from skewerjax.core.deposition import (
     cell_crossings,
     grid_segments,
     segment_fields,
+    tophat_chord_segments,
     tophat_segments,
     voronoi_segments,
 )

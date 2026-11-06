@@ -11,7 +11,7 @@ neither imports the other; ``tests/test_import_graph.py`` checks it):
 * ``skewerjax.summary_stats``: the statistics, from arrays and geometry only: the overflux and its 1D and 3D statistics
   (P1D, xi1D, P3D, xi3D, the (par, perp) plane and the wedges of mu), term by term and order by order; P and xi of 3D
   fields and of the density along skewers, against an expectation P(k).
-* ``skewerjax.comparison`` (C): fake_spectra's scheme and results, compared with SkewerJAX's (uses the blocks above).
+* ``skewerjax.comparison`` (C): the benchmark against fake_spectra (uses the blocks above).
 
 Notebooks compose the realms. The subpackages are imported lazily (PEP 562): ``import skewerjax.summary_stats`` loads
 ``core`` at most, while ``skewerjax.simulations`` and ``from skewerjax import simulations`` work as before.

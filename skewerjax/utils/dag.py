@@ -171,9 +171,9 @@ DAG_NODES = {
         "fake_spectra",
         "external reference",
         "external reference",
-        "comparison.source",
+        "comparison.benchmark",
         "external",
-        "FakeSpectraSource",
+        "run_fake_spectra",
     ),
 }
 
@@ -259,8 +259,8 @@ DAG_EDGES = (
     ),
 )
 DAG_EXTERNAL = (
-    DagEdge("simulation", "fake_spectra", "external", None, "over", ("comparison.source:FakeSpectraSource",)),
-    DagEdge("fake_spectra", "tau", "external", "compared", "d", ("comparison.emulation:matched_tau",)),
+    DagEdge("simulation", "fake_spectra", "external", None, "over", ("comparison.benchmark:run_fake_spectra",)),
+    DagEdge("fake_spectra", "tau", "external", "compared", "d", ("core.optical_depth:compute_optical_depth",)),
 )
 DAG_NOTEBOOKS = {
     "lines": "01",
@@ -300,7 +300,6 @@ LAYER_EDGES = (  # (importer, imported)
     ("utils", "summary_stats"),
     ("utils", "core"),
     ("comparison", "simulations"),
-    ("comparison", "summary_stats"),
     ("comparison", "core"),
     ("simulations", "core"),
     ("summary_stats", "core"),

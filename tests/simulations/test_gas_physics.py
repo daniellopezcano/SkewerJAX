@@ -123,6 +123,53 @@ def test_cloudy_table_and_metal_ions():
     np.testing.assert_allclose(np.asarray(Pf["ion_fraction"]), np.asarray(tab.fraction(si, hden, P["T"])), rtol=1e-12)
 
 
+def test_gas_to_cells_options_are_fake_spectras_rules():
+    """Every gas-physics keyword of ``gas_to_cells``: the default is SkewerJAX's, the alternative the fake_spectra rule."""
+    c, si = synthetic(2), Ion("Si", 3)
+    base = gas_to_cells(c, ["HI", si])
+    default = gas_to_cells(
+        c,
+        ["HI", si],
+        mass_unit="amu",
+        T_constants="codata",
+        x_HI_model="stored_sf",
+        cloudy_density="hydrogen",
+        cloudy_interpolation="linear",
+    )
+    for sp in ("HI", "SiIII"):
+        for f in ("number_density", "temperature"):
+            np.testing.assert_array_equal(base.species[sp][f], default.species[sp][f])
+    n = lambda cells, sp="HI": np.asarray(cells.species[sp]["number_density"])
+    # the mass constant (absorption.h L4): every density 1 / 1.00728 of the default
+    st = dict(x_HI_model="stored")  # (the star-forming cells of the default depend on n_H, so on the mass constant)
+    np.testing.assert_allclose(
+        n(gas_to_cells(c, "HI", mass_unit="proton", **st)) / n(gas_to_cells(c, "HI", **st)), gp.M_U_G / phys.mp, rtol=1e-12
+    )
+    # the T constants (unitsystem.py L21, L23)
+    T = np.asarray(gas_to_cells(c, "HI", T_constants="fake_spectra").species["HI"]["temperature"])
+    ratio = (1.67262178e-24 / 1.38066e-16) / (phys.mp / phys.kB_erg_per_K)
+    hot = np.asarray(base.species["HI"]["temperature"]) > 1.0
+    np.testing.assert_allclose(T[hot] / np.asarray(base.species["HI"]["temperature"])[hot], ratio, rtol=1e-12)
+    # sf_neutral (gas_properties.py L116-L146): only the cells above its threshold in rho / m_p change, to x_cold
+    x = gas_to_cells(c, "HI", x_HI_model="fake_sf")
+    rho_mp = np.asarray(c.fields["rho"]) / 1.67262178e-24
+    high = rho_mp > gp.fake_spectra_sf_threshold() / 0.76
+    stored = gas_to_cells(c, "HI", x_HI_model="stored")
+    np.testing.assert_array_equal(n(x)[~high], n(stored)[~high])
+    # hden = 0.774132 rho / m_p (convert_cloudy.py L183), the spline of CloudyTable.ion
+    table = CloudyIonTable(1.0 / A - 1.0)
+    P = ion_properties(c, si)
+    hden = gp.CLOUDY_HDEN_FACTOR * np.clip(rho_mp, 10 ** table.LOG_DENS[0], 10 ** table.LOG_DENS[-1])
+    f_den = np.asarray(table.fraction(si, hden, P["T"]))
+    np.testing.assert_allclose(
+        n(gas_to_cells(c, si, cloudy_density="fake_spectra"), "SiIII") / (np.asarray(P["n_elem"]) * A**3), f_den, rtol=1e-12
+    )
+    f_cub = np.asarray(table.fraction(si, P["n_H"], P["T"], interpolation="cubic"))
+    np.testing.assert_allclose(
+        n(gas_to_cells(c, si, cloudy_interpolation="cubic"), "SiIII") / (np.asarray(P["n_elem"]) * A**3), f_cub, rtol=1e-12
+    )
+
+
 def test_gas_cells_and_gas_to_cells():
     c = synthetic(2)
     leaves, tree = jax.tree_util.tree_flatten(c)

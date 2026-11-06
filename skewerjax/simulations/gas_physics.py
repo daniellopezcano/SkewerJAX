@@ -3,7 +3,7 @@
 Everything here is a pure function of per-cell arrays (jit / vmap / grad friendly), except the
 reading of tables from disk.
 
-Conventions and choices (the fake_spectra choices are the matched options, ``skewerjax.comparison``):
+Conventions and choices (the fake_spectra choices are options, notebook 12 compares them with fake_spectra itself):
 
 * **Mass unit.** n_X = rho X_X / (A_X m_u), with A_X the standard atomic weight
   (``lines_table.dat``) and m_u = 1.66053906660e-24 g the atomic mass unit (default,
@@ -13,7 +13,8 @@ Conventions and choices (the fake_spectra choices are the matched options, ``ske
 * **Temperature.** T = (gamma - 1) mu m_p u / k_B, mu = 4 / (1 + 3 X + 4 X n_e), X = 0.76 (TNG FAQ;
   fake_spectra ``abstractsnapshot.get_temp`` L121-L154). ``constants="codata"`` uses CODATA 2018
   m_p and k_B; ``"fake_spectra"`` uses fake_spectra's ``unitsystem.py`` values (m_p 1.67262178e-24,
-  k_B 1.38066e-16), which makes T 8.1e-6 lower.
+  k_B 1.38066e-16), which makes T 8.1e-6 lower. The constants of the thermal width b are an option of the optical depth
+  (``core.compute_optical_depth``'s ``b_constants``).
 * **H I fraction.** ``x_HI_model="stored_sf"`` (default) keeps TNG's ``NeutralHydrogenAbundance``,
   which Arepo computes on the fly in ionisation equilibrium with the FG09 (``TREECOOL_fg_dec11``)
   UVB, the Rahmati+13 self-shielding factor and the local AGN radiation (Vogelsberger+13
@@ -55,11 +56,6 @@ CONSTANTS = {  # (m_p [g], k_B [erg/K]) used in T
     "codata": (phys.mp, phys.kB_erg_per_K),
     "fake_spectra": (1.67262178e-24, 1.38066e-16),  # fake_spectra unitsystem.py L21, L23
 }
-# fake_spectra's C engine (absorption.h L4, absorption.cpp L158): b = sqrt(2 k T / (A m_p))
-FAKE_C_BOLTZMANN, FAKE_C_PROTONMASS = 1.3806504e-16, 1.67262178e-24
-FAKE_SPECTRA_B2_RATIO = (FAKE_C_BOLTZMANN / FAKE_C_PROTONMASS) / (phys.kB_erg_per_K / M_U_G)
-"""(b_fake / b_SkewerJAX)^2 at equal T and A: fake_spectra's (k_B / m_p) over SkewerJAX's
-(k_B / m_u) = 0.992777. Multiplying T by it inside the profile reproduces fake_spectra's b."""
 CLOUDY_HDEN_FACTOR = 0.774132  # convert_cloudy.CloudyTable.ion, rho *= 0.774132
 GFM_METALS_ORDER = ("H", "He", "C", "N", "O", "Ne", "Mg", "Si", "Fe")
 _ROMAN = ("I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X")

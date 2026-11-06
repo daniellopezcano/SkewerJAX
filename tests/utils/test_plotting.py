@@ -1242,3 +1242,196 @@ def test_the_imprints_of_the_pairs_on_the_p1d_figures():
     )
     assert all(len([ln for ln in a.lines if ln.get_linewidth() == 1.4]) <= len(prs) for a in axs) and key_of(axs[-1]) is not None
     plt.close(fig)
+
+
+def _code_curves(nv=400):
+    """The arrays of ``plot_code_comparison``'s curves on one skewer: a reference, and the same 1 % higher in n and tau."""
+    v, y = np.arange(0.5, nv + 0.5), np.arange(0.5, nv + 0.5) / 80.0  # (aH) = 80 km/s per cMpc
+    n, tau = 1e-10 * (2.0 + np.sin(v / 9)), 0.5 + 0.4 * np.cos(v / 17)
+    ref = dict(v=v, y=y, n=n, tau=tau, F=np.exp(-tau))
+    other = dict(v=v, y=y, n=n * 1.01, tau=tau * 1.01, F=np.exp(-tau * 1.01))
+    return ref, other
+
+
+def test_code_residual_definitions():
+    """n and tau: the symmetric relative difference, bounded by 2, NaN where neither has gas; F: the absolute difference."""
+    a, b = np.array([3.0, 1.0, 0.0, 0.0]), np.array([1.0, 3.0, 2.0, 0.0])
+    for q in ("n", "tau"):
+        r = pl.code_residual(q, a, b)
+        np.testing.assert_allclose(r[:3], [1.0, -1.0, -2.0], rtol=1e-14)
+        assert np.isnan(r[3])
+        assert np.nanmax(np.abs(r)) <= 2.0
+    np.testing.assert_array_equal(pl.code_residual("F", a, b), a - b)
+    with pytest.raises(ValueError):
+        pl.code_residual("T", a, b)
+    with pytest.raises(ValueError):
+        pl.code_residual("F", a, b[:2])
+
+
+def test_code_modes_and_switch_colors():
+    """A fixed style per mode: only fake_spectra dashed, the default solid and blue, every colour and style distinct and from
+    the palette; 17 distinct colours for the switches, none of them a colour of the modes they are drawn against."""
+    m = pl.CODE_MODES
+    assert set(m) == {"default", "fake_spectra", "matched", "default+switch", "matched-switch"}
+    assert m["default"]["ls"] == "-" and m["default"]["color"] == pl.PALETTE["blue"]
+    assert m["fake_spectra"]["ls"] == "--" and m["fake_spectra"]["color"] != pl.PALETTE["blue"]
+    assert [k for k, s in m.items() if s["ls"] == "--"] == ["fake_spectra"]
+    assert len({str(s["ls"]) for s in m.values()}) == 5 and len({s["color"] for s in m.values()}) == 5
+    assert all(s["color"] in pl.PALETTE.values() for s in m.values())
+    colours = list(pl.SWITCH_COLORS.values())
+    assert len(colours) == 17 == len(set(colours))
+    assert not set(colours) & {m[k]["color"] for k in ("default", "fake_spectra", "matched")}
+
+
+def test_plot_code_comparison_rows_and_axes():
+    """Any subset of the rows, always in order, the residual rows shorter; n against y [cMpc], tau and F against v [km/s], on the
+    same horizontal extent through y = v / aH; fixed residual limits, unless changed; the window; no residual rows without residuals."""
+    ref, other = _code_curves()
+    curves = [dict(mode="fake_spectra", **ref), dict(mode="default", **other)]
+    pair = [("default", "fake_spectra")]
+    fig, axs = pl.plot_code_comparison(curves, residuals=pair, aH=80.0, title="t")
+    assert len(axs) == 6 and not pl.check_fonts(fig)
+    assert [a.get_yscale() for a in axs] == ["log", "symlog", "log", "symlog", "linear", "symlog"]
+    assert axs[1].get_position().height < axs[0].get_position().height
+    assert axs[0].get_xlabel() == pl.LABELS["y"] and axs[5].get_xlabel() == pl.LABELS["v"]
+    np.testing.assert_allclose(np.array(axs[0].get_xlim()) * 80.0, axs[5].get_xlim())
+    np.testing.assert_allclose(axs[1].get_xlim(), axs[0].get_xlim())
+    np.testing.assert_allclose(axs[2].get_xlim(), axs[5].get_xlim())
+    assert axs[0].get_xlim() == (0.0, 5.0) and axs[5].get_xlim() == (0.0, 400.0)
+    for row, ax in zip(("dn", "dtau", "dF"), axs[[1, 3, 5]]):
+        assert ax.get_ylim() == (-pl.CODE_RESIDUAL_LIMITS[row][0], pl.CODE_RESIDUAL_LIMITS[row][0])
+    plt.close(fig)
+
+    fig, axs = pl.plot_code_comparison(curves, residuals=pair, rows=("dF", "n", "F", "dn"), aH=80.0)  # the order is fixed
+    assert [a.get_ylabel() for a in axs[[1, 3]]] == [r"$\Delta n/\bar{n}$", pl.LABELS["dF"]] and axs[2].get_ylabel() == pl.LABELS["F"]
+    plt.close(fig)
+    fig, axs = pl.plot_code_comparison(curves, residuals=pair, aH=80.0, window=(100, 200), residual_limits=dict(dF=(1e-2, 1e-7)))
+    assert axs[5].get_xlim() == (100, 200) and axs[0].get_xlim() == (1.25, 2.5) and axs[5].get_ylim() == (-1e-2, 1e-2)
+    plt.close(fig)
+    fig, axs = pl.plot_code_comparison(curves, aH=80.0)  # no residuals: n, tau, F
+    assert len(axs) == 3
+    plt.close(fig)
+    deep = dict(ref, n=ref["n"] * 10.0 ** -(30.0 * (ref["v"] > 200)))  # decades of nearly empty pixels: the axis stops at log_decades
+    fig, axs = pl.plot_code_comparison([dict(mode="default", **deep)], rows=("n",), aH=80.0, log_decades=6.0)
+    lo, hi = axs[0].get_ylim()
+    assert np.isclose(hi / lo, 1e6)
+    plt.close(fig)
+    fig, axs = pl.plot_code_comparison(curves, rows=("F",))  # no n row: no aH needed
+    assert len(axs) == 1 and axs[0].get_xlabel() == pl.LABELS["v"]
+    plt.close(fig)
+    fig, axs = pl.plot_code_comparison(curves, rows=("n",))  # n alone: its own axis at the bottom
+    assert axs[0].get_xlabel() == pl.LABELS["y"]
+    plt.close(fig)
+    for bad in (dict(rows=("T",)), dict(rows=("dF",)), dict()):  # an unknown row; a residual row alone, no residuals; n and F, no aH
+        with pytest.raises(ValueError):
+            pl.plot_code_comparison(curves, **bad)
+        plt.close("all")
+
+
+def test_plot_code_comparison_curves_and_residuals():
+    """Each curve takes its mode's style, its own velocity grid and an optional colour; each residual its curve's style, its
+    pair's label and the definition of ``code_residual``, with a thinner line on request."""
+    ref, other = _code_curves()
+    shifted = dict(ref, v=ref["v"] + 0.25)  # fake_spectra's own grid: drawn as it is, nothing corrected
+    curves = [
+        dict(mode="fake_spectra", **shifted),
+        dict(mode="default", **ref),
+        dict(mode="default+switch", label="a_eff", color=pl.SWITCH_COLORS["a_eff"], **other),
+    ]
+    pairs = [("a_eff", "default", dict(lw=0.7)), ("a_eff", "fake_spectra")]
+    fig, axs = pl.plot_code_comparison(curves, residuals=pairs, aH=80.0)
+    fs, de, sw = axs[4].get_lines()
+    assert fs.get_linestyle() == "--" and fs.get_color() == pl.CODE_MODES["fake_spectra"]["color"]
+    np.testing.assert_array_equal(fs.get_xdata(), shifted["v"])
+    assert de.get_linestyle() == "-" and de.get_color() == pl.PALETTE["blue"]
+    assert sw.get_color() == pl.SWITCH_COLORS["a_eff"] and sw.get_linestyle() == ":"
+    thin, thick = [ln for ln in axs[3].get_lines() if len(ln.get_xdata()) > 2]
+    assert thin.get_linewidth() < thick.get_linewidth() and thin.get_color() == pl.SWITCH_COLORS["a_eff"]
+    assert thin.get_label() == "a_eff − default" and thick.get_label() == "a_eff − fake_spectra"
+    np.testing.assert_allclose(thin.get_ydata(), 2 * 0.01 / 2.01, rtol=1e-12)
+    np.testing.assert_allclose([ln for ln in axs[5].get_lines() if len(ln.get_xdata()) > 2][0].get_ydata(), other["F"] - ref["F"])
+    assert {t.get_text() for t in axs[1].get_legend().get_texts()} == {"a_eff − default", "a_eff − fake_spectra"}
+    plt.close(fig)
+    two = [dict(mode="default+switch", **other), dict(mode="matched-switch", **ref)]
+    fig, axs = pl.plot_code_comparison(two, residuals=[("default+switch", "matched-switch")], aH=80.0)
+    assert axs[1].get_legend().get_texts()[0].get_text() == "(default + switch) − (matched − switch)"
+    plt.close(fig)
+    fig, axs = pl.plot_code_comparison(two, residuals=[("default+switch", "matched-switch")], aH=80.0, residual_note="each − x")
+    assert axs[1].get_legend() is None and any(t.get_text() == "each − x" for t in axs[1].texts)
+    plt.close(fig)
+    for bad in (dict(residuals=[("nope", "default+switch")]), dict(curves=[dict(mode="nope", **ref)]), dict(curves=[dict(mode="default", **ref)] * 2)):
+        with pytest.raises(ValueError):
+            pl.plot_code_comparison(bad.pop("curves", two), aH=80.0, **bad)
+        plt.close("all")
+
+
+def test_plot_code_comparison_linewidths():
+    """The widths follow the plotting order, from 4 to 1 by default, each curve above the one before and under the legend; each
+    residual takes the width of its curve; a curve's own ``lw`` and a residual's style go over them."""
+    ref, other = _code_curves()
+    three = [dict(mode="fake_spectra", **ref), dict(mode="default", **other), dict(mode="matched", **ref)]
+    pairs = [("default", "fake_spectra"), ("matched", "fake_spectra")]
+
+    def curves_and_residuals(axs):  # the lines of the F row and of the dF row, without the line at 0
+        return axs[4].get_lines(), [ln for ln in axs[5].get_lines() if len(ln.get_xdata()) > 2]
+
+    fig, axs = pl.plot_code_comparison(three, residuals=pairs, aH=80.0)
+    lines, res = curves_and_residuals(axs)
+    np.testing.assert_allclose([ln.get_linewidth() for ln in lines], [4.0, 2.0, 1.0])
+    np.testing.assert_allclose([ln.get_linewidth() for ln in res], [2.0, 1.0])
+    orders = [ln.get_zorder() for ln in lines]
+    assert orders == sorted(set(orders)) and orders[-1] < axs[0].get_legend().get_zorder()
+    plt.close(fig)
+
+    four = [dict(three[0]), dict(three[1]), dict(three[2]), dict(mode="default+switch", **other)]
+    fig, axs = pl.plot_code_comparison(four, aH=80.0)
+    widths = [ln.get_linewidth() for ln in axs[2].get_lines()]  # no residuals: n, tau, F
+    assert np.isclose(widths[0], 4.0) and np.isclose(widths[-1], 1.0) and widths == sorted(widths, reverse=True)
+    plt.close(fig)
+
+    fig, axs = pl.plot_code_comparison(three, residuals=pairs, aH=80.0, linewidths=(5, 3, 0.5))
+    lines, res = curves_and_residuals(axs)
+    assert [ln.get_linewidth() for ln in lines] == [5, 3, 0.5] and [ln.get_linewidth() for ln in res] == [3, 0.5]
+    plt.close(fig)
+
+    own = [dict(three[0]), dict(three[1], lw=1.2), dict(three[2])]
+    styled = [("default", "fake_spectra"), ("matched", "fake_spectra", dict(lw=0.7))]
+    fig, axs = pl.plot_code_comparison(own, residuals=styled, aH=80.0, linewidths=(5, 3, 0.5))
+    lines, res = curves_and_residuals(axs)
+    assert [ln.get_linewidth() for ln in lines] == [5, 1.2, 0.5] and [ln.get_linewidth() for ln in res] == [1.2, 0.7]
+    plt.close(fig)
+
+    with pytest.raises(ValueError, match="one width per curve"):
+        pl.plot_code_comparison(three, aH=80.0, linewidths=(4, 2))
+    plt.close("all")
+
+
+def test_plot_code_comparison_shade_below():
+    """The band |residual| < shade_below, in the residual rows only and under their lines, leaves their limits alone; None: no band."""
+    ref, other = _code_curves()
+    curves = [dict(mode="fake_spectra", **ref), dict(mode="default", **other)]
+    pair = [("default", "fake_spectra")]
+
+    def band(ax):  # (low, high) of the one shaded patch of a row, in data units
+        assert len(ax.patches) == 1
+        low, high = ax.transData.inverted().transform(ax.patches[0].get_window_extent().get_points())[:, 1]
+        return low, high
+
+    fig, axs = pl.plot_code_comparison(curves, residuals=pair, aH=80.0)
+    fig.canvas.draw()
+    for row, ax in zip(("dn", "dtau", "dF"), axs[[1, 3, 5]]):
+        np.testing.assert_allclose(band(ax), (-1e-5, 1e-5), rtol=1e-6)
+        assert ax.patches[0].get_zorder() < min(ln.get_zorder() for ln in ax.get_lines())
+        assert 0.0 < ax.patches[0].get_alpha() < 1.0
+        assert ax.get_ylim() == (-pl.CODE_RESIDUAL_LIMITS[row][0], pl.CODE_RESIDUAL_LIMITS[row][0])
+    assert not any(ax.patches for ax in axs[[0, 2, 4]])
+    plt.close(fig)
+
+    fig, axs = pl.plot_code_comparison(curves, residuals=pair, aH=80.0, shade_below=1e-3)
+    fig.canvas.draw()
+    np.testing.assert_allclose(band(axs[5]), (-1e-3, 1e-3), rtol=1e-6)
+    plt.close(fig)
+
+    fig, axs = pl.plot_code_comparison(curves, residuals=pair, aH=80.0, shade_below=None)
+    assert not any(ax.patches for ax in axs)
+    plt.close(fig)

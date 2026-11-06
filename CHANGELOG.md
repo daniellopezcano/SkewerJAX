@@ -3,6 +3,39 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — fake_spectra's choices as core options; its emulation removed; notebook 12 against fake_spectra itself
+
+### Added
+- `plotting.CODE_MODES`, `SWITCH_COLORS`, `CODE_ROWS`, `code_residual`; `plot_code_comparison(linewidths=, shade_below=)`: widths
+  decreasing in plotting order, later curves on top, residuals in the width of their curve; a grey band |residual| < 1e-5.
+- `envs/skewerjax-fs.yml` and the steps in `docs/installation.md`: one environment for SkewerJAX and native fake_spectra (built
+  from a local clone, its `cloudy_tables` submodule initialised), Jupyter kernel `skewerjax-fs`.
+- `core.compute_optical_depth`: `b_constants` ("codata" | "fake_spectra", `line_profiles.B2_RATIOS`), `pixel_average`, `tautail`
+  (per cell, on the host, `_per_cell_optical_depth`), `chord_weight`; `tau_absorbers` passes `b_constants`.
+- `core.deposition.tophat_chord_segments`, `deposition="tophat_chords"` and `chord_weight` of `cell_pieces` / `deposit`: fake_spectra's
+  7 points per chord, weight 1/7 (column kept) or 1/8 (7/8 of it); `Pieces.cell` (the cell of every piece); `core.density_per_pixel`.
+- `simulations.gas_to_cells` and `snapshot_cells`: keywords `mass_unit`, `T_constants`, `x_HI_model`, `cloudy_density`,
+  `cloudy_interpolation`.
+- `plotting.plot_code_comparison`, `CODE_RESIDUAL_LIMITS`. `tests/core/test_fake_spectra_options.py`: each option against the rule it
+  cites, and all of them against fake_spectra's C engine on toy particles.
+
+### Changed
+- Notebook 12 rebuilt: kernel `skewerjax-fs`, TNG50-2, native `Spectra`, a block for the fully matched mode, then 17 options each on
+  its own from both ends (A = default + option, B = matched - option; four curves per figure, the matched mode standing for fake_spectra), two master figures per line, and the
+  root causes generated from the run, with what each option changes on this skewer. The cumulative chain, the 10 skewers and the
+  timing are gone from the notebook.
+- `plotting.plot_code_comparison` redesigned: a list of curves with a mode, a list of residual pairs, any subset of the rows n, Δn,
+  τ, Δτ, F, ΔF; n against y [cMpc]; the relative residuals are 2(a - b)/(a + b); `CODE_RESIDUAL_LIMITS` per residual row.
+- `comparison.benchmark`: the matched mode through the core options (`MATCHED_CELLS`, `MATCHED_PIECES`, `MATCHED_TAU`).
+- `tests/comparison/test_fake_spectra.py` against native fake_spectra, in process. `b_constants` moved from `ExtractionOptions` to
+  `IntegrationOptions`. `Pieces.path_cMpc` may be negative (chord points beyond the ends of a path).
+
+### Removed
+- `comparison.emulation`, `effects`, `source`, `driver` (`matched_tau`, `fake_chord_absorbers`, `MatchedIntegration`, `run_effects`,
+  `EXTRACTION_EFFECTS`, `INTEGRATION_EFFECTS`, `FAKE_SPECTRA_*`, `FakeSpectraSource`, `SKEWER_SETS`, now in `tests/helpers.py`);
+  `gas_physics.FAKE_SPECTRA_B2_RATIO`; `T_scale` and `n_scale` of `cell_pieces`, `absorber_pieces`, `tau_absorbers`;
+  `IntegrationOptions.normalisation`; the `ext` argument of `gas_to_cells`, `snapshot_cells`; `plotting.plot_effect_fluxes`.
+
 ## Unreleased — skewer statistics without mass assignment; one style for the BAO and the line features; figure aspects; P1D references
 
 ### Added

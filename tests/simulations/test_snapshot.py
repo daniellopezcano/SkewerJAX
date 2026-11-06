@@ -14,7 +14,6 @@ import numpy as np
 import pytest
 from scipy.spatial import cKDTree
 
-from skewerjax.comparison import SKEWER_SETS
 from skewerjax.core import absorber_pieces, axis_aligned_skewer_points, path_geometry, phys, select_cells
 from skewerjax.core import deposition as dep
 from skewerjax.simulations import (
@@ -29,6 +28,8 @@ from skewerjax.simulations import (
 )
 from skewerjax.simulations import gas_physics as gp
 from skewerjax.utils.paths import snapshot_dir
+
+from helpers import SKEWER_SETS
 
 TNG = snapshot_dir("TNG50-4")
 

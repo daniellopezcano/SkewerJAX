@@ -2,6 +2,17 @@
 
 import numpy as np
 
+# Skewer sets of the snapshot tests (axis 1/2/3 = x/y/z, cofm in ckpc/h, TNG50-4 box 35000 ckpc/h).
+SKEWER_SETS = {
+    "single": dict(axis=np.array([3], dtype=np.int32), cofm=np.array([[17500.25, 17500.75, 0.0]])),
+    "nset": dict(
+        axis=np.tile(np.array([1, 2, 3], dtype=np.int32), 6)[:16],
+        cofm=np.random.default_rng(2155).uniform(0.0, 35000.0, size=(16, 3)),
+    ),
+    "face": dict(axis=np.array([3, 1], dtype=np.int32), cofm=np.array([[5.0, 17500.75, 0.0], [0.0, 34995.0, 12000.5]])),
+}
+SKEWER_SETS["sk8"] = dict(axis=SKEWER_SETS["nset"]["axis"][8:9].copy(), cofm=SKEWER_SETS["nset"]["cofm"][8:9].copy())
+
 
 def raises(exc, match, fn, *a, **kw):
     """``fn(*a, **kw)`` raises ``exc`` whose message holds ``match``; returns the exception."""

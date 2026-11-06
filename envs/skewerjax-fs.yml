@@ -1,0 +1,33 @@
+# One environment for SkewerJAX and native fake_spectra (docs/installation.md, section "fake_spectra in one environment").
+#
+#   conda env create -f envs/skewerjax-fs.yml
+#
+# then, with the environment active, from the repository root (the three steps conda cannot do from here):
+#
+#   git -C .project_material/fake_spectra submodule update --init --recursive
+#   pip install .project_material/fake_spectra
+#   pip install -e ".[simulations,notebooks,dev]"
+#   python -m ipykernel install --user --name skewerjax-fs --display-name skewerjax-fs
+#
+# The versions are those SkewerJAX is validated with (the `skewerjax` environment); JAX is the same build, with the
+# CUDA 12 plugin (the notebooks and tests set JAX_PLATFORMS=cpu). Do not install the `comparison` extra here: it would
+# pull fake-spectra from PyPI over the local build.
+name: skewerjax-fs
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - jax[cuda12]==0.6.2
+      - jaxlib==0.6.2
+      - numpy==1.26.4
+      - scipy==1.16.3
+      - h5py==3.15.1
+      - matplotlib==3.10.8
+      - diffrax==0.7.0
+      - equinox==0.13.2
+      - exojax==2.2.2
+      - psutil==7.2.1
+      - setuptools>=68
+      - wheel

@@ -7,7 +7,7 @@ and ξ3D, and P and ξ of the density of the gas cells themselves. It is written
 be compiled, vectorised and differentiated, and it runs on CPUs and GPUs. The gas is one container for every source,
 Voronoi gas cells (`core.Cells`): built from Gaussian random fields (toy fields, isotropic or with a Kaiser-like
 anisotropy, Fingers of God and a BAO feature) or from hydrodynamical snapshots (Arepo/IllustrisTNG HDF5). A dedicated subpackage
-reproduces the scheme of fake_spectra, so that the two codes can be compared option by option.
+takes each choice of fake_spectra as an option, so that the two codes can be compared one switch at a time.
 
 **Key features**
 
@@ -28,8 +28,9 @@ reproduces the scheme of fake_spectra, so that the two codes can be compared opt
 - **Simulation extraction.** Streamed snapshot I/O and k-d tree cell selection, then the core's exact Voronoi
   deposition of the cells along each skewer (a fast path for regular grids of cells). Gas physics: TNG's stored neutral fractions, Rahmati et al. self-shielding for
   star-forming gas, and CLOUDY tables for metal ions.
-- **Comparison with fake_spectra.** A matched mode reproduces fake_spectra to |ΔF| ~ 1e-5. An effect chain switches
-  every difference on one at a time, and a benchmark harness measures both codes on identical skewers.
+- **Comparison with fake_spectra.** Every choice of fake_spectra is one option of a SkewerJAX function. Notebook 12 runs
+  fake_spectra natively, shows the fully matched mode and tests each option on its own, from both ends, and a benchmark harness measures
+  both codes on identical skewers. Environment: `envs/skewerjax-fs.yml`, steps in [`docs/installation.md`](docs/installation.md).
 
 ## Architecture
 
@@ -63,7 +64,6 @@ flowchart TB
     utils --> summary_stats
     utils --> core
     comparison --> simulations
-    comparison --> summary_stats
     comparison --> core
     simulations --> core
     summary_stats --> core
@@ -124,12 +124,8 @@ flowchart LR
 <!-- BEGIN generated:tree -->
 ```
 skewerjax/                    # SkewerJAX: absorption along skewers (tau, F = exp(-tau)) for many transitions, and …
-├── comparison/               # Block C, comparison with fake_spectra: its per-cell scheme on SkewerJAX absorbers …
-│   ├── benchmark.py          # Wall time and memory of SkewerJAX against fake_spectra on identical skewers (Lya …
-│   ├── driver.py             # Runs fake_spectra (NumPy / C, no JAX): full skewer runs to HDF5 and its per-cell …
-│   ├── effects.py            # fake_spectra vs SkewerJAX, one difference at a time: the matched option sets, the …
-│   ├── emulation.py          # fake_spectra's per-cell integration scheme on SkewerJAX's absorbers, and the …
-│   └── source.py             # fake_spectra results for the comparisons: live (``comparison.driver``) or read …
+├── comparison/               # Block C, comparison with fake_spectra: what remains is the benchmark of the two …
+│   └── benchmark.py          # Wall time and memory of SkewerJAX against fake_spectra on identical skewers (Lya …
 ├── core/                     # Block A, the core backbone: lines, cosmology, skewers, gas cells, the route cells …
 │   ├── absorbers.py          # Absorbers: the deposited pieces of every skewer, their frame a(s), and the pieces …
 │   ├── analytic.py           # Closed-form optical depths of uniform gas (review notes): the validation targets …
@@ -199,7 +195,7 @@ subpackage.
 | 1D statistics: P1D, ξ1D (by order and term) | `summary_stats.lattice`, `summary_stats.stats_1d` | `skewer_p1d`, `skewer_xi1d`, `decompose_1d` | 10, 11 |
 | 3D statistics: P3D, ξ3D on the lattice of skewers | `summary_stats.lattice`, `summary_stats.grid3d` | `lattice_grid`, `measure_lattice`, `GridStatistics3D` | 10, 11 |
 | field statistics: P, ξ of the cells' density: mesh (MAS + interlacing) | `summary_stats.field_stats`, `summary_stats.mesh` | `field_statistics`, `cell_weights`, `fourier_mesh` | 08, 09, 11 |
-| fake_spectra: external reference | `comparison.source` | `FakeSpectraSource` | 12, 13 |
+| fake_spectra: external reference | `comparison.benchmark` | `run_fake_spectra` | 12, 13 |
 <!-- END generated:concepts -->
 
 ## Quickstart
@@ -305,7 +301,7 @@ flowchart LR
 | `09_field_statistics_tng` | the statistics of 08 on the cells of TNG50-4 (snapshot 25): the total gas, H I, Si III and Si II through the same mesh, real space and redshift space along each axis (the three orientations as the ensemble), the header's cosmology against IllustrisTNG's, r_d (Aubourg et al. 2015) and its periodic images (r_d > L/2) |
 | `10_skewer_statistics` | the summary statistics on skewers through the toy boxes of 08 (regenerated with the same configuration): A, skewers through every box, step by step (`SkewerBundle`, cells, pieces, τ); B, the (k⊥, k∥) and (r⊥, r∥) planes of the density on the same skewers against their exact expectation; C, the normalisation (the statistics from arrays), where the skewers run and one from the gas to the overflux δ = T / T̄ − 1 (the mean transmission of the ensemble per redshift, `mean="redshift"`; also "global", "box", "skewer"); D, P and ξ of the total overflux in the (k⊥, k∥) and (r⊥, r∥) planes on the lattice's own modes and separations (the Si III–Lyα spot at Δv_{Lyα–Si III}/u and the echoes of the BAO ring; four lines: a spot for every pair), the 3D P and ξ of the overflux of every line and of the total on the lattice of skewers in comoving units (the BAO peak), ξ in μ wedges with r_BAO, the spot and the echoes per wedge; E, the relations of P1D and ξ1D to the 3D statistics, P1D next to DESI DR1, and P1D and ξ1D of the total overflux by term and order |
 | `11_skewer_statistics_tng` | the statistics of 10 on TNG50-4 (snapshot 25, z = 3.008, L = 51.7 cMpc): 32 × 32 periodic skewers along each axis in the snapshot frame (the three lines of sight as the ensemble, not independent), points every 0.5 km/s (the resolution check passes), 256 pixels; four lines (Lyα, Si III, Si II 1193, 1190); B, the density of H I, Si III, Si II and their sum on the skewers against the whole box through a mesh (`field_statistics`, PCS, interlaced); C, the transmission and overflux (one mean: one snapshot); D, the (k⊥, k∥) and (r⊥, r∥) planes with a spot for every pair of lines, P, r²ξ and wedges, the BAO scale r_d through its periodic images, P1D next to DESI DR1 at z = 3.0, by order (0 to 8) and term by term |
-| `12_comparison_fake_spectra_results` | what the two codes compute on the same TNG50-4 skewer (the gas, τ and above all the flux): the matched mode against fake_spectra, the differences one switch at a time, their root causes and the effect chain |
+| `12_comparison_fake_spectra_results` | what the two codes compute on the same TNG50-2 skewers (kernel `skewerjax-fs`): the core calls with the defaults, native fake_spectra, the fully matched mode; each option on its own, from the default and from the matched mode (four curves per figure), all of them together per line; the root causes, with what each option changes on this skewer, generated from the run |
 | `13_comparison_fake_spectra_performance` | speed and memory against fake_spectra: scaling with the number of skewers (1–1024) and the simulation size (TNG50-4, -3, -2), CPU and GPU, the time per stage, host and GPU memory, threads and one core (reads the results file of `scripts/benchmarks/benchmark_fake_spectra.py`, presets `quick` and `full`; `RUN_BENCHMARKS = True` re-runs it) |
 
 Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: the white "paper" style by default,
@@ -394,7 +390,7 @@ skewerjax/            the package
   simulations/        the sources of gas cells: toy fields (PowerLawGRF, grf_cells, ToyBoxes) and snapshots (readers, gas physics,
                       streamed selection, snapshot_cells, SimulationSkewers, maps)
     cloudy_tables/    CLOUDY ionisation tables (git submodule sbird/cloudy_tables)
-  comparison/         fake_spectra emulation, matched options and effect chain, fake_spectra driver, benchmark
+  comparison/         the benchmark of the two codes (wall time, memory, agreement)
   utils/              plotting (style, figures), dag (the architecture as data: DAG, layers, README diagrams),
                       paths (data, cache and benchmark folders)
 notebooks/            00-12 tutorials (committed with outputs cleared)

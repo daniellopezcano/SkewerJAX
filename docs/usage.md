@@ -75,9 +75,9 @@ Dependencies run one way only: `comparison` uses `simulations`, `simulations` us
 | gas cells | `Cells(positions, volumes, species, box)`, `cells_from_values`, `cells_on_grid`, `grid_points`, `voronoi_volumes` | (filled by the sources of `skewerjax.simulations`) |
 | line profiles | `core.line_profiles`: `line_profiles(v, lines, temperature=..., los_velocity=..., scale_factor=..., a_dagger=...)`, `voigt_line_profiles`, `voigt_widths_GHz`, `voigt_width_kms` | `voigt` (`PROFILE_MODES`: `"ExoJAX"`, `"harris"`: first order in the damping parameter, a ≤ 10⁻³, exact above; any other mode raises), `detuning` (`"exact"`, `"linear"`), `velocity_period` |
 | Voigt function | `core.voigt`: `voigt_exojax`, `voigt_harris`, `voigt_convolution` (FFT on an increasing uniform grid), `voigt_scipy` (wofz, NumPy), `log10_voigt(mode=)` | standalone; the line profiles and τ use ExoJAX or Harris |
-| τ | `compute_optical_depth(bundle, v, lines, cells, a_dagger=...)` or `compute_optical_depth(pieces, v, lines)` | `deposition` (`"voronoi"` default, `"tophat"`, `"voronoi_crossings"`), `line_frame`, `velocity_period`, `a_eff` (None: a_p^-2 of every piece; a scalar: a_eff^-2 for all, the line centres and detuning untouched), `hubble_flow` (`"exact"` default: V_H = c ln(a†/a(y)); `"linear"`: V_H(0) + (aH)_ref y, fake_spectra; the period of `velocity_period=True` and the resolution widths follow it; `velocity_span(pieces \| bundle \| frame, hubble_flow, aH_ref)`), `aH_ref` (None: the frame's aH at the first point, `Pieces.aH_first`; traced, differentiable), `voigt`, `detuning`, `resolution_tolerance`, `v_chunk`, `piece_chunk`, `batch_size`, `per_piece`, `dtype`, `devices`, `return_info` |
+| τ | `compute_optical_depth(bundle, v, lines, cells, a_dagger=...)` or `compute_optical_depth(pieces, v, lines)` | `deposition` (`"voronoi"` default, `"tophat"`, `"tophat_chords"`, `"voronoi_crossings"`), `line_frame`, `velocity_period`, `a_eff` (None: a_p^-2 of every piece; a scalar: a_eff^-2 for all, the line centres and detuning untouched), `hubble_flow` (`"exact"` default: V_H = c ln(a†/a(y)); `"linear"`: V_H(0) + (aH)_ref y, fake_spectra; the period of `velocity_period=True` and the resolution widths follow it; `velocity_span(pieces \| bundle \| frame, hubble_flow, aH_ref)`), `aH_ref` (None: the frame's aH at the first point, `Pieces.aH_first`; traced, differentiable), `voigt`, `detuning`, `b_constants`, `pixel_average`, `tautail` (fake_spectra's per-cell schemes, section below), `resolution_tolerance`, `v_chunk`, `piece_chunk`, `batch_size`, `per_piece`, `dtype`, `devices`, `return_info` |
 | debugging | `check_skewers(cells, bundle, lines)`, `enable_logging()`, `return_info=True` | see "Debugging and input checks" |
-| τ (layers) | `select_cells` → `voronoi_segments` / `grid_segments` / `tophat_segments` → `absorbers_from_components` → `absorber_pieces` (all in `cell_pieces`) → `Pieces` → `optical_depth_from_pieces` → `optical_depth_kernel` | `resolution_report(pieces, lines)`; `voronoi_segments(..., backend="jax")`; `tau_absorbers`, `tau_by_path_bins` |
+| τ (layers) | `select_cells` → `voronoi_segments` / `grid_segments` / `tophat_segments` / `tophat_chord_segments` → `absorbers_from_components` → `absorber_pieces` (all in `cell_pieces`) → `Pieces` → `optical_depth_from_pieces` → `optical_depth_kernel` | `resolution_report(pieces, lines)`; `voronoi_segments(..., backend="jax")`; `tau_absorbers`, `tau_by_path_bins` |
 | frames | `compute_optical_depth(..., line_frame="reference")`, `wrap_to_ref_line`, `velocities_in_line_frames`, `line_wavelength_grid_A` | |
 
 ## `skewerjax.summary_stats`
@@ -140,7 +140,7 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
   blocks of `max_rows` cells. Host memory is therefore set by the block size, not by the snapshot size.
 - **Physics options** (`ExtractionOptions`): `deposition` (`"voronoi"` default, `"tophat"`, or the opt-in
   `"voronoi_crossings"`: one absorber per sub-piece of each cell crossing, split so that its velocity width stays below
-  0.25 b), `mass_unit`, `T_constants`, `b_constants`, `x_HI_model`, `cloudy_density`, `cloudy_interpolation`.
+  0.25 b), `mass_unit`, `T_constants`, `x_HI_model`, `cloudy_density`, `cloudy_interpolation`.
 - **Selection back ends:** `selection.select_cells_near_paths(..., backend="cpu" | "jztree" | "auto")` and
   `SimulationSkewers(..., selection_backend=...)`: `"cpu"` (default, SciPy's periodic `cKDTree`); `"jztree"` (CUDA GPU,
   needs the optional package jztree; borderline cells re-checked in float64 so the set is the CPU one); `"auto"` (the
@@ -153,7 +153,7 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
   the peculiar velocity), the container of the toy fields, with the values of `snapshot_cells` for the same cells. The deposition is the core's (`core.deposition`; `voronoi_segments(...,
   backend="jax")` computes the same pieces in JAX). `SimulationSkewers.crossings()` keeps the cell crossings of the
   skewers alongside their points (`CellCrossings`).
-- **Integration options** (`IntegrationOptions`): `frame`, `normalisation`, `detuning`, `dtype`, `a_eff` (None: a_p^-2 per piece; a scalar: one comoving-to-physical conversion a_eff^-2, e.g. `header.a`). Periodicity is not one
+- **Integration options** (`IntegrationOptions`): `frame`, `b_constants`, `detuning`, `dtype`, `a_eff` (None: a_p^-2 per piece; a scalar: one comoving-to-physical conversion a_eff^-2, e.g. `header.a`). Periodicity is not one
   of them: `sk.tau(..., velocity_period=...)` and `sk.optical_depth(..., velocity_period=..., line_frame=...)` pass the
   core's option through (default: none). `spectral_grid(res, frame)` spans the velocity span of the box and implies no
   wrap.
@@ -170,19 +170,38 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
   - `core.tau_by_path_bins(A, lines, v, frame, s_edges)` gives the τ made by each stretch of the path
     (`00_quickstart_step_by_step`).
 
+## fake_spectra's choices, one option each
+
+SkewerJAX re-implements nothing of fake_spectra: every difference is one option of the function it belongs to, whose
+default is SkewerJAX's choice and whose alternative is fake_spectra's. Notebook 12 runs fake_spectra natively (environment
+`skewerjax-fs`, `docs/installation.md`), shows the fully matched mode and tests each option on its own, from both ends.
+
+| function | keyword: default → fake_spectra | fake_spectra |
+|---|---|---|
+| `simulations.gas_to_cells` | `T_constants`: `"codata"` → `"fake_spectra"` | `unitsystem.py` L21, L23 |
+| | `mass_unit`: `"amu"` → `"proton"` | `gas_properties.py` L108, `absorption.h` L4 |
+| | `x_HI_model`: `"stored_sf"` → `"fake_sf"` (its `sf_neutral=True`) | `gas_properties.py` L116–L146 |
+| | `cloudy_density`: `"hydrogen"` → `"fake_spectra"` (0.774 ρ/m_p) | `spectra.py` L691–L698, `convert_cloudy.py` L183 |
+| | `cloudy_interpolation`: `"linear"` → `"cubic"` | `convert_cloudy.py` L199 |
+| `core.cell_pieces` | `deposition`: `"voronoi"` → `"tophat"` (spheres of radius V^(1/3)) | `absorption.cpp` L112–L118 |
+| | `deposition`: → `"tophat_chords"` (7 points per chord, straight paths) | `singleabs.h` L100–L118 |
+| | `chord_weight`: `None` (1/7) → `1/8` (7/8 of the column) | `singleabs.h` L97–L100, L116 |
+| | `frame`: `bundle_frame` → `SnapshotFrame` (one a, u = aHs + v_pec) | `absorption.cpp` L237 |
+| `core.compute_optical_depth` | `b_constants`: `"codata"` → `"fake_spectra"` | `absorption.cpp` L24, L158 |
+| | `voigt`: `"ExoJAX"` → `"harris"` | `singleabs.h` L57–L66, `fastvoigt.h` |
+| | `velocity_period`: `False` → the span of the grid | `absorption.cpp` L261–L264 |
+| | `a_eff`: `None` → `a_snap` | `spectra.py` L221, L615 |
+| | `hubble_flow`, `aH_ref`: `"exact"` → `"linear"`, (aH)_snap | `absorption.cpp` L237, `spectra.py` L225–L228 |
+| | `detuning`: `"exact"` → `"linear"` | `singleabs.h` L182 |
+| | `pixel_average`: `False` → `True` (needs a uniform grid; eager) | `singleabs.h` L133–L155 |
+| | `tautail`: `None` → `1e-7` (per cell, needs `Pieces.cell`; eager) | `absorption.cpp` L253–L281, `spectra.py` L145 |
+
+`core.density_per_pixel(absorbers, L, nbins)` is the number density in position pixels, fake_spectra's `get_density`.
+
 ## `skewerjax.comparison`
 
-- **Modes:** `FAKE_SPECTRA_EXTRACTION` + `FAKE_SPECTRA_INTEGRATION` reproduce fake_spectra (the matched mode), and
-  `ExtractionOptions()` + `DEFAULT_INTEGRATION` are SkewerJAX's defaults. Both use `velocity_period=True`, because
-  fake_spectra's spectra are periodic by construction. `matched_tau(sk, ion, lines, v, ext, integ)` evaluates any
-  combination.
-- **Effect chain:** `run_effects` and `effect_rows` switch one difference at a time (`EXTRACTION_EFFECTS`,
-  `INTEGRATION_EFFECTS`).
-- **fake_spectra itself:** `FakeSpectraSource(cache=DIR, snap_base=..., snapnum=...)` runs it live, in its own process
-  (`python -m skewerjax.comparison.driver full ...`). `FakeSpectraSource(reference=FILE)` reads a file exported earlier
-  with `FS.export(FILE)`.
-- **Benchmark:** `comparison.benchmark` (`PRESETS`, `benchmark_sets(name, data_dir, preset=)`, `make_config`,
-  `run_suite(total_budget_s=)`, `collect`, `result_rows`, `print_rows`); see "Validation, tests and benchmarks" below.
+**Benchmark:** `comparison.benchmark` (`PRESETS`, `benchmark_sets(name, data_dir, preset=)`, `make_config`,
+`run_suite(total_budget_s=)`, `collect`, `result_rows`, `print_rows`); see "Validation, tests and benchmarks" below.
 
 ## Speed and memory
 
@@ -362,5 +381,6 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   "wavelength", "wrapped"}: (fig, ax)`; "global": each line's own window relabelled at v − Δv_j;
   `tau_scale={line: k}` draws a weak line as exp(−k τ), display only; `wrapped=` adds "wrapped", what
   `wrap_to_ref_line` does to a periodic spectrum),
-  `plot_effect_fluxes`, `plot_skewer_anatomy`, `plot_cylinder(..., progress=p)` (one frame per call),
+  `plot_code_comparison` (any curves of `CODE_MODES`, any rows of n, τ, F and their residuals `code_residual`; 12),
+  `plot_skewer_anatomy`, `plot_cylinder(..., progress=p)` (one frame per call),
   `plot_slab`, `plot_tau_buildup`, the benchmark figures `plot_bench_*`.

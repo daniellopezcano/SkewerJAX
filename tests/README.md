@@ -28,7 +28,7 @@ pytest tests/core                          # one folder; pytest tests/core/test_
 pytest -m tng                              # only the TNG50-4 tests (fast and slow)
 pytest -m "not tng"                        # what the CI runs (no data, no GPU, no fake_spectra)
 JAX_PLATFORMS=cuda,cpu pytest -m gpu       # the GPU tests
-pytest -m fake_spectra                     # the comparison with fake_spectra (live; several minutes)
+pytest -m fake_spectra                     # fake_spectra natively (environment skewerjax-fs; several minutes)
 pytest --cov=skewerjax --cov-report=term   # with coverage
 ```
 

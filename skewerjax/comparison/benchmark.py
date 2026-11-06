@@ -24,10 +24,10 @@ exceed ``budget_s`` (at least one timed run).
   fake_spectra ``particles_near_lines``);
 * ``physics``: per-cell gas physics (ion fractions, temperatures; SkewerJAX ``SimulationSkewers.properties``; for
   fake_spectra, the rest of ``get_tau``);
-* ``pieces``: the deposition of the cells on the skewers and the pieces the kernel sums (SkewerJAX: absorbers,
-  ``absorber_pieces``, the matched mode's chords; fake_spectra does this inside its C engine, counted in ``tau``);
-* ``tau``: the optical-depth sum (SkewerJAX ``compute_optical_depth`` and the matched mode's per-cell sums;
-  fake_spectra's C engine ``_do_interpolation_work``).
+* ``pieces``: the deposition of the cells on the skewers and the pieces the kernel sums (SkewerJAX: ``cell_pieces``,
+  absorbers, ``absorber_pieces``; fake_spectra does this inside its C engine, counted in ``tau``);
+* ``tau``: the optical-depth sum (SkewerJAX ``compute_optical_depth``; fake_spectra's C engine
+  ``_do_interpolation_work``).
 
 SkewerJAX shares ``setup``, ``io`` and ``selection`` between its modes (one selection per run); each mode then runs
 on a fresh ``SimulationSkewers`` holding the same cells (no cache shared between modes). Modes (``MODES``): ``matched``
@@ -63,6 +63,18 @@ if __name__ == "__main__" and Path(sys.path[0]).resolve() == Path(__file__).reso
 
 import numpy as np  # noqa: E402
 
+# The matched mode: fake_spectra's value of every option of SkewerJAX's functions (notebook 12 switches them one by one).
+MATCHED_CELLS = dict(
+    mass_unit="proton",
+    T_constants="fake_spectra",
+    x_HI_model="fake_sf",
+    cloudy_density="fake_spectra",
+    cloudy_interpolation="cubic",
+)
+MATCHED_PIECES = dict(deposition="tophat_chords", chord_weight=1.0 / 8.0)
+MATCHED_TAU = dict(
+    voigt="harris", detuning="linear", b_constants="fake_spectra", pixel_average=True, tautail=1e-7, piece_chunk=2048
+)
 STAGES = ("setup", "io", "selection", "physics", "pieces", "tau")
 SHARED_STAGES = ("setup", "io", "selection")  # once per SkewerJAX run, whatever the modes
 SPECIES = {"HI-LyA": ("H", 1, 1215), "SiIII-1206": ("Si", 3, 1206)}
@@ -270,9 +282,9 @@ def run_fake_spectra(c: dict, out: Path) -> dict:
                 reload_file=True,
                 quiet=True,
             )
-        with T.patched(
-            (sp.snapshot_set, "get_data", "io"), (sp, "particles_near_lines", "selection"), (sp, "_do_interpolation_work", "tau")
-        ):
+        # fake_spectra >= 2.3 searches for the particles inside its C engine: no "selection" stage of its own, it is in "tau"
+        near = [(sp, "particles_near_lines", "selection")] if hasattr(sp, "particles_near_lines") else []
+        with T.patched((sp.snapshot_set, "get_data", "io"), (sp, "_do_interpolation_work", "tau"), *near):
             for name, (el, st, ll) in SPECIES.items():
                 with T.stage("physics"):
                     taus[name] = np.asarray(sp.get_tau(el, st, ll))
@@ -292,18 +304,19 @@ def run_fake_spectra(c: dict, out: Path) -> dict:
 
 def _mode_tau(mode: str, sk, ion, lb, c: dict, T: StageTimer):
     """tau (N_sk, N_v) of one species in one SkewerJAX mode, timed by stage; also the number of absorbers with gas
-    (all skewers; None for the matched mode, whose chords are built inside its tau)."""
-    from skewerjax.comparison.effects import FAKE_SPECTRA_EXTRACTION, FAKE_SPECTRA_INTEGRATION
-    from skewerjax.comparison.emulation import matched_tau
+    (all skewers; None for the matched mode, whose pieces are not kept)."""
     from skewerjax.core import absorbers as ab_
-    from skewerjax.simulations import ExtractionOptions
+    from skewerjax.core import cell_pieces, compute_optical_depth
+    from skewerjax.simulations import ExtractionOptions, gas_to_cells
 
     if mode == "matched":
         with T.stage("physics"):
-            sk.properties(ion, FAKE_SPECTRA_EXTRACTION)
-        v, _ = sk.spectral_grid(c["res"])  # fake_spectra's periodic pixel grid
-        with T.stage("tau"):  # chords and pieces are timed inside, as "pieces"
-            return matched_tau(sk, ion, lb, v, FAKE_SPECTRA_EXTRACTION, FAKE_SPECTRA_INTEGRATION), None
+            cells = gas_to_cells(sk.cells, ion, **MATCHED_CELLS)
+        v, dv = sk.spectral_grid(c["res"])  # fake_spectra's periodic pixel grid
+        with T.stage("pieces"):
+            pieces = cell_pieces(cells, lb, points=sk.points, frame=sk.frame("snapshot"), a_data=sk.header.a, **MATCHED_PIECES)
+        with T.stage("tau"):
+            return np.asarray(compute_optical_depth(pieces, v, lb, velocity_period=v.size * dv, **MATCHED_TAU))[0], None
     ext = ExtractionOptions(deposition="voronoi_crossings") if mode == "crossings" else ExtractionOptions()
     with T.stage("physics"):
         sk.properties(ion, ext)
@@ -321,7 +334,6 @@ def run_skewerjax(c: dict, out: Path) -> dict:
     import jax
 
     jax.config.update("jax_enable_x64", True)
-    from skewerjax.comparison import emulation as em
     from skewerjax.core import LineBundle
     from skewerjax.core import absorbers as ab_
     from skewerjax.simulations import HI, ArepoHDF5Reader, Ion, SimulationSkewers
@@ -347,7 +359,7 @@ def run_skewerjax(c: dict, out: Path) -> dict:
             tm = time.perf_counter()
             sk = SimulationSkewers.axis_aligned(rd, cofm, axis, c["spacing_kms"], cells=cells)  # fresh caches, same cells
             n_abs = {}
-            with Tm.patched((rd, "read_rows", "io"), (ab_, "absorber_pieces", "pieces"), (em, "fake_chord_absorbers", "pieces")):
+            with Tm.patched((rd, "read_rows", "io"), (ab_, "absorber_pieces", "pieces")):
                 for name, ion in ions.items():
                     taus[(m, name)], n_abs[name] = _mode_tau(m, sk, ion, lbs[name], c, Tm)
             rep["modes"][m] = dict(

@@ -13,7 +13,7 @@ simulation):
 
 ``cell_pieces`` runs the whole chain for every species of a ``LineBundle``; ``compute_optical_depth(bundle, v, lines,
 cells)`` calls it. ``tau_absorbers`` integrates the absorbers of one species skewer by skewer (bounded memory,
-optional pixel averaging).
+optional sub-pixel points).
 
 Periodicity is not a property of the frame or of the pieces: it is ``compute_optical_depth``'s ``velocity_period``
 (default: none), passed through by ``tau_absorbers``.
@@ -23,7 +23,7 @@ Frames (NumPy, host side):
 * ``ExactFrame`` (SkewerJAX default): a(s) along the path (from the bundle's scale factors, or from the cosmology);
   the spectral coordinate is the notes' v_dagger.
 * ``SnapshotFrame``: one scale factor a_snap for every point and the linear Hubble flow u = velfac s + v_pec as a
-  line-of-sight velocity c tanh(u / c) (fake_spectra's frame, ``spectra.py`` L221-L228; matched option).
+  line-of-sight velocity c tanh(u / c) (fake_spectra's frame, ``spectra.py`` L221-L228, ``absorption.cpp`` L237).
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ import numpy as np
 
 from skewerjax.core import deposition as dep
 from skewerjax.core.constants import phys
+from skewerjax.core.line_profiles import check_b_constants
 from skewerjax.core.optical_depth import Pieces, compute_optical_depth, resolution_report
 from skewerjax.core.selection import select_cells
 from skewerjax.core.skewers import path_geometry
@@ -470,26 +471,22 @@ def absorber_pieces(
     n_lines: int,
     *,
     skewers=None,
-    T_scale: float = 1.0,
-    n_scale: float = 1.0,
 ) -> Pieces:
     """The absorbers of ``skewers`` (default all) as ``core.Pieces`` (N_sk, M), padded with empty pieces.
 
     Every absorber is one piece: at its centroid s, with the frame's a(s), the velocity along the photon (the frame's
-    injected velocity; photons travel towards decreasing s unless the frame says otherwise), T x ``T_scale``, the
-    comoving density n x ``n_scale``, its turbulence and collisional term, its length, and the path fields of
-    ``hubble_flow="linear"`` (``hubble_coordinate``, ``path_length_of``, ``first_hubble_rate``,
-    ``first_hubble_velocity`` of the frame) (a fixed
-    comoving-to-physical conversion, e.g. fake_spectra's column at the data epoch a_data, is ``compute_optical_depth(a_eff=a_data)``). Its width in velocity is the frame's Hubble
-    rate times its length (n, T and v_pec are constant inside a cell). ``T_scale`` and ``n_scale`` are matched-mode
-    knobs (fake_spectra's b constants and 7/8 chords).
+    injected velocity; photons travel towards decreasing s unless the frame says otherwise), T, the comoving density
+    n, its turbulence and collisional term, its length, its cell (``Pieces.cell``: the per-cell options of
+    ``compute_optical_depth``), and the path fields of ``hubble_flow="linear"`` (``hubble_coordinate``,
+    ``path_length_of``, ``first_hubble_rate``, ``first_hubble_velocity`` of the frame). A fixed comoving-to-physical
+    conversion, e.g. fake_spectra's column at the data epoch a_data, is ``compute_optical_depth(a_eff=a_data)``. Its
+    width in velocity is the frame's Hubble rate times its length (n, T and v_pec are constant inside a cell).
     """
     ks = range(ab.n_skewers) if skewers is None else [int(k) for k in np.atleast_1d(skewers)]
     s, n, l, T, vl = (np.asarray(getattr(ab, f))[list(ks)] for f in ("s", "n", "length", "T", "v_los"))
     a = np.stack([frame.scale_factors(k, s[i]) for i, k in enumerate(ks)])
     u = np.stack([frame.velocity(k, s[i], vl[i]) for i, k in enumerate(ks)])
     W = np.stack([frame.hubble_rate(k, s[i]) for i, k in enumerate(ks)]) * l
-    n_com = n * n_scale
     lines = lambda x: jnp.broadcast_to(jnp.asarray(x)[None], (n_lines,) + x.shape)
     opt = lambda x: np.zeros(T.shape) if x is None else np.asarray(x)[list(ks)]
     a_sk = getattr(frame, "a_dagger_per_skewer", None)
@@ -502,17 +499,18 @@ def absorber_pieces(
         a_dagger=a_d,
         scale_factor=jnp.asarray(a),
         length_m=jnp.asarray(l) * phys.Mpc_to_m,
-        temperature=lines(T * T_scale),
+        temperature=lines(T),
         turbulence=lines(opt(ab.turbulence)),
         collisional=lines(opt(ab.collisional)),
         los_velocity=lines(-u),
-        number_density=lines(n_com),
+        number_density=lines(n),
         width_kms=lines(W),
         velocity_span_kms=jnp.asarray([frame.velocity_span(k) for k in ks]),
         path_cMpc=jnp.asarray(np.stack([frame.hubble_coordinate(k, s[i]) for i, k in enumerate(ks)])),
         path_length_cMpc=jnp.asarray([frame.path_length_of(k) for k in ks]),
         aH_first=jnp.asarray([frame.first_hubble_rate(k) for k in ks]),
         vH_first=jnp.asarray([frame.first_hubble_velocity(k) for k in ks]),
+        cell=jnp.asarray(np.asarray(ab.cell)[list(ks)]),
     )
 
 
@@ -524,8 +522,7 @@ def tau_absorbers(
     *,
     velocity_period=False,
     a_eff: float | None = None,
-    T_scale: float = 1.0,
-    n_scale: float = 1.0,
+    b_constants: str = "codata",
     detuning: str = "exact",
     hubble_flow: str = "exact",
     aH_ref=None,
@@ -552,8 +549,8 @@ def tau_absorbers(
         its own velocity span; a number: that period [km/s]).
     a_eff : None (default: a_p^-2 of every piece) or a scalar, the effective scale factor of the comoving-to-physical
         conversion (``core.compute_optical_depth``; e.g. a_eff = ``ab.a_data``, fake_spectra's column at the data epoch).
-    T_scale, n_scale : see ``absorber_pieces``.
-    detuning : "exact" (default) or "linear" (matched mode).
+    b_constants : the constants of the thermal width (``core.compute_optical_depth``; "codata" default).
+    detuning : "exact" (default) or "linear" (fake_spectra's).
     hubble_flow, aH_ref : the Hubble part of the line centres (``core.compute_optical_depth``; "exact" default).
     pixel_offsets, pixel_weights : sub-pixel offsets [km/s] and weights (sum 1) to average each pixel; None: centres.
     chunk : pieces per kernel call (``compute_optical_depth``'s ``piece_chunk``); v_chunk : velocities per call.
@@ -571,7 +568,7 @@ def tau_absorbers(
         raise ValueError(f"line_bundle must hold lines of {ab.species!r} only, got {tuple(line_bundle.species_keys)}.")
     if check is not None:
         hwhm = float(np.min(np.asarray(line_bundle.lambda0_A) * np.asarray(line_bundle.A21_GHz) / (4.0 * np.pi))) * 1e-4
-        sampling_check(ab, frame, T_scale=T_scale, tolerance=check, lorentz_hwhm_kms=hwhm)
+        sampling_check(ab, frame, T_scale=check_b_constants(b_constants), tolerance=check, lorentz_hwhm_kms=hwhm)
     v = np.asarray(velocities_kms, dtype=np.float64)
     off = np.zeros(1) if pixel_offsets is None else np.asarray(pixel_offsets, float)
     wts = np.ones(1) if pixel_weights is None else np.asarray(pixel_weights, float)
@@ -592,9 +589,10 @@ def tau_absorbers(
         a_eff=a_eff,
         hubble_flow=hubble_flow,
         aH_ref=aH_ref,
+        b_constants=b_constants,
     )
     for i, k in enumerate(ks):
-        pieces = absorber_pieces(ab, frame, n_lines, skewers=[k], T_scale=T_scale, n_scale=n_scale)
+        pieces = absorber_pieces(ab, frame, n_lines, skewers=[k])
         t = np.asarray(compute_optical_depth(pieces, v_all if v.ndim == 1 else jnp.asarray(v_all), line_bundle, **kw))[:, 0]
         if per_absorber:
             out[:, i] = (t.reshape(n_lines, M, n_v, off.size) * wts).sum(-1)
@@ -642,8 +640,15 @@ def column_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarra
     return out
 
 
+def density_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarray:
+    """(N_sk, nbins) mean physical number density [cm^-3] at the data epoch in each of ``nbins`` equal position pixels:
+    ``column_per_pixel`` over the physical pixel length a_data L / nbins. On a position pixel, velocity pixels of width
+    dv = (a H) L / nbins (fake_spectra's ``Spectra.get_density``, ``spectra.py`` L912-L916)."""
+    return column_per_pixel(ab, path_length, nbins) / (path_length / nbins * ab.a_data * phys.Mpc_to_cm)
+
+
 # --------------------------------------------------------------------------- the route: cells -> pieces
-DEPOSITIONS = ("voronoi", "tophat", "voronoi_crossings")
+DEPOSITIONS = ("voronoi", "tophat", "voronoi_crossings", "tophat_chords")
 
 
 def deposit(
@@ -653,6 +658,7 @@ def deposit(
     deposition: str = "voronoi",
     selection_backend: str = "cpu",
     grid_fast_path: bool = True,
+    chord_weight: float | None = None,
     return_info: bool = False,
 ):
     """Selection and deposition of ``cells`` along ``points`` (N_sk, N, 3) [cMpc]: (the cells the indices refer to,
@@ -660,7 +666,11 @@ def deposit(
 
     deposition : "voronoi" (default: the exact pieces of the Voronoi cells in every dual segment; for a grid of cells,
         ``grid_segments``, unless ``grid_fast_path=False``), "tophat" (spheres of radius V^(1/3), the fake_spectra
-        option) or "voronoi_crossings" (the Voronoi pieces, joined per cell crossing by ``cell_pieces``).
+        option: their exact overlaps with the dual segments), "tophat_chords" (those spheres through fake_spectra's
+        quadrature of 7 points per chord, ``tophat_chord_segments``: straight paths) or "voronoi_crossings" (the
+        Voronoi pieces, joined per cell crossing by ``cell_pieces``).
+    chord_weight : "tophat_chords" only: the weight of each chord point (``tophat_chord_segments``; None: 1/7, the
+        column kept; 1/8: fake_spectra's, 7/8 of the column).
     selection_backend : backend of ``core.selection.select_cells``, which first keeps the cells within reach of the
         points (skipped by the grid fast path).
     return_info : also return dict(selection (``select_cells``'s info; for the grid fast path every cell), deposition
@@ -670,18 +680,21 @@ def deposit(
         raise ValueError(f"deposition must be one of {DEPOSITIONS}, got {deposition!r}.")
     pts = np.asarray(points, dtype=np.float64)
     t0 = time.perf_counter()
-    if deposition != "tophat" and grid_fast_path and cells.grid is not None and cells.box is not None:
+    if chord_weight is not None and deposition != "tophat_chords":
+        raise ValueError(f"chord_weight applies to deposition='tophat_chords', not {deposition!r}.")
+    spheres = deposition in ("tophat", "tophat_chords")
+    if not spheres and grid_fast_path and cells.grid is not None and cells.box is not None:
         use, sel = cells, dict(n_cells=len(cells), n_selected=len(cells), indices=np.arange(len(cells)), mode="grid", time_s=0.0)
         seg = dep.grid_segments(pts, cells.grid, cells.box)
     else:
-        mode = "tophat" if deposition == "tophat" else "voronoi"
-        use, sel = select_cells(cells, pts, mode=mode, backend=selection_backend, return_info=True)
+        use, sel = select_cells(cells, pts, mode="tophat" if spheres else "voronoi", backend=selection_backend, return_info=True)
         t0 = time.perf_counter()
-        seg = (
-            dep.tophat_segments(pts, use.positions, use.size_cMpc, use.box)
-            if deposition == "tophat"
-            else dep.voronoi_segments(pts, use.positions, use.box, gas_size=use.size_cMpc)
-        )
+        if deposition == "tophat":
+            seg = dep.tophat_segments(pts, use.positions, use.size_cMpc, use.box)
+        elif deposition == "tophat_chords":
+            seg = dep.tophat_chord_segments(pts, use.positions, use.size_cMpc, use.box, chord_weight=chord_weight)
+        else:
+            seg = dep.voronoi_segments(pts, use.positions, use.box, gas_size=use.size_cMpc)
     info = dict(selection=sel, deposition=dict(kind=seg.kind, **seg.diagnostics, time_s=time.perf_counter() - t0))
     logger.debug(
         "deposit: %s pieces of %d dual segments from %d cells (%s), %.3f s",
@@ -727,8 +740,7 @@ def cell_pieces(
     selection_backend: str = "cpu",
     grid_fast_path: bool = True,
     crossing_tolerance: float | None = 0.25,
-    T_scale: float = 1.0,
-    n_scale: float = 1.0,
+    chord_weight: float | None = None,
     a_data: float | None = None,
     skewers=None,
     return_parts: bool = False,
@@ -753,8 +765,8 @@ def cell_pieces(
         (N_sk, N, 3) [cMpc] and a ``frame`` (``ExactFrame`` / ``SnapshotFrame``) instead.
     deposition, selection_backend, grid_fast_path : see ``deposit``; segments : a ``SegmentComponents`` already
         computed for ``points`` (its cell indices refer to ``cells``), used instead.
-    T_scale, n_scale : see ``absorber_pieces`` (matched-mode knobs; defaults change nothing); a_data : the scale factor
-        of the data (kept on the ``Absorbers``).
+    chord_weight : ``deposition="tophat_chords"`` only, see ``deposit``.
+    a_data : the scale factor of the data (kept on the ``Absorbers``).
     skewers : optional indices of the skewers to return.
     return_parts : also return dict(cells, segments, absorbers {species: Absorbers}, frame, crossings).
     return_info : also return dict(selection, deposition (``deposit``'s info; selection None when ``segments`` are
@@ -793,6 +805,7 @@ def cell_pieces(
             deposition="voronoi" if deposition == "voronoi_crossings" else deposition,
             selection_backend=selection_backend,
             grid_fast_path=grid_fast_path,
+            chord_weight=chord_weight,
             return_info=True,
         )
     else:
@@ -811,8 +824,7 @@ def cell_pieces(
     else:
         abs_ = {sp: absorbers_from_components(seg, pts, use, sp, mass[sp], a_data=a_data) for sp in species}
     t2 = time.perf_counter()
-    kw = dict(skewers=skewers, T_scale=T_scale, n_scale=n_scale)
-    per = {sp: absorber_pieces(abs_[sp], frame, 1, **kw) for sp in species}
+    per = {sp: absorber_pieces(abs_[sp], frame, 1, skewers=skewers) for sp in species}
     p0 = per[species[0]]
     n_l = line_bundle.n_lines
     rows = {f: [None] * n_l for f in ("temperature", "turbulence", "collisional", "los_velocity", "number_density", "width_kms")}

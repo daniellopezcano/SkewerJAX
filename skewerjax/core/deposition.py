@@ -25,8 +25,11 @@ Inside a piece the gas properties are constant; the core sums the optical depth 
   uniform density (3 / 4 pi) n (``absorption.cpp:tophat_kern_frac`` L112-L118). The overlap of
   every sphere with every half-segment is solved exactly (a quadratic in t). Spheres overlap, so a
   segment has several pieces with *different* T and v: the representation is multi-valued.
+* ``tophat_chord_segments`` (fake_spectra's quadrature of those spheres, ``singleabs.h`` L100-L118): every chord of a
+  sphere with a straight path is sampled at its 7 interior points, instead of the exact overlaps. With its weights
+  (1/8 per point) a chord holds 7/8 of its column, the one deposition that does not conserve it (``chord_weight``).
 
-Every deposition conserves the column by construction (sum of piece lengths x density), for
+Every other deposition conserves the column by construction (sum of piece lengths x density), for
 any spacing, because the lengths are exact segment integrals; only *where* inside the piece the
 absorption sits is approximated (at the piece centroid). That approximation is what the sampling
 criterion of ``core.absorbers.sampling_check`` monitors.
@@ -63,7 +66,7 @@ class SegmentComponents:
     length : (N_sk, N, K) comoving length of the piece [cMpc].
     offset : (N_sk, N, K) signed path offset of the piece centroid from x_i [cMpc].
     weight : float, density per n_cell inside the piece (1 Voronoi, 3/4pi top hat).
-    kind : "voronoi" or "tophat".
+    kind : "voronoi", "tophat" or "tophat_chords".
     diagnostics : dict (e.g. the k-nearest-neighbour guarantee, the largest nearest-generator distance).
     """
 
@@ -461,6 +464,72 @@ def tophat_segments(points, gas_positions, gas_size, box: float | None, *, chunk
     return SegmentComponents(
         cell.reshape(shp), length.reshape(shp), offset.reshape(shp), TOPHAT_NORM, "tophat", dict(max_candidates=int(idx.shape[1]))
     ).compact()
+
+
+CHORD_POINTS = 7  # the interior points of fake_spectra's chord quadrature: NGRID - 1 (singleabs.h L9, L102)
+
+
+def tophat_chord_segments(
+    points, gas_positions, gas_size, box: float | None, *, chord_weight: float | None = None
+) -> SegmentComponents:
+    """fake_spectra's chord quadrature of its top-hat spheres (radius ``gas_size`` = V^(1/3)) along straight paths.
+
+    The chord of half-length z_r = sqrt(h^2 - dr^2) of every sphere touching the path (``absorption.cpp`` L235) is
+    sampled at its interior points s_c + z_r (k / 4 - 1), k = 1..7 (``singleabs.h`` L100-L118; NGRID = 8), each one a
+    piece at that position, of density (3 / 4 pi) n (L106) and length 2 z_r w.
+
+    chord_weight : the weight w of every point. None (default): 1/7, so that the chord keeps its whole column. 1/8:
+        fake_spectra's (``deltav`` = 2 v_high / NGRID, L100, L116): the two end points, which have zero weight for an SPH
+        kernel, are dropped (L97-L99), so a top hat integrates 7/8 of its column.
+
+    Parameters
+    ----------
+    points : (N_sk, N, 3) sampling points of straight paths [cMpc]; a chord point belongs to the nearest one, with its
+        offset (only where the absorption sits matters: the pieces are not cut at the dual segments).
+    gas_positions (M, 3), gas_size (M,) [cMpc]; box : the periodic box (min image from the middle of the path) or None.
+
+    A path across a whole periodic box keeps the chord points beyond its ends (s < 0, s > L: the spectrum wraps them,
+    ``velocity_period``); a shorter path drops them. Returns SegmentComponents with weight 3 / (4 pi), kind "tophat_chords".
+    """
+    if chord_weight is not None and not chord_weight > 0:
+        raise ValueError(f"chord_weight must be None or > 0, got {chord_weight!r}.")
+    w = 1.0 / CHORD_POINTS if chord_weight is None else float(chord_weight)
+    pts = np.asarray(points, dtype=np.float64)
+    n_sk, n_p = pts.shape[:2]
+    pos, h = np.asarray(gas_positions, dtype=np.float64), np.asarray(gas_size, dtype=np.float64)
+    s_pt = np.asarray(path_geometry(jnp.asarray(pts))["s"])
+    k_ = (np.arange(1, CHORD_POINTS + 1) / (0.5 * (CHORD_POINTS + 1)) - 1.0)[None, :]
+    rows = []
+    for k in range(n_sk):
+        p0, chord = pts[k, 0], pts[k, -1] - pts[k, 0]
+        L = float(np.linalg.norm(chord))
+        e = chord / L
+        off = pts[k] - p0 - np.outer((pts[k] - p0) @ e, e)
+        if np.abs(off).max() > 1e-9 * L:
+            raise ValueError("deposition='tophat_chords' needs straight paths (fake_spectra's sightlines).")
+        d = pos - 0.5 * (p0 + pts[k, -1])
+        d = d if box is None else d - box * np.round(d / box)
+        par = d @ e
+        dr2 = np.sum(d * d, axis=1) - par * par
+        touch = np.nonzero(h * h - dr2 > 0.0)[0]
+        z_r = np.sqrt(h[touch] ** 2 - dr2[touch])
+        s = (0.5 * L + par[touch])[:, None] + z_r[:, None] * k_  # (M_touch, 7) positions along the path [cMpc]
+        c = np.repeat(touch, CHORD_POINTS)
+        ln = np.repeat(2.0 * z_r * w, CHORD_POINTS)
+        s = s.ravel()
+        if box is None or abs(L - box) > 1e-9 * box:
+            inside = (s >= 0.0) & (s <= L)
+            s, c, ln = s[inside], c[inside], ln[inside]
+        i = np.clip(np.searchsorted(0.5 * (s_pt[k, 1:] + s_pt[k, :-1]), s), 0, n_p - 1)
+        rows.append((i, c, ln, s - s_pt[k, i]))
+    K = max(max((int(np.bincount(r[0], minlength=n_p).max()) for r in rows if r[0].size), default=1), 1)
+    cell = np.full((n_sk, n_p, K), -1, dtype=np.int64)
+    length, offset = np.zeros(cell.shape), np.zeros(cell.shape)
+    for k, (i, c, ln, o) in enumerate(rows):
+        order = np.argsort(i, kind="stable")
+        slot = np.arange(i.size) - np.searchsorted(i[order], i[order])
+        cell[k, i[order], slot], length[k, i[order], slot], offset[k, i[order], slot] = c[order], ln[order], o[order]
+    return SegmentComponents(cell, length, offset, TOPHAT_NORM, "tophat_chords", dict(chord_points=CHORD_POINTS, chord_weight=w))
 
 
 # --------------------------------------------------------------------------- cell crossings (Voronoi-adapted segmentation)

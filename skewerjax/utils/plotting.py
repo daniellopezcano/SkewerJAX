@@ -3530,65 +3530,274 @@ def plot_voigt_limits(x, sigma, gamma, curves: dict, ref_key: str = "scipy_wofz"
     return fig, np.asarray(axs)
 
 
-def plot_effect_fluxes(
-    v,
-    tau_base,
-    isolated: dict,
+# --------------------------------------------------------------------------- codes and modes on one skewer (notebook 12)
+# Every mode of a curve has one colour and one line style, the same in every figure. Only fake_spectra is dashed.
+CODE_MODES = {
+    "default": dict(color=PALETTE["blue"], ls="-", label="default"),
+    "fake_spectra": dict(color=PALETTE["red"], ls="--", label="fake_spectra"),
+    "matched": dict(color=PALETTE["green"], ls="-.", label="matched"),
+    "default+switch": dict(color=PALETTE["purple"], ls=":", label="default + switch"),
+    "matched-switch": dict(color=PALETTE["cyan"], ls=(0, (3, 1, 1, 1, 1, 1)), label="matched − switch"),
+}
+# One colour per switch of fake_spectra's options, the same in both master figures, from Tol's discrete schemes "bright", "vibrant",
+# "muted", "light", "dark" and "high-contrast" (https://personal.sron.nl/~pault/), without the three colours of the modes these
+# curves are drawn against. A search (not exhaustive) chose the 17 for the smallest distance between any two, also under protan,
+# deutan and tritan simulations (Machado et al. 2009): 5.25 in OKLab x 100, below the 8 aimed at for a few series, so not every pair stays apart
+# by colour alone; the step figures and the table give each switch by itself.
+SWITCH_COLORS = {
+    "T_constants": "#555555",
+    "mass_unit": "#EE8866",
+    "x_HI_model": "#CCBB44",
+    "cloudy_density": "#222255",
+    "cloudy_interpolation": "#BB5566",
+    "deposition='tophat'": "#0077BB",
+    "deposition='tophat_chords'": "#66CCEE",
+    "chord_weight=1/8": "#CC3311",
+    "b_constants": "#663333",
+    "voigt": "#FFAABB",
+    "velocity_period": "#117733",
+    "a_eff": "#999933",
+    "hubble_flow": "#AA3377",
+    "frame='snapshot'": "#77AADD",
+    "detuning": "#009988",
+    "pixel_average": "#CC6677",
+    "tautail": "#004488",
+}
+CODE_ROWS = ("n", "dn", "tau", "dtau", "F", "dF")  # the rows of ``plot_code_comparison``, in this order
+_CODE_RESIDUAL_OF = {"dn": "n", "dtau": "tau", "dF": "F"}
+# The residual rows of every figure of a comparison share these limits, (limit, linear threshold): the relative rows are
+# bounded by 2 (``code_residual``), and F by 1.
+CODE_RESIDUAL_LIMITS = dict(dn=(2.2, 1e-7), dtau=(2.2, 1e-7), dF=(1.0, 1e-7))
+
+
+def code_residual(quantity: str, a, b) -> np.ndarray:
+    """The residual of ``a`` against ``b``, pixel by pixel, for ``quantity`` "n" or "tau": the symmetric relative difference
+    2 (a - b) / (a + b), bounded by 2, and NaN on the pixels with neither gas nor absorption (a + b = 0); for "F" the
+    absolute a - b."""
+    if quantity not in ("n", "tau", "F"):
+        raise ValueError(f"quantity must be 'n', 'tau' or 'F', got {quantity!r}.")
+    a, b = np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64)
+    if a.shape != b.shape:
+        raise ValueError(f"a residual needs the same pixels in both curves, got {a.shape} and {b.shape}.")
+    if quantity == "F":
+        return a - b
+    total = a + b
+    has = total > 0.0
+    return np.where(has, 2.0 * (a - b) / np.where(has, total, 1.0), np.nan)
+
+
+def _residual_axis(ax, limit: float, linthresh: float):
+    """A residual row: symmetric-log axis, fixed limits, one tick every three decades, a line at 0."""
+    ax.set_yscale("symlog", linthresh=linthresh, linscale=0.6)
+    ax.set_ylim(-limit, limit)
+    top = int(np.floor(np.log10(limit)))
+    exps = np.arange(top, int(np.floor(np.log10(linthresh))) - 1, -3)
+    ax.set_yticks([*(-(10.0**e) for e in exps), 0.0, *(10.0**e for e in exps[::-1])])
+    ax.minorticks_off()
+    ax.axhline(0.0, color=FG, lw=0.8)
+
+
+def _code_curves(curves, linewidths=None) -> dict:
+    """{key: curve} of ``plot_code_comparison``: the key is the curve's ``label``, or its mode; each curve gets its style, the
+    width of its place in the order and a zorder that grows with it (within [2, 3), so the curves stay under the legend)."""
+    if linewidths is None:
+        linewidths = np.geomspace(4.0, 1.0, len(curves))  # 3 curves: 4, 2, 1; 4 curves: 4, 2.52, 1.59, 1
+    elif len(linewidths) != len(curves):
+        raise ValueError(f"linewidths needs one width per curve: got {len(linewidths)} for {len(curves)} curves.")
+    out = {}
+    for i, c in enumerate(curves):
+        if c.get("mode") not in CODE_MODES:
+            raise ValueError(f"mode must be one of {tuple(CODE_MODES)}, got {c.get('mode')!r}.")
+        mode = CODE_MODES[c["mode"]]
+        key = c.get("label", c["mode"])
+        if key in out:
+            raise ValueError(f"two curves are called {key!r}: give them different labels.")
+        out[key] = dict(
+            c,
+            label=c.get("label", mode["label"]),
+            color=c.get("color") or mode["color"],
+            ls=mode["ls"],
+            lw=c.get("lw", float(linewidths[i])),
+            zorder=2.0 + i / len(curves),
+        )
+    return out
+
+
+def plot_code_comparison(
+    curves,
     *,
+    residuals=(),
+    rows=CODE_ROWS,
+    aH: float | None = None,
     window=None,
-    skewer: int = 0,
-    ncols: int = 4,
+    species: str = "HI",
+    residual_limits: dict | None = None,
+    residual_note: str | None = None,
+    legend_ncols: int = 5,
+    log_decades: float = 14.0,
+    linewidths=None,
+    shade_below: float | None = 1e-5,
+    title: str | None = None,
     figsize=None,
-    color=None,
-    base_label: str = "fake_spectra options",
 ):
-    """One pair of panels per isolated switch: the flux with fake_spectra's options (thick, light) and with that one
-    switch set to SkewerJAX's value (solid) on ``window`` [km/s], and below their difference. isolated : {label: tau}
-    of ``run_effects(...)["isolated"]``, (N_sk, N_v) or (N_lines, N_sk, N_v); tau_base : the same shape. Returns (fig, axs)."""
-    labels = list(isolated)
-    n = len(labels)
-    nrows = -(-n // ncols)
+    """The figure of notebook 12: any modes of any codes on one skewer, with any residuals between them.
+
+    The rows run in the order of ``CODE_ROWS``, whichever are asked for: n, its residual, tau, its residual, F, its residual
+    (the residual rows are shorter). n lives on position pixels (``core.density_per_pixel``) and is drawn against the comoving
+    position y [cMpc], labelled on the top axis; tau and F are drawn against v [km/s], each curve on its own velocity grid, and
+    nothing is shifted to align them. All the rows have the same horizontal extent, through y = v / (aH)_snap.
+
+    Parameters
+    ----------
+    curves : a list of dicts, one per curve, with ``mode`` (a key of ``CODE_MODES``, which sets its line style and colour),
+        optional ``label`` (the name in the legend and in ``residuals``; default: the mode's), optional ``color`` (e.g. from
+        ``SWITCH_COLORS``) and ``lw`` (over ``linewidths``), and the arrays of the rows it appears in: ``y`` [cMpc] and ``n`` [cm^-3], ``v`` [km/s]
+        and ``tau``, ``F``. A curve without the arrays of a row is not drawn there.
+    residuals : a list of pairs (curve, reference) of labels (or modes), or (curve, reference, style) with a dict of line
+        options (e.g. dict(lw=0.7)), drawn in order in the colour, style and width of ``curve`` (``code_residual``: relative for
+        n and tau, absolute for F, pixel by pixel). The legend names both, e.g. "matched − fake_spectra".
+    rows : any subset of ``CODE_ROWS``. Residual rows are left out when there are no ``residuals``.
+    aH : (aH)_snap [km/s per cMpc]: needed to draw the n rows next to the tau and F rows, or with ``window``.
+    window : (v_min, v_max) [km/s] or None (the whole skewer).
+    species : the key of ``species_name``, for the label of n.
+    residual_limits : {row: (limit, linear threshold)} over ``CODE_RESIDUAL_LIMITS``, whose values every figure shares otherwise.
+    residual_note : a text drawn in each residual row in place of the legend of the residuals (when there are many).
+    legend_ncols : the columns of the legend of the curves (at most 3 for the residuals, whose labels are long).
+    log_decades : the log axes of n and tau span at most this many decades below the largest value in view.
+    linewidths : one width per curve, in the order of ``curves``, each drawn on top of the ones before, so that curves lying on
+        top of each other stay visible: give the first the largest. None: decreasing from 4 to 1 (3 curves: 4, 2, 1).
+    shade_below : the band |residual| < ``shade_below`` shaded in grey in the residual rows; None: no band.
+
+    Returns (fig, axs): ``axs`` the axes of the rows, in order.
+    """
+    unknown = [r for r in rows if r not in CODE_ROWS]
+    if unknown:
+        raise ValueError(f"rows must be among {CODE_ROWS}, got {unknown}.")
+    pairs = [(*r, {})[:3] for r in residuals]
+    rows = [r for r in CODE_ROWS if r in rows and (pairs or r not in _CODE_RESIDUAL_OF)]
+    if not rows:
+        raise ValueError("no row to draw: the residual rows need residuals.")
+    by_key = _code_curves(curves, linewidths)
+    for a, b, _ in pairs:
+        missing = [k for k in (a, b) if k not in by_key]
+        if missing:
+            raise ValueError(f"residual of unknown curves {missing}: the curves are {list(by_key)}.")
+    limits = {**CODE_RESIDUAL_LIMITS, **(residual_limits or {})}
+
+    position = [r for r in rows if r in ("n", "dn")]
+    velocity = [r for r in rows if r not in position]
+    if position and aH is None and (velocity or window is not None):
+        raise ValueError("the n rows beside tau and F, or a window, need aH = (aH)_snap [km/s per cMpc].")
+    if velocity:
+        first = next(c for c in by_key.values() if "v" in c)
+        grid = np.asarray(first["v"], dtype=np.float64)
+        half = 0.5 * (grid[1] - grid[0])
+        extent = (grid[0] - half, grid[-1] + half) if window is None else tuple(window)
+    elif aH is not None:
+        first = next(c for c in by_key.values() if "y" in c)
+        grid = np.asarray(first["y"], dtype=np.float64)
+        half = 0.5 * (grid[1] - grid[0])
+        extent = (aH * (grid[0] - half), aH * (grid[-1] + half)) if window is None else tuple(window)
+    else:
+        extent = None
+    extent_y = None if extent is None or aH is None else (extent[0] / aH, extent[1] / aH)
+
+    heights = [1.2 if r in _CODE_RESIDUAL_OF else 2.0 for r in rows]
     fig, axs = plt.subplots(
-        2 * nrows,
-        ncols,
-        figsize=figsize or (6 * ncols, 5.2 * nrows),
-        sharex=True,
-        gridspec_kw={"height_ratios": [2, 1] * nrows},
+        len(rows),
+        1,
+        figsize=figsize or (20, 1.75 + 1.72 * sum(heights)),
+        gridspec_kw=dict(height_ratios=heights),
         layout="constrained",
         squeeze=False,
     )
-    v = np.asarray(v)
-    m = slice(None) if window is None else (v >= window[0]) & (v <= window[1])
-    pick = lambda t: np.asarray(t)[0, skewer] if np.ndim(t) == 3 else np.asarray(t)[skewer]  # (N_lines, N_sk, N_v) or (N_sk, N_v)
-    Fb = np.exp(-pick(tau_base))
-    c = color or ENTITY_COLORS["HI"]
-    for i, lab in enumerate(labels):
-        r, q = 2 * (i // ncols), i % ncols
-        Fi = np.exp(-pick(isolated[lab]))
-        axs[r, q].plot(v[m], Fb[m], color=ENTITY_COLORS["fake_spectra"], **MODE_STYLES["reference"])
-        axs[r, q].plot(v[m], Fi[m], color=c, lw=1.6)
-        d = Fi - Fb
-        axs[r + 1, q].plot(v[m], d[m], color=c, lw=1.4)
-        axs[r + 1, q].axhline(0, color=FG, lw=0.8)
-        axs[r, q].set_title(lab, fontsize=FONT_MIN["legend"] + 1)
-        _textbox(
-            axs[r + 1, q],
-            0.02,
-            0.85,
-            f"max|ΔF| = {np.abs(d).max():.1e}\nΔ⟨F⟩ = {d.mean():+.1e}",
-            transform=axs[r + 1, q].transAxes,
-            va="top",
-        )
-        axs[r, q].set_ylim(-0.03, 1.05)
-        if q == 0:
-            axs[r, q].set_ylabel(LABELS["F"])
-            axs[r + 1, q].set_ylabel(LABELS["dF"])
-    for i in range(n, nrows * ncols):
-        r, q = 2 * (i // ncols), i % ncols
-        axs[r, q].set_axis_off()
-        axs[r + 1, q].set_axis_off()
-    for q in range(ncols):
-        axs[-1, q].set_xlabel("u [km/s]")
+    axs = axs[:, 0]
+    ax_of = dict(zip(rows, axs))
+    for group in (position, velocity):  # each block of rows shares its own x axis
+        for r in group[1:]:
+            ax_of[r].sharex(ax_of[group[0]])
+
+    def axis_of(row, curve):  # the (x, values) of one curve in one row, or None
+        quantity = _CODE_RESIDUAL_OF.get(row, row)
+        x = curve.get("y" if quantity == "n" else "v")
+        values = curve.get(quantity)
+        return None if x is None or values is None else (np.asarray(x), np.asarray(values))
+
+    name = species_name(species).replace(" ", r"\,")
+    ylabels = dict(
+        n=rf"$n_{{\rm {name}}}\ [\mathrm{{cm^{{-3}}}}]$",
+        tau=LABELS["tau"],
+        F=LABELS["F"],
+        dn=r"$\Delta n/\bar{n}$",
+        dtau=r"$\Delta\tau/\bar{\tau}$",
+        dF=LABELS["dF"],
+    )
+    for row, ax in ax_of.items():
+        ax.set_ylabel(ylabels[row])
+        if row in _CODE_RESIDUAL_OF:
+            _residual_axis(ax, *limits[row])
+            if shade_below is not None:
+                residual_band(ax, shade_below, zero=False)
+            quantity = _CODE_RESIDUAL_OF[row]
+            for a, b, style in pairs:
+                ca, cb = by_key[a], by_key[b]
+                pa, pb = axis_of(row, ca), axis_of(row, cb)
+                if pa is None or pb is None:
+                    continue
+                lab = " − ".join(f"({c['label']})" if " " in c["label"] else c["label"] for c in (ca, cb))
+                ax.plot(pa[0], code_residual(quantity, pa[1], pb[1]), **{"color": ca["color"], "ls": ca["ls"], "lw": ca["lw"], "label": lab, **style})
+            continue
+        lo, hi = (extent if row != "n" else extent_y) or (-np.inf, np.inf)
+        visible = []
+        for c in by_key.values():
+            p = axis_of(row, c)
+            if p is None:
+                continue
+            ax.plot(*p, color=c["color"], ls=c["ls"], lw=c["lw"], zorder=c["zorder"], label=c["label"])
+            inside = p[1][(p[0] >= lo) & (p[0] <= hi)]
+            visible.append(inside[inside > 0])
+        if row == "F":
+            ax.set_ylim(-0.03, 1.05)
+        else:
+            ax.set_yscale("log")
+            visible = np.concatenate(visible) if visible else np.empty(0)
+            if visible.size:
+                top = 2.0 * visible.max()
+                ax.set_ylim(max(0.5 * visible.min(), top * 10.0**-log_decades), top)
+
+    for group, xlim in ((position, extent_y), (velocity, extent)):
+        if not group:
+            continue
+        if xlim is not None:
+            ax_of[group[0]].set_xlim(xlim)
+        for r in group:
+            ax_of[r].tick_params(labelbottom=False)
+    if velocity:
+        ax_of[velocity[-1]].tick_params(labelbottom=True)
+        ax_of[velocity[-1]].set_xlabel(LABELS["v"])
+    if position:  # on the top axis of the n block when tau and F take the bottom one
+        ax = ax_of[position[0]] if velocity else ax_of[position[-1]]
+        if velocity:
+            ax.xaxis.set_label_position("top")
+            ax.tick_params(top=True, labeltop=True)
+        else:
+            ax.tick_params(labelbottom=True)
+        ax.set_xlabel(LABELS["y"])
+
+    plain = [r for r in rows if r not in _CODE_RESIDUAL_OF]
+    if plain:
+        legend = _legend(ax_of[plain[0]], loc="upper right", ncols=legend_ncols, handlelength=3.0)
+        for handle in legend.legend_handles:  # thick enough to tell the colour, whatever the width of the curve
+            handle.set_linewidth(max(handle.get_linewidth(), 2.2))
+    shown = [r for r in rows if r in _CODE_RESIDUAL_OF]
+    if residual_note is not None:
+        for r in shown:
+            _textbox(ax_of[r], 0.985, 0.92, residual_note, transform=ax_of[r].transAxes, ha="right", va="top")
+    elif shown:
+        _legend(ax_of[shown[0]], loc="upper right", ncols=min(legend_ncols, 3))
+    add_panel_letters(axs)
+    if title:
+        fig.suptitle(title, fontsize=FONT_MIN["title"] + 1)
     return fig, axs
 
 

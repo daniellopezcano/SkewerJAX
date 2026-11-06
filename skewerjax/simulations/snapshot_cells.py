@@ -19,7 +19,7 @@ from skewerjax.core.cells import Cells
 from skewerjax.simulations import gas_physics as gp
 from skewerjax.simulations.gas_cells import GasCells
 from skewerjax.simulations.selection import read_selected
-from skewerjax.simulations.snapshot_skewers import ExtractionOptions, ion_cell_fields
+from skewerjax.simulations.snapshot_skewers import ion_cell_fields
 
 GAS_SPECIES = "gas"  # the total gas in ``gas_to_cells``: n = rho / m_u (nucleons), no ion fraction
 
@@ -68,22 +68,42 @@ def select_cells_in_region(reader, lo, hi, *, margin: float = 0.0, max_rows: int
     return GasCells.concatenate(parts)
 
 
-def gas_to_cells(gas: GasCells, species, ext: ExtractionOptions = ExtractionOptions()) -> Cells:
+def gas_to_cells(
+    gas: GasCells,
+    species,
+    *,
+    mass_unit: str = "amu",
+    T_constants: str = "codata",
+    x_HI_model: str = "stored_sf",
+    cloudy_density: str = "hydrogen",
+    cloudy_interpolation: str = "linear",
+) -> Cells:
     """``core.Cells`` of raw snapshot cells after the gas physics, per species (as ``SimulationSkewers.to_cells``).
 
     species : a species key (e.g. "HI"), an ``Ion``, or a sequence of them; ``GAS_SPECIES`` ("gas") is the total gas, the
     number density of nucleons rho / m_u (no ion fraction: its density follows the mass). Per species:
     ``number_density`` = n a^3 [comoving cm^-3], ``temperature`` [K] and ``velocity`` [km/s, physical peculiar];
-    positions [cMpc], volumes [cMpc^3], the periodic box and the snapshot ids of the cells. ``ext``: the gas-physics
-    options of ``ExtractionOptions`` (mass unit, T constants, x_HI model, CLOUDY density and interpolation).
+    positions [cMpc], volumes [cMpc^3], the periodic box and the snapshot ids of the cells.
+
+    The gas physics (``gas_physics.ion_properties``; the default is SkewerJAX's choice, the alternative fake_spectra's):
+
+    mass_unit : "amu" (n_X = rho X / (A m_u)) or "proton" (A m_p, ``absorption.h`` L4 labels PROTONMASS "1 a.m.u").
+    T_constants : "codata" or "fake_spectra" (the m_p and k_B of ``unitsystem.py`` L21, L23) in T.
+    x_HI_model : "stored_sf" (the stored fraction, star-forming cells recomputed) or "fake_sf" (``sf_neutral=True``,
+        ``gas_properties.py:get_reproc_HI`` L116-L146: Rahmati+13 at 1e4 K above its density threshold in rho / m_p), or
+        "stored", "rahmati_all" (``gas_physics.neutral_fraction``). H I only.
+    cloudy_density : "hydrogen" (hden = n_H) or "fake_spectra" (hden = 0.774132 rho / m_p, ``spectra.py`` L691-L698,
+        ``cloudy_tables/convert_cloudy.py`` L183). Metals only.
+    cloudy_interpolation : "linear" (bilinear in log f) or "cubic" (the spline of ``convert_cloudy.py:CloudyTable.ion``).
+        Metals only.
     """
     items = [species] if isinstance(species, (str, gp.Ion)) else list(species)
     a = float(gas.a)
     per, cloudy = {}, None
     if GAS_SPECIES in items:
         f = gas.fields
-        n_gas = gp.element_number_density(np.asarray(f["rho"]), 1.0, 1.0, ext.mass_unit)
-        T = gp.temperature(f["u"], f["n_e"], constants=ext.T_constants)
+        n_gas = gp.element_number_density(np.asarray(f["rho"]), 1.0, 1.0, mass_unit)
+        T = gp.temperature(f["u"], f["n_e"], constants=T_constants)
         per[GAS_SPECIES] = ion_cell_fields(n_gas, T, f["velocity"], a)
         items = [x for x in items if not (isinstance(x, str) and x == GAS_SPECIES)]
     ions = [x if isinstance(x, gp.Ion) else gp.ion_from_species(x) for x in items]
@@ -93,12 +113,12 @@ def gas_to_cells(gas: GasCells, species, ext: ExtractionOptions = ExtractionOpti
         P = gp.ion_properties(
             gas,
             ion,
-            mass_unit=ext.mass_unit,
-            T_constants=ext.T_constants,
-            x_HI_model=ext.x_HI_model,
+            mass_unit=mass_unit,
+            T_constants=T_constants,
+            x_HI_model=x_HI_model,
             cloudy=cloudy,
-            cloudy_density=ext.cloudy_density,
-            cloudy_interpolation=ext.cloudy_interpolation,
+            cloudy_density=cloudy_density,
+            cloudy_interpolation=cloudy_interpolation,
         )
         per[ion.species] = ion_cell_fields(P["n_ion"], P["T"], gas.fields["velocity"], a)
     return Cells(
@@ -106,11 +126,10 @@ def gas_to_cells(gas: GasCells, species, ext: ExtractionOptions = ExtractionOpti
     )
 
 
-def snapshot_cells(
-    reader, species, lo, hi, *, margin: float = 0.0, ext: ExtractionOptions = ExtractionOptions(), max_rows: int = 4_000_000
-) -> Cells:
+def snapshot_cells(reader, species, lo, hi, *, margin: float = 0.0, max_rows: int = 4_000_000, **gas_physics) -> Cells:
     """The gas cells of a sub-box of a snapshot as ``core.Cells``, for the given species, without skewers.
 
-    ``select_cells_in_region(reader, lo, hi, margin=margin)`` then ``gas_to_cells(cells, species, ext)``; see both.
+    ``select_cells_in_region(reader, lo, hi, margin=margin)`` then ``gas_to_cells(cells, species, **gas_physics)``; see
+    both (``gas_physics``: ``mass_unit``, ``T_constants``, ``x_HI_model``, ``cloudy_density``, ``cloudy_interpolation``).
     """
-    return gas_to_cells(select_cells_in_region(reader, lo, hi, margin=margin, max_rows=max_rows), species, ext)
+    return gas_to_cells(select_cells_in_region(reader, lo, hi, margin=margin, max_rows=max_rows), species, **gas_physics)

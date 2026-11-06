@@ -158,7 +158,7 @@ def main() -> int:
     section("iminuit", test_iminuit)
     section("diffrax", lambda d: (True, "import ok"))
     section("exojax", lambda e: (True, "import ok (ExoJAX Voigt, the default line profile)"))
-    section("fake_spectra", lambda f: (True, "import ok (optional: live comparisons, skewerjax.comparison.driver)"))
+    section("fake_spectra", lambda f: (True, "import ok (optional: notebook 12, the benchmark; docs/installation.md)"))
     sjx = section("skewerjax", test_skewerjax)
     header("Summary")
     print(f"Checks passed: {sum(RESULTS)}/{len(RESULTS)}")
