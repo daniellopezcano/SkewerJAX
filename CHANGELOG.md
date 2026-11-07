@@ -20,6 +20,9 @@ All notable changes to SkewerJAX. Dates are those of the working sessions; the p
   cites, and all of them against fake_spectra's C engine on toy particles.
 
 ### Changed
+- Notebook 12: every step's calls written out, one keyword per line, with `# <-- switched` and `# <-- taken along`; each step's markdown with
+  both expressions and their constants; the root-cause table with Accuracy, Impact (from rms(ΔF) of Lyα, own effect for steps 7, 8, 14) and
+  Expected cost (`GRADES`); step 3 prints the star-forming cells the skewer crosses; a closing cell on what to adopt, what is a choice, what to time.
 - Notebook 12 rebuilt: kernel `skewerjax-fs`, TNG50-2, native `Spectra`, a block for the fully matched mode, then 17 options each on
   its own from both ends (A = default + option, B = matched - option; four curves per figure, the matched mode standing for fake_spectra), two master figures per line, and the
   root causes generated from the run, with what each option changes on this skewer. The cumulative chain, the 10 skewers and the
