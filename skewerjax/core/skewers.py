@@ -13,9 +13,10 @@ import jax.numpy as jnp
 import numpy as np
 from jax.typing import ArrayLike
 
+from skewerjax.config import device_array
 from skewerjax.core.constants import phys
 from skewerjax.core.cosmology import Cosmology
-from skewerjax.core.validation import check_values
+from skewerjax.core.validation import check_values, is_traced
 
 
 # --------------------------------------------------------------------------- polyline geometry
@@ -35,7 +36,9 @@ def path_geometry(points) -> dict:
 
     Parameters
     ----------
-    points : (..., N, 3) positions [cMpc], N >= 2, unwrapped along the path.
+    points : (..., N, 3) positions [cMpc], N >= 2, unwrapped along the path. A NumPy array (or a list) is processed in
+        float64 NumPy whatever the precision policy (the host geometry: ``s`` is a cumulative sum over the points, which
+        float32 would round by ~sqrt(N) eps s); a JAX array in JAX, in its own dtype (jit / grad).
 
     Returns
     -------
@@ -43,18 +46,20 @@ def path_geometry(points) -> dict:
     ``tangents`` (..., N, 3) unit tangent (central difference, one-sided at the ends); ``mid_lo``, ``mid_hi``
     (..., N, 3) the midpoints m_{i-1/2}, m_{i+1/2} (= x_i at the two ends).
     """
-    x = jnp.asarray(points)
+    xp = jnp if isinstance(points, jax.Array) else np
+    x = xp.asarray(points) if xp is jnp else np.asarray(points, dtype=np.float64)
     if x.ndim < 2 or x.shape[-1] != 3 or x.shape[-2] < 2:
         raise ValueError(f"points must be (..., N >= 2, 3), got {x.shape}.")
-    d = jnp.linalg.norm(jnp.diff(x, axis=-2), axis=-1)
-    z = jnp.zeros(d.shape[:-1] + (1,), d.dtype)
-    s = jnp.concatenate([z, jnp.cumsum(d, axis=-1)], axis=-1)
+    d = xp.linalg.norm(xp.diff(x, axis=-2), axis=-1)
+    z = xp.zeros(d.shape[:-1] + (1,), d.dtype)
+    s = xp.concatenate([z, xp.cumsum(d, axis=-1)], axis=-1)
     mid = 0.5 * (x[..., 1:, :] + x[..., :-1, :])
-    mid_lo = jnp.concatenate([x[..., :1, :], mid], axis=-2)
-    mid_hi = jnp.concatenate([mid, x[..., -1:, :]], axis=-2)
+    mid_lo = xp.concatenate([x[..., :1, :], mid], axis=-2)
+    mid_hi = xp.concatenate([mid, x[..., -1:, :]], axis=-2)
     t = mid_hi - mid_lo
-    t = t / jnp.maximum(jnp.linalg.norm(t, axis=-1, keepdims=True), 1e-300)
-    return dict(s=s, line_elements=line_elements(x), tangents=t, mid_lo=mid_lo, mid_hi=mid_hi)
+    t = t / xp.maximum(xp.linalg.norm(t, axis=-1, keepdims=True), 1e-300 if xp is np else jnp.finfo(t.dtype).tiny)
+    elements = 0.5 * (xp.concatenate([z, d], axis=-1) + xp.concatenate([d, z], axis=-1))
+    return dict(s=s, line_elements=elements, tangents=t, mid_lo=mid_lo, mid_hi=mid_hi)
 
 
 # --------------------------------------------------------------------------- point layouts
@@ -162,6 +167,36 @@ def _scale_factors(cosmology: Cosmology, a0, distances) -> jnp.ndarray:
     return cosmology.solve_a_of_x(jnp.repeat(a0, cosmology.N_cosmologies), distances)
 
 
+def _host_photon_directions(points: np.ndarray, direction: np.ndarray) -> np.ndarray:
+    """``photon_directions`` of every skewer in float64 NumPy: (N_sk, N, 3)."""
+    fwd = np.diff(points, axis=1)
+    fwd = np.concatenate([fwd, fwd[:, -1:]], axis=1)
+    bwd = -np.diff(points, axis=1)
+    bwd = np.concatenate([bwd[:, :1], bwd], axis=1)
+    d = np.where((np.asarray(direction) == 1)[:, None, None], fwd, bwd)
+    return d / np.maximum(np.linalg.norm(d, axis=-1, keepdims=True), 1e-20)
+
+
+def _host_distances(points: np.ndarray, x0: np.ndarray, ic: np.ndarray, is_absorption: np.ndarray) -> np.ndarray:
+    """``comoving_distances`` of every skewer in float64 NumPy: (N_sk, N) [Mpc]."""
+    steps = np.linalg.norm(np.diff(points, axis=1), axis=-1)
+    steps = np.where((ic == -1)[:, None], steps[:, ::-1], steps)
+    rel = np.cumsum(steps, axis=1)
+    rel = np.where(is_absorption[:, None], -rel, rel)
+    return x0[:, None] + np.concatenate([np.zeros((points.shape[0], 1)), rel], axis=1)
+
+
+def _host_scale_factors(cosmology: Cosmology, a0: np.ndarray, distances: np.ndarray, ic: np.ndarray) -> np.ndarray:
+    """(N_cosmologies, N_sk, N) a(x) of every skewer in float64 (``Cosmology.solve_a_of_x_host``), in the order of the
+    points. **Box mode:** the skewers that share their distances from the IC point and their a0 (parallel skewers through
+    a box, ``axis_aligned_skewer_points``, ``lattice_points``) share one solve, broadcast to all of them."""
+    key = np.concatenate([a0[:, None], distances], axis=1)
+    uniq, inv = np.unique(key, axis=0, return_inverse=True)
+    sol = np.stack([cosmology.solve_a_of_x_host(np.full(cosmology.N_cosmologies, u[0]), u[1:]) for u in uniq], axis=1)
+    a = sol[:, np.ravel(inv)]  # (N_cosmologies, N_sk, N) from the IC point on
+    return np.where((ic == -1)[None, :, None], a[..., ::-1], a)
+
+
 # --------------------------------------------------------------------------- SkewerBundle
 @jax.tree_util.register_pytree_node_class
 class SkewerBundle:
@@ -214,7 +249,11 @@ class SkewerBundle:
         manual_scale_factors: ArrayLike | None = None,
         cosmologies: Cosmology | None = None,
     ):
-        spatial_points = jnp.asarray(spatial_points)
+        concrete = not is_traced(
+            spatial_points, a0, x0, manual_scale_factors, *(() if cosmologies is None else jax.tree_util.tree_leaves(cosmologies))
+        )
+        pts64 = np.asarray(spatial_points, dtype=np.float64) if concrete else None
+        spatial_points = device_array(spatial_points) if concrete else jnp.asarray(spatial_points)
         if spatial_points.ndim != 3 or spatial_points.shape[-1] != 3:
             raise ValueError(f"spatial_points must be (N_sk, N_ppsk, 3), got {spatial_points.shape}")
         N_sk, N_ppsk = spatial_points.shape[:2]
@@ -222,10 +261,11 @@ class SkewerBundle:
             raise ValueError(
                 f"a SkewerBundle needs at least one skewer of at least 2 points, got (N_sk, N_ppsk) = {(N_sk, N_ppsk)}."
             )
-        check_values("SkewerBundle: spatial_points [cMpc]", spatial_points)
+        check_values("SkewerBundle: spatial_points [cMpc]", spatial_points if pts64 is None else pts64)
         check_values("SkewerBundle: a0", a0, minimum=0.0, strict=True)
-        a0 = jnp.broadcast_to(jnp.asarray(a0), (N_sk,))
-        x0 = jnp.broadcast_to(jnp.asarray(x0), (N_sk,))
+        a0_in, x0_in = a0, x0
+        a0 = jnp.broadcast_to(device_array(a0) if concrete else jnp.asarray(a0), (N_sk,))
+        x0 = jnp.broadcast_to(device_array(x0) if concrete else jnp.asarray(x0), (N_sk,))
         ic = jnp.asarray(ICs_defined_at_index)
         if jnp.any((ic != -1) & (ic != 0)):
             raise ValueError(f"ICs_defined_at_index must be -1 or 0, got {ic}")
@@ -247,24 +287,44 @@ class SkewerBundle:
             max_dev = jnp.max(jnp.abs(jnp.linalg.norm(los_directions, axis=-1) - 1.0))
             if max_dev > 1e-5:
                 raise ValueError(f"los_directions must be normalized. Max |‖d‖-1| = {max_dev:.3e}")
+        elif concrete:
+            los_directions = device_array(_host_photon_directions(pts64, np.asarray(direction)))
         else:
             los_directions = jax.vmap(photon_directions)(spatial_points, direction)
-
-        distances = jax.vmap(comoving_distances)(spatial_points, x0, ic, is_absorption)
-        if manual_scale_factors is not None:
-            scale_factors = jnp.asarray(manual_scale_factors)
-            if scale_factors.ndim != 3 or scale_factors.shape[1:] != (N_sk, N_ppsk):
-                raise ValueError(
-                    f"manual_scale_factors must have shape (N_cosmologies, N_sk, N_ppsk) = (., {N_sk}, {N_ppsk}), "
-                    f"got {scale_factors.shape}"
-                )
+        if manual_scale_factors is None and cosmologies is None:
+            raise ValueError("When manual_scale_factors is not provided, you must supply the 'cosmologies' argument.")
+        self._host = None
+        if concrete:  # the geometry and a(x) in float64 on the host, whatever the precision policy (skewerjax.config)
+            ic64, absn = np.asarray(ic), np.asarray(is_absorption)
+            x064 = np.broadcast_to(np.asarray(x0_in, dtype=np.float64), (N_sk,))
+            dist64 = _host_distances(pts64, x064, ic64, absn)
+            if manual_scale_factors is not None:
+                sf64 = np.asarray(manual_scale_factors, dtype=np.float64)
+            else:
+                a064 = np.broadcast_to(np.asarray(a0_in, dtype=np.float64), (N_sk,))
+                sf64 = _host_scale_factors(cosmologies, a064, dist64, ic64)
+            a0_host = np.broadcast_to(np.asarray(a0_in, dtype=np.float64), (N_sk,)).copy()
+            self._host = dict(points=pts64, scale_factors=sf64, distances=dist64, a0=a0_host)
+            distances, scale_factors = device_array(dist64), device_array(sf64)
         else:
-            if cosmologies is None:
-                raise ValueError("When manual_scale_factors is not provided, you must supply the 'cosmologies' argument.")
-            a_from_ics = jnp.swapaxes(jax.vmap(lambda a, d: _scale_factors(cosmologies, a, d))(a0, distances), 0, 1)
-            scale_factors = jnp.where((ic == -1)[None, :, None], jnp.flip(a_from_ics, axis=-1), a_from_ics)
+            distances = jax.vmap(comoving_distances)(spatial_points, x0, ic, is_absorption)
+            if manual_scale_factors is not None:
+                scale_factors = jnp.asarray(manual_scale_factors)
+            else:
+                a_from_ics = jnp.swapaxes(jax.vmap(lambda a, d: _scale_factors(cosmologies, a, d))(a0, distances), 0, 1)
+                scale_factors = jnp.where((ic == -1)[None, :, None], jnp.flip(a_from_ics, axis=-1), a_from_ics)
+        if scale_factors.ndim != 3 or scale_factors.shape[1:] != (N_sk, N_ppsk):
+            raise ValueError(
+                f"manual_scale_factors must have shape (N_cosmologies, N_sk, N_ppsk) = (., {N_sk}, {N_ppsk}), "
+                f"got {scale_factors.shape}"
+            )
         try:
-            check_values("SkewerBundle: scale factors a(x)", scale_factors, minimum=0.0, strict=True)
+            check_values(
+                "SkewerBundle: scale factors a(x)",
+                scale_factors if self._host is None else self._host["scale_factors"],
+                minimum=0.0,
+                strict=True,
+            )
         except ValueError as e:
             raise ValueError(
                 f"{e} The scale factor must stay finite and > 0 along every path: check a0, the cosmology and the "
@@ -277,6 +337,44 @@ class SkewerBundle:
         self.scale_factors = scale_factors
         sp = jnp.tile(spatial_points[None, ...], (scale_factors.shape[0], 1, 1, 1))
         self.quadri_vectors = jnp.concatenate([scale_factors[..., None], sp], axis=-1)
+
+    @classmethod
+    def axis_aligned(cls, cofm, axis, box: float, spacing: float, cosmology: Cosmology, a_ref: float, s_ref: float | None = None):
+        """**Box mode**: straight skewers parallel to the box axes, across the box once (``axis_aligned_skewer_points``),
+        all sharing one path coordinate s, hence one a(s), one frame and one pixel grid.
+
+        a(s) is solved once, in float64 on the host, with a(s_ref) = ``a_ref`` (default s_ref: the middle of the path,
+        the convention of a snapshot at a = a_ref), and broadcast to every skewer; the photons travel towards
+        decreasing s (the observer before the first point), as for simulations. Equivalent to building the points and
+        solving a(s) per skewer (``core.scale_factors_along_paths``), at the cost of one solve.
+
+        cofm : (N_sk, 3) a point of each skewer [cMpc] (its coordinate along ``axis`` is ignored); axis : (N_sk,) 1, 2, 3 or
+        a scalar; box, spacing : [cMpc] (the spacing is rounded to divide the box); cosmology : ``Cosmology`` (one).
+        """
+        from skewerjax.core.absorbers import scale_factors_along_paths
+
+        cofm = np.atleast_2d(np.asarray(cofm, dtype=np.float64))
+        axis = np.broadcast_to(np.asarray(axis, dtype=int), (cofm.shape[0],))
+        pts = axis_aligned_skewer_points(cofm, axis, box, spacing)
+        s = path_geometry(pts[:1])["s"]  # (1, N): every skewer has the same path coordinate
+        a = scale_factors_along_paths(s, a_ref, cosmology, s_ref=None if s_ref is None else np.array([s_ref]))[0]
+        sf = np.broadcast_to(a[None, None, :], (1,) + pts.shape[:2])
+        return cls(
+            spatial_points=pts,
+            a0=float(a[0]),
+            x0=0.0,
+            ICs_defined_at_index=0,
+            ICs_at_emission_or_absorption="absorption",
+            manual_scale_factors=sf,
+        )
+
+    @property
+    def host(self) -> dict | None:
+        """The float64 host copies of the geometry, dict(points (N_sk, N_ppsk, 3) [cMpc], scale_factors (N_cosmologies,
+        N_sk, N_ppsk), distances (N_sk, N_ppsk) [Mpc], a0 (N_sk,): the reference scale factor a_dagger of the frame), kept when the bundle was built from concrete values (None for one
+        built under ``jit`` or rebuilt by a pytree map): what the host geometry (``core.absorbers.bundle_frame``,
+        ``cell_pieces``) reads, whatever the precision policy."""
+        return getattr(self, "_host", None)
 
     def tree_flatten(self):
         return tuple(getattr(self, n) for n in self._leaves), None
@@ -322,5 +420,7 @@ class SkewerBundle:
 def hubble_velocity(bundle: SkewerBundle) -> np.ndarray:
     """v_c = c ln(a_dagger / a) [km/s] of the points of the first skewer (the line centre without peculiar velocity,
     ``core.spectral.line_centre_velocity_kms``), a_dagger = the bundle's a0."""
-    a = np.asarray(bundle.scale_factors[0, 0], dtype=np.float64)
-    return phys.c_kms * np.log(float(np.ravel(bundle.a0)[0]) / a)
+    h = bundle.host  # the float64 host copies when the bundle has them (a float32 a0 would shift v_c by ~0.02 km/s)
+    a = np.asarray(bundle.scale_factors[0, 0] if h is None else h["scale_factors"][0, 0], dtype=np.float64)
+    a0 = float(np.ravel(bundle.a0 if h is None else h["a0"])[0])
+    return phys.c_kms * np.log(a0 / a)

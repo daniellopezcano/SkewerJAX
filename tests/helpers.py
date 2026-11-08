@@ -14,6 +14,36 @@ SKEWER_SETS = {
 SKEWER_SETS["sk8"] = dict(axis=SKEWER_SETS["nset"]["axis"][8:9].copy(), cofm=SKEWER_SETS["nset"]["cofm"][8:9].copy())
 
 
+def float64_only(fn):
+    """Run the test in float64 whatever the precision of the run (``SKEWERJAX_PRECISION``): validations whose
+    tolerances are float64 ones (closed forms to 1e-10, bit-for-bit equalities, the regression references). Works
+    with pytest and with the shim (a plain decorator, no fixture)."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(*a, **kw):
+        from skewerjax.config import precision
+
+        with precision("float64"):
+            return fn(*a, **kw)
+
+    run.float64_only = True
+    return run
+
+
+def is_float32() -> bool:
+    """True when the run's precision (``skewerjax.config.get_precision``) is float32."""
+    from skewerjax.config import get_precision
+
+    return get_precision() == "float32"
+
+
+def tol(f64: float, f32: float) -> float:
+    """A tolerance for the run's precision: ``f64`` in float64, ``f32`` in float32 (stated per test, from the float32
+    audit of docs/precision.md)."""
+    return f32 if is_float32() else f64
+
+
 def raises(exc, match, fn, *a, **kw):
     """``fn(*a, **kw)`` raises ``exc`` whose message holds ``match``; returns the exception."""
     try:

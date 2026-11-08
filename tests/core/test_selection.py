@@ -6,7 +6,7 @@
 * the streamed selections of a snapshot (``simulations.select_cells_near_paths``, ``select_cells_in_region``) on a small
   synthetic Arepo HDF5 snapshot (two files, several blocks, uneven cells): exactly the cells of their rules (brute
   force), for paths through the periodic faces, many paths, regions across the faces; the coarse prefilter of the paths
-  (``_PathOccupancy``) is conservative. The same on TNG50-4: ``tests/simulations/test_snapshot.py``.
+  (``_PathDistanceGrid``) is conservative. The same on TNG50-4: ``tests/simulations/test_snapshot.py``.
 """
 
 import tempfile
@@ -21,7 +21,7 @@ from scipy.spatial import cKDTree
 from skewerjax.core import cells_from_values, cells_on_grid, select_cells, voronoi_volumes
 from skewerjax.core import selection as sel
 from skewerjax.simulations import ArepoHDF5Reader, select_cells_in_region, select_cells_near_paths
-from skewerjax.simulations.selection import _PathOccupancy
+from skewerjax.simulations.selection import _PathDistanceGrid, _prefilter
 
 # --------------------------------------------------------------------------- cells in memory
 BOX = 10.0
@@ -194,23 +194,31 @@ def test_region_selection_is_the_periodic_box():
 
 
 def test_path_prefilter_is_conservative():
+    """The distance bounds of the streamed selection (``_PathDistanceGrid``) and its volume thresholds keep every cell
+    within its radius of a path (and reject most of the others); the prefiltered query selects the same cells."""
     box = 14.0
     rng = np.random.default_rng(2)
     pts = sel.wrap_positions(_paths(box, 2).reshape(-1, 3), box)
     cells = np.concatenate([rng.uniform(0.0, box, (20_000, 3)), pts[::7] + rng.normal(0.0, 0.3, (pts[::7].shape[0], 3))])
     cells = sel.wrap_positions(cells, box)
-    d = cKDTree(pts, boxsize=box).query(cells)[0]
-    occ = _PathOccupancy(pts, box, n=32)
-    for r_max in (0.05, 0.3, 1.0, 2.5):
-        cand = occ.candidates(cells, r_max)
-        assert cand is not None and np.all(cand[d <= r_max]) and cand.mean() < 0.9  # every cell within r_max is kept
-    assert occ.candidates(cells, 0.6 * box) is None  # a dilation over the whole box: no prefilter
+    tree = cKDTree(pts, boxsize=box)
+    d = tree.query(cells)[0]
+    grid = _PathDistanceGrid(tree, pts, box, r_cap=1.5, n=32)
+    for r in (0.05, 0.3, 1.0, 1.4):
+        cand = grid.candidates(cells, np.full(cells.shape[0], r))
+        assert np.all(cand[d <= r]) and cand.mean() < 0.9, r  # every cell within r is kept
+    assert np.all(grid.candidates(cells, np.full(cells.shape[0], 2.0)))  # beyond r_cap: every cell
     rad = rng.uniform(0.05, 1.0, cells.shape[0])
-    full = sel._nearest_distance_cpu(cKDTree(pts, boxsize=box), cells, rad, workers=1)
-    pre = sel._nearest_distance_cpu(
-        cKDTree(pts, boxsize=box), cells, rad, workers=-1, candidates=occ.candidates(cells, rad.max())
-    )
+    full = sel._nearest_distance_cpu(tree, cells, rad, workers=1)
+    pre = sel._nearest_distance_cpu(tree, cells, rad, workers=-1, candidates=grid.candidates(cells, rad))
     np.testing.assert_array_equal(np.nonzero(pre <= rad)[0], np.nonzero(full <= rad)[0])
+    # the volume thresholds: V >= V_thr  <=>  the radius 2.5 V^(1/3) + ds/2 reaches the bound
+    ds, vol = 0.01, rng.uniform(1e-5, 0.05, cells.shape[0])
+    vthr = grid.volume_thresholds("voronoi", ds, code_length=1.0)
+    q = (cells / grid.h).astype(int) % grid.n
+    by_volume = vol >= vthr[(q[:, 0] * grid.n + q[:, 1]) * grid.n + q[:, 2]]
+    np.testing.assert_array_equal(by_volume, grid.candidates(cells, sel.selection_radius(np.cbrt(vol), "voronoi", ds)))
+    np.testing.assert_array_equal(_prefilter(cells, vol, np.ones_like(vol), 1.0 / grid.h, grid.n, vthr), by_volume)
 
 
 def test_header_cosmology_wrap_and_paths():

@@ -36,8 +36,8 @@ options):
   the spectral axis (each line's own frame, or the reference line's) and the one periodicity option of the package,
   ``velocity_period`` (default: none).
 
-Two optional schemes evaluate the sum per cell instead, on the host (``_per_cell_optical_depth``): fake_spectra's pixel
-average and its early stop (``pixel_average``, ``tautail`` of ``compute_optical_depth``).
+Two optional schemes evaluate the sum per cell instead (``core.per_cell``): fake_spectra's pixel average and its early
+stop (``pixel_average``, ``tautail`` of ``compute_optical_depth``), on windows around each cell's line centre.
 """
 
 from __future__ import annotations
@@ -56,6 +56,7 @@ from jax.experimental.shard_map import shard_map
 from jax.sharding import Mesh, PartitionSpec
 from jax.typing import ArrayLike
 
+from skewerjax.config import real_dtype
 from skewerjax.core.constants import phys
 from skewerjax.core.line_profiles import (
     check_b_constants,
@@ -64,8 +65,8 @@ from skewerjax.core.line_profiles import (
     voigt_width_kms,
     voigt_widths_GHz,
 )
-from skewerjax.core.spectral import frequency_offset_GHz, line_centre_velocity_kms
-from skewerjax.core.validation import check_positive_int, check_shape, check_values, is_traced, warn_if_float32
+from skewerjax.core.spectral import frequency_offset_GHz
+from skewerjax.core.validation import check_positive_int, check_shape, check_values, is_traced
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ def optical_depth_kernel(
     collisional,
     number_density,
     length_m,
-    voigt: str = "ExoJAX",
+    voigt: str = "harris",
     detuning: str = "exact",
     velocity_period=None,
     per_piece: bool = False,
@@ -124,11 +125,15 @@ def optical_depth_kernel(
         detuning=detuning,
         hubble_kms=hubble_kms,
     )
-    n_l, n_p, n_v = nu.shape
-    phi = voigt_line_profiles(nu.reshape(n_l * n_p, n_v), sigma.reshape(-1), gamma.reshape(-1), voigt).reshape(n_l, n_p, n_v)
-    # dtau/dx [1/m] = C f phi n a^-2 (x comoving); 1e2 turns cm^2 cm^-3 m into a number
+    # one profile batch per line: voigt="harris" decides its exact fallback per batch (``voigt_harris``), and the lines
+    # differ in their damping parameters (every Lya element below HARRIS_A_MAX, Si III above it near 1e4 K)
+    phi = jnp.stack([voigt_line_profiles(nu[j], sigma[j], gamma[j], voigt) for j in range(nu.shape[0])])
+    # dtau/dx [1/m] = C f phi n a^-2 (x comoving); 1e2 turns cm^2 cm^-3 m into a number. The column n l first (the
+    # density alone reaches 1e-30 cm^-3 for metals in hot gas, whose product with the prefactor would leave the float32
+    # range), then the constant of each line.
     a2 = scale_factor**-2 if a_eff is None else jnp.broadcast_to(jnp.asarray(a_eff, scale_factor.dtype) ** -2, scale_factor.shape)
-    amp = phys.cross_section_prefactor * f_osc[:, None] * number_density * a2[None, :] * 1e2 * length_m[None, :]
+    const = (phys.cross_section_prefactor * 1e2) * f_osc
+    amp = const[:, None] * (number_density * (length_m * a2)[None, :])
     if per_piece:
         return amp[..., None] * phi
     return jnp.einsum("lp,lpv->lv", amp, phi)
@@ -167,6 +172,12 @@ class Pieces:
 
     cell : (N_sk, N_p) int, the cell of every piece (-1: padding).
 
+    Optional, for precision (filled by ``core.absorbers.absorber_pieces``; None: computed in the kernel):
+
+    hubble_kms : (N_sk, N_p) the Hubble part of every line centre, V_H = c ln(a_dagger / a_p) [km/s], evaluated in float64
+        on the host and stored in the policy dtype: ``hubble_flow="exact"`` uses it instead of the log of a ratio of
+        two rounded scale factors (in float32 an error of ~0.02 km/s; docs/precision.md).
+
     JAX pytree (every field a leaf; a None field has none).
     """
 
@@ -185,6 +196,7 @@ class Pieces:
     aH_first: jnp.ndarray | None = None
     vH_first: jnp.ndarray | None = None
     cell: jnp.ndarray | None = None
+    hubble_kms: jnp.ndarray | None = None
 
     @property
     def shape(self) -> tuple:
@@ -219,7 +231,14 @@ class Pieces:
             aH_first=None if self.aH_first is None else jnp.repeat(self.aH_first, n_rows),
             vH_first=None if self.vH_first is None else jnp.repeat(self.vH_first, n_rows),
             cell=None if self.cell is None else r(self.cell, False),
+            hubble_kms=None if self.hubble_kms is None else r(self.hubble_kms, False),
         )
+
+    def lines(self, sel) -> Pieces:
+        """The pieces of the lines ``sel`` (a slice or an index array of the N_lines axis): the per-line fields sliced,
+        the per-skewer ones shared."""
+        pick = lambda x: None if x is None else (x[sel] if x.ndim == 3 else x)
+        return Pieces(**{f: pick(getattr(self, f)) for f in self.__dataclass_fields__})
 
     def skewers(self, sel) -> Pieces:
         """The pieces of the skewers ``sel`` (an index array or a slice)."""
@@ -261,7 +280,7 @@ def optical_depth_from_pieces(
     velocities_kms,
     line_bundle,
     *,
-    voigt: str = "ExoJAX",
+    voigt: str = "harris",
     detuning: str = "exact",
     velocity_period=None,
     v_chunk: int | None = None,
@@ -278,8 +297,8 @@ def optical_depth_from_pieces(
     velocity_period : None (no wrap) or (N_sk,) periods [km/s] (``compute_optical_depth`` resolves the option).
     v_chunk : velocities per kernel call (memory ~ N_lines x N_p x v_chunk); batch_size : skewers vmapped together
     inside the sequential map (None: one at a time, the lowest memory). per_piece : (N_lines, N_sk, N_p, N_v).
-    dtype : None (default: the dtype of the inputs) or e.g. "float32": opt-in lower-precision kernel (2-3x faster on
-        the CPU; max |dF| ~1e-3 on TNG50-4 skewers); the result is cast back to the input dtype.
+    dtype : None (default: the dtype of the inputs; ``compute_optical_depth`` casts them to the package's precision) or
+        "float32" / "float64": the kernel's precision; the result is cast back to the input dtype.
     a_eff : None or a scalar (traced: no recompilation per value; differentiable): ``optical_depth_kernel``.
     hubble_flow : "exact" (default) or "linear": V_H = (aH)_ref y_p with ``aH_ref`` (None: ``Pieces.aH_first`` of each
         skewer; a scalar, traced and differentiable), y_p = ``Pieces.path_cMpc`` and V_H(0) = ``Pieces.vH_first`` (0 if
@@ -304,8 +323,8 @@ def optical_depth_from_pieces(
     nv = n_v if v_chunk is None else int(v_chunk)
 
     def one_skewer(s):
-        a_d, a, w, T, tb, co, lv, n, P, y, h, h0 = s
-        hub = None if y is None else h0 + h * y  # V_H = V_H(0) + (aH)_ref y_p ("linear"); None: c ln(a_dagger / a)
+        a_d, a, w, T, tb, co, lv, n, P, y, h, h0, hx = s
+        hub = hx if y is None else h0 + h * y  # V_H = V_H(0) + (aH)_ref y_p ("linear"); exact: Pieces.hubble_kms, else in-kernel
         chunks = [
             optical_depth_kernel(
                 velocities_kms[..., v0 : v0 + nv],
@@ -346,6 +365,7 @@ def optical_depth_from_pieces(
         pieces.path_cMpc if linear else None,
         aH,
         (jnp.zeros_like(aH) if pieces.vH_first is None else jnp.asarray(pieces.vH_first, dtype=aH.dtype)) if linear else None,
+        None if linear else pieces.hubble_kms,
     )
     return jnp.moveaxis(jax.lax.map(one_skewer, xs, batch_size=batch_size), 0, 1).astype(out_dtype)
 
@@ -363,8 +383,10 @@ def optical_depth_sharded(
     """
     devices = list(jax.devices() if devices is None else devices)
     velocities_kms = jnp.asarray(velocities_kms)
-    if len(devices) == 1:
-        return optical_depth_from_pieces(pieces, velocities_kms, line_bundle, velocity_period=velocity_period, **kw)
+    if len(devices) == 1:  # on that device, whatever the default backend (e.g. the CPU next to a GPU)
+        pieces, velocities_kms, velocity_period = jax.device_put((pieces, velocities_kms, velocity_period), devices[0])
+        with jax.default_device(devices[0]):
+            return optical_depth_from_pieces(pieces, velocities_kms, line_bundle, velocity_period=velocity_period, **kw)
     n_sk, n_dev = pieces.scale_factor.shape[0], len(devices)
     a_eff = kw.pop("a_eff", None)
     aH_ref = kw.pop("aH_ref", None)
@@ -426,211 +448,6 @@ def resolution_report(pieces: Pieces, line_bundle, tolerance: float = 0.25) -> d
     )
 
 
-# --------------------------------------------------------------------------- the sum per cell (optional schemes)
-def _pixel_rule(n_points: int, dv: float):
-    """fake_spectra's sub-pixel trapezoid (``singleabs.h:tau_kern_outer`` L133-L155): (offsets from the pixel centre
-    [km/s], weights), a single point at the centre when ``n_points`` = 1."""
-    if n_points == 1:
-        return np.zeros(1), np.ones(1)
-    w = np.ones(n_points) / (n_points - 1)
-    w[[0, -1]] *= 0.5
-    return (np.arange(n_points) / (n_points - 1) - 0.5) * dv, w
-
-
-def _tail_cut_sum(per_cell, centre, tautail, half: int, periodic: bool):
-    """The early stop of ``absorption.cpp`` L253-L281 on (N_cells, N_v) per-cell optical depths: walking forward from
-    each cell's pixel ``centre`` and backward from the one before (``half`` pixels each way, the indices wrapped when
-    ``periodic``), a pixel is added up to and including the first one that receives less than ``tautail``. Returns the
-    (N_v,) sum over the cells."""
-    n_c, n_v = per_cell.shape
-    rows, steps = jnp.arange(n_c)[:, None], jnp.arange(half)[None, :]
-    out = jnp.zeros(n_v, per_cell.dtype)
-    for start, sign in ((centre, 1), (centre - 1, -1)):
-        j = start[:, None] + sign * steps
-        vals = per_cell[rows, jnp.mod(j, n_v)]
-        before = jnp.cumprod(vals[:, :-1] >= tautail, axis=1)
-        keep = jnp.concatenate([jnp.ones((n_c, 1), before.dtype), before], axis=1)
-        inside = jnp.ones_like(keep) if periodic else (j >= 0) & (j < n_v)
-        out = out.at[jnp.mod(j, n_v).ravel()].add((vals * keep * inside).ravel())
-    return out
-
-
-@partial(jax.jit, static_argnames=("voigt", "detuning", "n_cells", "half", "periodic"))
-def _cell_chunk_tau(
-    v,
-    lam,
-    A21,
-    mass,
-    f_osc,
-    a_d,
-    a,
-    los,
-    T,
-    tb,
-    co,
-    n,
-    length,
-    P,
-    a_eff,
-    hub,
-    weights,
-    owner,
-    n_cells,
-    centre,
-    tautail,
-    half,
-    periodic,
-    voigt,
-    detuning,
-):
-    """(N_v,) tau of one chunk of pieces (one line, one skewer): each piece averaged on the sub-pixel grid ``v`` (N_v x
-    weights.size) and, with ``tautail``, summed per cell (``owner``) and cut (``_tail_cut_sum``)."""
-    t = optical_depth_kernel(
-        v,
-        lam,
-        A21,
-        mass,
-        f_osc,
-        a_d,
-        a,
-        los,
-        T,
-        tb,
-        co,
-        n,
-        length,
-        voigt=voigt,
-        detuning=detuning,
-        velocity_period=P,
-        per_piece=True,
-        a_eff=a_eff,
-        hubble_kms=hub,
-    )[0]
-    t = (t.reshape(t.shape[0], -1, weights.size) * weights).sum(-1)
-    if tautail is None:
-        return t.sum(0)
-    return _tail_cut_sum(jax.ops.segment_sum(t, owner, num_segments=n_cells), centre, tautail, half, periodic)
-
-
-def _per_cell_optical_depth(
-    pieces: Pieces, v, line_bundle, P, *, voigt, detuning, a_eff, hubble_flow, aH_ref, dtype, tautail, pixel_average, chunk
-) -> jnp.ndarray:
-    """tau (N_lines, N_sk, N_v) with fake_spectra's per-cell scheme (``absorption.cpp:add_tau_particle`` L215-L282): the
-    pieces of one cell form one absorber, whose number of sub-pixel points follows its b and whose walk starts at the
-    pixel of its line centre (column-weighted over its pieces). Host-side: the pieces are grouped by number of points
-    and in chunks of whole cells, each chunk through the jitted kernel. See ``compute_optical_depth``."""
-    n_l, n_sk, _ = pieces.shape
-    vv = np.broadcast_to(np.asarray(v, dtype=np.float64), (n_l, np.shape(v)[-1]))
-    n_v = vv.shape[1]
-    dv = float(vv[0, 1] - vv[0, 0]) if n_v > 1 else 0.0
-    if n_v < 2 or not np.allclose(np.diff(vv, axis=1), dv, rtol=1e-9, atol=0.0):
-        raise ValueError("pixel_average and tautail need a uniform velocity grid of at least 2 pixels.")
-    periodic = P is not None
-    if tautail is not None:
-        if pieces.cell is None:
-            raise ValueError("tautail needs Pieces.cell, the cell of every piece (core.absorbers.cell_pieces fills it).")
-        if periodic and not np.allclose(np.asarray(P), n_v * dv, rtol=1e-6, atol=0.0):
-            raise ValueError(
-                f"tautail walks the pixels modulo the grid: velocity_period {np.asarray(P)} must be its span {n_v * dv} (N_v dv)."
-            )
-    half = n_v // 2 if periodic else n_v  # fake_spectra stops half a box away: beyond it the indices have wrapped
-    aH = np.asarray(_hubble_rates(pieces, aH_ref)) if hubble_flow == "linear" else None
-    h0 = None if aH is None else (np.zeros(n_sk) if pieces.vH_first is None else np.asarray(pieces.vH_first))
-    cast = (lambda x: jnp.asarray(x)) if dtype is None else (lambda x: jnp.asarray(x).astype(dtype))
-    lam, A21, mass, f_osc = (
-        np.asarray(x, dtype=np.float64)
-        for x in (line_bundle.lambda0_A, line_bundle.A21_GHz, line_bundle.mass_amu, line_bundle.f_osc)
-    )
-    fields = {
-        f: np.asarray(getattr(pieces, f)) for f in ("temperature", "turbulence", "collisional", "los_velocity", "number_density")
-    }
-    a_ds, ass, ls = (np.asarray(getattr(pieces, f)) for f in ("a_dagger", "scale_factor", "length_m"))
-    ys, cells = None if aH is None else np.asarray(pieces.path_cMpc), None if pieces.cell is None else np.asarray(pieces.cell)
-    out = np.zeros((n_l, n_sk, n_v))
-    for j in range(n_l):
-        for k in range(n_sk):
-            T, tb, co, los, n = (
-                fields[f][j, k] for f in ("temperature", "turbulence", "collisional", "los_velocity", "number_density")
-            )
-            a_d, a, ln = a_ds[k], ass[k], ls[k]
-            hub = None if aH is None else h0[k] + aH[k] * ys[k]
-            live = np.nonzero((n != 0.0) & (ln > 0.0))[0]
-            if not live.size:
-                continue
-            vc = np.asarray(line_centre_velocity_kms(a_d[live], a[live], los[None, live], None if hub is None else hub[live]))[0]
-            col = np.abs(n[live] * ln[live])
-            key = live if cells is None else cells[k][live]
-            order = np.lexsort((vc, key))
-            live, vc, col, key = live[order], vc[order], col[order], key[order]
-            P_k = None if P is None else float(np.asarray(P)[k])
-            if P_k is None:  # a cell crossed at both ends of the path is two absorbers
-                new = (key[1:] != key[:-1]) | (np.diff(vc) > 0.5 * n_v * dv)
-            else:
-                new = key[1:] != key[:-1]
-            first = np.concatenate([[0], np.nonzero(new)[0] + 1])
-            sizes = np.diff(np.concatenate([first, [live.size]]))
-            owner = np.repeat(np.arange(first.size), sizes)
-            if P_k is not None:  # the pieces of a cell on one image: the nearest one to its first piece
-                ref = vc[first][owner]
-                vc = ref + np.mod(vc - ref + 0.5 * P_k, P_k) - 0.5 * P_k
-            vc_cell = np.bincount(owner, vc * col, first.size) / np.maximum(np.bincount(owner, col, first.size), 1e-300)
-            centre = np.floor((vc_cell - vv[j, 0] + 0.5 * dv) / dv).astype(np.int64)
-            centre = centre if periodic else np.clip(centre, 0, n_v - 1)
-            pts = np.ones(first.size, np.int64)
-            if pixel_average:  # b = b_th + b_turb, as voigt_widths_GHz
-                b = (np.sqrt(2.0 * phys.kB * T[live[first]] / mass[j]) + tb[live[first]]) / 1e3
-                pts = np.where(dv < 0.5 * b, 1, 2 * np.ceil(dv / b).astype(np.int64) + 1)
-            total = np.zeros(n_v)
-            for n_points in np.unique(pts):
-                off, wts = _pixel_rule(int(n_points), dv)
-                groups = np.nonzero(pts == n_points)[0]
-                ends = np.cumsum(sizes[groups])
-                base = max(max(1, chunk // int(n_points)), int(sizes[groups].max()))
-                g0 = 0
-                while g0 < groups.size:  # whole cells, at most ``base`` pieces per call (padded: one compilation per size)
-                    done = ends[g0 - 1] if g0 else 0
-                    g1 = int(np.searchsorted(ends, done + base, side="right"))
-                    g = groups[g0:g1]
-                    pick = np.concatenate([np.arange(first[i], first[i] + sizes[i]) for i in g])
-                    idx = live[pick]
-                    pad = base - idx.size
-                    full = np.concatenate([idx, np.full(pad, idx[-1])])
-                    own = np.concatenate([np.repeat(np.arange(g.size), sizes[g]), np.zeros(pad, np.int64)])
-                    cen = np.concatenate([centre[g], np.zeros(base - g.size, np.int64)])
-                    dens = np.concatenate([n[idx], np.zeros(pad)])
-                    t = _cell_chunk_tau(
-                        cast((vv[j][:, None] + off).ravel()),
-                        cast(lam[j : j + 1]),
-                        cast(A21[j : j + 1]),
-                        cast(mass[j : j + 1]),
-                        cast(f_osc[j : j + 1]),
-                        cast(a_d[full]),
-                        cast(a[full]),
-                        cast(los[None, full]),
-                        cast(T[None, full]),
-                        cast(tb[None, full]),
-                        cast(co[None, full]),
-                        cast(dens[None]),
-                        cast(ln[full]),
-                        None if P_k is None else cast(P_k),
-                        None if a_eff is None else cast(a_eff),
-                        None if hub is None else cast(hub[full]),
-                        cast(wts),
-                        jnp.asarray(own),
-                        base,
-                        jnp.asarray(cen),
-                        None if tautail is None else cast(tautail),
-                        half,
-                        periodic,
-                        voigt,
-                        detuning,
-                    )
-                    total += np.asarray(t, dtype=np.float64)
-                    g0 = g1
-            out[j, k] = total
-    return jnp.asarray(out, dtype=pieces.temperature.dtype)
-
-
 # --------------------------------------------------------------------------- the entry point
 def _velocity_periods(velocity_period, pieces: Pieces, hubble_flow: str = "exact", aH_ref=None) -> jnp.ndarray | None:
     """(N_sk,) periods [km/s] of the option ``velocity_period``, or None (no wrap); True: ``velocity_span`` under
@@ -686,11 +503,18 @@ def check_pieces(pieces: Pieces, line_bundle=None) -> None:
         ("aH_first", (n_sk,), None),
         ("vH_first", (n_sk,), None),
         ("cell", (n_sk, n_p), None),
+        ("hubble_kms", (n_sk, n_p), None),
     ):
         x = getattr(pieces, f)
         if x is not None:
             check_shape(f"Pieces.{f}", x, shape)
             check_values(f"Pieces.{f}", x, minimum=lo)
+
+
+def _cast_pieces(pieces: Pieces, dtype) -> Pieces:
+    """``pieces`` with every floating field in ``dtype`` (the integer ``cell`` unchanged); no copy for fields already in it."""
+    cast = lambda x: x if x is None or not jnp.issubdtype(x.dtype, jnp.floating) or x.dtype == dtype else jnp.asarray(x, dtype)
+    return Pieces(**{f: cast(getattr(pieces, f)) for f in pieces.__dataclass_fields__})
 
 
 def compute_optical_depth(
@@ -705,7 +529,7 @@ def compute_optical_depth(
     selection_backend: str = "cpu",
     line_frame: str = "own",
     velocity_period=False,
-    voigt: str = "ExoJAX",
+    voigt: str = "harris",
     detuning: str = "exact",
     resolution_tolerance: float | None = 0.25,
     v_chunk: int | None = None,
@@ -746,17 +570,23 @@ def compute_optical_depth(
         [km/s] for every skewer. With a period P, every detuning v - v_c is replaced by its nearest image in
         [-P/2, P/2): a piece whose line centre falls outside the period absorbs at the other end, and the wings that
         cross one end re-enter at the other (only the nearest image is kept).
-    voigt : "ExoJAX" (default) or "harris" (first order in the damping parameter, the matched fast mode;
-        ``core.voigt.voigt_harris``): ``line_profiles.PROFILE_MODES``. Any other value raises ``ValueError``; the FFT
-        convolution and SciPy's wofz are standalone functions of ``core.voigt``.
+    voigt : "harris" (default since stem 20261107; ``core.voigt.voigt_harris``: fake_spectra's first-order expansion in the
+        damping parameter a for a <= 1e-3, the fourth order up to a = 0.05, ExoJAX's exact function beyond; one batch per
+        line) or "ExoJAX" (the exact function everywhere, ~1e-6 against wofz): ``line_profiles.PROFILE_MODES``. Any other
+        value raises ``ValueError``; the FFT convolution and SciPy's wofz are standalone functions of ``core.voigt``.
     detuning : "exact" (default) or "linear" (fake_spectra's first-order mapping; matched mode).
     resolution_tolerance : warn when more than 1e-3 of the column sits in pieces wider than this fraction of the line
         width in velocity (``resolution_report``); None disables the check.
     v_chunk, batch_size : memory controls of ``optical_depth_from_pieces``; piece_chunk : pieces per kernel call (the
         pieces of each skewer are summed in rows of ``piece_chunk``, ``Pieces.rows``).
     per_piece : True returns every piece's contribution (N_lines, N_sk, N_p, N_v).
-    dtype : opt-in kernel precision, e.g. "float32" (``optical_depth_from_pieces``); None keeps the input precision.
-    devices : None (one device, the default) or a list of devices to split the skewers over (``optical_depth_sharded``).
+    dtype : the precision of the sum, "float32" or "float64"; None (default): the package's policy
+        (``skewerjax.config.get_precision``, "float32" unless set). The pieces are cast to it once, and tau is returned in it.
+    devices : None (the default device) or a list of devices, the same API on the CPU and on a GPU:
+        ``skewerjax.config.devices("cpu")`` (the host devices of ``skewerjax.config.configure_devices``) or
+        ``devices("gpu")``. The sum over pieces splits the skewers over them (``optical_depth_sharded``, ``shard_map``);
+        the per-cell schemes (``pixel_average``, ``tautail``) dispatch their chunks of cells to them in turn. One device:
+        everything runs on it. The result does not depend on the devices.
     a_eff : None (default) or a scalar > 0, the effective scale factor of the comoving-to-physical density conversion:
         None keeps a_p^-2 of every piece (tau_j = C_j f_j sum_p n_com,p l_p a_p^-2 phi_jp); a scalar uses a_eff^-2
         for every piece (e.g. 1 / (1 + z), a fixed conversion). The line centres v_c,p, the widths, the lengths and
@@ -807,8 +637,8 @@ def compute_optical_depth(
     if tautail is not None and not tautail > 0:
         raise ValueError(f"tautail must be None or a threshold > 0, got {tautail!r}.")
     per_cell = bool(pixel_average) or tautail is not None
-    if per_cell and (per_piece or devices is not None):
-        raise ValueError("pixel_average and tautail sum over the cells on one device: per_piece and devices do not apply.")
+    if per_cell and per_piece:
+        raise ValueError("pixel_average and tautail sum over the cells: per_piece does not apply.")
     if aH_ref is not None:
         if hubble_flow != "linear":
             raise ValueError('aH_ref applies to hubble_flow="linear" only.')
@@ -844,8 +674,7 @@ def compute_optical_depth(
                         f"so it is {float(a_eff) ** 2:.3g} times smaller than with a_eff = 1. Did you mean 1 / (1 + z)?",
                         stacklevel=2,
                     )
-    if dtype is None:
-        warn_if_float32("compute_optical_depth")
+    work = real_dtype() if dtype is None else np.dtype(dtype)  # the precision policy (skewerjax.config), resolved outside jit
     pieces_info = None
     if isinstance(source, Pieces):
         if cells is not None or a_dagger is not None:
@@ -871,6 +700,14 @@ def compute_optical_depth(
             pieces, pieces_info = pieces
     t1 = time.perf_counter()
     check_pieces(pieces, line_bundle)
+    if pieces.hubble_kms is None and work != np.float64 and not is_traced(pieces.a_dagger, pieces.scale_factor):
+        # Pieces built by hand: V_H = c ln(a_dagger / a_p) in float64 on the host before the cast, as absorber_pieces
+        # does (docs/precision.md, item 1); float64 keeps the in-kernel log, bit for bit
+        a_p = np.asarray(pieces.scale_factor, dtype=np.float64)
+        a_d = np.asarray(pieces.a_dagger, dtype=np.float64)
+        a_d = a_d[:, None] if a_d.ndim == 1 else a_d  # (N_sk,) or per piece (N_sk, N_p)
+        pieces = dataclasses.replace(pieces, hubble_kms=phys.c_kms * np.log(a_d / a_p))
+    pieces = _cast_pieces(pieces, work)
     if per_cell and is_traced(pieces.temperature):
         raise ValueError("pixel_average and tautail are host-side loops over the cells: they cannot run under jit or vmap.")
     if b_constants != "codata":
@@ -897,16 +734,22 @@ def compute_optical_depth(
                 + ". Sample the skewers more densely.",
                 stacklevel=2,
             )
+    traced = is_traced(velocities_kms, *jax.tree_util.tree_leaves(line_bundle))
+    v_host = None if traced else np.asarray(velocities_kms, dtype=np.float64)  # the grid, in float64 (concrete inputs)
     if line_frame == "reference":
         v = v[None, :] + jnp.asarray(line_bundle.delta_v)[:, None]
+        v_host = None if v_host is None else v_host[None, :] + np.asarray(line_bundle.delta_v, dtype=np.float64)[:, None]
+    v = (v if v_host is None else jnp.asarray(v_host)).astype(work)
     P = _velocity_periods(velocity_period, pieces, hubble_flow, aH_ref)
     n_sk, m = pieces.scale_factor.shape
     pieces_all = pieces
     if per_cell:
         t2 = time.perf_counter()
-        tau = _per_cell_optical_depth(
+        from skewerjax.core.per_cell import per_cell_optical_depth
+
+        tau = per_cell_optical_depth(
             pieces,
-            v,
+            v_host,
             line_bundle,
             P,
             voigt=voigt,
@@ -914,10 +757,10 @@ def compute_optical_depth(
             a_eff=a_eff,
             hubble_flow=hubble_flow,
             aH_ref=aH_ref,
-            dtype=dtype,
+            dtype=work,
             tautail=tautail,
             pixel_average=pixel_average,
-            chunk=2048 if piece_chunk is None else int(piece_chunk),
+            devices=devices,
         )
         return (
             _finish_info(tau, pieces_all, v, line_bundle, source, line_frame, P, rep, a_eff, t0, t1, t2, False, pieces_info)
@@ -936,7 +779,7 @@ def compute_optical_depth(
         v_chunk=v_chunk,
         batch_size=batch_size,
         per_piece=per_piece,
-        dtype=dtype,
+        dtype=None,
         a_eff=a_eff,
         hubble_flow=hubble_flow,
         aH_ref=aH_ref,
@@ -952,13 +795,23 @@ def compute_optical_depth(
         velocity_period,
         voigt,
         detuning,
-        dtype,
+        work.name,
     )
     t2 = time.perf_counter()
-    tau = (
-        optical_depth_sharded(pieces, v, line_bundle, devices=devices, **kw)
+    run = (
+        (lambda p, vj, lb: optical_depth_sharded(p, vj, lb, devices=devices, **kw))
         if devices is not None
-        else optical_depth_from_pieces(pieces, v, line_bundle, **kw)
+        else (lambda p, vj, lb: optical_depth_from_pieces(p, vj, lb, **kw))
+    )
+    # one line at a time: each has its own Voigt branch (voigt="harris": the first order for Lya, the fourth for Si III
+    # near 1e4 K), and two one-line batches are faster than one two-line batch (measured 2.4x on CPU)
+    n_l = line_bundle.n_lines
+    tau = (
+        run(pieces, v, line_bundle)
+        if n_l == 1
+        else jnp.concatenate(
+            [run(pieces.lines(slice(j, j + 1)), v if v.ndim == 1 else v[j : j + 1], line_bundle.subset([j])) for j in range(n_l)]
+        )
     )
     if piece_chunk is not None:
         n_l, n_v = tau.shape[0], tau.shape[-1]

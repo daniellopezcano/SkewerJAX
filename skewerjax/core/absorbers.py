@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 import jax.numpy as jnp
 import numpy as np
 
+from skewerjax.config import device_array
 from skewerjax.core import deposition as dep
 from skewerjax.core.constants import phys
 from skewerjax.core.line_profiles import check_b_constants
@@ -191,25 +192,30 @@ def velocity_span(source, hubble_flow: str = "exact", aH_ref=None, *, ii_cosmolo
 def scale_factors_along_paths(s, a_ref: float, cosmology, s_ref=None) -> np.ndarray:
     """a(s) along paths with a(s_ref) = a_ref; s increases away from the observer.
 
-    Uses ``Cosmology.solve_a_of_x`` (x = comoving distance towards the observer, da/dx > 0), forward
-    and backward from s_ref. s : (N_sk, N) [cMpc]; s_ref : (N_sk,) or None (path midpoints).
+    Solved in float64 on the host (``Cosmology.solve_a_of_x_host``; x = comoving distance towards the observer,
+    da/dx > 0), forward and backward from s_ref. s : (N_sk, N) [cMpc]; s_ref : (N_sk,) or None (path midpoints).
+    Paths with the same s grid and s_ref (parallel skewers through a box) share one solve (the box mode).
     """
     s = np.atleast_2d(np.asarray(s, dtype=np.float64))
     s_ref = 0.5 * (s[:, 0] + s[:, -1]) if s_ref is None else np.broadcast_to(np.asarray(s_ref, float), (s.shape[0],))
-    out = np.empty_like(s)
-    for k in range(s.shape[0]):
-        x = s_ref[k] - s[k]  # towards the observer
+    key = np.concatenate([s_ref[:, None], s], axis=1)
+    uniq, inv = np.unique(key, axis=0, return_inverse=True)
+    sols = np.empty((uniq.shape[0], s.shape[1]))
+    for u, row in enumerate(uniq):
+        x = row[0] - row[1:]  # towards the observer
+        res = np.empty_like(x)
         for m in (x >= 0, x < 0):
             if not m.any():
                 continue
             xs = x[m]
             order = np.argsort(np.abs(xs))
             grid = np.concatenate([[0.0], xs[order]])
-            a = np.asarray(cosmology.solve_a_of_x(jnp.array([a_ref]), jnp.asarray(grid), rtol=1e-10, atol=1e-12))[0, 1:]
-            res = np.empty_like(xs)
-            res[order] = a
-            out[k, m] = res
-    return out
+            a = cosmology.solve_a_of_x_host(np.full(1, a_ref), grid)[0, 1:]
+            out = np.empty_like(xs)
+            out[order] = a
+            res[m] = out
+        sols[u] = res
+    return sols[np.ravel(inv)]
 
 
 # --------------------------------------------------------------------------- absorbers
@@ -287,8 +293,8 @@ def _species_values(cells, species: str):
 
 def _path_s_tangents(points):
     """(s (N_sk, N) [cMpc], tangents (N_sk, N, 3)) of the sampling points (``path_geometry``)."""
-    g = path_geometry(jnp.asarray(points, dtype=jnp.float64))
-    return np.asarray(g["s"]), np.asarray(g["tangents"])
+    g = path_geometry(np.asarray(points, dtype=np.float64))  # float64 NumPy, whatever the precision policy
+    return g["s"], g["tangents"]
 
 
 class _AbsorberRows:
@@ -482,35 +488,40 @@ def absorber_pieces(
     conversion, e.g. fake_spectra's column at the data epoch a_data, is ``compute_optical_depth(a_eff=a_data)``. Its
     width in velocity is the frame's Hubble rate times its length (n, T and v_pec are constant inside a cell).
     """
-    ks = range(ab.n_skewers) if skewers is None else [int(k) for k in np.atleast_1d(skewers)]
-    s, n, l, T, vl = (np.asarray(getattr(ab, f))[list(ks)] for f in ("s", "n", "length", "T", "v_los"))
+    ks = list(range(ab.n_skewers) if skewers is None else [int(k) for k in np.atleast_1d(skewers)])
+    s, n, l, T, vl = (np.asarray(getattr(ab, f), dtype=np.float64)[ks] for f in ("s", "n", "length", "T", "v_los"))
     a = np.stack([frame.scale_factors(k, s[i]) for i, k in enumerate(ks)])
     u = np.stack([frame.velocity(k, s[i], vl[i]) for i, k in enumerate(ks)])
     W = np.stack([frame.hubble_rate(k, s[i]) for i, k in enumerate(ks)]) * l
-    lines = lambda x: jnp.broadcast_to(jnp.asarray(x)[None], (n_lines,) + x.shape)
-    opt = lambda x: np.zeros(T.shape) if x is None else np.asarray(x)[list(ks)]
+    opt = lambda x: np.zeros(T.shape) if x is None else np.asarray(x, dtype=np.float64)[ks]
     a_sk = getattr(frame, "a_dagger_per_skewer", None)
     a_d = (
-        jnp.full(s.shape, frame.a_dagger)
+        np.full(s.shape, frame.a_dagger)
         if a_sk is None
-        else jnp.broadcast_to(jnp.asarray(np.asarray(a_sk)[list(ks)])[:, None], s.shape)
+        else np.broadcast_to(np.asarray(a_sk, dtype=np.float64)[ks][:, None], s.shape)
     )
+    # The Hubble part of the line centres, c ln(a_dagger / a), in float64 here: in float32 the kernel would take the log of
+    # a ratio rounded to ~6e-8, i.e. ~0.02 km/s of error (docs/precision.md).
+    hub = phys.c_kms * np.log(a_d / a)
+    dev = lambda x: device_array(np.ascontiguousarray(x))
+    lines = lambda x: jnp.broadcast_to(dev(x)[None], (n_lines,) + x.shape)
     return Pieces(
-        a_dagger=a_d,
-        scale_factor=jnp.asarray(a),
-        length_m=jnp.asarray(l) * phys.Mpc_to_m,
+        a_dagger=dev(a_d),
+        scale_factor=dev(a),
+        length_m=dev(l * phys.Mpc_to_m),
         temperature=lines(T),
         turbulence=lines(opt(ab.turbulence)),
         collisional=lines(opt(ab.collisional)),
         los_velocity=lines(-u),
         number_density=lines(n),
         width_kms=lines(W),
-        velocity_span_kms=jnp.asarray([frame.velocity_span(k) for k in ks]),
-        path_cMpc=jnp.asarray(np.stack([frame.hubble_coordinate(k, s[i]) for i, k in enumerate(ks)])),
-        path_length_cMpc=jnp.asarray([frame.path_length_of(k) for k in ks]),
-        aH_first=jnp.asarray([frame.first_hubble_rate(k) for k in ks]),
-        vH_first=jnp.asarray([frame.first_hubble_velocity(k) for k in ks]),
-        cell=jnp.asarray(np.asarray(ab.cell)[list(ks)]),
+        velocity_span_kms=dev(np.array([frame.velocity_span(k) for k in ks])),
+        path_cMpc=dev(np.stack([frame.hubble_coordinate(k, s[i]) for i, k in enumerate(ks)])),
+        path_length_cMpc=dev(np.array([frame.path_length_of(k) for k in ks])),
+        aH_first=dev(np.array([frame.first_hubble_rate(k) for k in ks])),
+        vH_first=dev(np.array([frame.first_hubble_velocity(k) for k in ks])),
+        cell=jnp.asarray(np.asarray(ab.cell)[ks]),
+        hubble_kms=dev(hub),
     )
 
 
@@ -530,7 +541,7 @@ def tau_absorbers(
     pixel_weights=None,
     chunk: int = 2048,
     v_chunk: int | None = 4096,
-    voigt: str = "ExoJAX",
+    voigt: str = "harris",
     check: float | None = 0.25,
     per_absorber: bool = False,
     dtype: str | None = None,
@@ -707,13 +718,27 @@ def deposit(
     return (use, seg, info) if return_info else (use, seg)
 
 
+def _bundle_host(skewer_bundle, ii_cosmology: int = 0):
+    """(points (N_sk, N, 3) [cMpc], a (N_sk, N)) of a ``SkewerBundle`` in float64: its host copies (``SkewerBundle.host``)
+    when it has them, else its arrays (in the precision they hold)."""
+    h = skewer_bundle.host
+    if h is not None:
+        return h["points"], h["scale_factors"][ii_cosmology]
+    return (
+        np.asarray(skewer_bundle.spatial_points, dtype=np.float64),
+        np.asarray(skewer_bundle.scale_factors[ii_cosmology], dtype=np.float64),
+    )
+
+
 def bundle_frame(skewer_bundle, *, a_dagger=None, ii_cosmology: int = 0) -> ExactFrame:
     """The ``ExactFrame`` of a ``SkewerBundle``: a(s) interpolated in ln a between its points (where a(x) was solved),
     its photon directions, and a_dagger (default: the bundle's ``a0``; a scalar, or (N_sk,) per skewer)."""
-    pts = np.asarray(skewer_bundle.spatial_points, dtype=np.float64)
-    s = np.asarray(path_geometry(jnp.asarray(pts))["s"])
-    a = np.asarray(skewer_bundle.quadri_vectors[ii_cosmology][..., 0], dtype=np.float64)
-    a_d = np.asarray(skewer_bundle.a0 if a_dagger is None else a_dagger, dtype=np.float64)
+    pts, a = _bundle_host(skewer_bundle, ii_cosmology)
+    s = path_geometry(pts)["s"]
+    # a_dagger in float64 (the host copy): rounded to float32 it would shift every line centre by c x 6e-8 ~ 0.02 km/s
+    h = skewer_bundle.host
+    a0 = skewer_bundle.a0 if h is None or "a0" not in h else h["a0"]
+    a_d = np.asarray(a0 if a_dagger is None else a_dagger, dtype=np.float64)
     if a_d.ndim > 1 or (a_d.ndim == 1 and a_d.size not in (1, pts.shape[0])):
         raise ValueError(f"a_dagger must be a scalar or one value per skewer ({pts.shape[0]},), got shape {a_d.shape}.")
     per = None if a_d.size <= 1 or np.all(a_d == a_d.ravel()[0]) else np.broadcast_to(a_d, (pts.shape[0],)).copy()
@@ -783,7 +808,7 @@ def cell_pieces(
     from dataclasses import replace
 
     if skewer_bundle is not None:
-        points = np.asarray(skewer_bundle.spatial_points, dtype=np.float64)
+        points = _bundle_host(skewer_bundle, ii_cosmology)[0]
         frame = bundle_frame(skewer_bundle, a_dagger=a_dagger, ii_cosmology=ii_cosmology) if frame is None else frame
     elif points is None or frame is None:
         raise ValueError("give a skewer_bundle, or points and a frame.")

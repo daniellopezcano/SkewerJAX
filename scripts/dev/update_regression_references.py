@@ -4,8 +4,8 @@
     python scripts/dev/update_regression_references.py [route_toy modules_toy modules_tng]    (default: all of them)
 
 Run it **only for an intended change of the results**, and record the reason in ``CHANGELOG.md``: the regression tests
-exist to catch the unintended ones. It runs on the CPU with float64 enabled before SkewerJAX is imported (as the tests
-do: import-time constants follow the x64 flag); ``modules_tng`` needs the TNG50-4 snapshot ($SKEWERJAX_DATA).
+exist to catch the unintended ones. It runs on the CPU in float64 (x64 enabled before SkewerJAX is imported, and the package's
+precision set to "float64"); ``modules_tng`` needs the TNG50-4 snapshot ($SKEWERJAX_DATA).
 """
 
 import os
@@ -17,6 +17,10 @@ import jax  # noqa: E402
 
 jax.config.update("jax_enable_x64", True)
 import numpy as np  # noqa: E402
+
+import skewerjax.config  # noqa: E402
+
+skewerjax.config.set_precision("float64")  # the references are float64 ones (the tests compare float32 to them too)
 
 REGRESSION = Path(__file__).resolve().parents[2] / "tests" / "regression"
 sys.path.insert(0, str(REGRESSION))

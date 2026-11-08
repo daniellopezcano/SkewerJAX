@@ -20,6 +20,8 @@ from skewerjax.summary_stats import (
     xi_subset_offsets,
 )
 
+from helpers import float64_only
+
 BOXES = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3, bao_ratio=1e-3)  # below R_max of this grid
 
 
@@ -83,6 +85,7 @@ def test_bins_of_the_fields():
     assert np.all(np.isfinite(res["cov_xi_iso"][1:, 1:])) and res["axes"]["r_iso"][0] == 0.0
 
 
+@float64_only
 def test_field_statistics_and_the_chi2_of_xi():
     """``field_statistics`` streams the fields of an iterable (nothing stored; recomputed identically), with the
     expectation, the expectation without the bump, the covariance of xi and the limits; ``xi_chi2`` and

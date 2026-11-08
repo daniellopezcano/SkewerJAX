@@ -137,14 +137,14 @@ environment variable:
 ```bash
 export SKEWERJAX_DATA=/path/to/folder/with/TNG50-4   # DATA_DIR: holds TNG50-4/ (and TNG50-3/, TNG50-2/ for the benchmark)
 export SKEWERJAX_BENCHMARK_RAW=/path/to/raw          # BENCHMARK_RAW_DIR: per-configuration benchmark records
-export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the summary notebook 13 reads
+export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the summary notebook 14 reads
 ```
 
 Notebooks 08 and 10 recompute their toy boxes every time it runs and stores nothing.
 
 `DATA_DIR` defaults to `/home/STORAGE` (read only). The benchmark folders default to `benchmarks/raw` (one record per
 configuration in `benchmarks/raw/fake_spectra`, git-ignored) and `benchmarks/results`
-(`fake_spectra_benchmark.json`, the summary of every record that notebook 13 reads, committed); both are written by
+(`fake_spectra_benchmark.json`, the summary of every record that notebook 14 reads, committed); both are written by
 `scripts/benchmarks/benchmark_fake_spectra.py`.
 
 ## 5. Verify the installation
@@ -160,9 +160,10 @@ when those are missing (`tests/README.md`).
 
 ## Troubleshooting
 
-- **Precision.** SkewerJAX follows JAX's precision flag and never sets it itself. The validated tolerances are float64
-  ones, so call `jax.config.update("jax_enable_x64", True)` before computing. Without it JAX computes in float32. The
-  τ kernel can also be asked for float32 on its own with `dtype="float32"` (see `docs/usage.md`).
+- **Precision.** float32 by default; `skewerjax.config.set_precision("float64")` (or `SKEWERJAX_PRECISION=float64`) for
+  float64, which turns `jax_enable_x64` on (`docs/precision.md`).
+- **All the cores.** `skewerjax.config.configure_devices(n_cpu_devices=..., platforms="cuda,cpu")` before the first
+  `import jax`; then `devices=skewerjax.config.devices("cpu")` or `("gpu")` in `compute_optical_depth`.
 - **Forcing the CPU.** Set `JAX_PLATFORMS=cpu` before Python starts (or before `import jax`). The tests do this
   themselves (`JAX_PLATFORMS=cuda,cpu pytest -m gpu` for the GPU tests).
 - **GPU memory.** By default JAX preallocates 75 % of the GPU memory on first use. Set

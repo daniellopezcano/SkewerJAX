@@ -3,7 +3,8 @@
 * ``core`` (lines, cosmology, the paths, cells, tau) imports nothing from the other subpackages;
 * ``simulations`` (the gas) imports ``core`` only: not ``summary_stats`` or ``comparison``;
 * ``summary_stats`` (statistics from arrays, geometry and ``core.Cells``) imports ``core`` at most: never
-  ``simulations``, ``comparison`` or ``utils``.
+  ``simulations``, ``comparison`` or ``utils``;
+* ``skewerjax.config`` (the precision policy and the devices) is outside the realms: every one may import it.
 
 Checked twice: statically, on the source of every module (every ``import`` and ``from ... import``, also those inside
 functions), and at run time, in a fresh interpreter: importing ``skewerjax.summary_stats``

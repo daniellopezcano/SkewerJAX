@@ -21,6 +21,8 @@ from skewerjax.summary_stats import (
 )
 from skewerjax.summary_stats.density import _lattice_power
 
+from helpers import float64_only
+
 BOXES = ToyBoxes(box_cMpc=64.0, n_cells=32, n_real=48, r_bao=20.0, sigma_bao=2.0, bao_ratio=0.01)
 STRIDE, P = (2, 2), 4
 
@@ -84,6 +86,7 @@ def test_aliasing_sum():
     )
 
 
+@float64_only
 def test_skewer_density_statistics_against_the_lattice_expectation():
     """``skewer_density_statistics`` on the cells the lattice crosses (three species, n_X = r_X n_HI): the four
     overdensities identical, the 3D statistics = ``measure`` of n / <n> - 1 at the points, the exact decomposition of the

@@ -48,13 +48,17 @@ def _next_pow2(n: int) -> int:
 
 
 def voigt_convolution(
-    x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray, *, oversample: int = 1, work_dtype=jnp.float64
+    x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray, *, oversample: int = 1, work_dtype=None
 ) -> jnp.ndarray:
     """G * L by a zero-padded FFT convolution on a uniform grid x (N,), refined ``oversample`` times.
 
-    The kernels are evaluated in ``work_dtype`` (float64 needs ``jax_enable_x64``), convolved, scaled by the fine
-    spacing (unit area) and sampled back at x. Returns (N,) in the dtype of x.
+    The kernels are evaluated in ``work_dtype``, convolved, scaled by the fine spacing (unit area) and sampled back at x.
+    None: float64 when ``jax_enable_x64`` is on, float32 otherwise. This standalone reference keeps the best precision
+    available whatever the package's policy: in float32 the FFT's round-off (~1e-7 of the peak) dominates the far wings.
+    Returns (N,) in the dtype of x.
     """
+    if work_dtype is None:
+        work_dtype = jnp.float64 if jax.config.jax_enable_x64 else jnp.float32
     n = x.shape[0]
     x0, x1 = x[0], x[-1]
     dx = (x1 - x0) / (n - 1)
@@ -74,59 +78,140 @@ def voigt_convolution(
 def voigt_exojax(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray) -> jnp.ndarray:
     """V(x) with ExoJAX's ``voigtone`` (Humlicek-type Faddeeva approximation), vmapped over x (N,); sigma, gamma scalars."""
     tiny = jnp.finfo(x.dtype).tiny
-    return jax.vmap(voigtone, in_axes=(0, None, None))(x, jnp.maximum(sigma, tiny), jnp.maximum(gamma, tiny))
+    s, g = jnp.maximum(sigma, tiny).astype(x.dtype), jnp.maximum(gamma, tiny).astype(x.dtype)
+    # ExoJAX's constants are weakly typed only in part: with x64 on, float32 inputs come back float64 (cast back)
+    return jax.vmap(voigtone, in_axes=(0, None, None))(x, s, g).astype(x.dtype)
 
 
 # First-order expansion of H(a, u) = Re w(u + i a) in the damping parameter a (Harris 1948, ApJ 108, 112), the scheme
 # of fake_spectra (fastvoigt.h, commit 2aebe44; singleabs.h ``profile``):
 #     H(a, u) = exp(-u^2) + a H1(u) + O(a^2),   H1(u) = 2 u Im w(u) - 2 / sqrt(pi) = (2 / sqrt(pi)) (2 u Daw(u) - 1),
-# H1 tabulated on [0, U_MAX] (N_TAB intervals) and interpolated linearly; past U_MAX the Gaussian has underflowed and
-# H1 is its asymptotic series. For a > HARRIS_A_MAX the expansion is not used (fake_spectra calls Faddeeva::w there;
-# here ExoJAX's ``voigtone``). The Gaussian is evaluated exactly (fake_spectra tabulates it with a Taylor correction,
-# good to 1e-8).
-HARRIS_U_MAX, HARRIS_N_TAB, HARRIS_A_MAX = 6.0, 1024, 1e-3
+# H1 on [0, U_MAX] from a Chebyshev series of degree HARRIS_DEGREE (max error 1.3e-8; fake_spectra tabulates it on 1024
+# intervals and interpolates linearly, max error 1.9e-5): a polynomial, so the evaluation vectorises (a table lookup is
+# a gather, which XLA's CPU back end does not vectorise). Past U_MAX the Gaussian has underflowed and H1 is its
+# asymptotic series. For a > HARRIS_A_MAX the expansion is not used (fake_spectra calls Faddeeva::w there; here
+# ExoJAX's ``voigtone``). The Gaussian is evaluated exactly (fake_spectra tabulates it with a Taylor correction, good to
+# 1e-8).
+HARRIS_U_MAX, HARRIS_N_TAB, HARRIS_A_MAX, HARRIS_DEGREE = 6.0, 1024, 1e-3, 28
 _HARRIS_U = np.arange(HARRIS_N_TAB + 2) * (HARRIS_U_MAX / HARRIS_N_TAB)
-_HARRIS_H1 = (2.0 / np.sqrt(np.pi)) * (2.0 * _HARRIS_U * dawsn(_HARRIS_U) - 1.0)
+_HARRIS_H1 = (2.0 / np.sqrt(np.pi)) * (2.0 * _HARRIS_U * dawsn(_HARRIS_U) - 1.0)  # fake_spectra's table (tests)
+
+
+def _harris_h1_chebyshev(degree: int = HARRIS_DEGREE) -> np.ndarray:
+    """Chebyshev coefficients of H1(u) in x = 2 u / U_MAX - 1 on [0, U_MAX] (least squares on a fine grid)."""
+    u = np.linspace(0.0, HARRIS_U_MAX, 20001)
+    h1 = (2.0 / np.sqrt(np.pi)) * (2.0 * u * dawsn(u) - 1.0)
+    return np.polynomial.chebyshev.chebfit(2.0 * u / HARRIS_U_MAX - 1.0, h1, degree)
+
+
+_HARRIS_CHEB = _harris_h1_chebyshev()
+
+
+def _chebval(x, c):
+    """Clenshaw's recurrence for sum_k c_k T_k(x) (c a NumPy array: unrolled into the trace)."""
+    b1 = b2 = jnp.zeros_like(x)
+    for ck in c[:0:-1]:
+        b1, b2 = 2.0 * x * b1 - b2 + ck, b1
+    return x * b1 - b2 + c[0]
 
 
 def harris_H(u: jnp.ndarray, a: jnp.ndarray) -> jnp.ndarray:
     """H(a, u) to first order in a (no fallback): exp(-u^2) + a H1(u) for |u| < 6, the asymptotic
     a / (sqrt(pi) u^2) (1 + 3/(2u^2) + 15/(4u^4) + 105/(8u^6) + 945/(16u^8)) beyond. u, a broadcastable (dimensionless)."""
     au = jnp.abs(u)
-    t = jnp.minimum(au, HARRIS_U_MAX) * (HARRIS_N_TAB / HARRIS_U_MAX)  # the table index, as in fastvoigt.h
-    i = jnp.minimum(jnp.floor(t), HARRIS_N_TAB).astype(jnp.int32)
-    tab = jnp.asarray(_HARRIS_H1, dtype=au.dtype)
-    h1 = tab[i] + (t - i) * (tab[i + 1] - tab[i])  # linear interpolation, no search
+    x = jnp.minimum(au, HARRIS_U_MAX) * (2.0 / HARRIS_U_MAX) - 1.0
+    h1 = _chebval(x, _HARRIS_CHEB)
     inner = jnp.exp(-au * au) + a * h1
     u2 = 1.0 / jnp.maximum(au, HARRIS_U_MAX) ** 2  # safe in the inner region (not used there)
     wing = a / jnp.sqrt(jnp.pi) * u2 * (1.0 + u2 * (1.5 + u2 * (3.75 + u2 * (13.125 + 59.0625 * u2))))
     return jnp.where(au >= HARRIS_U_MAX, wing, inner)
 
 
-def voigt_harris(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray, *, a_max: float | None = HARRIS_A_MAX) -> jnp.ndarray:
-    """V(x; sigma, gamma) = H(a, u) / (sqrt(2 pi) sigma), u = x / (sqrt(2) sigma), a = gamma / (sqrt(2) sigma), with H to
-    first order in a (``harris_H``), as fake_spectra evaluates it.
+# Fourth order in a, for HARRIS_A_MAX < a <= HARRIS4_A_MAX (fake_spectra calls the exact Faddeeva::w there; ExoJAX's
+# ``voigtone`` costs ~25 times more): H = sum_{n <= 4} a^n H_n(u) with H_n = Re[i^n w^(n)(u) / n!] (Harris 1948),
+#     H0 = exp(-u^2), H2 = (1 - 2u^2) exp(-u^2), H4 = (1/2 - 2u^2 + 2u^4/3) exp(-u^2),
+#     H1 = (2/sqrt(pi)) (2 u Daw(u) - 1), H3 = -(2/sqrt(pi)) (2(1 - u^2)/3 - 2u (1 - 2u^2/3) Daw(u)),
+# H1 and H3 from Chebyshev series on [0, HARRIS4_U_MAX] (errors 1e-9, 1e-8); the series is accurate to 5e-8 at a = 0.03,
+# 5e-7 at a = 0.05. Beyond HARRIS4_U_MAX the asymptotic expansion of w(u + i a) to third order in a,
+#     H = (a / sqrt(pi)) (W1(u) - a^2 W3(u)),  W1 = sum_k c_k (2k + 1) / u^(2k+2),  W3 = sum_k c_k C(2k+3, 3) / u^(2k+4),
+# c_k = (2k - 1)!! / 2^k (six terms: 3e-8 at u = 8). Checked against SciPy's wofz in tests/core/test_voigt.py.
+HARRIS4_U_MAX, HARRIS4_A_MAX = 8.0, 0.05
 
-    x, sigma, gamma broadcastable (e.g. x (N, N_v) with sigma, gamma (N, 1)). Elements with a > ``a_max`` take the exact
-    evaluation (``voigt_exojax``); one ``lax.cond`` on the whole batch skips it when every a <= a_max (under an outer
-    ``vmap`` both branches run). ``a_max=None``: the expansion everywhere. jit / vmap / grad (piecewise linear in |u|
-    through the table).
+
+def _harris4_chebyshev(n: int, degree: int) -> np.ndarray:
+    """Chebyshev coefficients of H_n (n = 1, 3) in x = 2 u / U - 1 on [0, HARRIS4_U_MAX] (least squares, from the
+    closed forms with SciPy's Dawson function, in float64)."""
+    u = np.linspace(0.0, HARRIS4_U_MAX, 40001)
+    F = dawsn(u)
+    if n == 1:
+        h = (2.0 / np.sqrt(np.pi)) * (2.0 * u * F - 1.0)
+    else:
+        h = -(2.0 / np.sqrt(np.pi)) * ((2.0 / 3.0) * (1.0 - u * u) - 2.0 * u * (1.0 - (2.0 / 3.0) * u * u) * F)
+    return np.polynomial.chebyshev.chebfit(2.0 * u / HARRIS4_U_MAX - 1.0, h, degree)
+
+
+_HARRIS4_CHEB = {1: _harris4_chebyshev(1, 36), 3: _harris4_chebyshev(3, 36)}
+_W1 = (1.0, 1.5, 3.75, 13.125, 59.0625, 324.84375)  # c_k (2k + 1)
+_W3 = (1.0, 5.0, 26.25, 157.5, 1082.8125, 8445.9375)  # c_k C(2k + 3, 3)
+
+
+def _horner(q, coeffs):
+    out = jnp.full_like(q, coeffs[-1])
+    for c in coeffs[-2::-1]:
+        out = out * q + c
+    return out
+
+
+def harris_H4(u: jnp.ndarray, a: jnp.ndarray) -> jnp.ndarray:
+    """H(a, u) to fourth order in a (accurate to 5e-7 for a <= 0.05; module comments): the series below
+    ``HARRIS4_U_MAX``, the asymptotic wing beyond. u, a broadcastable (dimensionless)."""
+    au = jnp.abs(u)
+    x = jnp.minimum(au, HARRIS4_U_MAX) * (2.0 / HARRIS4_U_MAX) - 1.0
+    u2 = au * au
+    a2 = a * a
+    core = jnp.exp(-u2) * (1.0 + a2 * ((1.0 - 2.0 * u2) + a2 * (0.5 - 2.0 * u2 + (2.0 / 3.0) * u2 * u2)))
+    core = core + a * (_chebval(x, _HARRIS4_CHEB[1]) + a2 * _chebval(x, _HARRIS4_CHEB[3]))
+    q = 1.0 / jnp.maximum(u2, HARRIS4_U_MAX**2)  # safe in the inner region (not used there)
+    wing = (a / jnp.sqrt(jnp.pi)) * q * (_horner(q, _W1) - a2 * q * _horner(q, _W3))
+    return jnp.where(au >= HARRIS4_U_MAX, wing, core)
+
+
+def voigt_harris(x: jnp.ndarray, sigma: jnp.ndarray, gamma: jnp.ndarray, *, a_max: float | None = HARRIS_A_MAX) -> jnp.ndarray:
+    """V(x; sigma, gamma) = H(a, u) / (sqrt(2 pi) sigma), u = x / (sqrt(2) sigma), a = gamma / (sqrt(2) sigma), with H
+    from Harris' (1948) expansion in a: to first order (``harris_H``, as fake_spectra evaluates it) for a <= ``a_max``.
+
+    x, sigma, gamma broadcastable (e.g. x (N, N_v) with sigma, gamma (N, 1)). Elements with a > ``a_max`` (1e-3, where
+    fake_spectra switches to the exact Faddeeva function) take the fourth order (``harris_H4``, accurate to 5e-7) up to
+    ``HARRIS4_A_MAX`` = 0.05, and the exact evaluation (``voigt_exojax``) beyond. ``lax.cond`` on the damping parameters
+    (of the shape of sigma, e.g. (N, 1)) picks the cheapest branch that covers the whole batch: under an outer ``vmap``
+    every branch runs. ``a_max=None``: the first order everywhere. jit / vmap / grad (polynomials in |u|).
     """
     x = jnp.asarray(x)
     tiny = jnp.finfo(x.dtype).tiny
     s = jnp.maximum(jnp.asarray(sigma, dtype=x.dtype), tiny)
     g = jnp.maximum(jnp.asarray(gamma, dtype=x.dtype), 0.0)
-    a = g / (jnp.sqrt(2.0) * s)
-    fast = harris_H(x / (jnp.sqrt(2.0) * s), a) / (jnp.sqrt(2.0 * jnp.pi) * s)
+    a = g / (jnp.sqrt(2.0) * s)  # in the shape of sigma and gamma, e.g. (N, 1): never broadcast over x for the test
+    shape = jnp.broadcast_shapes(x.shape, s.shape, g.shape)
+
+    u = lambda: x * (1.0 / (jnp.sqrt(2.0) * s))
+    norm = lambda h: jnp.broadcast_to(h * (1.0 / (jnp.sqrt(2.0 * jnp.pi) * s)), shape)
+
+    def first(_):  # fake_spectra's expansion
+        return norm(harris_H(u(), a))
+
     if a_max is None:
-        return fast
-    xb, sb, gb, ab = jnp.broadcast_arrays(x, s, jnp.maximum(g, tiny), a)
+        return first(None)
 
-    def mixed(_):
-        exact = jax.vmap(voigtone)(xb.ravel(), sb.ravel(), gb.ravel()).reshape(xb.shape)
-        return jnp.where(ab <= a_max, jnp.broadcast_to(fast, xb.shape), exact)
+    def fourth(_):  # every element below HARRIS4_A_MAX: the first order up to a_max, the fourth beyond
+        return norm(jnp.where(a <= a_max, harris_H(u(), a), harris_H4(u(), a)))
 
-    return jax.lax.cond(jnp.all(ab <= a_max), lambda _: jnp.broadcast_to(fast, xb.shape), mixed, None)
+    def mixed(_):  # some element above HARRIS4_A_MAX: the exact function there
+        xb, sb, gb = jnp.broadcast_arrays(x, s, jnp.maximum(g, tiny))
+        exact = jax.vmap(voigtone)(xb.ravel(), sb.ravel(), gb.ravel()).reshape(shape).astype(x.dtype)
+        return jnp.where(jnp.broadcast_to(a, shape) <= HARRIS4_A_MAX, fourth(None), exact)
+
+    rest = lambda _: jax.lax.cond(jnp.all(a <= HARRIS4_A_MAX), fourth, mixed, None)
+    return jax.lax.cond(jnp.all(a <= a_max), first, rest, None)
 
 
 def log10_voigt(x, sigma, gamma, *, mode: Literal["ExoJAX", "convolution", "harris", "scipy_wofz"] = "ExoJAX", **kwargs: Any):

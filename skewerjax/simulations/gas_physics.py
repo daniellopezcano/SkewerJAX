@@ -43,6 +43,7 @@ import re
 from importlib.resources import files
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.scipy.ndimage import map_coordinates
@@ -111,6 +112,19 @@ def ion_from_species(species: str) -> Ion:
     return Ion(m.group(1), _ROMAN_VALUE[m.group(2)])
 
 
+# ---------------------------------------------------------------------------- precision
+def _xp(*xs):
+    """The array module of the per-cell physics: JAX when any input is a JAX array (or a tracer: jit / grad), else NumPy
+    in float64, whatever the package's precision policy. The products of these functions span ~80 decades (rho X ~ 1e-39 g
+    cm^-3 for pristine gas, ion fractions down to 1e-30): in float32 they reach the denormal range, where a metal-poor
+    cell loses every digit (docs/precision.md)."""
+    return jnp if any(isinstance(x, jax.Array) for x in xs) else np
+
+
+def _arr(xp, x):
+    return xp.asarray(x) if xp is jnp else np.asarray(x, dtype=np.float64)
+
+
 # ---------------------------------------------------------------------------- densities, T, b
 def _mass_unit_g(mass_unit: str) -> float:
     if mass_unit == "amu":
@@ -122,21 +136,24 @@ def _mass_unit_g(mass_unit: str) -> float:
 
 def element_number_density(rho, mass_fraction, mass_amu: float, mass_unit: str = "amu"):
     """n_X = rho X / (A m) [physical cm^-3]; rho [g cm^-3]."""
-    return jnp.asarray(rho) * jnp.asarray(mass_fraction) / (mass_amu * _mass_unit_g(mass_unit))
+    xp = _xp(rho, mass_fraction)
+    return _arr(xp, rho) / (mass_amu * _mass_unit_g(mass_unit)) * _arr(xp, mass_fraction)
 
 
 def temperature(u, n_e, *, X: float = 0.76, gamma: float = 5.0 / 3.0, constants: str = "codata"):
     """T [K] from the specific internal energy u [erg/g] and n_e / n_H; T <= 0 -> 1 K
     (fake_spectra ``spectra.py`` L608-L611)."""
     m_p, k_B = CONSTANTS[constants]
-    mu = 4.0 / (1.0 + 3.0 * X + 4.0 * X * jnp.asarray(n_e))
-    T = (gamma - 1.0) * mu * m_p / k_B * jnp.asarray(u)
-    return jnp.where(T > 0, T, 1.0)
+    xp = _xp(u, n_e)
+    mu = 4.0 / (1.0 + 3.0 * X + 4.0 * X * _arr(xp, n_e))
+    T = (gamma - 1.0) * mu * m_p / k_B * _arr(xp, u)
+    return xp.where(T > 0, T, 1.0)
 
 
 def doppler_b_kms(T, mass_amu: float):
     """Thermal Doppler parameter b = sqrt(2 k_B T / (A m_u)) [km/s] (as ``core.line_profiles.voigt_widths_GHz``)."""
-    return jnp.sqrt(2.0 * phys.kB * jnp.asarray(T) / mass_amu) / 1e3
+    xp = _xp(T)
+    return xp.sqrt(2.0 * phys.kB * _arr(xp, T) / mass_amu) / 1e3
 
 
 # ---------------------------------------------------------------------------- UVB and H I
@@ -176,7 +193,8 @@ def rahmati_neutral_fraction(n_H, T, redshift: float, *, gamma_uvb: float | None
     The quadratic assumes n_e = n_HII (no helium electrons) and the Hui & Gnedin (1997) case-A
     recombination rate. ``gamma_uvb`` None takes the FG09 value of Rahmati's table.
     """
-    n_H, T = jnp.asarray(n_H), jnp.maximum(jnp.asarray(T), 1.0)
+    xp = _xp(n_H, T)
+    n_H, T = _arr(xp, n_H), xp.maximum(_arr(xp, T), 1.0)
     g_tab = float(np.interp(redshift, _RAHMATI_Z, _RAHMATI_GAMMA_FG09))
     gamma = g_tab if gamma_uvb is None else float(gamma_uvb)
     gray = float(np.interp(redshift, _RAHMATI_Z, _RAHMATI_GRAY))
@@ -191,20 +209,21 @@ def rahmati_neutral_fraction(n_H, T, redshift: float, *, gamma_uvb: float | None
     photo = gamma * (0.98 * (1.0 + y**1.64) ** -2.28 + 0.02 * (1.0 + y) ** -0.84)
     lam = 315614.0 / T
     alpha_A = 1.269e-13 * lam**1.503 / (1.0 + (lam / 0.522) ** 0.47) ** 1.923
-    coll = 1.17e-10 * jnp.sqrt(T) * jnp.exp(-157809.0 / T) / (1.0 + jnp.sqrt(T / 1e5))
+    coll = 1.17e-10 * xp.sqrt(T) * xp.exp(-157809.0 / T) / (1.0 + xp.sqrt(T / 1e5))
     A = alpha_A + coll
-    B = 2.0 * alpha_A + photo / jnp.maximum(n_H, 1e-300) + coll
-    return jnp.clip((B - jnp.sqrt(jnp.maximum(B * B - 4.0 * A * alpha_A, 0.0))) / (2.0 * A), 0.0, 1.0)
+    B = 2.0 * alpha_A + photo / xp.maximum(n_H, 1e-300) + coll
+    return xp.clip((B - xp.sqrt(xp.maximum(B * B - 4.0 * A * alpha_A, 0.0))) / (2.0 * A), 0.0, 1.0)
 
 
 def arepo_equilibrium_neutral_fraction(n_H, T, n_e, gamma_HI: float, shielding=1.0):
     """Arepo's ionisation equilibrium for H I (Katz+96 Eq. 33 with Cen 1992 rates, Vogelsberger+13
     Sec. 2.4): x_HI = alpha / (alpha + Gamma_e + Gamma_HI S / n_e), with n_e = ``n_e`` x n_H the
     stored electron density and S the self-shielding factor. Used to *check* the stored values."""
-    n_H, T = jnp.asarray(n_H), jnp.maximum(jnp.asarray(T), 1.0)
-    alpha = 8.4e-11 / jnp.sqrt(T) / (T / 1e3) ** 0.2 / (1.0 + (T / 1e6) ** 0.7)
-    coll = 5.85e-11 * jnp.sqrt(T) * jnp.exp(-157809.1 / T) / (1.0 + jnp.sqrt(T / 1e5))
-    ne = jnp.maximum(jnp.asarray(n_e) * n_H, 1e-300)
+    xp = _xp(n_H, T, n_e)
+    n_H, T = _arr(xp, n_H), xp.maximum(_arr(xp, T), 1.0)
+    alpha = 8.4e-11 / xp.sqrt(T) / (T / 1e3) ** 0.2 / (1.0 + (T / 1e6) ** 0.7)
+    coll = 5.85e-11 * xp.sqrt(T) * xp.exp(-157809.1 / T) / (1.0 + xp.sqrt(T / 1e5))
+    ne = xp.maximum(_arr(xp, n_e) * n_H, 1e-300)
     return alpha / (alpha + coll + gamma_HI * shielding / ne)
 
 
@@ -220,24 +239,25 @@ def neutral_fraction(
     gamma_HI : H I photoionisation rate of the simulation's UVB [s^-1] for ``"stored_sf"``; None
         reads ``TREECOOL_fg_dec11`` at ``redshift``.
     """
-    stored = jnp.asarray(cells.fields["x_HI_stored"]) if "x_HI_stored" in cells.fields else None
+    xp = _xp(n_H, T, *cells.fields.values())
+    stored = _arr(xp, cells.fields["x_HI_stored"]) if "x_HI_stored" in cells.fields else None
     if model == "stored":
         return stored
     if model == "stored_sf":
         if gamma_HI is None:
             gamma_HI = treecool_rates(redshift, default_treecool_path())["Gamma_HI"]
-        sf = jnp.asarray(cells.fields["sfr"]) > 0
-        x_cold = rahmati_neutral_fraction(n_H, 1e4 * jnp.ones_like(n_H), redshift, gamma_uvb=gamma_HI, f_bar=f_bar)
-        return jnp.where(sf, x_cold, stored)
+        sf = _arr(xp, cells.fields["sfr"]) > 0
+        x_cold = rahmati_neutral_fraction(n_H, 1e4 * xp.ones_like(n_H), redshift, gamma_uvb=gamma_HI, f_bar=f_bar)
+        return xp.where(sf, x_cold, stored)
     if model == "fake_sf":
-        rho_mp = jnp.asarray(cells.fields["rho"]) / CONSTANTS["fake_spectra"][0]
+        rho_mp = _arr(xp, cells.fields["rho"]) / CONSTANTS["fake_spectra"][0]
         thr = fake_spectra_sf_threshold()
-        x_cold = rahmati_neutral_fraction(rho_mp, 1e4 * jnp.ones_like(rho_mp), redshift, f_bar=f_bar)
-        return jnp.where(rho_mp > thr / 0.76, x_cold, stored)
+        x_cold = rahmati_neutral_fraction(rho_mp, 1e4 * xp.ones_like(rho_mp), redshift, f_bar=f_bar)
+        return xp.where(rho_mp > thr / 0.76, x_cold, stored)
     if model == "rahmati_all":
         x = rahmati_neutral_fraction(n_H, T, redshift, f_bar=f_bar)
-        sf = jnp.asarray(cells.fields["sfr"]) > 0
-        return jnp.where(sf, rahmati_neutral_fraction(n_H, 1e4 * jnp.ones_like(n_H), redshift, f_bar=f_bar), x)
+        sf = _arr(xp, cells.fields["sfr"]) > 0
+        return xp.where(sf, rahmati_neutral_fraction(n_H, 1e4 * xp.ones_like(n_H), redshift, f_bar=f_bar), x)
     raise ValueError(f"unknown x_HI model {model!r}; use 'stored_sf', 'stored', 'fake_sf' or 'rahmati_all'.")
 
 
@@ -316,10 +336,16 @@ class CloudyIonTable:
             # as CloudyTable.ion: the density coordinate is not clamped (callers clamp rho / m_p before
             # the x 0.774132), points off the grid take mode="nearest"
             x, y = self._coords(np.asarray(hden, dtype=np.float64), np.asarray(T, dtype=np.float64), np, clamp_density=False)
-            return jnp.asarray(10.0 ** map_coordinates_np(self.log_fraction_grid(ion), np.vstack([x, y]), mode="nearest"))
+            f = 10.0 ** map_coordinates_np(self.log_fraction_grid(ion), np.vstack([x, y]), mode="nearest")
+            return jnp.asarray(f) if _xp(hden, T) is jnp else f
         if interpolation != "linear":
             raise ValueError(f"interpolation must be 'linear' or 'cubic', got {interpolation!r}.")
-        x, y = self._coords(jnp.asarray(hden), jnp.asarray(T), jnp)
+        xp = _xp(hden, T)
+        x, y = self._coords(_arr(xp, hden), _arr(xp, T), xp)
+        if xp is np:  # float64 on the host (the same bilinear interpolation, clamped at the edges)
+            from scipy.ndimage import map_coordinates as map_coordinates_np
+
+            return 10.0 ** map_coordinates_np(self.log_fraction_grid(ion), np.vstack([x, y]), order=1, mode="nearest")
         return 10.0 ** map_coordinates(jnp.asarray(self.log_fraction_grid(ion)), [x, y], order=1, mode="nearest")
 
 
@@ -348,8 +374,9 @@ def ion_properties(
     """
     f = cells.fields
     redshift = 1.0 / cells.a - 1.0
-    rho = jnp.asarray(f["rho"])
-    metals = jnp.asarray(f["metals"])
+    xp = _xp(*f.values())
+    rho = _arr(xp, f["rho"])
+    metals = _arr(xp, f["metals"])
     n_H = element_number_density(rho, metals[:, 0], get_mass_amu(["H"])["H"], mass_unit)
     T = temperature(f["u"], f["n_e"], constants=T_constants)
     if ion.is_HI:
@@ -360,7 +387,7 @@ def ion_properties(
         if cloudy_density == "hydrogen":
             hden = n_H
         elif cloudy_density == "fake_spectra":  # rho/m_p, clamped, then x 0.774132 (spectra.py L691-L698, convert_cloudy L183)
-            rho_atoms = jnp.clip(
+            rho_atoms = xp.clip(
                 rho / CONSTANTS["fake_spectra"][0], 10 ** CloudyIonTable.LOG_DENS[0], 10 ** CloudyIonTable.LOG_DENS[-1]
             )
             hden = CLOUDY_HDEN_FACTOR * rho_atoms

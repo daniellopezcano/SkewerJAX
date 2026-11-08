@@ -149,9 +149,11 @@ for nm, f in (
         *((jnp.asarray(3.0), jnp.asarray(0.5)) if nm.startswith("voigt") else (jnp.asarray(3.0),)),
     )
 for m in ("ExoJAX", "convolution"):
-    jit_check(f"log10_voigt ({m})", lambda s, g: V.log10_voigt(xv, s, g, mode=m), jnp.asarray(3.0), jnp.asarray(0.5))
+    jit_check(f"log10_voigt ({m})", lambda s, g, m=m: V.log10_voigt(xv, s, g, mode=m), jnp.asarray(3.0), jnp.asarray(0.5))
     vmap_check(
-        f"log10_voigt ({m}, sigma batch)", lambda s: V.log10_voigt(xv, s, jnp.asarray(0.5), mode=m), (jnp.array([1.0, 3.0, 8.0]),)
+        f"log10_voigt ({m}, sigma batch)",
+        lambda s, m=m: V.log10_voigt(xv, s, jnp.asarray(0.5), mode=m),
+        (jnp.array([1.0, 3.0, 8.0]),),
     )
 # spectral coordinates (vmap over skewers: batches of points)
 vel = jnp.linspace(-300.0, 300.0, 64)
@@ -362,4 +364,11 @@ vmap_check(
 def test_jit_and_vmap_give_the_eager_result(case):
     kind, name, fn = case
     got, ref = fn()
-    assert rel(got, ref) <= TOL, (kind, name, rel(got, ref))
+    f64 = all(
+        np.asarray(x).dtype in (np.float64, np.complex128)
+        for x in jax.tree_util.tree_leaves((got, ref))
+        if np.iscomplexobj(x) or np.issubdtype(np.asarray(x).dtype, np.floating)
+    )
+    # float64 results: the eager value to 1e-12; any float32 result (two routes, or float32 against a float64 reference):
+    # float32 rounding
+    assert rel(got, ref) <= (TOL if f64 else 2e-6), (kind, name, rel(got, ref))

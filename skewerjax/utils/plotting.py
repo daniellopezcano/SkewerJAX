@@ -2315,7 +2315,14 @@ BENCH_DEVICES = {
     ("skewerjax", "cpu"): dict(color=PALETTE["blue"], marker="o", name="SkewerJAX CPU"),
     ("skewerjax", "gpu"): dict(color=PALETTE["green"], marker="^", name="SkewerJAX GPU"),
 }
-BENCH_MODES = {None: "default", "default": "default", "matched": "matched", "float32": "alternative", "crossings": "isolated"}
+BENCH_MODES = {
+    None: "default",
+    "default": "default",
+    "matched": "matched",
+    "float32": "alternative",
+    "float64": "alternative",
+    "crossings": "isolated",
+}  # "float32": the records measured while the default was float64 (benchmarks/results); "float64" since the float32 default
 BENCH_STAGE_COLORS = {
     "setup": PALETTE["grey"],
     "io": PALETTE["yellow"],
@@ -2481,6 +2488,74 @@ def plot_bench_stages(ax, rows, *, fraction: bool = False, modes=None, labels: b
     ax.set_yticks(range(len(groups)), [bench_style(k)["label"] for k, _ in groups] if labels else [], fontsize=FONT_MIN["legend"])
     ax.invert_yaxis()
     ax.set_xlabel("share of the run [%]" if fraction else "median wall time per run [s]")
+    return ax
+
+
+def plot_stage_times(ax, entries: dict, *, compile_s: dict | None = None, fraction: bool = False, stages=None):
+    """Horizontal bars stacked by stage, one per entry of ``entries`` = {label: {stage: seconds}} (the medians of the
+    timed runs of notebook 13; the stages of ``comparison.benchmark.STAGES``, missing ones count as 0). The total, and
+    ``compile_s[label]`` (the JIT compilation of the first run, not in the bar), are written after each bar.
+    ``fraction``: the share of each stage [%]. Linear axis (a stacked bar on a log axis misstates the shares)."""
+    from skewerjax.comparison.benchmark import STAGES
+
+    stages = STAGES if stages is None else stages
+    seen = set(ax.get_legend_handles_labels()[1])
+    for i, (label, st) in enumerate(entries.items()):
+        tot = sum(st.get(s, 0.0) for s in stages)
+        left = 0.0
+        for s in stages:
+            w = st.get(s, 0.0) * (100.0 / tot if fraction else 1.0)
+            lab = BENCH_STAGE_LABELS[s]
+            ax.barh(i, w, left=left, color=BENCH_STAGE_COLORS[s], edgecolor=BG, lw=0.5, label=None if lab in seen else lab)
+            seen.add(lab)
+            left += w
+        if not fraction:
+            c = (compile_s or {}).get(label) or 0.0
+            ax.text(
+                left,
+                i,
+                f" {tot:.3g} s" + (f" (+{c:.2g} s compile)" if c > 0.05 else ""),
+                va="center",
+                ha="left",
+                fontsize=FONT_MIN["legend"],
+            )
+    ax.set_yticks(range(len(entries)), list(entries), fontsize=FONT_MIN["legend"])
+    ax.invert_yaxis()
+    ax.set_xlabel("share of the run [%]" if fraction else "median wall time per run [s]")
+    return ax
+
+
+def plot_stage_speedups(ax, totals: dict, *, reference: str, before: dict | None = None):
+    """The total time of every entry (``totals`` = {label: seconds}, filled bars, log axis) with its speed-up over
+    ``reference`` written (> 1: faster than it), and ``before`` = {label: seconds} (outlined bars underneath, e.g. the
+    same entries before the optimisation) with the gain."""
+    ref = float(totals[reference])
+    labels = list(totals)
+    seen = set()  # one legend entry per kind of bar, whichever entry draws it first
+
+    def once(name):
+        return None if name in seen or seen.add(name) else name
+
+    for i, lab in enumerate(labels):
+        if before and lab in before:
+            ax.barh(i, before[lab], height=0.8, color="none", edgecolor=DIM, lw=1.5, hatch="//", label=once("before"))
+        ax.barh(
+            i,
+            totals[lab],
+            height=0.55,
+            color=BENCH_STAGE_COLORS["tau"] if lab != reference else PALETTE["grey"],
+            edgecolor=BG,
+            label=once("now") if lab != reference else None,
+        )
+        x = max(totals[lab], before.get(lab, 0.0) if before else 0.0)
+        txt = f" {totals[lab]:.3g} s" + ("" if lab == reference else f": {ref / totals[lab]:.2g}x {reference}'s speed")
+        if before and lab in before and lab != reference:
+            txt += f", {before[lab] / totals[lab]:.2g}x faster than before"
+        ax.text(x * 1.05, i, txt, va="center", ha="left", fontsize=FONT_MIN["legend"])
+    ax.set_xscale("log")
+    ax.set_yticks(range(len(labels)), labels, fontsize=FONT_MIN["legend"])
+    ax.invert_yaxis()
+    ax.set_xlabel("total wall time per run [s]")
     return ax
 
 
@@ -3745,7 +3820,11 @@ def plot_code_comparison(
                 if pa is None or pb is None:
                     continue
                 lab = " − ".join(f"({c['label']})" if " " in c["label"] else c["label"] for c in (ca, cb))
-                ax.plot(pa[0], code_residual(quantity, pa[1], pb[1]), **{"color": ca["color"], "ls": ca["ls"], "lw": ca["lw"], "label": lab, **style})
+                ax.plot(
+                    pa[0],
+                    code_residual(quantity, pa[1], pb[1]),
+                    **{"color": ca["color"], "ls": ca["ls"], "lw": ca["lw"], "label": lab, **style},
+                )
             continue
         lo, hi = (extent if row != "n" else extent_y) or (-np.inf, np.inf)
         visible = []

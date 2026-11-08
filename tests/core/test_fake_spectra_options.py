@@ -20,7 +20,7 @@ from skewerjax.core import (
 )
 from skewerjax.core.line_profiles import B2_RATIOS
 
-from helpers import raises
+from helpers import float64_only, raises, tol
 
 LYA = LineBundle(["HI-LyA"], ref_line_id="HI-LyA")
 SI3 = LineBundle(["SiIII-1206"], ref_line_id="SiIII-1206")
@@ -127,6 +127,7 @@ def test_chords_wrap_at_the_seam_and_a_short_path_drops_them():
     assert (seg.cell >= 0).sum() == 4  # only the points with s >= 0 of the sphere at s = 0.1
 
 
+@float64_only
 def test_chord_weight_is_seven_eighths_of_the_column():
     gas, pts = toy_gas(), toy_points(4.0)
     v, _ = grid(200)
@@ -178,6 +179,7 @@ def _pixel_rule_of_fake_spectra(b, dv):
     return np.linspace(-dv / 2, dv / 2, npoints), w / (npoints - 1)
 
 
+@float64_only
 def test_pixel_average_reproduces_the_trapezoid():
     """Si III (b ~ 2.4 km/s at 1e4 K) on 1.5 and 8 km/s pixels: each cell on its own number of points, against one
     compute_optical_depth per cell at those points."""
@@ -225,6 +227,7 @@ def _walk_of_fake_spectra(tau_cell, zmax, tautail):
 
 
 @pytest.mark.parametrize("tautail", [1e-7, 1e-3])
+@float64_only
 def test_tautail_reproduces_the_walk(tautail):
     gas = toy_gas(n_cells=60)
     p, parts = cell_pieces(
@@ -253,6 +256,7 @@ def test_tautail_reproduces_the_walk(tautail):
     assert np.abs(got - full).max() > 0.0 and np.all(got <= full * (1 + 1e-12))  # only wings are cut
 
 
+@float64_only
 def test_tautail_needs_the_cells_and_a_grid_over_the_period():
     import dataclasses
 
@@ -347,4 +351,4 @@ def test_the_matched_options_reproduce_the_c_engine():
     )[0, 0]
     F_c, F = np.exp(-np.asarray(tau_c)[0]), np.exp(-t)
     assert 0.1 < F.mean() < 0.95, F.mean()  # neither empty nor saturated
-    assert np.abs(F_c - F).max() < 1e-6, np.abs(F_c - F).max()
+    assert np.abs(F_c - F).max() < tol(1e-6, 1e-5), np.abs(F_c - F).max()  # float32: 1.2e-6

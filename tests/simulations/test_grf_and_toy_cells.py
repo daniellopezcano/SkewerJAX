@@ -13,6 +13,8 @@ import pytest
 
 from skewerjax.simulations import PowerLawGRF, grf_cells, interpolate_periodic
 
+from helpers import float64_only
+
 
 def test_grid_modes_and_checks():
     a = PowerLawGRF(1.0, 1.0, -1.0, L=(20.0, 10.0), N=(16, 8))
@@ -35,6 +37,7 @@ def test_grid_modes_and_checks():
         PowerLawGRF(-1.0, 1.0, -1.0, L=10.0, N=8)  # A_s < 0
 
 
+@float64_only
 def test_draws_reproducible_zero_mean_and_unbiased():
     g = PowerLawGRF(A_s=2.0, k_0=1.0, n_s=-1.0, L=50.0, N=64)
     k1, k2 = jax.random.PRNGKey(1), jax.random.PRNGKey(2)
@@ -49,6 +52,7 @@ def test_draws_reproducible_zero_mean_and_unbiased():
     assert abs(np.asarray(d).var(axis=1).mean() / float(g.variance()) - 1) < 0.1  # dominated by the k_min modes: ~4 %
 
 
+@float64_only
 def test_grid_cells_reproduce_n_bar_one_plus_delta():
     grf = PowerLawGRF(A_s=0.02, k_0=2.0, n_s=-1.25, L=(20.0,) * 3, N=(16,) * 3)
     delta = np.asarray(grf.sample(jax.random.PRNGKey(4)))

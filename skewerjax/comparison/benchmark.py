@@ -31,12 +31,14 @@ exceed ``budget_s`` (at least one timed run).
 
 SkewerJAX shares ``setup``, ``io`` and ``selection`` between its modes (one selection per run); each mode then runs
 on a fresh ``SimulationSkewers`` holding the same cells (no cache shared between modes). Modes (``MODES``): ``matched``
-(fake_spectra's scheme on its pixel grid), ``default``, ``float32``, ``crossings``.
+(fake_spectra's scheme on its pixel grid), ``default``, ``float64``, ``crossings`` (every mode in the package's precision,
+float32 by default since 2026-11, except ``float64``; records measured before hold a ``float32`` mode instead, when the
+default was float64).
 
 **Memory.** Host: the peak RSS of each SkewerJAX mode (sampled every 20 ms, from the selection's cells upwards) and
 of the whole process (``ru_maxrss``); the launcher also samples the RSS of the worker and stops it when it exceeds
 ``mem_cap_GB`` or when the machine's available memory falls below ``mem_floor_GB``. GPU: XLA's ``peak_bytes_in_use``
-after each mode (cumulative over the process: modes run matched, default, float32, crossings), with
+after each mode (cumulative over the process: modes run matched, default, float64, crossings), with
 ``XLA_PYTHON_CLIENT_PREALLOCATE=false``.
 
 **Agreement.** SkewerJAX's matched mode against fake_spectra's tau on the first ``n_store`` skewers (max and rms
@@ -80,10 +82,13 @@ SHARED_STAGES = ("setup", "io", "selection")  # once per SkewerJAX run, whatever
 SPECIES = {"HI-LyA": ("H", 1, 1215), "SiIII-1206": ("Si", 3, 1206)}
 MODES = {
     "matched": "fake_spectra's scheme in SkewerJAX (FAKE_SPECTRA_EXTRACTION + FAKE_SPECTRA_INTEGRATION), its pixel grid",
-    "default": "SkewerJAX's default: Voronoi pieces of 0.25 km/s dual segments, exact frame, float64",
-    "float32": "the default with the float32 kernel",
+    "default": "SkewerJAX's default: Voronoi pieces of 0.25 km/s dual segments, exact frame (float32, the package's precision)",
+    "float64": "the default in float64 (the validation precision)",
     "crossings": "the default with deposition='voronoi_crossings' (one absorber per sub-piece of each cell crossing)",
 }
+RECORDED_MODES = (*MODES, "float32")
+"""The modes a record may hold: ``MODES`` and ``float32`` (the default with the float32 kernel, in the records measured
+while the default was float64, before 2026-11, e.g. ``benchmarks/results``)."""
 CPU_SETS = {1: [0], 4: [0, 2, 4, 6], 8: list(range(0, 16, 2)), 16: list(range(16)), 32: list(range(32))}
 """Logical CPUs per thread count on the benchmark machine (i9-13900KF: CPUs 0-15 are the 8 P-cores with their
 hyperthreads, 16-31 the E-cores): 4 and 8 use one thread per P-core."""
@@ -139,6 +144,74 @@ class StageTimer:
         finally:
             for obj, attr, f, own in reversed(saved):
                 setattr(obj, attr, f) if own else delattr(obj, attr)
+
+
+class RunClock:
+    """Wall times of named entries (a code, a mode and a device) by stage, over repeated runs (notebook 13):
+
+        clock = RunClock()
+        for run in range(1 + N_RUNS):
+            with clock.time("SkewerJAX default, CPU", "tau", run):
+                tau = np.asarray(compute_optical_depth(...))   # pulled to the host: the result is ready
+
+    Run 0 is the warm-up (JIT compilation, caches) and is kept apart; ``medians()`` are over the runs >= 1, and
+    ``compile_s()`` is run 0 minus the median of the stage (its compilation, when the stage compiles). ``share(entry,
+    stage, other)`` copies the times of a stage measured once for several entries (e.g. the shared selection)."""
+
+    def __init__(self):
+        self.t = {}  # {entry: {stage: [seconds per run]}}
+
+    @contextmanager
+    def time(self, entry: str, stage: str, run: int):
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            runs = self.t.setdefault(entry, {}).setdefault(stage, [])
+            runs.extend([np.nan] * (run + 1 - len(runs)))
+            runs[run] = time.perf_counter() - t0
+
+    def record(self, entry: str, stage: str, run: int, seconds: float) -> None:
+        """A time measured elsewhere (e.g. a stage of a function's own timings) for one run (0: the warm-up)."""
+        runs = self.t.setdefault(entry, {}).setdefault(stage, [])
+        runs.extend([np.nan] * (run + 1 - len(runs)))
+        runs[run] = float(seconds)
+
+    def add(self, entry: str, stage: str, seconds, *, warmup: bool = True) -> None:
+        """Times measured elsewhere, one per run: with ``warmup`` the first is the warm-up; without, all are timed
+        runs (a code that compiles nothing and whose reads exceed the page cache, e.g. fake_spectra)."""
+        self.t.setdefault(entry, {})[stage] = ([] if warmup else [np.nan]) + [float(x) for x in seconds]
+
+    def share(self, entry: str, stage: str, other: str) -> None:
+        self.t.setdefault(other, {})[stage] = list(self.t[entry][stage])
+
+    def medians(self) -> dict:
+        """{entry: {stage: median over the timed runs [s]}}."""
+        return {
+            e: {s: float(np.nanmedian(r[1:])) if len(r) > 1 else float(r[0]) for s, r in st.items()} for e, st in self.t.items()
+        }
+
+    def warmup(self) -> dict:
+        """{entry: {stage: run 0 [s]}}."""
+        return {e: {s: float(r[0]) for s, r in st.items()} for e, st in self.t.items()}  # NaN: no warm-up run
+
+    def compile_s(self, stage: str = "tau") -> dict:
+        """{entry: run 0 - median of ``stage``} [s] (the JIT compilation of the first call; ~0 for host stages)."""
+        m, w = self.medians(), self.warmup()
+        return {e: w[e][stage] - m[e][stage] for e in m if stage in m[e]}
+
+    def totals(self) -> dict:
+        """{entry: sum of the stage medians [s]}."""
+        return {e: float(sum(st.values())) for e, st in self.medians().items()}
+
+    def table(self, stages=STAGES) -> str:
+        """The medians as a text table, one row per entry, a column per stage and the total."""
+        m = self.medians()
+        head = f"{'entry':32s}" + "".join(f"{s:>11s}" for s in stages) + f"{'total':>11s}"
+        rows = [
+            f"{e:32s}" + "".join(f"{st.get(s, 0.0):11.2f}" for s in stages) + f"{sum(st.values()):11.2f}" for e, st in m.items()
+        ]
+        return "\n".join([head, *rows])
 
 
 def peak_rss_GB() -> float:
@@ -325,7 +398,7 @@ def _mode_tau(mode: str, sk, ion, lb, c: dict, T: StageTimer):
         v, _ = sk.spectral_grid(c["res"], fr)
         A = sk.absorbers(ion, ext, frame=fr)
     with T.stage("tau"):  # periodic, as fake_spectra
-        tau = ab_.tau_absorbers(A, lb, v, fr, velocity_period=True, check=None, dtype="float32" if mode == "float32" else None)[0]
+        tau = ab_.tau_absorbers(A, lb, v, fr, velocity_period=True, check=None, dtype="float64" if mode == "float64" else None)[0]
     return tau, int((np.asarray(A.n) > 0).sum())
 
 
@@ -333,7 +406,8 @@ def run_skewerjax(c: dict, out: Path) -> dict:
     """SkewerJAX: per run, one reader and one selection; then every mode of ``c["modes"]`` on the same cells."""
     import jax
 
-    jax.config.update("jax_enable_x64", True)
+    if "float64" in c["modes"]:  # the float64 mode needs x64; every other mode stays in the package's float32
+        jax.config.update("jax_enable_x64", True)
     from skewerjax.core import LineBundle
     from skewerjax.core import absorbers as ab_
     from skewerjax.simulations import HI, ArepoHDF5Reader, Ion, SimulationSkewers
@@ -514,10 +588,10 @@ def benchmark_sets(name: str, data_dir, snapnum: int = 25, preset: str = "full")
     ``preset="full"``:
 
     * ``scaling``: N = 1, 4, ..., 1024 skewers in TNG50-4, -3 and -2 (32 threads): fake_spectra, SkewerJAX on the
-      CPU and on the GPU (modes matched + default, and float32 in TNG50-4); 3 timed runs (2 in TNG50-2); larger N
+      CPU and on the GPU (modes matched + default, and float64 in TNG50-4); 3 timed runs (2 in TNG50-2); larger N
       stop at the limits;
     * ``threads``: TNG50-4, 16 skewers, 1 / 4 / 8 / 16 threads (32 is in ``scaling``); on one core SkewerJAX also
-      runs float32 and crossings (the strict single-core comparison);
+      runs float64 and crossings (the strict single-core comparison);
     * ``smoke``: TNG50-4, 1 and 4 skewers, one timed run (a quick check of the whole chain).
 
     ``preset="quick"`` (``QUICK_SCALING``, ``QUICK_THREADS``; each point with its own cap and estimate):
@@ -538,7 +612,7 @@ def benchmark_sets(name: str, data_dir, snapnum: int = 25, preset: str = "full")
     if preset == "quick" and name == "threads":
         out = []
         for t, (est, cap) in QUICK_THREADS.items():
-            modes = ("matched", "default", "float32", "crossings") if t == 1 else ("matched", "default")
+            modes = ("matched", "default", "float64", "crossings") if t == 1 else ("matched", "default")
             out += [
                 make_config(
                     "fake_spectra",
@@ -570,7 +644,7 @@ def benchmark_sets(name: str, data_dir, snapnum: int = 25, preset: str = "full")
     if name == "scaling":
         out = []
         for s in SIMULATIONS:
-            extra = ("float32",) if s == "TNG50-4" else ()
+            extra = ("float64",) if s == "TNG50-4" else ()
             rep = 2 if s == "TNG50-2" else 3  # each TNG50-2 run streams 349 GB
             for n in N_SKEWERS:
                 out += [
@@ -584,7 +658,7 @@ def benchmark_sets(name: str, data_dir, snapnum: int = 25, preset: str = "full")
     if name == "threads":
         out = []
         for t in (1, 4, 8, 16):
-            modes = ("matched", "default", "float32", "crossings") if t == 1 else ("matched", "default")
+            modes = ("matched", "default", "float64", "crossings") if t == 1 else ("matched", "default")
             out += [
                 make_config("fake_spectra", sim("TNG50-4"), snapnum, 16, threads=t),
                 make_config("skewerjax", sim("TNG50-4"), snapnum, 16, threads=t, modes=modes, repeats=2),
@@ -958,7 +1032,7 @@ def print_rows(rows, **match) -> None:
             r["n_skewers"],
             r["code"] != "fake_spectra",
             r["platform"],
-            list(MODES).index(r["mode"]) if r["mode"] else -1,
+            RECORDED_MODES.index(r["mode"]) if r["mode"] else -1,
         ),
     )
     head = [

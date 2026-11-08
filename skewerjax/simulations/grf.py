@@ -6,7 +6,6 @@ container (``core.Cells``) as a snapshot (``snapshot_skewers``).
 
 from __future__ import annotations
 
-import warnings
 from functools import lru_cache, partial
 
 import jax
@@ -145,8 +144,8 @@ class PowerLawGRF:
     * JAX pytree: ``A_s, k_0, n_s`` are leaves (traceable, differentiable); the grid
       (shape, L) is static. Changing the spectrum does not recompile ``sample``; changing
       the grid does.
-    * dtype: float64 when ``jax_enable_x64`` is on (recommended: P(k) spans many decades
-      for |n_s - 1| >~ 2), else float32 with a warning.
+    * dtype: the package's precision policy (``skewerjax.config``: float32 by default; float64 recommended when P(k)
+      spans many decades over the grid, |n_s - 1| >~ 2).
     * Memory: one real field plus one rfft half-spectrum (complex, ~N_pix/2 entries).
     """
 
@@ -218,8 +217,6 @@ class PowerLawGRF:
             raise ValueError(f"`A_s` must be >= 0, got {A_s}.")
         if not isinstance(k_0, jax.core.Tracer) and not float(k_0) > 0.0:
             raise ValueError(f"`k_0` must be > 0, got {k_0}.")
-        if not jax.config.jax_enable_x64:
-            warnings.warn("jax_enable_x64 is off: PowerLawGRF runs in float32.", stacklevel=2)
 
         self.A_s, self.k_0, self.n_s = A_s, k_0, n_s
         self.shape: tuple[int, ...] = N_ax
@@ -553,7 +550,9 @@ class PowerLawGRF:
         delta_k : complex array, rfft shape (only if ``return_modes``), layout of
             ``k_grid(real=True)``.
         """
-        return _sample_power_law_grf(self, key, return_modes)
+        from skewerjax.config import real_dtype
+
+        return _sample_power_law_grf(self, key, return_modes, real_dtype().name)
 
 
 def _bao_window(k, r0, sg, ndim: int):
@@ -593,12 +592,11 @@ def _bao_ratio_max(shape, L, k_0: float, n_s: float, r_bao: float, sigma_bao: fl
     return float(np.min((k[neg] / k_0) ** (n_s - 1.0) / np.abs(W[neg])))
 
 
-@partial(jax.jit, static_argnames=("return_modes",))
-def _sample_power_law_grf(grf: PowerLawGRF, key: jax.Array, return_modes: bool):
-    dtype = jnp.result_type(float)  # float64 under x64
+@partial(jax.jit, static_argnames=("return_modes", "dtype"))
+def _sample_power_law_grf(grf: PowerLawGRF, key: jax.Array, return_modes: bool, dtype: str = "float32"):
     white_k = jnp.fft.rfftn(jax.random.normal(key, grf.shape, dtype=dtype))
     # <|white_k|^2> = N_pix  ->  <|FFT(delta)|^2> = N_pix P / dV  ->  <P_hat> = P
-    fft_delta = white_k * jnp.sqrt(grf.power_grid() / grf.cell_volume)
+    fft_delta = white_k * jnp.sqrt(grf.power_grid().astype(dtype) / grf.cell_volume)
     delta = jnp.fft.irfftn(fft_delta, s=grf.shape)
     if return_modes:
         return delta, fft_delta * grf.cell_volume

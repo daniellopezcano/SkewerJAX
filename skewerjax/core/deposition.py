@@ -41,6 +41,7 @@ of times.
 
 from __future__ import annotations
 
+import os
 import warnings
 from dataclasses import dataclass
 from functools import partial
@@ -109,12 +110,28 @@ def _min_image(d, box):
 
 def _halves(points):
     """Half-segments of every point: (A, B_back, B_fwd), each (P, 3) [cMpc]: the point and the midpoints around it."""
-    g = path_geometry(jnp.asarray(points, dtype=jnp.float64))
-    A = np.asarray(points, dtype=np.float64).reshape(-1, 3)
-    return A, np.asarray(g["mid_lo"]).reshape(-1, 3), np.asarray(g["mid_hi"]).reshape(-1, 3)
+    A = np.asarray(points, dtype=np.float64)
+    g = path_geometry(A)  # float64 NumPy, whatever the precision policy
+    return A.reshape(-1, 3), g["mid_lo"].reshape(-1, 3), g["mid_hi"].reshape(-1, 3)
 
 
 # --------------------------------------------------------------------------- Voronoi
+def _crossing_np(A, D, ga, gb, t0, t1):
+    """``_crossing`` in float64 NumPy (the host back end of ``voronoi_segments``)."""
+    da, db = A[:, None, :] - ga, A[:, None, :] - gb
+    alpha_a, alpha_b = np.einsum("psk,psk->ps", da, da), np.einsum("psk,psk->ps", db, db)
+    beta_a, beta_b = 2.0 * np.einsum("psk,pk->ps", da, D), 2.0 * np.einsum("psk,pk->ps", db, D)
+    den = beta_b - beta_a
+    same = np.all(ga == gb, axis=-1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        tc = np.where(same | (den == 0), t1[None, :], (alpha_a - alpha_b) / np.where(den == 0, 1.0, den))
+    return np.clip(tc, t0[None, :], t1[None, :])
+
+
+def _min_image_np(d, box):
+    return d if box is None else d - box * np.round(d / box)
+
+
 @jax.jit
 def _crossing(A, D, ga, gb, t0, t1):
     """Exact parameter t in [t0, t1] where the nearest generator changes from ga to gb on A + t D.
@@ -143,6 +160,7 @@ def voronoi_segments(
     backend: str = "numpy",
     chunk: int = 64,
     k_chunk: int = 512,
+    threads: int | None = None,
 ) -> SegmentComponents:
     """Nearest-generating-point (Voronoi) deposition on the dual segments of ``points``.
 
@@ -164,6 +182,8 @@ def voronoi_segments(
         JAX with static shapes, ``_voronoi_segments_jax``; identical cells, lengths equal to round-off).
     chunk, k_chunk : "jax" only: consecutive points of a path per chunk and candidate generators per chunk
         (doubled automatically until the candidate sets are provably complete).
+    threads : "numpy" only: threads over chunks of skewers (default: one per core, at most one per skewer); the result
+        does not depend on it.
 
     Returns
     -------
@@ -177,7 +197,6 @@ def voronoi_segments(
     pts = np.asarray(points, dtype=np.float64)
     n_sk, n_p = pts.shape[:2]
     A, Bl, Bh = _halves(pts)
-    P = A.shape[0]
     gpos = wrap_positions(gas_positions, box)
     size = None if gas_size is None else np.asarray(gas_size, dtype=np.float64)
     L_half = np.stack([np.linalg.norm(Bl - A, axis=-1), np.linalg.norm(Bh - A, axis=-1)], axis=1)  # (P, 2)
@@ -193,28 +212,22 @@ def voronoi_segments(
         shp = (n_sk, n_p, cell.shape[-1])
         return SegmentComponents(cell.reshape(shp), length.reshape(shp), offset.reshape(shp), 1.0, "voronoi", diag).compact()
     tree = cKDTree(gpos, boxsize=box) if box is not None else cKDTree(gpos)
-    t = np.linspace(0.0, 1.0, S + 1)
-    sub = np.stack([A[:, None, :] + t[None, :, None] * (B - A)[:, None, :] for B in (Bl, Bh)], axis=1)  # (P, 2, S+1, 3)
-    dist, lab = tree.query(wrap_positions(sub.reshape(-1, 3), box), k=1, workers=-1)
-    lab = lab.reshape(P, 2, S + 1)
-    rows, labs, lens, moms = [], [], [], []
-    t0, t1 = jnp.asarray(t[:-1]), jnp.asarray(t[1:])
-    for h, (B, sign) in enumerate(((Bl, -1.0), (Bh, 1.0))):
-        D = B - A
-        la, lb = lab[:, h, :-1], lab[:, h, 1:]
-        ga = A[:, None, :] + np.asarray(_min_image(jnp.asarray(gpos[la]) - A[:, None, :], box))
-        gb = A[:, None, :] + np.asarray(_min_image(jnp.asarray(gpos[lb]) - A[:, None, :], box))
-        tc = np.asarray(_crossing(jnp.asarray(A), jnp.asarray(D), jnp.asarray(ga), jnp.asarray(gb), t0, t1))
-        Lh = L_half[:, h][:, None]
-        T0, T1 = t[None, :-1], t[None, 1:]
-        for lab_, lo, hi in ((la, T0, tc), (lb, tc, T1)):
-            rows.append(np.broadcast_to(np.arange(P)[:, None], lab_.shape).ravel())
-            labs.append(lab_.ravel())
-            lens.append(((hi - lo) * Lh).ravel())
-            moms.append((sign * 0.5 * (hi**2 - lo**2) * Lh**2).ravel())
+    # the skewers in chunks, one thread each (one shared tree; NumPy and the tree queries release the GIL): the pieces of
+    # a skewer do not depend on the others, so the result is that of one call, bit for bit
+    n_thr = max(1, min(os.cpu_count() or 1, n_sk)) if threads is None else max(1, int(threads))
+    bounds = np.linspace(0, n_sk, min(n_sk, 4 * n_thr) + 1).astype(int)
+    chunks = [slice(int(a), int(b)) for a, b in zip(bounds[:-1], bounds[1:]) if b > a]
+    job = lambda sl: _voronoi_numpy(pts[sl], tree, gpos, box, size, S)
+    if n_thr > 1 and len(chunks) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=n_thr) as pool:
+            parts = list(pool.map(job, chunks))
+    else:
+        parts = [job(sl) for sl in chunks]
     diag = dict(n_sub=S, sub_over_min_cell=float(L_half.max() / S / size.min()) if size is not None else None)
     if size is not None:  # how far the path gets from the gas, in sizes of its nearest cell
-        diag["max_distance_over_size"] = float(np.max(dist / size[lab.reshape(-1)]))
+        diag["max_distance_over_size"] = float(max(p[1] for p in parts))
         if box is None and diag["max_distance_over_size"] > VORONOI_FACTOR:
             warnings.warn(
                 f"voronoi_segments: parts of the paths lie {diag['max_distance_over_size']:.1f} cell sizes from the nearest "
@@ -222,7 +235,43 @@ def voronoi_segments(
                 "stretches take the nearest cell's gas.",
                 stacklevel=2,
             )
-    return _merge_pieces(rows, labs, lens, moms, P, len(gpos), (n_sk, n_p), diag)
+    K = max(p[0].cell.shape[-1] for p in parts)
+    pad = lambda x, fill: np.concatenate([x, np.full(x.shape[:-1] + (K - x.shape[-1],), fill, x.dtype)], axis=-1)
+    cell = np.concatenate([pad(p[0].cell, -1) for p in parts])
+    length = np.concatenate([pad(p[0].length, 0.0) for p in parts])
+    offset = np.concatenate([pad(p[0].offset, 0.0) for p in parts])
+    return SegmentComponents(cell, length, offset, 1.0, "voronoi", diag)
+
+
+def _voronoi_numpy(pts, tree, gpos, box, size, S: int):
+    """``voronoi_segments`` (host back end) of the skewers ``pts`` (n, N, 3) with the k-d tree of all the generators:
+    (SegmentComponents, the largest distance from a sub-point to its generator in units of that cell's size (0 without
+    ``size``))."""
+    n_sk, n_p = pts.shape[:2]
+    A, Bl, Bh = _halves(pts)
+    P = A.shape[0]
+    L_half = np.stack([np.linalg.norm(Bl - A, axis=-1), np.linalg.norm(Bh - A, axis=-1)], axis=1)  # (P, 2)
+    t = np.linspace(0.0, 1.0, S + 1)
+    sub = np.stack([A[:, None, :] + t[None, :, None] * (B - A)[:, None, :] for B in (Bl, Bh)], axis=1)  # (P, 2, S+1, 3)
+    dist, lab = tree.query(wrap_positions(sub.reshape(-1, 3), box), k=1, workers=1)
+    lab = lab.reshape(P, 2, S + 1)
+    rows, labs, lens, moms = [], [], [], []
+    t0, t1 = t[:-1], t[1:]
+    for h, (B, sign) in enumerate(((Bl, -1.0), (Bh, 1.0))):
+        D = B - A
+        la, lb = lab[:, h, :-1], lab[:, h, 1:]
+        ga = A[:, None, :] + _min_image_np(gpos[la] - A[:, None, :], box)
+        gb = A[:, None, :] + _min_image_np(gpos[lb] - A[:, None, :], box)
+        tc = _crossing_np(A, D, ga, gb, t0, t1)
+        Lh = L_half[:, h][:, None]
+        T0, T1 = t[None, :-1], t[None, 1:]
+        for lab_, lo, hi in ((la, T0, tc), (lb, tc, T1)):
+            rows.append(np.broadcast_to(np.arange(P)[:, None], lab_.shape).ravel())
+            labs.append(lab_.ravel())
+            lens.append(((hi - lo) * Lh).ravel())
+            moms.append((sign * 0.5 * (hi**2 - lo**2) * Lh**2).ravel())
+    worst = float(np.max(dist / size[lab.reshape(-1)])) if size is not None else 0.0
+    return _merge_pieces(rows, labs, lens, moms, P, len(gpos), (n_sk, n_p), {}), worst
 
 
 def _merge_pieces(rows, labs, lens, moms, P: int, M: int, shape, diag) -> SegmentComponents:
@@ -395,23 +444,23 @@ def _voronoi_segments_jax(A, Bl, Bh, L_half, gpos, box, S: int, n_sk: int, chunk
 
 
 # --------------------------------------------------------------------------- top hat
-@jax.jit
 def _tophat_half(A, B, G, h, valid):
-    """Exact overlap of the straight half A -> B with spheres (G, h): (length, moment) (P, K)."""
+    """Exact overlap of the straight half A -> B with spheres (G, h): (length, moment) (P, K), in float64 NumPy (host
+    geometry, whatever the precision policy)."""
     D = B - A
-    L2 = jnp.sum(D * D, axis=-1)[:, None]
+    L2 = np.sum(D * D, axis=-1)[:, None]
     AG = A[:, None, :] - G
-    bq = jnp.sum(AG * D[:, None, :], axis=-1)
-    cq = jnp.sum(AG * AG, axis=-1) - h * h
+    bq = np.einsum("pkc,pc->pk", AG, D)
+    cq = np.einsum("pkc,pkc->pk", AG, AG) - h * h
     disc = bq * bq - L2 * cq
     good = valid & (disc > 0) & (L2 > 0)
-    sq = jnp.sqrt(jnp.where(good, disc, 0.0))
-    L2s = jnp.where(L2 > 0, L2, 1.0)
-    t1 = jnp.clip((-bq - sq) / L2s, 0.0, 1.0)
-    t2 = jnp.clip((-bq + sq) / L2s, 0.0, 1.0)
-    dt = jnp.where(good, jnp.maximum(t2 - t1, 0.0), 0.0)
-    length = dt * jnp.sqrt(L2s)
-    moment = jnp.where(good & (t2 > t1), 0.5 * (t2**2 - t1**2) * L2s, 0.0)
+    sq = np.sqrt(np.where(good, disc, 0.0))
+    L2s = np.where(L2 > 0, L2, 1.0)
+    t1 = np.clip((-bq - sq) / L2s, 0.0, 1.0)
+    t2 = np.clip((-bq + sq) / L2s, 0.0, 1.0)
+    dt = np.where(good, np.maximum(t2 - t1, 0.0), 0.0)
+    length = dt * np.sqrt(L2s)
+    moment = np.where(good & (t2 > t1), 0.5 * (t2**2 - t1**2) * L2s, 0.0)
     return length, moment
 
 
@@ -446,18 +495,16 @@ def tophat_segments(points, gas_positions, gas_size, box: float | None, *, chunk
     idx = _tophat_pairs(A, r, gpos, size, box)
     valid = idx >= 0
     safe = np.maximum(idx, 0)
-    G = A[:, None, :] + np.asarray(_min_image(jnp.asarray(gpos[safe]) - A[:, None, :], box))
+    G = A[:, None, :] + _min_image_np(gpos[safe] - A[:, None, :], box)
     H = size[safe]
     length = np.zeros(idx.shape)
     moment = np.zeros(idx.shape)
     for c0 in range(0, A.shape[0], chunk):
         sl = slice(c0, c0 + chunk)
         for B, sign in ((Bl, -1.0), (Bh, 1.0)):
-            l_, m_ = _tophat_half(
-                jnp.asarray(A[sl]), jnp.asarray(B[sl]), jnp.asarray(G[sl]), jnp.asarray(H[sl]), jnp.asarray(valid[sl])
-            )
-            length[sl] += np.asarray(l_)
-            moment[sl] += sign * np.asarray(m_)
+            l_, m_ = _tophat_half(A[sl], B[sl], G[sl], H[sl], valid[sl])
+            length[sl] += l_
+            moment[sl] += sign * m_
     offset = np.where(length > 0, moment / np.where(length > 0, length, 1.0), 0.0)
     cell = np.where(length > 0, idx, -1)
     shp = (n_sk, n_p, idx.shape[1])
@@ -497,10 +544,10 @@ def tophat_chord_segments(
     pts = np.asarray(points, dtype=np.float64)
     n_sk, n_p = pts.shape[:2]
     pos, h = np.asarray(gas_positions, dtype=np.float64), np.asarray(gas_size, dtype=np.float64)
-    s_pt = np.asarray(path_geometry(jnp.asarray(pts))["s"])
+    s_pt = path_geometry(np.asarray(pts, dtype=np.float64))["s"]
     k_ = (np.arange(1, CHORD_POINTS + 1) / (0.5 * (CHORD_POINTS + 1)) - 1.0)[None, :]
-    rows = []
-    for k in range(n_sk):
+
+    def one(k):
         p0, chord = pts[k, 0], pts[k, -1] - pts[k, 0]
         L = float(np.linalg.norm(chord))
         e = chord / L
@@ -521,7 +568,15 @@ def tophat_chord_segments(
             inside = (s >= 0.0) & (s <= L)
             s, c, ln = s[inside], c[inside], ln[inside]
         i = np.clip(np.searchsorted(0.5 * (s_pt[k, 1:] + s_pt[k, :-1]), s), 0, n_p - 1)
-        rows.append((i, c, ln, s - s_pt[k, i]))
+        return i, c, ln, s - s_pt[k, i]
+
+    if n_sk > 1:  # one skewer per task (NumPy releases the GIL on these arrays): the same rows as a loop
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(n_sk, os.cpu_count() or 1)) as pool:
+            rows = list(pool.map(one, range(n_sk)))
+    else:
+        rows = [one(0)]
     K = max(max((int(np.bincount(r[0], minlength=n_p).max()) for r in rows if r[0].size), default=1), 1)
     cell = np.full((n_sk, n_p, K), -1, dtype=np.int64)
     length, offset = np.zeros(cell.shape), np.zeros(cell.shape)
@@ -574,7 +629,7 @@ def cell_crossings(seg: SegmentComponents, points) -> CellCrossings:
     """
     if seg.kind != "voronoi":
         raise ValueError(f"cell crossings need a Voronoi deposition, got {seg.kind!r}.")
-    g = path_geometry(jnp.asarray(points, dtype=jnp.float64))
+    g = path_geometry(np.asarray(points, dtype=np.float64))
     s_pt = np.asarray(g["s"])
     rows_lo, rows_hi, rows_c = [], [], []
     gap = 0.0

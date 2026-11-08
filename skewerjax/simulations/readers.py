@@ -230,6 +230,32 @@ class ArepoHDF5Reader:
                 out[k] = g[k][start:stop]
         return out
 
+    def memmaps(self, file_index: int, datasets: Sequence[str]) -> dict:
+        """Read-only memory maps (``np.memmap``, mode "r") of ``datasets`` of one file, for the contiguous, uncompressed
+        ones (TNG's layout); a dataset stored otherwise maps to None (read it with ``read_rows``). Reading a slice or a
+        fancy index of a map reads only the pages it touches, outside h5py's global lock, so threads read in parallel
+        (``select_cells_near_paths``). The maps of a file are kept on the reader."""
+        import h5py  # optional dependency (the simulations extra): imported where it is used
+
+        cache = self.__dict__.setdefault("_memmaps", {})
+        out, need = {}, [k for k in datasets if (file_index, k) not in cache]
+        if need:
+            with h5py.File(self.files[file_index], "r") as f:
+                g = f[self.part_type] if self.part_type in f else {}
+                for k in need:
+                    if k not in g:
+                        raise KeyError(f"{self.files[file_index].name}: {self.part_type} has no dataset {k!r}")
+                    d = g[k]
+                    off = d.id.get_offset() if d.chunks is None and d.compression is None and d.shape[0] > 0 else None
+                    cache[(file_index, k)] = (
+                        None
+                        if off is None
+                        else np.memmap(self.files[file_index], dtype=d.dtype, mode="r", offset=off, shape=d.shape)
+                    )
+        for k in datasets:
+            out[k] = cache[(file_index, k)]
+        return out
+
     def iter_blocks(self, datasets: Sequence[str], max_rows: int = 4_000_000) -> Iterator[tuple[int, int, dict]]:
         """Stream the gas in blocks of at most ``max_rows`` cells.
 

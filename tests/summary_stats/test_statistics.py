@@ -22,6 +22,8 @@ from skewerjax.summary_stats import (
 )
 from skewerjax.utils.plotting import hybrid_k_edges, pk_sigma
 
+from helpers import float64_only
+
 
 def statistics_checks(n_s_, n3):
     """Every check of the module docstring for ``n_s_`` GRF skewers and a ``n3``^3 3D grid: [(name, value, tolerance, expect)]."""
@@ -137,6 +139,7 @@ def test_statistics():
 
 
 @pytest.mark.slow
+@float64_only
 def test_statistics_full():
     _assert_all(statistics_checks(500, 32))
 
@@ -159,6 +162,7 @@ def _brute_xi_iso(d, L, edges):
     return sums / np.maximum(cnt, 1)
 
 
+@float64_only
 def test_grid_statistics_conventions():
     """``GridStatistics3D``: xi is the brute-force periodic correlation (the FFT pair and the minimum-image binning), the
     rfft half-space weights give the mean over every full-grid mode of a bin, and the expectation of xi at r = 0 is the
@@ -246,6 +250,7 @@ def test_grid_xi_multipoles():
     np.testing.assert_allclose(ell[:, ok], np.broadcast_to(c[:, None], (3, ok.sum())), rtol=1e-9, atol=1e-9)
 
 
+@float64_only
 def test_summary_and_ensemble():
     """``OverfluxStatistics1D.summary``: the terms and the orders add up to the total; ``ensemble_1d`` of identical
     records has no scatter."""

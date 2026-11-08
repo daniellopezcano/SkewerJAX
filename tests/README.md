@@ -13,7 +13,11 @@ One pytest suite, laid out like the package and the pipeline (reader â†’ cells â
 | `test_mesh.py` | mass assignment and interlacing (`summary_stats.mesh`): mass conservation and the periodic wrap, the nodes bit for bit, the window, plane waves below and above k_Nyq, the sign of the interlacing phase, jit and gradients, in 1D, 2D, 3D; the chunked deposit and `node_transfer` |
 | `test_import_graph.py` | the import graph: `simulations` and `summary_stats` import `core` at most and not each other (static, on the source, and at run time) |
 
-`conftest.py` runs JAX on the CPU in float64 and skips the tests whose markers need what the machine lacks;
+`conftest.py` runs JAX on the CPU (x64 enabled, so that a test can opt into float64), sets the package's precision from
+`SKEWERJAX_PRECISION` (float32 by default) and skips the tests whose markers need what the machine lacks; the suite runs
+in both precisions (`SKEWERJAX_PRECISION=float64 pytest`): a test whose tolerances are float64 ones (closed forms,
+bit-for-bit identities, the regression references) runs in float64 in both (`helpers.float64_only`), and
+`helpers.tol(f64, f32)` states a tolerance per precision (`docs/precision.md`);
 `helpers.py` holds a few shared builders (test-only), among them `toy_tau` and `toy_lattice_statistics`: the toy boxes
 along a lattice of skewers by the explicit pipeline of notebook 10.
 

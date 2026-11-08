@@ -1303,7 +1303,9 @@ def test_plot_code_comparison_rows_and_axes():
     plt.close(fig)
 
     fig, axs = pl.plot_code_comparison(curves, residuals=pair, rows=("dF", "n", "F", "dn"), aH=80.0)  # the order is fixed
-    assert [a.get_ylabel() for a in axs[[1, 3]]] == [r"$\Delta n/\bar{n}$", pl.LABELS["dF"]] and axs[2].get_ylabel() == pl.LABELS["F"]
+    assert [a.get_ylabel() for a in axs[[1, 3]]] == [r"$\Delta n/\bar{n}$", pl.LABELS["dF"]] and axs[2].get_ylabel() == pl.LABELS[
+        "F"
+    ]
     plt.close(fig)
     fig, axs = pl.plot_code_comparison(curves, residuals=pair, aH=80.0, window=(100, 200), residual_limits=dict(dF=(1e-2, 1e-7)))
     assert axs[5].get_xlim() == (100, 200) and axs[0].get_xlim() == (1.25, 2.5) and axs[5].get_ylim() == (-1e-2, 1e-2)
@@ -1311,7 +1313,9 @@ def test_plot_code_comparison_rows_and_axes():
     fig, axs = pl.plot_code_comparison(curves, aH=80.0)  # no residuals: n, tau, F
     assert len(axs) == 3
     plt.close(fig)
-    deep = dict(ref, n=ref["n"] * 10.0 ** -(30.0 * (ref["v"] > 200)))  # decades of nearly empty pixels: the axis stops at log_decades
+    deep = dict(
+        ref, n=ref["n"] * 10.0 ** -(30.0 * (ref["v"] > 200))
+    )  # decades of nearly empty pixels: the axis stops at log_decades
     fig, axs = pl.plot_code_comparison([dict(mode="default", **deep)], rows=("n",), aH=80.0, log_decades=6.0)
     lo, hi = axs[0].get_ylim()
     assert np.isclose(hi / lo, 1e6)
@@ -1322,7 +1326,11 @@ def test_plot_code_comparison_rows_and_axes():
     fig, axs = pl.plot_code_comparison(curves, rows=("n",))  # n alone: its own axis at the bottom
     assert axs[0].get_xlabel() == pl.LABELS["y"]
     plt.close(fig)
-    for bad in (dict(rows=("T",)), dict(rows=("dF",)), dict()):  # an unknown row; a residual row alone, no residuals; n and F, no aH
+    for bad in (
+        dict(rows=("T",)),
+        dict(rows=("dF",)),
+        dict(),
+    ):  # an unknown row; a residual row alone, no residuals; n and F, no aH
         with pytest.raises(ValueError):
             pl.plot_code_comparison(curves, **bad)
         plt.close("all")
@@ -1359,7 +1367,11 @@ def test_plot_code_comparison_curves_and_residuals():
     fig, axs = pl.plot_code_comparison(two, residuals=[("default+switch", "matched-switch")], aH=80.0, residual_note="each − x")
     assert axs[1].get_legend() is None and any(t.get_text() == "each − x" for t in axs[1].texts)
     plt.close(fig)
-    for bad in (dict(residuals=[("nope", "default+switch")]), dict(curves=[dict(mode="nope", **ref)]), dict(curves=[dict(mode="default", **ref)] * 2)):
+    for bad in (
+        dict(residuals=[("nope", "default+switch")]),
+        dict(curves=[dict(mode="nope", **ref)]),
+        dict(curves=[dict(mode="default", **ref)] * 2),
+    ):
         with pytest.raises(ValueError):
             pl.plot_code_comparison(bad.pop("curves", two), aH=80.0, **bad)
         plt.close("all")

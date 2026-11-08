@@ -5,6 +5,7 @@ from __future__ import annotations
 import diffrax
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.typing import ArrayLike
 
 from skewerjax.core.constants import phys
@@ -135,3 +136,39 @@ class Cosmology:
             self.H0, self.Omega_r_0, self.Omega_m_0, self.Omega_k_0, self.Omega_lambda_0, ICs[:, None], x_eval_Mpc * 1e-3
         )  # Mpc -> Gpc
         return ys[..., 0]
+
+    def solve_a_of_x_host(self, ICs, x_eval_Mpc, rtol: float = 1e-12, atol: float = 1e-14) -> np.ndarray:
+        """a(x) of Eq. dadx_general in float64 on the host (SciPy's DOP853, 8th order, rtol 1e-12), whatever the precision
+        policy: the scale factors of a ``SkewerBundle`` with concrete inputs. The Hubble velocities of the line
+        centres, c ln(a_dagger / a), are differences of nearly equal values times c, so a needs ~1e-12 accuracy there
+        (in float32 it would err by ~0.02 km/s).
+
+        ICs : (N_cosmologies,) a(x_eval[0]); x_eval_Mpc : (N_eval,) comoving distances [Mpc], monotonic (the first one
+        is the initial condition). Returns (N_cosmologies, N_eval) float64 NumPy. Not traceable (``solve_a_of_x`` is)."""
+        from scipy.integrate import solve_ivp
+
+        x = np.asarray(x_eval_Mpc, dtype=np.float64) * 1e-3  # Mpc -> Gpc
+        a0 = np.atleast_1d(np.asarray(ICs, dtype=np.float64))
+        pars = np.asarray(self.params, dtype=np.float64)
+        if a0.shape[0] != pars.shape[0]:
+            raise ValueError(f"ICs shape {a0.shape} incompatible with number of cosmologies {pars.shape[0]}.")
+        out = np.empty((pars.shape[0], x.size))
+        for i, (H0, om_r, om_m, om_k, om_l) in enumerate(pars):
+            kk = -om_k / phys.cc_Gpc_per_Gyr**2
+
+            def rhs(xx, aa, H0=H0, om_r=om_r, om_m=om_m, om_k=om_k, om_l=om_l, kk=kk):
+                num = om_r + om_m * aa + om_k * aa**2 + om_l * aa**4
+                return (H0 / phys.cc_Gpc_per_Gyr) * np.sqrt(num / max(1e-32, 1.0 - kk * xx**2))
+
+            if x.size == 1 or x[-1] == x[0]:
+                out[i] = a0[i]
+                continue
+            # SciPy wants strictly monotonic evaluation points: solve on the distinct ones (ties: the same a)
+            xu, inv = np.unique(x, return_inverse=True)
+            if x[-1] < x[0]:
+                xu, inv = xu[::-1], xu.size - 1 - inv
+            sol = solve_ivp(rhs, (xu[0], xu[-1]), [a0[i]], method="DOP853", t_eval=xu, rtol=rtol, atol=atol)
+            if not sol.success:
+                raise RuntimeError(f"solve_a_of_x_host: {sol.message}")
+            out[i] = sol.y[0][np.ravel(inv)]
+        return out

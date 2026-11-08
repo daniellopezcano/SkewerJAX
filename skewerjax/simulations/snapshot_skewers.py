@@ -27,9 +27,9 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-import jax.numpy as jnp
 import numpy as np
 
+from skewerjax.config import get_precision
 from skewerjax.core import absorbers as ab_
 from skewerjax.core import deposition as dep
 from skewerjax.core.cells import Cells
@@ -75,7 +75,7 @@ class IntegrationOptions:
     frame : "exact" (a(x) along the path from the cosmology) or "snapshot" (one a, linear Hubble flow, fake_spectra's).
     b_constants : the constants of the thermal width, "codata" or "fake_spectra" (``core.compute_optical_depth``).
     detuning : "exact" (nu = (c / lambda) expm1(-dv / c)) or "linear" (fake_spectra).
-    dtype : None (the input precision, float64 under x64) or "float32": opt-in faster kernel.
+    dtype : None (the package's precision policy, ``skewerjax.config``: float32 unless set) or "float32" / "float64".
     a_eff : None (default: a_p^-2 of every piece) or a scalar, the effective scale factor of the comoving-to-physical
         density conversion (``core.compute_optical_depth``; e.g. the snapshot's a, ``header.a``). Independent of
         ``frame`` and ``detuning``: the line centres keep the frame's a(x).
@@ -199,7 +199,7 @@ class SimulationSkewers:
             else sel.select_cells_near_paths(reader, self.points, mode="voronoi", max_rows=max_rows, backend=selection_backend)
         )
         self.selection_s = time.perf_counter() - t
-        g = path_geometry(jnp.asarray(self.points))
+        g = path_geometry(self.points)  # float64 NumPy
         self.s = np.asarray(g["s"])
         self.line_elements = np.asarray(g["line_elements"])
         self.tangents = np.asarray(g["tangents"])
@@ -217,8 +217,12 @@ class SimulationSkewers:
         The bundle's scale factors (``quadri_vectors[ii_cosmology][..., 0]``, from its cosmology or
         ``manual_scale_factors``) are used by the exact frame. SkewerJAX's convention for simulations is
         that the observer is before the first point: a(x) must not increase along the points."""
-        qv = np.asarray(skewer_bundle.quadri_vectors[ii_cosmology])
-        sk = cls(reader, qv[..., 1:], scale_factors=qv[..., 0], **kw)
+        h = skewer_bundle.host  # the float64 host copies (the bundle's arrays are in the precision policy's dtype)
+        if h is not None:
+            sk = cls(reader, h["points"], scale_factors=h["scale_factors"][ii_cosmology], **kw)
+        else:
+            qv = np.asarray(skewer_bundle.quadri_vectors[ii_cosmology])
+            sk = cls(reader, qv[..., 1:], scale_factors=qv[..., 0], **kw)
         sk.skewer_bundle = skewer_bundle
         return sk
 
@@ -515,6 +519,8 @@ class SimulationSkewers:
         }  # options added later: in the key only when not at their defaults
         integ_d = {k: w for k, w in asdict(integ).items() if not (k in new and w == new[k])}
         opts = {**asdict(relevant_options(ext, ion)), **integ_d, "velocity_period": velocity_period}
+        # since the float32 policy and the Harris default (2026-11): results before them do not match the key
+        opts.update(voigt="harris", precision=integ.dtype or get_precision())
         geo = hashlib.md5(
             self.points.tobytes() + (b"" if self.scale_factors is None else self.scale_factors.tobytes())
         ).hexdigest()[:10]

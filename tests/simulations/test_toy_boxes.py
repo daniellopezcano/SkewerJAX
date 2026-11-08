@@ -15,7 +15,7 @@ import pytest
 from skewerjax.core import hubble_velocity, lattice_columns
 from skewerjax.simulations import LINE_IDS, ToyBoxes
 
-from helpers import toy_lattice_statistics, toy_tau
+from helpers import float64_only, tol, toy_lattice_statistics, toy_tau
 
 BOXES = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3, bao_ratio=1e-3)  # below R_max of this grid
 STRIDE, P, N_PIX = (4, 4), 80, 64  # 16 skewers; cells of 40 km/s: pieces of W = 0.5 km/s
@@ -33,6 +33,7 @@ def _uniform(boxes):
     )
 
 
+@float64_only
 def test_realisations_and_gas():
     b = BOXES
     assert np.array_equal(b.seeds, b.base_seed + np.arange(b.n_real))
@@ -69,6 +70,7 @@ def test_realisations_and_gas():
         ToyBoxes(box_cMpc=8.0, n_cells=16, sigma_delta=0.8, bao_ratio=1e-3).fields(0)
 
 
+@float64_only
 def test_one_box_along_its_skewers():
     """One realisation along its lattice of skewers, normalised by the mean of its own skewers at each pixel (the
     default mean="redshift"): tau, the resolution check, the exact decomposition by order, Parseval for P1D, and the 3D
@@ -98,6 +100,7 @@ def test_one_box_along_its_skewers():
 
 
 @pytest.mark.parametrize("mean", ["redshift", "global", "box", "skewer"])
+@float64_only
 def test_ensemble_normalisation_of_the_overflux(mean):
     """The explicit pipeline of notebook 10 in every mode of the mean transmission: T_bar over the pixels at the same
     redshift of every skewer of every box ("redshift", the default: the per-pixel ensemble mean on the shared grid of the
@@ -129,6 +132,7 @@ def test_ensemble_normalisation_of_the_overflux(mean):
         assert np.max(np.abs(e[f"{kind}_order"][1])) < 1e-12 * sc, "order 1 vanishes over the sets of the mode"
 
 
+@float64_only
 def test_a_eff_and_the_jacobian_of_the_exact_frame():
     """A uniform gas in the exact frame of the toy skewers (z at y = 0, a(y) decreasing): tau per pixel follows
     n a(y)^-2 / (a H(y)) (the comoving-to-physical factor and the Jacobian dy / dv of the line centres), about +6.4 % from
@@ -185,7 +189,9 @@ def test_linear_hubble_flow_flattens_a_uniform_gas():
         if hf == "linear":
             assert r["period"] == pytest.approx(boxes.aH * boxes.box_cMpc, rel=1e-6)
             assert float(velocity_span(r["bundle"], "linear")[0]) == pytest.approx(r["period"], rel=1e-12)
-    assert flat["linear"] < 1e-8 and flat["exact"] > 5e-3, flat  # 5.7e-10 and 8.6e-3 (the Jacobian 1/(aH))
+    assert flat["linear"] < tol(1e-8, 1e-4) and flat["exact"] > 5e-3, (
+        flat
+    )  # float32: 2.4e-5  # 5.7e-10 and 8.6e-3 (the Jacobian 1/(aH))
 
 
 def test_continuous_correlation():

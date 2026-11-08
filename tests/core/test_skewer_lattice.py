@@ -11,6 +11,8 @@ from skewerjax.core import SkewerBundle, hubble_velocity, lattice_columns, latti
 from skewerjax.simulations import ToyBoxes
 from skewerjax.summary_stats import bao_k_edges, lattice_grid, lattice_limits
 
+from helpers import float64_only
+
 BOXES = ToyBoxes(box_cMpc=8.0, n_cells=16, n_real=3, bao_ratio=1e-3)
 STRIDE, P, N_PIX = (4, 4), 80, 64
 
@@ -22,6 +24,7 @@ def _bundle(cols, p=P, boxes=BOXES):
     )
 
 
+@float64_only
 def test_columns_points_and_frame():
     cols = lattice_columns(BOXES.n_cells, STRIDE)
     assert cols.shape == (16, 2) and np.array_equal(cols[:4], [[0, 0], [0, 4], [0, 8], [0, 12]]), "x-major"

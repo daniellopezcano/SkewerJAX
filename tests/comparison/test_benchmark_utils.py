@@ -52,7 +52,7 @@ def test_config_ids_are_unique():
         make_config("fake_spectra", "/x/TNG50-4", 25, 16),
         make_config("skewerjax", "/x/TNG50-4", 25, 16),
         make_config("skewerjax", "/x/TNG50-4", 25, 16, platform="gpu"),
-        make_config("skewerjax", "/x/TNG50-4", 25, 16, modes=("float32",)),
+        make_config("skewerjax", "/x/TNG50-4", 25, 16, modes=("float64",)),
         make_config("skewerjax", "/x/TNG50-4", 25, 16, threads=1),
     ]
     assert len({config_id(c) for c in cs}) == len(cs)

@@ -70,14 +70,3 @@ def warn_once(key: str, message: str, stacklevel: int = 3) -> None:
     if key not in _WARNED:
         _WARNED.add(key)
         warnings.warn(message, stacklevel=stacklevel)
-
-
-def warn_if_float32(where: str) -> None:
-    """Warn once when ``jax_enable_x64`` is off: SkewerJAX follows the flag (it never sets it), and its tolerances, the
-    column sums and tau are validated in float64 (float32 tau: max |dF| ~1e-3 on TNG50-4 skewers)."""
-    if not jax.config.jax_enable_x64:
-        warn_once(
-            "x64",
-            f"{where}: jax_enable_x64 is off, so the computation runs in float32 (max |dF| ~1e-3 on "
-            "TNG50-4 skewers); call jax.config.update('jax_enable_x64', True) before any computation for float64.",
-        )

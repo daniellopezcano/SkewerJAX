@@ -21,10 +21,10 @@ from skewerjax.core import (
     compute_optical_depth,
     phys,
     select_cells,
-    validation,
     voronoi_volumes,
 )
 
+from helpers import float64_only
 from helpers import raises as _raises
 
 BOX = 8.0
@@ -146,6 +146,7 @@ def test_checks_are_skipped_under_tracing():
     assert np.isfinite(float(g)) and float(g) > 0
 
 
+@float64_only
 def test_periodic_paths():
     """The same gas along any periodic image of a path, through the faces several times, along a face and from the box
     edge: the pieces tile the path, and images give the same pieces (to round-off) and tau."""
@@ -172,24 +173,6 @@ def test_periodic_paths():
             assert abs(float(np.sum(q.length_m)) / phys.Mpc_to_m / (1.5 * BOX) - 1.0) < 1e-12
         col = lambda q: float(np.sum(np.asarray(q.number_density) * np.asarray(q.length_m)))
         assert abs(col(pg) / col(ps) - 1.0) < 1e-12
-
-
-def test_precision_warning():
-    """compute_optical_depth warns once when jax_enable_x64 is off (the package never sets it)."""
-    validation._WARNED.discard("x64")
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        validation.warn_if_float32("here")  # x64 on: silent
-        assert not w
-        jax.config.update("jax_enable_x64", False)
-        try:
-            validation.warn_if_float32("here")
-            validation.warn_if_float32("here")
-        finally:
-            jax.config.update("jax_enable_x64", True)
-    assert len(w) == 1 and "jax_enable_x64 is off" in str(w[0].message)
-    p = cell_pieces(_toy(), LYA, skewer_bundle=_bundle(_line()))
-    assert compute_optical_depth(p, np.arange(0.0, 900.0, 2.0), LYA, resolution_tolerance=None).dtype == jnp.float64
 
 
 def test_resolution_warning():

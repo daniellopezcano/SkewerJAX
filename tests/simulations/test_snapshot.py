@@ -29,7 +29,7 @@ from skewerjax.simulations import (
 from skewerjax.simulations import gas_physics as gp
 from skewerjax.utils.paths import snapshot_dir
 
-from helpers import SKEWER_SETS
+from helpers import SKEWER_SETS, tol
 
 TNG = snapshot_dir("TNG50-4")
 
@@ -223,13 +223,13 @@ def tng_field_checks(quick: bool):
     check(
         "Pieces carry the cells' own temperatures (max |diff| [K])",
         np.abs(np.asarray(smp.temperature[0]).ravel()[:M] - A1.T[0]).max(),
-        0,
+        tol(0, 1e-6 * A1.T[0].max()),  # float32: the rounding of T
     )
     live = A1.n[0] > 0
     check(
         "Pieces density = the absorbers' comoving density (max rel)",
         np.abs(np.asarray(smp.number_density[0]).ravel()[:M][live] / A1.n[0][live] - 1).max(),
-        1e-12,
+        tol(1e-12, 1e-6),
     )
     pv = S.point_values(HI)
     check(

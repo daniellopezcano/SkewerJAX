@@ -33,7 +33,7 @@ from skewerjax.core import (
 )
 
 from analytic_cases import radiation_natural, radiation_thermal, static_natural, static_thermal
-from helpers import ramp_pieces
+from helpers import float64_only, ramp_pieces
 from helpers import uniform_skewer as uniform
 
 LYA = LineBundle(["HI-LyA"], ref_line_id="HI-LyA")
@@ -107,6 +107,7 @@ def test_reference_frame_is_the_shifted_evaluation():
     assert np.array_equal(t_ref[0], t_ly), "the reference line is unchanged"
 
 
+@float64_only
 def test_reference_frame_wraps_a_shift_beyond_the_period():
     """``line_frame="reference"`` with ``velocity_period``: every line is evaluated at v + delta_v_j and the detuning
     takes its nearest periodic image, so a line whose offset exceeds the period (Lya-Si II 1193 and 1190, 5571 and 6294
@@ -196,6 +197,7 @@ def test_radiation_domination_thermal_converges_full():
 
 
 # --------------------------------------------------------------------------- the density conversion a_eff
+@float64_only
 def test_a_eff_density_conversion():
     """``a_eff``: None is the per-piece a_p^-2 (the same tau as without the option, bit for bit); a scalar is a_eff^-2
     for every piece, i.e. the densities rescaled by (a_p / a_eff)^2 with the line centres, widths and detuning untouched;
@@ -230,6 +232,7 @@ def test_a_eff_density_conversion():
 
 
 # --------------------------------------------------------------------------- precision, sharding, devices
+@float64_only
 def test_float32_is_opt_in_and_close():
     smp, v, lb = ramp_pieces()
     t64 = np.asarray(optical_depth_from_pieces(smp, v, lb))
@@ -288,6 +291,7 @@ def test_gpu_matches_cpu():
 
 
 # --------------------------------------------------------------------------- the Hubble flow of the line centres
+@float64_only
 def test_hubble_flow_option():
     """``hubble_flow``: "exact" (default) is the current tau, bit for bit; "linear" puts the line centres at V_H(0) +
     (aH)_ref y (the frame's aH at the first point by default; ``Pieces.path_cMpc``, ``aH_first``, ``vH_first``), which

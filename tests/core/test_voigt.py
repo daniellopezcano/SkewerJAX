@@ -2,8 +2,9 @@
 
 * ExoJAX (the default) and the FFT convolution against scipy's Faddeeva ``wofz``; unit area; the Gaussian and
   Lorentzian limits; finite gradients (formerly ``scripts/validation/check_voigt.py``, same tolerances);
-* the first-order expansion (``voigt="harris"``, fake_spectra's fastvoigt.h; a matched fast mode) against the exact
-  evaluations: its table, the fallback above a_max, shapes, jit / vmap / grad, and tau through ``compute_optical_depth``;
+* Harris' expansion (``voigt="harris"``, the default of tau since 2026-11): the first order below a = 1e-3 (fake_spectra's
+  fastvoigt.h), the fourth order up to a = 0.05, the exact function beyond, against wofz; its H1 against fake_spectra's
+  table, shapes, jit / vmap / grad, and tau through ``compute_optical_depth``;
 * the Voigt modes of the line profiles and of tau (``line_profiles.PROFILE_MODES``): any other mode raises.
 """
 
@@ -16,7 +17,7 @@ from skewerjax.core import LineBundle, Pieces, compute_optical_depth, phys
 from skewerjax.core import voigt as V
 from skewerjax.core.line_profiles import PROFILE_MODES, voigt_line_profiles
 
-from helpers import raises
+from helpers import float64_only, raises
 
 X = jnp.linspace(-60.0, 60.0, 4801)
 PAIRS = [(s, g) for s in (0.3, 1.0, 3.0) for g in (0.003, 0.1, 1.0, 3.0)]
@@ -108,6 +109,22 @@ def test_expansion_accuracy():
         assert r[core].max() < max(20 * a * a, 1e-6), (a, r[core].max())  # the a^2 term, or the table interpolation
 
 
+@float64_only
+def test_fourth_order_against_wofz():
+    """``harris_H4`` (a <= 0.05) and the tiers of ``voigt_harris``: the first order below a = 1e-3, the fourth up to
+    0.05, the exact function beyond, each within its stated accuracy of SciPy's wofz over u in [0, 5000]."""
+    u = np.concatenate([np.linspace(0.0, 12.0, 4801), np.geomspace(12.0, 5000.0, 600)])
+    for a, tol4 in ((1.5e-3, 1e-7), (1e-2, 1e-7), (3e-2, 1e-7), (5e-2, 6e-7)):
+        r = np.abs(np.asarray(V.harris_H4(jnp.asarray(u), a)) / H_exact(u, a) - 1)
+        assert r.max() < tol4, (a, r.max())
+    x = jnp.asarray(u * np.sqrt(2.0))  # sigma = 1
+    for a, tol in ((1e-4, 1e-5), (5e-3, 1e-7), (0.2, 2e-6)):
+        got = np.asarray(V.voigt_harris(x, 1.0, a * np.sqrt(2.0)))
+        assert np.abs(got / V.voigt_scipy(np.asarray(x), 1.0, a * np.sqrt(2.0)) - 1).max() < tol, a
+    cheb = V._chebval(jnp.asarray(V._HARRIS_U[:-1] / 3.0 - 1.0), V._HARRIS_CHEB)  # the first order's H1 on [0, 6]
+    assert np.abs(np.asarray(cheb) - V._HARRIS_H1[:-1]).max() < 2e-8
+
+
 def test_matches_fake_spectra_table():
     """The same table as fastvoigt.h: H1(u_i) = 2 u_i Im w(u_i) - 2/sqrt(pi) at u_i = i 6/1024."""
     u = V._HARRIS_U
@@ -124,9 +141,10 @@ def test_fallback_and_shapes():
     ref = np.stack([V.voigt_scipy(np.asarray(x), float(s), float(g)) for s, g in zip(sig[:, 0], gam[:, 0])])
     assert Vh.shape == (4, 8001)
     assert np.abs(Vh / ref - 1).max() < 2e-5
-    assert (
+    assert np.abs(Vh[1] / ref[1] - 1).max() < 1e-6  # a = 3.5e-3: the fourth order, more accurate than the first
+    assert (  # a = 14, 707: the exact function
         np.abs(
-            Vh[1:] - np.stack([np.asarray(V.voigt_exojax(x, float(s), float(g))) for s, g in zip(sig[1:, 0], gam[1:, 0])])
+            Vh[2:] - np.stack([np.asarray(V.voigt_exojax(x, float(s), float(g))) for s, g in zip(sig[2:, 0], gam[2:, 0])])
         ).max()
         == 0
     )
@@ -141,7 +159,9 @@ def test_jit_vmap_grad():
     eager = np.asarray(f(x, 1.0, 5e-4))
     assert np.allclose(np.asarray(jax.jit(f)(x, 1.0, 5e-4)), eager, rtol=1e-13, atol=0)  # XLA fusion: last-bit rounding only
     vm = np.asarray(jax.vmap(f, in_axes=(None, 0, 0))(x, jnp.array([1.0, 2.0]), jnp.array([5e-4, 5e-3])))
-    assert np.abs(vm[0] - eager).max() == 0 and np.abs(vm[1] / V.voigt_scipy(np.asarray(x), 2.0, 5e-3) - 1).max() < 1e-5
+    # under vmap the branch test of voigt_harris becomes a select of both branches: the same values to the last bit
+    assert np.abs(vm[0] - eager).max() <= 1e-14 * np.abs(eager).max()
+    assert np.abs(vm[1] / V.voigt_scipy(np.asarray(x), 2.0, 5e-3) - 1).max() < 1e-5
     for argnum, h in ((1, 1e-6), (2, 1e-9)):  # d/dsigma, d/dgamma against central differences
         g = jax.grad(lambda *p: jnp.sum(f(*p)), argnums=argnum)(x, 1.0, 5e-4)
         p0 = [x, 1.0, 5e-4]
@@ -169,7 +189,7 @@ def test_line_profiles_and_tau():
         400.0,
     )
     v = np.linspace(-500.0, 900.0, 2801)
-    t_ex = np.asarray(compute_optical_depth(pc, v, lb, resolution_tolerance=None))
+    t_ex = np.asarray(compute_optical_depth(pc, v, lb, voigt="ExoJAX", resolution_tolerance=None))
     t_h = np.asarray(compute_optical_depth(pc, v, lb, voigt="harris", resolution_tolerance=None))
     live = t_ex > 1e-12
     assert np.abs(t_h[live] / t_ex[live] - 1).max() < 3e-5

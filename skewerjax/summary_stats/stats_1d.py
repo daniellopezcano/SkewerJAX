@@ -69,7 +69,9 @@ def p1d_kernel(total, terms, w, c, pref, chunk: int):
         s_w = s_w + jnp.einsum("asf,bsf->abf", f_w, f_w.conj())
         return (s_raw, s_w), pref * jnp.abs(f_tot) ** 2
 
-    cdt = jnp.result_type(total.dtype, jnp.complex64)
+    cdt = jnp.result_type(
+        total.dtype, terms.dtype, w.dtype, c.dtype, jnp.complex64
+    )  # w, c may be float64 (host) with float32 fields
     init = (jnp.zeros((n, n, K), cdt), jnp.zeros((n + 1, n + 1, K), cdt))
     (s_raw, s_w), p_tot = jax.lax.scan(body, init, (total, terms, live, wc))
     return pref * s_raw / B, pref * s_w / B, p_tot.reshape(-1, K)[:B]

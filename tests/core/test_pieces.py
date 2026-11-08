@@ -7,11 +7,13 @@ import numpy as np
 
 from skewerjax.core import LineBundle, SkewerBundle, cell_pieces, cells_on_grid, compute_optical_depth, phys
 
+from helpers import float64_only
 from helpers import uniform_skewer as uniform
 
 LYA = LineBundle(["HI-LyA"], ref_line_id="HI-LyA")
 
 
+@float64_only
 def test_pieces_tile_the_path_and_centroids():
     sb, f, pos, a = uniform()
     p = cell_pieces(f, LYA, skewer_bundle=sb, a_dagger=0.302)
@@ -33,6 +35,7 @@ def test_pieces_tile_the_path_and_centroids():
     assert d.min() < d.max()
 
 
+@float64_only
 def test_finer_sampling_converges_and_keeps_the_column():
     """Cells of a coarse grid sampled with more and more points: the pieces are the cell crossings cut at the dual
     segments, so the sum converges at second order in the spacing and the column is exact at every spacing."""

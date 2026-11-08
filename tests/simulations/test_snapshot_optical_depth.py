@@ -11,7 +11,7 @@ from skewerjax.simulations import HI, ArepoHDF5Reader, Ion, SimulationSkewers
 from skewerjax.summary_stats import p1d_from_tau
 from skewerjax.utils.paths import snapshot_dir
 
-from helpers import SKEWER_SETS
+from helpers import SKEWER_SETS, tol
 
 TNG = snapshot_dir("TNG50-4")
 
@@ -46,7 +46,11 @@ def tng_tau_checks(quick: bool):
     vw = v[(v > 2150) & (v < 2500)]
     t_pp = tau_absorbers(sub, LYA, vw, fr, per_absorber=True, check=None, velocity_period=True)[0, 0, : win.sum()]
     t_sum = tau_absorbers(sub, LYA, vw, fr, check=None, velocity_period=True)[0, 0]
-    check("sum of the per-piece profiles = tau of the pieces (rel)", np.abs(t_pp.sum(0) - t_sum).max() / t_sum.max(), 1e-10)
+    check(
+        "sum of the per-piece profiles = tau of the pieces (rel)",
+        np.abs(t_pp.sum(0) - t_sum).max() / t_sum.max(),
+        tol(1e-10, 1e-6),
+    )
     live = A1.n[0] > 0
     N_p = A1.n[0][live] * fr.scale_factors(0, A1.s[0][live]) ** -2 * A1.length[0][live] * 3.085678e24
     pred = np.pi * 2.8179403262e-13 * 2.99792458e10 * float(LYA.f_osc[0]) * float(LYA.lambda0_A[0]) * 1e-8 * N_p.sum() / 1e5

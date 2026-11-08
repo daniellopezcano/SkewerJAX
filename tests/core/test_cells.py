@@ -31,6 +31,8 @@ from skewerjax.core import (
     voronoi_volumes,
 )
 
+from helpers import float64_only
+
 BOX = 4.0
 SHAPE = (8, 6, 5)
 
@@ -150,6 +152,7 @@ def _bundle(n_sk=3, n=200):
     return SkewerBundle(spatial_points=jnp.asarray(pts), cosmologies=eds, a0=0.25, x0=BOX)
 
 
+@float64_only
 def test_uniform_cells_column_and_species():
     sb = _bundle()
     n0 = 1e-12
@@ -168,6 +171,7 @@ def test_uniform_cells_column_and_species():
     np.testing.assert_allclose(np.asarray(t_b), np.asarray(t_p), rtol=0, atol=1e-14 * float(np.max(t_p)))
 
 
+@float64_only
 def test_tophat_on_toy_cells_conserves_the_column():
     sb = _bundle(n_sk=1, n=400)
     rng = np.random.default_rng(1)

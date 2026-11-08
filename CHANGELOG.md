@@ -3,6 +3,57 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — float32 by default, Harris by default, CPU/GPU parallelism, profile-driven optimisation (stem 20261107)
+
+### Added
+- `skewerjax.config`: one precision policy (`set_precision("float32" | "float64")`, `precision()` context, `real_dtype`,
+  `$SKEWERJAX_PRECISION`; float32 by default), `configure_devices(n_cpu_devices=, cpu_threads=, platforms=)` (before JAX
+  starts) and `devices("cpu" | "gpu")`, the one `devices=` API of `compute_optical_depth`. `docs/precision.md`: the float32
+  audit, its fixes and the float32-against-float64 differences.
+- `SkewerBundle.axis_aligned` (box mode: parallel skewers across a box share one a(s), solved once); `SkewerBundle.host` (float64
+  copies of the points, distances, scale factors and a0); `Cosmology.solve_a_of_x_host` (SciPy DOP853, rtol 1e-12); bundles with
+  identical paths share one solve.
+- `core.per_cell`: fake_spectra's per-cell schemes (`tautail`, `pixel_average`) on windows around each cell's line centre,
+  escalated until the walk stops inside (the result of the full grid, whatever the window estimate), batched over the skewers,
+  dispatched over `devices`, with the detunings formed on the host in float64.
+- `voigt.harris_H4`: Harris' expansion to fourth order in a (5e-7 against wofz for a <= 0.05), used by `voigt="harris"` for
+  1e-3 < a <= 0.05 instead of ExoJAX (fake_spectra calls its exact Faddeeva function there).
+- `Pieces.hubble_kms` (V_H = c ln(a_dagger / a) per piece, float64 on the host), `Pieces.lines`, `LineBundle.subset`,
+  `ArepoHDF5Reader.memmaps`, `plotting.plot_stage_times`, `plot_stage_speedups`; notebook `13_comparison_fake_spectra_timing`.
+- `tests/test_config.py`, `tests/core/test_per_cell.py`; `helpers.float64_only`, `tol`, `is_float32`: the suite runs in both
+  precisions (`SKEWERJAX_PRECISION`).
+
+### Changed
+- **Default precision float32** (was: the `jax_enable_x64` flag). The host geometry, a(s), the Hubble velocities and the per-cell
+  gas physics stay float64 whatever the policy (`docs/precision.md`). Notebooks no longer enable x64.
+- **`voigt="harris"` is the default of `compute_optical_depth`** (and of `optical_depth_from_pieces`, `optical_depth_kernel`,
+  `tau_absorbers`); `voigt_harris` decides its branch on the damping parameters only (it broadcast them over the velocities: 25x
+  slower), its H1 is a Chebyshev series (1.3e-8; fake_spectra's table, kept for the tests, 1.9e-5).
+- `simulations.select_cells_near_paths`: parallel over the blocks of the files (threads, memory maps), a prefilter of distance
+  bounds on a 256^3 grid and per-cell volume thresholds (numba), the exact rule on the candidates: the same cells, 33x faster
+  on TNG50-2 with 256 skewers.
+- `core.deposition`: `voronoi_segments` threads over chunks of skewers, `tophat_chord_segments` over skewers; the host geometry
+  (`_crossing`, `_tophat_half`, `path_geometry` of NumPy input) in float64 NumPy.
+- `simulations.gas_physics` on host data in float64 NumPy (JAX for JAX inputs). `compute_optical_depth` sums one line at a time.
+- Notebook 13 → 14 (`14_comparison_fake_spectra_performance`, unchanged but its number and one sentence: its records predate the
+  float32 default). `comparison.benchmark`: no x64 switching; the mode `float32` became `float64`.
+- Regression references regenerated in float64 for the intended changes (the Harris default, the float64 host solve of a(x)).
+
+### Fixed
+- float32: c ln(a_dagger / a) from rounded scale factors (~0.02 km/s), the float32 path coordinates, and the Si III densities of
+  metal-poor cells in the float32 denormal range (11 % in tau); ExoJAX returning float64 for float32 input under x64 (which also
+  crashed `voigt="harris"` with float32); SciPy's strict ordering of the evaluation points of a(x); the float32 a0 read by
+  `bundle_frame` (0.017 km/s); hand-built `Pieces` without `hubble_kms` now get V_H in float64 on the host before the float32
+  cast (8e-4 → 8e-7 in τ); `p1d_kernel`'s scan carry with float64 weights and float32 fields; `voigt_convolution` (`work_dtype=None`: float64
+  whenever x64 is on, else float32 without JAX's truncation warning); `print_rows` reads the legacy `float32` mode of the records
+  (`comparison.benchmark.RECORDED_MODES`); `plot_stage_speedups` labels its legend whichever entry draws first.
+- Notebooks: 04 evaluates T = T0 (1 + δ)^0.6 on 1 + δ floored at 1e-3 (the float32 draw has one 5σ cell below −1); 06
+  describes and checks Harris' fourth order; 07 forms F of the weak Si III line in float64.
+
+### Removed
+- `core.validation.warn_if_float32`; `optical_depth._per_cell_optical_depth`, `_cell_chunk_tau`, `_tail_cut_sum` (→ `core.per_cell`);
+  `simulations.selection._PathOccupancy` (→ `_PathDistanceGrid`).
+
 ## Unreleased — fake_spectra's choices as core options; its emulation removed; notebook 12 against fake_spectra itself
 
 ### Added

@@ -110,6 +110,10 @@ class LineBundle:
         obj._arrays = tuple(leaves)
         return obj
 
+    def subset(self, indices) -> LineBundle:
+        """The bundle of the lines ``indices`` (a sequence of positions), with the same reference line."""
+        return LineBundle([self.lines[int(i)].id for i in indices], ref_line_id=self.ref_line.id)
+
     # -- metadata
     @property
     def n_lines(self) -> int:

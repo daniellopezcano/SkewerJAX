@@ -60,7 +60,9 @@ Dependencies run one way only: `comparison` uses `simulations`, `simulations` us
     one period), it wraps modulo P.
   - In simulations, `frame="exact"` uses a(x) along the path and `frame="snapshot"` uses fake_spectra's single
     redshift with a linear Hubble flow.
-- **Precision.** SkewerJAX follows `jax_enable_x64` and never sets it. Every validated tolerance is a float64 one.
+- **Precision.** float32 by default, float64 on request (`skewerjax.config.set_precision("float64")`, which turns
+  `jax_enable_x64` on): the device kernels follow the policy; the host geometry, a(s), the Hubble velocities of the line
+  centres and the per-cell gas physics are float64 whatever it is. The audit and the float32 errors: `docs/precision.md`.
 - **Purity.** Every container is a JAX pytree, and every kernel of the τ sum can be traced with `jit`, `vmap` and
   `grad`. The host-side parts are NumPy: snapshot I/O, the k-d tree selection, the deposition bookkeeping (so
   `cell_pieces` runs outside `jit`) and fake_spectra.
@@ -188,7 +190,7 @@ default is SkewerJAX's choice and whose alternative is fake_spectra's. Notebook 
 | | `chord_weight`: `None` (1/7) → `1/8` (7/8 of the column) | `singleabs.h` L97–L100, L116 |
 | | `frame`: `bundle_frame` → `SnapshotFrame` (one a, u = aHs + v_pec) | `absorption.cpp` L237 |
 | `core.compute_optical_depth` | `b_constants`: `"codata"` → `"fake_spectra"` | `absorption.cpp` L24, L158 |
-| | `voigt`: `"ExoJAX"` → `"harris"` | `singleabs.h` L57–L66, `fastvoigt.h` |
+| | `voigt`: `"harris"` (the default since 2026-11) is fake_spectra's below a = 1e-3; above, fake_spectra's exact Faddeeva against SkewerJAX's fourth order (5e-7) | `singleabs.h` L57–L66, `fastvoigt.h` |
 | | `velocity_period`: `False` → the span of the grid | `absorption.cpp` L261–L264 |
 | | `a_eff`: `None` → `a_snap` | `spectra.py` L221, L615 |
 | | `hubble_flow`, `aH_ref`: `"exact"` → `"linear"`, (aH)_snap | `absorption.cpp` L237, `spectra.py` L225–L228 |
@@ -210,8 +212,8 @@ default is SkewerJAX's choice and whose alternative is fake_spectra's. Notebook 
 | `v_chunk` | `compute_optical_depth`, `optical_depth_from_pieces`, `tau_absorbers` (default 4096) | velocities per kernel call: memory ∝ N_lines × N_pieces × v_chunk |
 | `batch_size` | `compute_optical_depth`, `optical_depth_from_pieces` | skewers vmapped at once inside `lax.map` (more memory, fewer launches) |
 | `piece_chunk` / `chunk` | `compute_optical_depth` / `tau_absorbers` (default 2048) | pieces per kernel call: each skewer's pieces summed in rows (`Pieces.rows`; a static shape) |
-| `dtype="float32"` | `compute_optical_depth`, `tau_absorbers`, `IntegrationOptions` | opt-in: 2.4× faster on 16 TNG50-4 skewers on the CPU, max \|ΔF\| 1.6e-3 |
-| `devices=` | `compute_optical_depth`, `tau_absorbers`, `optical_depth_sharded` | shards the skewer axis (or a skewer's absorber rows) over devices |
+| `dtype=` | `compute_optical_depth`, `tau_absorbers`, `IntegrationOptions` | the precision of the sum (None: the policy, float32 by default; `"float64"` for validation) |
+| `devices=` | `compute_optical_depth`, `tau_absorbers`, `optical_depth_sharded` | `skewerjax.config.devices("cpu" \| "gpu")`: the sum over pieces shards the skewers, the per-cell schemes dispatch their chunks; one device: run there |
 | `max_rows` | `SimulationSkewers` | cells per streamed block of the selection |
 | `deposition="voronoi_crossings"` | `ExtractionOptions` | one absorber per (sub-piece of a) cell crossing instead of per piece of every dual segment: ~10× fewer H I absorbers at 0.25 km/s spacing, independent of the spacing |
 
@@ -249,8 +251,7 @@ first bad entry. They are skipped for traced values, so `jit`, `vmap` and `grad`
   - `velocity_period`;
   - the shapes and values of the pieces (`check_pieces`).
 
-  It warns once if `jax_enable_x64` is off: SkewerJAX never sets that flag, and its tolerances are float64 ones. The
-  resolution check (`resolution_tolerance`) warns when the pieces are too wide in velocity for the line widths.
+  The resolution check (`resolution_tolerance`) warns when the pieces are too wide in velocity for the line widths.
 
 **Diagnostics** (all off by default; when off they cost nothing):
 
@@ -312,7 +313,7 @@ the threads at N = 1, one or two timed runs, a cap and an estimate per point, an
 plus its estimate would exceed `--budget`, 1800 s) and `full` (N up to 1024 on the three snapshots, the threads at
 N = 16; it re-measures the quick points that hold fewer timed runs). Every record keeps its preset. The raw records go to
 `benchmarks/raw/fake_spectra` (git-ignored), and their summary to `benchmarks/results/fake_spectra_benchmark.json`
-(committed; with the runtime per preset and the list of launches), which `13_comparison_fake_spectra_performance` plots (`RUN_BENCHMARKS = True` re-runs the missing
+(committed; with the runtime per preset and the list of launches), which `14_comparison_fake_spectra_performance` plots (`RUN_BENCHMARKS = True` re-runs the missing
 configurations of its `PRESET`).
 
 ## Figures: `skewerjax.utils.plotting`

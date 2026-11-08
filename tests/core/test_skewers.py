@@ -18,6 +18,8 @@ from skewerjax.core import (
     plane_points,
 )
 
+from helpers import float64_only
+
 BOX = 20.0
 EDS = Cosmology(H0=phys.H0, Omega_r_0=0.0, Omega_m_0=1.0, Omega_k_0=0.0, Omega_lambda_0=0.0)
 
@@ -34,6 +36,7 @@ def helix(n=400, turns=1.5, r=3.0, length=45.0):
     return pts[None], np.hypot(length, 2 * np.pi * turns * r)
 
 
+@float64_only
 def test_curved_path_geometry_across_the_faces():
     pts, L_exact = helix()
     assert pts.max() > BOX  # leaves the box: the points stay unwrapped
@@ -55,6 +58,7 @@ def test_curved_path_geometry_across_the_faces():
     np.testing.assert_allclose(np.asarray(sb.segment_midpoints[1])[0], hi, rtol=1e-15)
 
 
+@float64_only
 def test_scale_factors_match_einstein_de_sitter():
     """EdS: da/dx = (H0 / c) a^(1/2), so sqrt(a) = sqrt(a0) -/+ (H0 / 2c) d at path distance d from the IC point
     (towards the past for absorption, the future for emission), for each IC convention."""
@@ -83,6 +87,7 @@ def _check_eds(ic, kind):
     assert np.all(cos > 0.99) if toward_end else np.all(cos < -0.99)
 
 
+@float64_only
 def test_bundle_inputs():
     pts, _ = helix(n=50)
     a = jnp.full((1, 1, 50), 0.3)
