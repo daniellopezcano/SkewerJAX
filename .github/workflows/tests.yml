@@ -25,5 +25,10 @@ jobs:
           pip install -e ".[dev,simulations]"
       - name: Lint
         run: ruff check .
+      - name: Basic checks (scripts/checks; the TNG50-4 one skips without the data)
+        run: |
+          python scripts/checks/check_install.py
+          python scripts/checks/check_toy.py
+          python scripts/checks/check_tng.py
       - name: Fast tests (CPU)
         run: pytest -m "not slow and not tng and not gpu and not fake_spectra"

@@ -1,7 +1,7 @@
 """Cell selection (layer 4): streaming k-d tree selection of the gas cells of a snapshot that can reach a set of paths.
 
-The selection rule, its radii (``"voronoi"``: 2.5 V^(1/3) + ds/2; ``"tophat"``: V^(1/3) + ds/2) and its back ends
-(``"cpu"``, ``"jztree"``, ``"auto"``) are ``core.selection``'s, the same for every source of cells; cells already in memory
+The selection rule and its radii (``"voronoi"``: 2.5 V^(1/3) + ds/2; ``"tophat"``: V^(1/3) + ds/2) are
+``core.selection``'s, the same for every source of cells; cells already in memory
 (a toy model, ``snapshot_cells``) go through ``core.select_cells``. This module applies the same rule to a snapshot
 streamed from disk, block by block: a periodic k-d tree is built on the *path points* (few: N_sk x N_pts) and each block
 of cells streamed by the reader (layer 1) is queried against it. Memory is bounded by one block of cells (``max_rows``)
@@ -21,9 +21,7 @@ from scipy.spatial import cKDTree
 from skewerjax.core.selection import (
     VORONOI_FACTOR,
     _nearest_distance_cpu,
-    _nearest_distance_jztree,
     path_tree,
-    resolve_backend,
     selection_radius,
 )
 from skewerjax.simulations.gas_cells import GasCells
@@ -96,13 +94,8 @@ _PREFILTER = {}
 
 
 def _prefilter(coords, masses, density, inv_h: float, n: int, vthr) -> np.ndarray:
-    """Mask of the candidates of one block (``_prefilter_kernel``; NumPy fallback without numba)."""
-    try:
-        run = _PREFILTER.setdefault("numba", _prefilter_kernel())
-    except ImportError:  # numba comes with exojax; without it the same test in NumPy
-        q = (np.asarray(coords) * inv_h).astype(np.int64) % n
-        v = np.asarray(masses, dtype=np.float64) / np.asarray(density, dtype=np.float64)
-        return v >= vthr[(q[:, 0] * n + q[:, 1]) * n + q[:, 2]]
+    """Mask of the candidates of one block (``_prefilter_kernel``, compiled once per process)."""
+    run = _PREFILTER.setdefault("numba", _prefilter_kernel())
     return run(coords, masses, density, float(inv_h), int(n), vthr, np.empty(coords.shape[0], dtype=np.bool_))
 
 
@@ -124,7 +117,6 @@ def select_cells_near_paths(
     mode: str = "voronoi",
     max_rows: int = 4_000_000,
     workers: int = -1,
-    backend: str = "cpu",
     return_info: bool = False,
 ) -> GasCells:
     """Stream the snapshot and keep the cells that can contribute to any of ``paths``.
@@ -140,11 +132,8 @@ def select_cells_near_paths(
     workers : threads (-1: all cores). The blocks of every file are processed in parallel, each by one thread (read
         through ``reader.memmaps``, prefilter, k-d tree query, read of the selected rows); a reader without memory maps,
         or a dataset that is not contiguous, falls back to h5py reads (serialised by h5py's lock).
-    backend : "cpu" (default, scipy cKDTree), "jztree" (CUDA GPU; ImportError / RuntimeError if jztree or a CUDA
-        device is missing; sequential) or "auto" (``resolve_backend``). Every back end selects the same cells.
-
     return_info : also return dict(n_gas, n_blocks, n_candidates (cells left by the prefilter), n_selected, ds_cMpc,
-        backend, threads, timings {read, prefilter, query, read_selected} [s] (each stage's share of the wall time: the
+        threads, timings {read, prefilter, query, read_selected} [s] (each stage's share of the wall time: the
         stages of different blocks overlap), thread_seconds (the same, summed over the threads), time_s).
 
     Returns
@@ -159,36 +148,27 @@ def select_cells_near_paths(
     hdr = reader.header
     box = hdr.box_cMpc
     pts, tree, ds = path_tree(paths, box)
-    backend = resolve_backend(backend)
     threads = (os.cpu_count() or 1) if workers == -1 else max(int(workers), 1)
     tm = dict(read=0.0, prefilter=0.0, query=0.0, read_selected=0.0)
-    if backend == "jztree":
-        parts, n_cand, n_blocks = _select_jztree(reader, pts, tree, box, ds, mode, max_rows, rest, tm)
-    else:
-        t = time.perf_counter()
-        # r_cap: ten mean cell spacings, far beyond the radius of all but the largest void cells
-        grid = _PathDistanceGrid(tree, pts, box, r_cap=10.0 * box / max(hdr.n_gas, 1) ** (1.0 / 3.0), workers=workers)
-        grid.vthr = grid.volume_thresholds(mode, ds, hdr.code_length_cMpc)
-        tm["prefilter"] += time.perf_counter() - t
-        tasks = [
-            (fi, r0, min(n, r0 + max_rows))
-            for fi in range(hdr.n_files)
-            for n in [reader.n_rows(fi)]
-            for r0 in range(0, n, max_rows)
-        ]
-        job = lambda task: _select_block(reader, task, grid, tree, ds, mode, rest)
-        if threads > 1:
-            from concurrent.futures import ThreadPoolExecutor
+    t = time.perf_counter()
+    # r_cap: ten mean cell spacings, far beyond the radius of all but the largest void cells
+    grid = _PathDistanceGrid(tree, pts, box, r_cap=10.0 * box / max(hdr.n_gas, 1) ** (1.0 / 3.0), workers=workers)
+    grid.vthr = grid.volume_thresholds(mode, ds, hdr.code_length_cMpc)
+    tm["prefilter"] += time.perf_counter() - t
+    tasks = [(fi, r0, min(n, r0 + max_rows)) for fi in range(hdr.n_files) for n in [reader.n_rows(fi)] for r0 in range(0, n, max_rows)]
+    job = lambda task: _select_block(reader, task, grid, tree, ds, mode, rest)
+    if threads > 1:
+        from concurrent.futures import ThreadPoolExecutor
 
-            with ThreadPoolExecutor(max_workers=threads) as pool:
-                results = list(pool.map(job, tasks))
-        else:
-            results = [job(task) for task in tasks]
-        parts = [r[0] for r in results if r[0] is not None]
-        n_cand, n_blocks = sum(r[1] for r in results), len(tasks)
-        for r in results:
-            for k, v in r[2].items():
-                tm[k] += v
+        with ThreadPoolExecutor(max_workers=threads) as pool:
+            results = list(pool.map(job, tasks))
+    else:
+        results = [job(task) for task in tasks]
+    parts = [r[0] for r in results if r[0] is not None]
+    n_cand, n_blocks = sum(r[1] for r in results), len(tasks)
+    for r in results:
+        for k, v in r[2].items():
+            tm[k] += v
     n_sel = sum(len(p) for p in parts)
     if n_sel == 0:
         raise RuntimeError(
@@ -205,8 +185,7 @@ def select_cells_near_paths(
         n_candidates=n_cand,
         n_selected=n_sel,
         ds_cMpc=ds,
-        backend=backend,
-        threads=threads if backend == "cpu" else 1,
+        threads=threads,
         timings={k: wall * v / total if total > 0 else 0.0 for k, v in tm.items()},
         thread_seconds=dict(tm),
         time_s=wall,
@@ -268,24 +247,3 @@ def _select_block(reader, task, grid: _PathDistanceGrid, tree, ds: float, mode: 
     tm = dict(read=t1 - t, prefilter=t2 - t1, query=t3 - t2, read_selected=t4 - t3)
     logger.debug("select_cells_near_paths: file %d rows %d-%d: %d candidates, %d selected", fi, r0, r1, idx.size, sel.size)
     return cells, int(idx.size), tm
-
-
-def _select_jztree(reader, pts, tree, box, ds, mode, max_rows, rest, tm) -> tuple:
-    """The sequential stream of the "jztree" back end (the distances on the GPU): (parts, n_candidates, n_blocks)."""
-    parts, n_cand, n_blocks = [], 0, 0
-    t = time.perf_counter()
-    for fi, r0, base in reader.iter_blocks(GEOMETRY_DATASETS, max_rows=max_rows):
-        vol = reader.volumes_cMpc3(base["Masses"], base["Density"])
-        t1 = time.perf_counter()
-        tm["read"] += t1 - t
-        pos, rad = reader.positions_cMpc(base["Coordinates"]), selection_radius(np.cbrt(vol), mode, ds)
-        sel = np.nonzero(_nearest_distance_jztree(pts, pos, box, tree, rad) <= rad)[0]
-        t3 = time.perf_counter()
-        tm["query"] += t3 - t1
-        n_cand += vol.shape[0]
-        if sel.size:
-            parts.append(read_selected(reader, fi, r0, sel, base, rest))
-        n_blocks += 1
-        t = time.perf_counter()
-        tm["read_selected"] += t - t3
-    return parts, n_cand, n_blocks

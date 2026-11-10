@@ -6,8 +6,6 @@ the first bad index) are only computed when a check fails. Traced values (inside
 
 from __future__ import annotations
 
-import warnings
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -64,9 +62,3 @@ def check_positive_int(name: str, x) -> None:
 
 _WARNED = set()
 
-
-def warn_once(key: str, message: str, stacklevel: int = 3) -> None:
-    """``warnings.warn(message)`` the first time ``key`` is seen in this process."""
-    if key not in _WARNED:
-        _WARNED.add(key)
-        warnings.warn(message, stacklevel=stacklevel)

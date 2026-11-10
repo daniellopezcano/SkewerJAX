@@ -1,7 +1,6 @@
 """Summary statistics: P1D / xi1D / P3D recovery of Gaussian random fields, the exact decomposition by order and line
 pair, the shift signature of a second line, the linear-flux McDonald form and the McDonald / Ma contamination fits
-(review notes, P1D, xi1D and Sec. Overflux; formerly ``scripts/validation/check_summary_statistics.py``, same
-tolerances; 100 skewers and a 16^3 grid by default, 500 and 32^3 with the ``slow`` marker)."""
+(review notes, P1D, xi1D and Sec. Overflux; 100 skewers and a 16^3 grid by default, 500 and 32^3 with the ``slow`` marker)."""
 
 from types import SimpleNamespace
 
@@ -560,3 +559,28 @@ def test_periodic_ranges_of_the_statistics():
     ov = DeltaFieldBuilder(rng.uniform(0.1, 1.0, (1, 5, 64))).build()
     st = OverfluxStatistics1D(ov, dv).compute_xi1d()
     assert np.max(np.abs(np.asarray(st.lags))) == pytest.approx(64 * dv / 2), "centred lags within +- v_per / 2"
+
+
+def test_the_line_cross_term_C_is_resolved_in_any_precision():
+    """C = T_bar / prod_j T_bar_j - 1 of a strong and a weak, correlated line is ~1e-6: below the rounding of float32
+    means. ``DeltaFieldBuilder`` and ``ensemble_mean_transmissions`` form the means and C in float64 on the host, so C
+    equals its float64 value and C = sum_{|A| >= 2} <delta_A> holds far below C, whatever the precision of the fields."""
+    from skewerjax.config import real_dtype
+    from skewerjax.summary_stats import mean_transmissions, overflux_check
+
+    rng = np.random.default_rng(11)
+    g = rng.normal(size=(64, 512))
+    tau = np.stack([0.3 * np.exp(0.8 * g), 2e-3 * np.exp(0.8 * np.roll(g, 3, axis=1))])  # Lya-like, a weak metal
+    T64 = np.exp(-tau)
+    Tb64 = mean_transmissions(T64, "global")
+    C64 = Tb64[-1, 0] / np.prod(Tb64[:-1, 0]) - 1.0
+    ov = DeltaFieldBuilder(jnp.asarray(tau, real_dtype()), labels=["a", "b"], mean="global").build()
+    assert ov.C_per_pixel.dtype == np.float64 and 1e-7 < abs(C64) < 1e-5
+    np.testing.assert_allclose(ov.C_per_pixel, C64, rtol=1e-3)  # the float32 rounding of tau only
+    pair = float(np.mean(np.asarray(ov.delta_terms["ab"], dtype=np.float64)))
+    assert abs(pair - float(ov.C_per_pixel[0, 0])) < 1e-2 * abs(C64)
+    T32 = T64.astype(np.float32)  # float32 transmissions, as a float32 run gives them
+    Tb = np.broadcast_to(mean_transmissions(T32, "global")[None, :, None, :], (1, 3) + T32.shape[1:])
+    delta = np.concatenate([T32, T32.prod(0, keepdims=True)])[None] / Tb - 1.0
+    chk = overflux_check(delta, Tb, "global")
+    assert abs(chk["C"] - C64) < 1e-3 * abs(C64) and chk["C_error"] < 1e-3 * abs(C64)

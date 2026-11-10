@@ -24,7 +24,7 @@ from skewerjax.simulations.maps import slab_projection, voronoi_slice
 from skewerjax.simulations.readers import TNG_COSMOLOGY, ArepoHDF5Reader, SnapshotHeader
 from skewerjax.simulations.selection import select_cells_near_paths
 from skewerjax.simulations.snapshot_cells import GAS_SPECIES, gas_to_cells, select_cells_in_region, snapshot_cells
-from skewerjax.simulations.snapshot_skewers import ExtractionOptions, IntegrationOptions, SimulationSkewers, cached
+from skewerjax.simulations.snapshot_skewers import ExtractionOptions, IntegrationOptions, SimulationSkewers
 from skewerjax.simulations.toy_boxes import LINE_IDS, ToyBoxes
 from skewerjax.simulations.toy_cells import grf_cells, interpolate_periodic
 

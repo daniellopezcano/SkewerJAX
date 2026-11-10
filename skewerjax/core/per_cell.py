@@ -10,7 +10,7 @@ is the column-weighted mean of its pieces'.
   (at most half the grid each way when periodic), the cell adds a pixel up to and including the first one that
   receives less than ``tautail`` from it.
 
-**Windows (since 2026-11).** The walk makes each cell's support finite, so a cell is evaluated only on a window of
+**Windows.** The walk makes each cell's support finite, so a cell is evaluated only on a window of
 pixels around its centre pixel, not on the whole grid: the window is sized from the cell's peak optical depth and its
 damping wing (``_window_estimate``), rounded up to a level of ``WINDOW_LEVELS``. A cell whose walk reaches the edge of
 its window while still above ``tautail`` is flagged and evaluated again with the next level, until its walk stops inside
@@ -435,9 +435,3 @@ def _run_level(
         flags[part] = np.asarray(f)[:m]
     return flags
 
-
-def _ranges(starts, sizes) -> np.ndarray:
-    """concatenate(arange(s, s + n) for s, n in zip(starts, sizes)), vectorised."""
-    total = int(sizes.sum())
-    rep = np.repeat(starts - np.concatenate([[0], np.cumsum(sizes)[:-1]]), sizes)
-    return np.arange(total) + rep

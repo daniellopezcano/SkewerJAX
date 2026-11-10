@@ -1,8 +1,8 @@
 """The Voigt function V(x; sigma, gamma) (``core.voigt``; review notes, Eq. line_profile).
 
-* ExoJAX (the default) and the FFT convolution against scipy's Faddeeva ``wofz``; unit area; the Gaussian and
-  Lorentzian limits; finite gradients (formerly ``scripts/validation/check_voigt.py``, same tolerances);
-* Harris' expansion (``voigt="harris"``, the default of tau since 2026-11): the first order below a = 1e-3 (fake_spectra's
+* ExoJAX (the exact function: the reference of Harris' expansion and its fallback beyond a = 0.05) and the FFT
+  convolution against scipy's Faddeeva ``wofz``; unit area; the Gaussian and Lorentzian limits; finite gradients;
+* Harris' expansion (``voigt="harris"``, the default of tau): the first order below a = 1e-3 (fake_spectra's
   fastvoigt.h), the fourth order up to a = 0.05, the exact function beyond, against wofz; its H1 against fake_spectra's
   table, shapes, jit / vmap / grad, and tau through ``compute_optical_depth``;
 * the Voigt modes of the line profiles and of tau (``line_profiles.PROFILE_MODES``): any other mode raises.

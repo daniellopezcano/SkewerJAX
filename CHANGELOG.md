@@ -3,6 +3,51 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — cleanup, exact straight-skewer pieces, notebook 13 at 128² skewers, scaling notebook 14 (stem 20261108)
+
+### Added
+- `core.deposition`: the **exact lower envelope** of the Voronoi cells along straight paths (`straight_paths`,
+  `_voronoi_envelope`): along x_0 + s t the nearest generator is the lowest of the lines -2 u s + u^2 + r^2, so the cells
+  crossed and their crossings come from a convex-hull sweep (numba) over a provably complete candidate set (the generators
+  within d_1 + delta of the points); `voronoi_segments(method="auto" | "envelope" | "sampled")`, "auto" the default (the
+  envelope for straight paths, the sampled construction for curved ones).
+- `comparison.scaling` and `scripts/benchmarks/benchmark_scaling.py`: the scaling benchmark of notebook 14 (blocks A, B,
+  C1, C2; one process and one JSON record per point in `benchmarks/results/scaling/`, resumable); notebook
+  `14_comparison_fake_spectra_scaling`; `plotting.plot_stage_grid`, `plot_scaling_block`, `plot_flux_checks`,
+  `SCALING_ENTRY_STYLES`.
+- `scripts/checks/`: `check_install.py`, `check_toy.py`, `check_tng.py` (the basic checks; also in CI).
+- `numba` declared as a dependency (the selection prefilter, the envelope).
+
+### Changed
+- `summary_stats.overflux`: the mean transmissions and C = T_bar / prod_j T_bar_j - 1 are formed in float64 on the host
+  (`DeltaFieldBuilder`, `ensemble_mean_transmissions`, `overflux_check`, NumPy input of `mean_transmissions`), so C ~ 1e-7
+  of weak metal lines is resolved in float32 runs.
+- Notebook 13 runs 128^2 skewers of TNG50-2 (fake_spectra runs up to 256^2 within 20 min), four entries (the matched
+  GPU entry removed), SkewerJAX in batches of 1024 skewers; notebook 14 → 15 (`15_comparison_fake_spectra_benchmark`).
+- `plotting`: no colour-map default outside the theme (8 `cmap="seismic"`, `plot_toy_fields`' "hot" and "managua" →
+  `CMAPS`), enforced by a static test; the order rows of the term figures hide orders below the rounding of the precision.
+- `RunClock` adds up repeated records of one run (batches).
+- `plotting.plot_scaling_block`: legends keep the panel-letter corner free; the speed-up axis is labelled within a
+  decade. Notebook 14 skips a block without records (a partial `RUN = True`).
+- Notebook 15: its takeaways and summary follow the refreshed quick records and name the preset of every number (the
+  full and quick presets measure different states of the package); its thread scan uses one preset.
+- Notebook 12: the `voigt="harris"` step (a no-op since the default) removed, steps 11–17 → 10–16. Notebook 04: the density
+  floored with the temperature (1 + delta >= 1e-3). Notebooks 04, 05, 07: notes on the algorithms.
+
+### Removed
+- The HDF5 result cache of `SimulationSkewers` (`cached`, `h5_write`, `h5_read`, `tau_key`, `name`, `cache`); fake_spectra's
+  save files go to temporary folders; `cache/toy_boxes` deleted.
+- The jztree selection back end (`backend=`, `selection_backend=`, `resolve_backend`, `jztree_available`).
+- `benchmarks/results/timing_baseline_20261107.json` and the before/after bars of `plot_stage_speedups`.
+- Dead code: `plotting._symlog_linear`, `_band_handle`, `shade_outside_window`, `echo_scales`;
+  `reference_data.P1D_DESI_DR1_Z22`, `_Z30`; `snapshot_skewers.relevant_options`; `validation.warn_once`;
+  `per_cell._ranges`; the NumPy fallback of the selection prefilter.
+- `scripts/verify_install.py`, `scripts/dev/run_tests.py` and `pytest_shim/`, `scripts/figures/`.
+
+### Fixed
+- `tests/utils/test_dag.py::test_plot_dag_routes_and_keys` (the current layout), `test_toy_box_figures` (the analytic input
+  is an option), the theme colour maps: the suite is green in both precisions.
+
 ## Unreleased — float32 by default, Harris by default, CPU/GPU parallelism, profile-driven optimisation (stem 20261107)
 
 ### Added

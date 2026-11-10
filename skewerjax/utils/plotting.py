@@ -583,17 +583,6 @@ def add_panel_letters(axes, x: float = 0.012, y: float = 0.975, size: int = 18, 
         )
 
 
-def shade_outside_window(ax, v, period: float, end: str, **shade):
-    """Shade the part of a velocity axis ``v`` [km/s] outside the window [0, P) at one ``end`` ("start": v < 0, "end":
-    v >= P) and mark the window's edge (dash-dot); the x limits are set to the axis."""
-    v = np.asarray(v, dtype=float)
-    shade = dict(dict(color=PALETTE["grey"], alpha=0.22, lw=0), **shade)
-    edge = 0.0 if end == "start" else float(period)
-    ax.axvspan(*((v[0], edge) if end == "start" else (edge, v[-1])), **shade)
-    ax.axvline(edge, color=DIM, ls="-.", lw=1.8)
-    ax.set_xlim(v[0], v[-1])
-
-
 def residual_band(ax, tol: float, label: str | None = None, zero: bool = True):
     """Zero line and a shaded +/- ``tol`` band on a residual panel."""
     if zero:
@@ -711,27 +700,6 @@ def _symlog_decades(ax, linthresh: float):
     ax.set_yticks(sorted(ticks))
     ax.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(ten_power_formatter))
     ax.yaxis.set_minor_locator(mpl.ticker.NullLocator())
-
-
-def _symlog_linear(ax, linthresh: float, linscale: float = 2.5):
-    """A symmetric-log y axis whose linear part, |y| < linthresh, keeps most of the height (``linscale``), with nice
-    linear ticks inside, decade ticks outside and dashed lines at +/- linthresh."""
-    ax.set_yscale("symlog", linthresh=linthresh, linscale=linscale)
-    lo, hi = ax.get_ylim()
-    inner = mpl.ticker.MaxNLocator(nbins=4, symmetric=True).tick_values(-linthresh, linthresh)
-    inner = inner[np.abs(inner) < linthresh]
-    top = max(abs(lo), abs(hi))
-    exps = np.arange(np.ceil(np.log10(linthresh)), np.floor(np.log10(top)) + 1)
-    outer = [sg * 10.0**e for e in exps for sg in (1.0, -1.0) if 10.0**e > linthresh and lo <= sg * 10.0**e <= hi]
-    ax.set_yticks(sorted(list(inner) + outer))
-    ax.yaxis.set_major_formatter(
-        mpl.ticker.FuncFormatter(
-            lambda y, pos: ten_power_formatter(y, pos) if abs(y) >= linthresh else f"{y:g}".replace("-", "−")
-        )
-    )
-    ax.yaxis.set_minor_locator(mpl.ticker.NullLocator())
-    for s in (-1.0, 1.0):
-        ax.axhline(s * linthresh, color=DIM, ls="--", lw=0.8)
 
 
 def plot_orders_superimposed(
@@ -1039,8 +1007,10 @@ def plot_terms_by_order(
     xc, by_order, by_order_e = _binned(x, ens[f"{kind}_order_each"], edges, x_bin=x_bin)
     scale = float(np.max(np.abs(by_order))) or 1.0
     wt = _xi1d_weight(xc, kind, quantity, kms_per_cMpc)
-    if orders is None:  # those drawn (P: k > 0, so not the order-0 term)
-        orders = [n for n in range(by_order.shape[0]) if np.max(np.abs(by_order[n])) > 1e-12 * scale]
+    if orders is None:  # those drawn (P: k > 0, so not the order-0 term); an order that vanishes is rounding (eps)
+        from skewerjax.config import eps
+
+        orders = [n for n in range(by_order.shape[0]) if np.max(np.abs(by_order[n])) > max(1e-12, eps()) * scale]
     if axs is None:
         fig, axs = plt.subplots(1, len(orders), figsize=figsize or (6.5 * len(orders), 6.5), layout="constrained")
     axs = np.atleast_1d(axs)
@@ -1229,7 +1199,9 @@ def _terms_figure(stats, kind, orders, kms_per_cMpc, unit, figsize, **kw):
     if orders is None:  # those with a non-zero contribution, without order 0 (P1D: k = 0 only; xi1D: a constant)
         o = np.abs(np.asarray(ens[f"{kind}_order"]))
         o = o[:, 1:] if kind == "P" else o
-        orders = [n for n in range(1, o.shape[0]) if o[n].max() > 1e-12 * o.max()]
+        from skewerjax.config import eps
+
+        orders = [n for n in range(1, o.shape[0]) if o[n].max() > max(1e-12, eps()) * o.max()]  # zero to rounding
     fig, axs = plt.subplots(
         len(orders), 1, figsize=figsize or (16, 5.5 * len(orders)), sharex=True, layout="constrained", squeeze=False
     )
@@ -1902,7 +1874,7 @@ def plot_slab(
     slab: dict,
     *,
     quantity: str = "sigma",
-    cmap="seismic",
+    cmap=None,
     vmin=None,
     vmax=None,
     colorbar: bool = True,
@@ -2278,7 +2250,7 @@ def plot_overflux_p1d_xi(v, overflux, stats, k, P_tot, P_ll, fit, *, skewer: int
 
 
 # --------------------------------------------------------------------------- Gaussian random fields (notebook 04)
-def plot_grf_draws(draws, titles, *, width_ratios=(1.3, 0.75, 1.0), cmap="seismic", figsize=(24, 7.5)):
+def plot_grf_draws(draws, titles, *, width_ratios=(1.3, 0.75, 1.0), cmap=None, figsize=(24, 7.5)):
     """One draw of a ``PowerLawGRF`` per panel (notebook 04): a 1D field as a line, a 2D field as a map, a 3D field as
     its slice through the middle of the last axis (diverging maps centred on delta = 0, ``cmap``, default
     ``CMAPS["diverging"]``; "line of sight" on the y label when it is the map's y axis). draws : [(grf, field)]; titles :
@@ -2514,7 +2486,7 @@ def plot_stage_times(ax, entries: dict, *, compile_s: dict | None = None, fracti
             ax.text(
                 left,
                 i,
-                f" {tot:.3g} s" + (f" (+{c:.2g} s compile)" if c > 0.05 else ""),
+                f" {_fmt_s(tot)}" + (f" (+{c:.2g} s JIT)" if c > 0.05 else ""),
                 va="center",
                 ha="left",
                 fontsize=FONT_MIN["legend"],
@@ -2525,38 +2497,176 @@ def plot_stage_times(ax, entries: dict, *, compile_s: dict | None = None, fracti
     return ax
 
 
-def plot_stage_speedups(ax, totals: dict, *, reference: str, before: dict | None = None):
-    """The total time of every entry (``totals`` = {label: seconds}, filled bars, log axis) with its speed-up over
-    ``reference`` written (> 1: faster than it), and ``before`` = {label: seconds} (outlined bars underneath, e.g. the
-    same entries before the optimisation) with the gain."""
+def _fmt_s(t: float) -> str:
+    """A duration [s] for the bar labels: 3 significant digits, thousands with a separator."""
+    return f"{t:,.0f} s" if t >= 100 else f"{t:.3g} s"
+
+
+def plot_stage_speedups(ax, totals: dict, *, reference: str, colors: dict | None = None):
+    """The total time of every entry (``totals`` = {label: seconds}, bars on a log axis) with its speed-up over
+    ``reference`` written (> 1: faster than it). ``colors`` {label: colour} (default: the reference grey, the others the
+    colour of the tau sum); an entry whose label contains "matched" is hatched."""
     ref = float(totals[reference])
     labels = list(totals)
-    seen = set()  # one legend entry per kind of bar, whichever entry draws it first
-
-    def once(name):
-        return None if name in seen or seen.add(name) else name
-
     for i, lab in enumerate(labels):
-        if before and lab in before:
-            ax.barh(i, before[lab], height=0.8, color="none", edgecolor=DIM, lw=1.5, hatch="//", label=once("before"))
-        ax.barh(
-            i,
-            totals[lab],
-            height=0.55,
-            color=BENCH_STAGE_COLORS["tau"] if lab != reference else PALETTE["grey"],
-            edgecolor=BG,
-            label=once("now") if lab != reference else None,
-        )
-        x = max(totals[lab], before.get(lab, 0.0) if before else 0.0)
-        txt = f" {totals[lab]:.3g} s" + ("" if lab == reference else f": {ref / totals[lab]:.2g}x {reference}'s speed")
-        if before and lab in before and lab != reference:
-            txt += f", {before[lab] / totals[lab]:.2g}x faster than before"
-        ax.text(x * 1.05, i, txt, va="center", ha="left", fontsize=FONT_MIN["legend"])
+        col = (colors or {}).get(lab, BENCH_STAGE_COLORS["tau"] if lab != reference else PALETTE["grey"])
+        ax.barh(i, totals[lab], height=0.6, color=col, edgecolor=BG, hatch="//" if "matched" in lab else None)
+        txt = f" {_fmt_s(totals[lab])}" + ("" if lab == reference else f": {ref / totals[lab]:.2g}x {reference}")
+        ax.text(totals[lab] * 1.05, i, txt, va="center", ha="left", fontsize=FONT_MIN["legend"])
     ax.set_xscale("log")
     ax.set_yticks(range(len(labels)), labels, fontsize=FONT_MIN["legend"])
     ax.invert_yaxis()
     ax.set_xlabel("total wall time per run [s]")
     return ax
+
+
+# --------------------------------------------------------------------------- notebooks 13 and 14: stages and scaling
+SCALING_ENTRY_STYLES = {  # colour = code and device (as BENCH_DEVICES), line style = mode; fake_spectra the reference
+    "fake_spectra": dict(color=PALETTE["grey"], ls="-", lw=2.4, marker="s"),
+    "SkewerJAX default, CPU": dict(color=PALETTE["blue"], ls="-", lw=2.2, marker="o"),
+    "SkewerJAX matched, CPU": dict(color=PALETTE["blue"], ls="--", lw=2.2, marker="o", mfc="none"),
+    "SkewerJAX default, GPU": dict(color=PALETTE["green"], ls="-", lw=1.4, marker="^"),
+}
+
+
+def plot_stage_grid(rows, *, labels=None, reference: str = "fake_spectra", jit=None, figsize=None):
+    """Where the time goes, one row per configuration (notebooks 13 and 14): (a) the median wall time of every entry
+    stacked by stage, its total and JIT time written after the bar; (b) each stage's share; (c) the total on a log axis
+    in the colour of the entry (``SCALING_ENTRY_STYLES``; the matched mode hatched) with the speed-up over ``reference``. ``rows``: [{entry: {stage: seconds}}]; ``labels``: one title per row; ``jit``:
+    [{entry: seconds}] or None. The entries share the rows' order, the stages one legend below. Returns (fig, axs (n, 3))."""
+    n = len(rows)
+    fig, axs = plt.subplots(
+        n, 3, figsize=figsize or (22, 1.6 + 2.9 * n), squeeze=False, layout="constrained", gridspec_kw={"width_ratios": [1.25, 1.0, 1.05]}
+    )
+    for r, entries in enumerate(rows):
+        plot_stage_times(axs[r, 0], entries, compile_s=None if jit is None else jit[r])
+        axs[r, 0].set_xlim(0.0, 1.75 * max(sum(st.values()) for st in entries.values()))
+        plot_stage_times(axs[r, 1], entries, fraction=True)
+        axs[r, 1].set_xlim(0.0, 100.0)
+        totals = {e: float(sum(st.values())) for e, st in entries.items()}
+        colors = {e: SCALING_ENTRY_STYLES.get(e, {}).get("color", PALETTE["grey"]) for e in totals}
+        plot_stage_speedups(axs[r, 2], totals, reference=reference if reference in totals else next(iter(totals)), colors=colors)
+        lo, hi = min(totals.values()), max(totals.values())
+        axs[r, 2].set_xlim(lo / 2.0, hi * 40.0)
+        for c in (1, 2):
+            axs[r, c].set_yticklabels([])
+        if labels is not None:
+            axs[r, 0].set_title(labels[r], loc="left", fontsize=FONT_MIN["title"])
+        if r < n - 1:
+            for c in range(3):
+                axs[r, c].set_xlabel("")
+    handles, names = axs[0, 0].get_legend_handles_labels()
+    fig.legend(handles, names, loc="outside lower center", ncol=len(names), frameon=False, fontsize=FONT_MIN["legend"])
+    return fig, axs
+
+
+def plot_scaling_block(x, rows, *, xlabel: str, reference: str = "fake_spectra", reference_total=None, entries=None, figsize=None):
+    """How every stage and the total scale with one parameter ``x`` (notebook 14): one panel per entry, the median time of
+    each stage (colour) and the total (thick) against x on log axes, each with the slope of log t against log x in the
+    legend; then the totals of every entry, and their speed-ups over ``reference`` (> 1: faster). ``rows``: one
+    {entry: {stage: seconds}} per x. ``reference_total``: a fixed reference time (e.g. fake_spectra's run when the block
+    does not vary it), drawn as a horizontal line. Returns (fig, axs (2, 3))."""
+    from skewerjax.comparison.benchmark import STAGES
+    from skewerjax.comparison.scaling import fit_slope
+
+    x = np.asarray(x, dtype=np.float64)
+    entries = entries or list(dict.fromkeys(e for r in rows for e in r))
+    fig, axs = plt.subplots(2, 3, figsize=figsize or (22, 13), layout="constrained", sharex=True)
+    panels = list(axs.ravel())
+    for ax in panels:  # keep the corner of the panel letter free: "best" counts each overlapped rectangle once and each
+        for _ in range(25):  # line vertex once, so 25 invisible rectangles there outweigh the few vertices of a corner
+            ax.add_patch(mpl.patches.Rectangle((0.0, 0.86), 0.12, 0.14, transform=ax.transAxes, fill=False, lw=0, alpha=0))
+    tot = {e: np.array([sum(r[e].values()) if e in r else np.nan for r in rows]) for e in entries}
+    for ax, e in zip(panels[:4], entries):
+        for s in STAGES:
+            y = np.array([r[e].get(s, 0.0) if e in r else np.nan for r in rows])
+            if not np.any(y > 0.01 * np.nanmax(tot[e])):  # stages below 1 % of the total everywhere: left out
+                continue
+            ax.plot(x, np.where(y > 0, y, np.nan), color=BENCH_STAGE_COLORS[s], marker="o", ms=7, lw=2.0,
+                    label=f"{BENCH_STAGE_LABELS[s]}: slope {fit_slope(x, y):.2f}")
+        ax.plot(x, tot[e], color=FG, lw=3.2, marker="D", ms=8, label=f"total: slope {fit_slope(x, tot[e]):.2f}")
+        ax.set_title(e, fontsize=FONT_MIN["title"])
+        _legend(ax, loc="best", fontsize=FONT_MIN["legend"])
+    for ax in panels[len(entries) : 4]:
+        ax.set_visible(False)
+    ax = panels[4]
+    for e in entries:
+        ax.plot(x, tot[e], label=f"{e}: slope {fit_slope(x, tot[e]):.2f}", ms=8, **SCALING_ENTRY_STYLES.get(e, {}))
+    ref = tot.get(reference) if reference_total is None else np.full(x.shape, float(reference_total))
+    if reference_total is not None:
+        ax.axhline(float(reference_total), color=PALETTE["grey"], lw=2.4, ls=":", label=f"{reference} (fixed)")
+    ax.set_title("total", fontsize=FONT_MIN["title"])
+    _legend(ax, loc="best", fontsize=FONT_MIN["legend"])
+    ax = panels[5]
+    if ref is not None:
+        for e in entries:
+            if e == reference:
+                continue
+            ax.plot(x, ref / tot[e], label=e, ms=8, **SCALING_ENTRY_STYLES.get(e, {}))
+        ax.axhline(1.0, color=DIM, lw=1.2)
+        ax.set_title(f"speed-up over {reference} (> 1: faster)", fontsize=FONT_MIN["title"])
+        _legend(ax, loc="best", fontsize=FONT_MIN["legend"])
+    for k, ax in enumerate(panels):
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel(xlabel if k >= 3 else "")
+        ax.set_ylabel("speed-up" if k == 5 else "median wall time [s]")
+    if ref is not None:  # after the log scale (which resets the tickers): plain labels, also within one decade
+        panels[5].yaxis.set_major_locator(mpl.ticker.LogLocator(subs=(1.0, 2.0, 5.0)))
+        panels[5].yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda y, _: f"{y:g}"))
+        panels[5].yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
+    ymin = min(np.nanmin(np.where(np.asarray(l.get_ydata(), float) > 0, l.get_ydata(), np.nan)) for a in panels[:5] for l in a.lines if len(l.get_ydata()))
+    ymax = max(np.nanmax(l.get_ydata()) for a in panels[:5] for l in a.lines if len(l.get_ydata()))
+    for ax in panels[:5]:
+        ax.set_ylim(ymin / 1.5, ymax * 1.5)
+    return fig, axs
+
+
+def plot_flux_checks(columns, *, v_window=None, floor: float = 1e-12, figsize=None):
+    """The transmitted flux of one skewer and its residuals (notebook 14, in the spirit of notebook 12): one column per
+    comparison, rows (1) F of Lya, (2) |Delta F| of Lya and (3) |Delta F| of Si III against the column's reference, on
+    log axes (values below ``floor`` drawn at it). ``columns``: [dict(title, v [km/s], F {label: F_Lya}, dF {label:
+    (dF_Lya, dF_SiIII)}, style {label: Line2D keywords})]; a label containing "fake_spectra" is drawn as the reference
+    (thick and light, underneath). One legend for the figure, below it. ``v_window``: (v0, v1) [km/s] of the plots.
+    Returns (fig, axs (3, n), stats {(column title, label, line): (rms, max |dF|)} over every pixel)."""
+    n = len(columns)
+    fig, axs = plt.subplots(3, n, figsize=figsize or (max(7.3 * n, 14), 13), layout="constrained", sharex="col", squeeze=False,
+                            gridspec_kw={"height_ratios": [1.3, 1.0, 1.0]})
+    stats, handles = {}, {}
+    for j, col in enumerate(columns):
+        v = np.asarray(col["v"])
+        st = col.get("style", {})
+
+        def kw_of(lab, residual=False):
+            kw = {k: x for k, x in st.get(lab, {}).items() if k not in ("marker", "mfc", "ms")}
+            if "fake_spectra" in lab:
+                kw.update(MODE_STYLES["reference"], color=kw.get("color", PALETTE["grey"]), zorder=1)
+            elif residual:
+                kw["lw"] = min(kw.get("lw", 1.6), 1.6)
+            return kw
+
+        for lab, F in col["F"].items():
+            (h,) = axs[0, j].plot(v, F, label=lab, **kw_of(lab))
+            handles.setdefault(lab, h)
+        for lab, (d1, d2) in col["dF"].items():
+            for r, d, line in ((1, d1, "Lya"), (2, d2, "SiIII")):
+                d = np.abs(np.asarray(d, dtype=np.float64))
+                stats[(col["title"], lab, line)] = (float(np.sqrt(np.mean(d**2))), float(d.max()))
+                (h,) = axs[r, j].plot(v, np.maximum(d, floor), label=lab, **kw_of(lab, residual=True))
+                handles.setdefault(lab, h)
+        axs[0, j].set_title(col["title"], fontsize=FONT_MIN["title"])
+        axs[0, j].set_ylim(-0.05, 1.08)
+        for r, name in ((1, r"Ly$\alpha$"), (2, "Si III")):
+            axs[r, j].set_yscale("log")
+            axs[r, j].set_ylim(floor / 2, 2.0)
+            axs[r, j].set_ylabel(rf"$|\Delta F|$, {name}" if j == 0 else "")
+        axs[0, j].set_ylabel(r"$F$, Ly$\alpha$" if j == 0 else "")
+        axs[2, j].set_xlabel(r"$v$ [km s$^{-1}$]")
+        if v_window is not None:
+            axs[0, j].set_xlim(*v_window)
+    fig.legend(list(handles.values()), list(handles), loc="outside lower center", ncol=min(len(handles), 4), frameon=False,
+               fontsize=FONT_MIN["legend"])
+    return fig, axs, stats
 
 
 def plot_bench_accuracy(ax, rows, *, line: str = "HI-LyA", sims=("TNG50-4", "TNG50-3", "TNG50-2")):
@@ -4067,7 +4177,7 @@ def _velocity_key_box(ax, v_key: float, scale: float, *, pad: float = 0.016):
     )
 
 
-def _slice_image(ax, fields, L: float, *, species: str = "HI", z_index: int = 0, colorbar: bool = True, cmap="seismic", cax=None):
+def _slice_image(ax, fields, L: float, *, species: str = "HI", z_index: int = 0, colorbar: bool = True, cmap=None, cax=None):
     """The log number density of one species in the plane z = z_index dx (x across, y upwards), as panel (a1) of
     ``plot_toy_fields`` (``cmap``: default ``CMAPS["density"]``); returns the image. ``fields`` the toy fields (dict), or
     a map (n_x, n_y) of the density in the plane, pixel i centred on (i + 1/2) L / n (e.g. ``simulations.voronoi_slice``).
@@ -4106,8 +4216,8 @@ def plot_toy_fields(
     species=None,
     arrow_every: int = 8,
     centres: str = "nodes",
-    cmap="hot",
-    velocity_cmap="managua",
+    cmap=None,
+    velocity_cmap=None,
     figsize=None,
 ):
     """The gas of one toy box in the plane of the cell layer ``z_index`` of the third axis (notebook 08, A2): rows number
@@ -4222,7 +4332,7 @@ def plot_skewer_slice(
     species: str = "HI",
     highlight=None,
     n_arrows: int = 4,
-    cmap="seismic",
+    cmap=None,
     spacing: float | None = None,
     figsize=(12, 10.5),
 ):
@@ -4345,23 +4455,6 @@ def fold_periodic(x, period: float):
     periodic images are one separation: a line-of-sight lag beyond half the period re-enters closer to 0)."""
     m = np.mod(np.asarray(x, dtype=float), float(period))
     return np.minimum(m, float(period) - m)
-
-
-def echo_scales(r_bao: float, delta: float, box: float) -> dict:
-    """The characteristic separations of the cross term of two lines Delta apart along the line of sight (notebooks 10
-    and 11, Part D: one pair of lines), in the units of the inputs, with every line-of-sight component folded into [0, box / 2]
-    (``fold_periodic``): r_BAO; Delta; the BAO echo of the cross term at its ends on the line of sight (r_perp = 0:
-    |r_BAO - Delta| and r_BAO + Delta) and across it (r_perp = r_BAO, r_par = Delta: sqrt(r_BAO^2 + Delta^2)). Returns
-    {mathtext label: |r|}."""
-    r, d, L = float(r_bao), float(delta), float(box)
-    f = lambda x: float(fold_periodic(x, L))
-    return {
-        r"$r_{\rm BAO}$": f(r),
-        r"$\Delta$": f(d),
-        r"$|r_{\rm BAO} - \Delta|$": f(abs(r - d)),
-        r"$r_{\rm BAO} + \Delta$": f(r + d),
-        r"$\sqrt{r_{\rm BAO}^2 + \Delta^2}$": float(np.hypot(f(r), f(d))),
-    }
 
 
 def _mark_lines(ax, marks, *, color=None, ls=_MARK["ls"], lw=_MARK["lw"], labels: bool = True, y: float = 0.97):
@@ -4680,11 +4773,6 @@ def _contour_band(ax, x, y, M, E, levels, n_sigma: float = 1.0, **kw):
         )
 
 
-def _band_handle(n: int, what: str = "realisations", n_sigma: float = 1.0):
-    """The legend entry of ``_contour_band``."""
-    return mpl.patches.Patch(**_BAND, label=rf"measured $\pm {float(n_sigma):g}\sigma$ (error of the mean over {n} {what})")
-
-
 def _contours(ax, x, y, M, levels, fmt, **kw):
     """Iso-contours of M[y, x] on the bin centres, labelled with their value (None on a map smaller than 2 x 2 bins)."""
     if min(np.shape(M)) < 2:
@@ -4722,7 +4810,7 @@ def plot_kpar_kperp_maps(
     kperp_edges=None,
     n_sigma: float = 1.0,
     levels=None,
-    cmap="seismic",
+    cmap=None,
     kpar_scale: str = "log",
     kperp_scale: str = "log",
     k_marks=None,
@@ -4893,7 +4981,7 @@ def plot_rpar_rperp_maps(
     linthresh: float | None = None,
     linthresh_frac: float = 1e-2,
     linscale: float = 1.0,
-    cmap="seismic",
+    cmap=None,
     kms_per_cMpc: float | None = None,
     figsize=(14, 12.5),
 ):
@@ -5592,7 +5680,7 @@ def plot_overflux_rpar_rperp(
     linthresh: float | None = None,
     linthresh_frac: float = 1e-2,
     linscale: float = 1.0,
-    cmap="seismic",
+    cmap=None,
     unit: str = "km/s",
     theory=None,
     show: str = "measured",
@@ -5741,7 +5829,7 @@ def plot_overflux_kpar_kperp(
     kperp_edges=None,
     n_sigma: float = 1.0,
     levels=None,
-    cmap="seismic",
+    cmap=None,
     kpar_scale: str = "linear",
     kperp_scale: str = "linear",
     k_marks=None,

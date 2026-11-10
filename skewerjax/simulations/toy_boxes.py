@@ -29,7 +29,7 @@ from skewerjax.simulations.grf import PowerLawGRF, _bao_ratio_max
 from skewerjax.simulations.toy_cells import grf_cells
 
 LINE_IDS = ("HI-LyA", "SiIII-1206", "SiII-1193", "SiII-1190")  # the default lines (HI, SiIII, SiII): lines 1 .. 4 of the terms
-# Toy ratios n_X / n_HI per metal species (``ToyBoxes.metal_to_hi``): Si III as before (0.2); Si II an illustrative toy
+# Toy ratios n_X / n_HI per metal species (``ToyBoxes.metal_to_hi``): Si III 0.2; Si II an illustrative toy
 # choice, half of Si III, so that its two lines (f = 0.58 and 0.29, against 1.63 for Si III 1206) stay weaker than Si III
 METAL_TO_HI = {"SiIII": 0.2, "SiII": 0.1}
 VELOCITY_MODES = ("zero", "linear")  # ToyBoxes.velocity

@@ -1,7 +1,6 @@
 """tau through TNG50-4 snapshot 25 (read-only; ``tng`` marker): the exact frame a(x), the opt-in periodic spectrum
 (``velocity_period=True``), the integral of tau against the column, the sampling criterion and its convergence, P1D,
-the non-periodic default, curved paths, and Si III (formerly ``scripts/validation/check_tng_optical_depth.py``, same
-tolerances; the quick variant by default, the full one with the ``slow`` marker)."""
+the non-periodic default, curved paths, and Si III (the quick variant by default, the full one with the ``slow`` marker)."""
 
 import numpy as np
 import pytest

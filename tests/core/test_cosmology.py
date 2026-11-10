@@ -1,7 +1,6 @@
 """a(x) along a photon path (``core.Cosmology.solve_a_of_x``): the diffrax solution against the closed forms of
 radiation, matter and Lambda domination, forward and backward, at the default and at tight tolerances; a realistic
-background is monotonic and bracketed; densities must sum to 1 (review notes, Eq. dadx_general, Fig. a_of_x;
-formerly ``scripts/validation/check_cosmology.py``, same tolerances)."""
+background is monotonic and bracketed; densities must sum to 1 (review notes, Eq. dadx_general, Fig. a_of_x)."""
 
 import jax.numpy as jnp
 import numpy as np

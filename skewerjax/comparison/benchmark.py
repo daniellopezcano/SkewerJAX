@@ -163,19 +163,19 @@ class RunClock:
 
     @contextmanager
     def time(self, entry: str, stage: str, run: int):
+        """Time the block as ``stage`` of ``entry`` in ``run``; repeated blocks of one run add up (e.g. batches)."""
         t0 = time.perf_counter()
         try:
             yield
         finally:
-            runs = self.t.setdefault(entry, {}).setdefault(stage, [])
-            runs.extend([np.nan] * (run + 1 - len(runs)))
-            runs[run] = time.perf_counter() - t0
+            self.record(entry, stage, run, time.perf_counter() - t0)
 
     def record(self, entry: str, stage: str, run: int, seconds: float) -> None:
-        """A time measured elsewhere (e.g. a stage of a function's own timings) for one run (0: the warm-up)."""
+        """A time measured elsewhere (e.g. a stage of a function's own timings) for one run (0: the warm-up); repeated
+        records of one run add up."""
         runs = self.t.setdefault(entry, {}).setdefault(stage, [])
         runs.extend([np.nan] * (run + 1 - len(runs)))
-        runs[run] = float(seconds)
+        runs[run] = float(seconds) + (0.0 if np.isnan(runs[run]) else runs[run])
 
     def add(self, entry: str, stage: str, seconds, *, warmup: bool = True) -> None:
         """Times measured elsewhere, one per run: with ``warmup`` the first is the warm-up; without, all are timed

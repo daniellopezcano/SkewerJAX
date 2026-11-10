@@ -69,9 +69,10 @@ def p3d_order_spectra(f_w, order_ids, pref, n_orders: int):
     return jnp.stack(out)
 
 
-def _C_rows(C, shape) -> jnp.ndarray:
-    """C (1, N_v) shared by the samples, or (N_s, N_v) one row per sample, of a built overflux of ``shape`` (N_s, N_v)."""
-    C = jnp.asarray(C)
+def _C_rows(C, shape, dtype=None) -> jnp.ndarray:
+    """C (1, N_v) shared by the samples, or (N_s, N_v) one row per sample, of a built overflux of ``shape`` (N_s, N_v), in
+    ``dtype`` (that of the overflux fields; C itself is formed in float64 by ``DeltaFieldBuilder``)."""
+    C = jnp.asarray(C, dtype)
     C = C.reshape(1, -1) if C.ndim < 2 else C
     rows = 1 if C.shape[0] == 1 else shape[0]
     if C.shape[0] not in (1, shape[0]):

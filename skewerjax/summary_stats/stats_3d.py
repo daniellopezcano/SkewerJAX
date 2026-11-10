@@ -126,7 +126,7 @@ class OverfluxStatistics3D:
                 raise ValueError(f"`overflux` is missing required attribute '{attr}'.")
 
         total = jnp.asarray(overflux.total)
-        C_per_pixel = _C_rows(overflux.C_per_pixel, total.shape)
+        C_per_pixel = _C_rows(overflux.C_per_pixel, total.shape, total.dtype)
         if not bool(jnp.all(jnp.isfinite(C_per_pixel)) & jnp.all(jnp.abs(1.0 + C_per_pixel) > self.c_norm_min)):
             raise ValueError("The normalisation 1 + C(v) is not finite or vanishes at some pixel.")
         self.subset_keys = list(overflux.subset_keys)

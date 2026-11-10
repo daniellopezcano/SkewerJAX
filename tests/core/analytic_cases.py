@@ -1,5 +1,5 @@
 """The closed-form cases of uniform gas (review notes, Sec. analytic_no_expansion and radiation domination), shared by
-``test_optical_depth.py`` and ``scripts/figures/optical_depth_vs_analytic.py``: each returns (v [km/s], tau, the analytic
+``test_optical_depth.py``: each returns (v [km/s], tau, the analytic
 tau) for three lines. The gas is a set of cells whose generating points are the sampling points of the skewers: the
 Voronoi cell of a point of a straight skewer is its dual segment, so each skewer is cut into its dual segments, with the
 values of the closed forms (uniform density; one temperature per skewer). Imports nothing from pytest."""

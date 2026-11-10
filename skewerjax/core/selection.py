@@ -13,16 +13,11 @@ Selection radius of a cell c with cube side h_c = V_c^(1/3), for a path sampled 
   deposition checks this a posteriori, and ``tests/simulations/test_snapshot.py`` checks the selection on TNG50-4
   against a brute-force nearest-generator search over the whole snapshot.
 
-Back ends (``backend``): ``"cpu"`` (default) queries a scipy ``cKDTree``; ``"jztree"`` computes the same
-nearest-path-point distance on a CUDA GPU with JZ-TREE (``jztree.knn.knn`` with ``boxsize``, periodic;
-https://jstuecker.github.io/jztree/api.html), re-checking in float64 on the host the cells whose distance is
-within a relative ``1e-6`` of their radius, so that the selected set does not depend on the back end;
-``"auto"`` takes ``"jztree"`` when jztree imports and JAX sees a CUDA device, otherwise ``"cpu"``. jztree is
-optional: CPU-only installations never import it.
+The distances are k-d tree queries (scipy ``cKDTree``, periodic ``boxsize``) on the host.
 
 ``select_cells`` works on cells in memory (``core.Cells``, or any container with ``positions``, ``size_cMpc``,
 ``box`` and ``take``), whatever their source; ``skewerjax.simulations.select_cells_near_paths`` applies the same rule
-(``selection_radius`` and the back ends below) to a snapshot streamed from disk.
+(``selection_radius``) to a snapshot streamed from disk.
 """
 
 from __future__ import annotations
@@ -69,31 +64,6 @@ def selection_radius(size, mode: str, ds: float):
     raise ValueError(f"mode must be 'tophat' or 'voronoi', got {mode!r}.")
 
 
-def jztree_available() -> bool:
-    """True if jztree imports and JAX sees a CUDA device (the conditions of ``backend="jztree"``)."""
-    try:
-        import jax
-        import jztree  # noqa: F401
-
-        return any(d.platform == "gpu" for d in jax.devices())
-    except Exception:  # ImportError, or no GPU platform initialised
-        return False
-
-
-def resolve_backend(backend: str) -> str:
-    """ "cpu", "jztree" or "auto" -> "cpu" / "jztree"; "jztree" without jztree or a CUDA device raises."""
-    if backend not in ("cpu", "jztree", "auto"):
-        raise ValueError(f"backend must be 'cpu', 'jztree' or 'auto', got {backend!r}.")
-    if backend == "auto":
-        return "jztree" if jztree_available() else "cpu"
-    if backend == "jztree" and not jztree_available():
-        raise RuntimeError(
-            "backend='jztree' needs the optional package jztree (CUDA wheels, `pip install \"jztree[cuda12]\"`) "
-            "and a CUDA device visible to JAX; use backend='cpu' or 'auto'."
-        )
-    return backend
-
-
 def _query_workers(n: int, workers: int) -> int:
     """Threads of one k-d tree query of ``n`` points: ``workers``, except that -1 (all cores) is capped at one thread
     per 20 000 points (starting threads costs more than small queries)."""
@@ -126,25 +96,6 @@ def _nearest_distance_cpu(
     return d
 
 
-def _nearest_distance_jztree(
-    pts: np.ndarray, pos: np.ndarray, box: float, tree: cKDTree, rad: np.ndarray, margin: float = 1e-6
-) -> np.ndarray:
-    """The same distance from JZ-TREE on the GPU (k = 1 nearest path point, periodic ``boxsize``).
-
-    jztree's working precision is not documented, so the cells within ``margin`` (relative) of their radius are
-    re-measured in float64 with the host tree: the decision d <= r is then the CPU back end's for every cell.
-    """
-    import jax.numpy as jnp
-    import jztree
-
-    rnn, _ = jztree.knn.knn(jnp.asarray(pts), 1, boxsize=box, part_query=jnp.asarray(pos))
-    d = np.asarray(rnn, dtype=np.float64).reshape(-1)
-    border = np.abs(d - rad) <= margin * np.maximum(rad, 1.0)
-    if border.any():
-        d[border] = tree.query(pos[border], k=1)[0]
-    return d
-
-
 def path_tree(paths, box: float | None):
     """The path points of ``paths`` (N_sk, N_pts, 3) [cMpc] wrapped into the box, as (points (N_sk N_pts, 3), periodic
     ``cKDTree`` on them, the largest spacing ds of the paths [cMpc]): what every selection queries."""
@@ -153,15 +104,14 @@ def path_tree(paths, box: float | None):
     return pts, (cKDTree(pts) if box is None else cKDTree(pts, boxsize=box)), ds
 
 
-def select_cells(cells, paths, *, mode: str = "voronoi", workers: int = -1, backend: str = "cpu", return_info: bool = False):
+def select_cells(cells, paths, *, mode: str = "voronoi", workers: int = -1, return_info: bool = False):
     """The cells of ``cells`` that can reach any of ``paths`` (selection radius of the module docstring).
 
     cells : ``core.Cells`` (or any container with ``positions``, ``size_cMpc``, ``box`` and ``take``).
     paths : (N_sk, N_pts, 3) sampling points [cMpc], e.g. ``SkewerBundle.spatial_points``.
     mode : "voronoi" (default deposition) or "tophat" (spheres of radius V^(1/3)).
     workers : threads of the k-d tree queries (-1: all cores).
-    backend : "cpu" (default), "jztree" or "auto" (``resolve_backend``); every back end selects the same cells.
-    return_info : also return dict(n_cells, n_selected, indices (the selected cells in ``cells``), mode, backend,
+    return_info : also return dict(n_cells, n_selected, indices (the selected cells in ``cells``), mode,
         ds_cMpc (path spacing), radius_cMpc (min, max), box, time_s).
 
     Returns ``cells.take(selected)`` (and the info). ``RuntimeError`` if no cell is within reach (with the distance and
@@ -174,12 +124,7 @@ def select_cells(cells, paths, *, mode: str = "voronoi", workers: int = -1, back
     pts, tree, ds = path_tree(paths, box)
     pos = wrap_positions(cells.positions, box)
     rad = selection_radius(cells.size_cMpc, mode, ds)
-    backend = resolve_backend(backend)
-    d = (
-        _nearest_distance_jztree(pts, pos, box, tree, rad)
-        if backend == "jztree"
-        else _nearest_distance_cpu(tree, pos, rad, workers)
-    )
+    d = _nearest_distance_cpu(tree, pos, rad, workers)
     sel = np.nonzero(d <= rad)[0]
     if sel.size == 0:
         raise RuntimeError(no_cell_message(tree, pos, rad, box, ds))
@@ -191,20 +136,18 @@ def select_cells(cells, paths, *, mode: str = "voronoi", workers: int = -1, back
         n_selected=int(sel.size),
         indices=sel,
         mode=mode,
-        backend=backend,
         ds_cMpc=ds,
         radius_cMpc=(float(rad.min()), float(rad.max())),
         box=box,
         time_s=time.perf_counter() - t0,
     )
     logger.debug(
-        "select_cells: %d of %d cells within reach (%s radius %.3g-%.3g cMpc, ds = %.3g cMpc, %s back end), %.3f s",
+        "select_cells: %d of %d cells within reach (%s radius %.3g-%.3g cMpc, ds = %.3g cMpc), %.3f s",
         info["n_selected"],
         info["n_cells"],
         mode,
         *info["radius_cMpc"],
         ds,
-        backend,
         info["time_s"],
     )
     return (out, info) if return_info else out

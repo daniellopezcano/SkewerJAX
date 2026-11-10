@@ -14,7 +14,7 @@ neither imports the other; ``tests/test_import_graph.py`` checks it):
 * ``skewerjax.comparison`` (C): the benchmark against fake_spectra (uses the blocks above).
 
 Notebooks compose the realms. The subpackages are imported lazily (PEP 562): ``import skewerjax.summary_stats`` loads
-``core`` at most, while ``skewerjax.simulations`` and ``from skewerjax import simulations`` work as before.
+``core`` at most; ``skewerjax.simulations`` and ``from skewerjax import simulations`` load that subpackage on access.
 
 ``skewerjax.utils.plotting`` holds the shared figure style.
 

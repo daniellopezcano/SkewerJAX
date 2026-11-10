@@ -1,8 +1,7 @@
 """Line-centred velocity frames (review notes, relative line-centred velocity units): the sign of the reference-line
 shift (``core.wrap_to_ref_line``, ``core.velocities_in_line_frames``, ``compute_optical_depth(line_frame="reference")``):
 a feature at v0 in a line's own frame lands at v0 - delta_v on the reference frame, delta_v = c ln(lambda_ref /
-lambda_j). The shift is a change of axis: it wraps only with ``velocity_period``. (Formerly also
-``scripts/validation/check_line_frames.py``.)"""
+lambda_j). The shift is a change of axis: it wraps only with ``velocity_period``."""
 
 import jax.numpy as jnp
 import numpy as np

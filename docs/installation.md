@@ -68,7 +68,7 @@ in an existing clone), then, from the repository root:
 
 ```bash
 pip install -e .                    # the core (JAX for the CPU included): toy fields, tau, statistics, figures
-pip install -e ".[simulations]"     # + h5py: the snapshot readers and the result cache
+pip install -e ".[simulations]"     # + h5py: the snapshot readers
 pip install -e ".[plots]"           # + tol-colors, ipympl (optional figure extras)
 pip install -e ".[notebooks]"       # + Jupyter, ipympl, ipywidgets, nbconvert for the notebooks
 pip install -e ".[comparison]"      # + h5py, fake-spectra (PyPI), psutil: the benchmark; for notebook 12 see below
@@ -85,11 +85,6 @@ development install, run `pre-commit install` once (ruff, nbstripout and the fil
 - **fake_spectra** is needed only by notebook 12, the tests with the `fake_spectra` marker
   (`tests/comparison/test_fake_spectra.py`, `tests/core/test_fake_spectra_options.py`) and the benchmark; the package never
   imports it elsewhere. Install it as in the next section, in one environment with SkewerJAX.
-- **jztree** (JZ-TREE, CUDA-only neighbour search with periodic boxes) is optional: the GPU back end of the cell
-  selection (`select_cells_near_paths(..., backend="jztree" | "auto")`). It is not installed by default, and CPU-only
-  installations never import it; the default is SciPy's `cKDTree`. Its CUDA 12 wheels (`pip install "jztree[cuda12]"`,
-  jztree 1.1.0) require jax ≥ 0.8 and NumPy ≥ 2.2.6, which conflict with this environment (jax 0.6.2, NumPy < 2 for
-  ExoJAX): check with `pip install --dry-run` first, or use a separate environment.
 - **tol_colors** (Paul Tol's colour schemes) is optional: `skewerjax.utils.plotting` takes its "bright" scheme from it
   when it is installed and otherwise uses a vendored copy with the same values.
 - **ipympl** gives interactive figures in a live notebook (`plotting.use_backend()`); without it, figures are inline.
@@ -137,20 +132,22 @@ environment variable:
 ```bash
 export SKEWERJAX_DATA=/path/to/folder/with/TNG50-4   # DATA_DIR: holds TNG50-4/ (and TNG50-3/, TNG50-2/ for the benchmark)
 export SKEWERJAX_BENCHMARK_RAW=/path/to/raw          # BENCHMARK_RAW_DIR: per-configuration benchmark records
-export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the summary notebook 14 reads
+export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the summary notebook 15 reads
 ```
 
 Notebooks 08 and 10 recompute their toy boxes every time it runs and stores nothing.
 
 `DATA_DIR` defaults to `/home/STORAGE` (read only). The benchmark folders default to `benchmarks/raw` (one record per
 configuration in `benchmarks/raw/fake_spectra`, git-ignored) and `benchmarks/results`
-(`fake_spectra_benchmark.json`, the summary of every record that notebook 14 reads, committed); both are written by
+(`fake_spectra_benchmark.json`, the summary of every record that notebook 15 reads, committed); both are written by
 `scripts/benchmarks/benchmark_fake_spectra.py`.
 
 ## 5. Verify the installation
 
 ```bash
-python scripts/verify_install.py                                  # environment, devices, a tiny optical depth
+python scripts/checks/check_install.py                            # dependencies, JAX devices, the package imports
+python scripts/checks/check_toy.py                                # a toy box end to end (a few seconds)
+python scripts/checks/check_tng.py                                # one TNG50-4 skewer end to end (skipped without the data)
 pytest                                                            # the fast test suite (needs the dev extra)
 pytest -m "slow or not slow"                                      # every test, incl. the slow physics checks
 ```

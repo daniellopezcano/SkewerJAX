@@ -526,7 +526,6 @@ def compute_optical_depth(
     a_dagger: ArrayLike | None = None,
     ii_cosmology: int = 0,
     deposition: str = "voronoi",
-    selection_backend: str = "cpu",
     line_frame: str = "own",
     velocity_period=False,
     voigt: str = "harris",
@@ -558,7 +557,7 @@ def compute_optical_depth(
     cells : ``core.Cells`` holding every species of ``line_bundle`` (bundle sources only).
     a_dagger, ii_cosmology : reference scale factor of v_dagger (default: the bundle's ``a0``; scalar or (N_sk,)) and
         which cosmology of the bundle's scale factors (bundle sources only).
-    deposition, selection_backend : see ``core.absorbers.deposit`` (bundle sources only; default "voronoi", the exact
+    deposition : see ``core.absorbers.deposit`` (bundle sources only; default "voronoi", the exact
         pieces of the Voronoi cells in every dual segment); chord_weight : ``deposition="tophat_chords"`` only, the weight
         of each chord point (``core.deposition.tophat_chord_segments``).
     line_frame : "own" (default): each line on its own line-centred axis; "reference": every line evaluated directly on
@@ -570,7 +569,7 @@ def compute_optical_depth(
         [km/s] for every skewer. With a period P, every detuning v - v_c is replaced by its nearest image in
         [-P/2, P/2): a piece whose line centre falls outside the period absorbs at the other end, and the wings that
         cross one end re-enter at the other (only the nearest image is kept).
-    voigt : "harris" (default since stem 20261107; ``core.voigt.voigt_harris``: fake_spectra's first-order expansion in the
+    voigt : "harris" (default; ``core.voigt.voigt_harris``: fake_spectra's first-order expansion in the
         damping parameter a for a <= 1e-3, the fourth order up to a = 0.05, ExoJAX's exact function beyond; one batch per
         line) or "ExoJAX" (the exact function everywhere, ~1e-6 against wofz): ``line_profiles.PROFILE_MODES``. Any other
         value raises ``ValueError``; the FFT convolution and SciPy's wofz are standalone functions of ``core.voigt``.
@@ -692,7 +691,6 @@ def compute_optical_depth(
             a_dagger=a_dagger,
             ii_cosmology=ii_cosmology,
             deposition=deposition,
-            selection_backend=selection_backend,
             chord_weight=chord_weight,
             return_info=return_info,
         )

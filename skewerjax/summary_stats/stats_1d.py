@@ -111,7 +111,7 @@ class OverfluxStatistics1D:
     Pk_total_from_terms (N_k,), Pk_total_by_order {n: (N_k,)},
     Pk_total_from_terms_contributions {(A,B): (N_k,)} weighted, incl. ZERO_ORDER_KEY pairs
     xi_total, xi_total_from_terms (N_v,) centred; xi_total_per_sample (N_s, N_v) centred
-    xi_pair {(a,b): (N_v,)} raw FFT lag order (lag j dv, j = 0..N_v-1), as before
+    xi_pair {(a,b): (N_v,)} raw FFT lag order (lag j dv, j = 0..N_v-1)
     xi_total_by_order {n: (N_v,)}, xi_total_from_terms_contributions {(A,B): (N_v,)} centred
 
     Error bars: ``n_modes[k]`` counts full-grid modes (+k and -k separately) over all
@@ -140,7 +140,7 @@ class OverfluxStatistics1D:
                 raise ValueError(f"`overflux` is missing required attribute '{attr}'.")
 
         total = jnp.asarray(overflux.total)
-        C_per_pixel = _C_rows(overflux.C_per_pixel, total.shape)
+        C_per_pixel = _C_rows(overflux.C_per_pixel, total.shape, total.dtype)
         if not bool(jnp.all(jnp.isfinite(C_per_pixel)) & jnp.all(jnp.abs(1.0 + C_per_pixel) > self.c_norm_min)):
             raise ValueError("The normalisation 1 + C(v) is not finite or vanishes at some pixel.")
         self.subset_keys = list(overflux.subset_keys)

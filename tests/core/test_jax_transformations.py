@@ -1,8 +1,7 @@
 """JAX-readiness: every public numerical function of ``skewerjax.core`` (and the GRF of ``simulations``) gives the eager
 result under ``jax.jit`` and, batched over skewers (or keys, parameters), under ``jax.vmap``; the containers pass through
 jit as pytrees. Tolerance 1e-12 of the array scale (float64). The geometry of the route cells -> pieces (selection,
-deposition) runs on the host, so ``cell_pieces`` is computed once outside jit and the sum over its pieces under jit.
-(Formerly ``scripts/validation/check_jax.py``.)"""
+deposition) runs on the host, so ``cell_pieces`` is computed once outside jit and the sum over its pieces under jit."""
 
 import jax
 import jax.numpy as jnp

@@ -4,8 +4,8 @@
   frame as the shifted evaluation;
 * the closed forms of uniform gas (review notes, Sec. analytic_no_expansion and radiation domination): static natural
   and thermal lines to 1e-6 in F, radiation domination with thermal lines converging as N^-2, and the resolution check
-  that flags unresolved natural lines (formerly ``scripts/validation/check_optical_depth_analytic.py``; the figure:
-  ``scripts/figures/optical_depth_vs_analytic.py``; the cases: ``analytic_cases.py``);
+  that flags unresolved natural lines (the cases:
+  ``analytic_cases.py``);
 * the effective scale factor ``a_eff`` of the density conversion (None: a_p per piece; traced, differentiable);
 * the opt-in float32 kernel, the sharded tau (one and four CPU devices, bit for bit), jit of the pieces path;
 * on a GPU (``gpu`` marker): the same tau as on the CPU.

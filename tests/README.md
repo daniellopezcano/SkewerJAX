@@ -45,8 +45,8 @@ Markers (`pyproject.toml`):
 | `gpu` | needs a GPU visible to JAX (`JAX_PLATFORMS=cuda,cpu`) | skipped |
 | `fake_spectra` | needs fake_spectra importable | skipped |
 
-Without pytest (an environment where it cannot be installed), `python scripts/dev/run_tests.py [-m EXPR] [--all]
-[path ...]` runs the same tests with a minimal stand-in (`scripts/dev/pytest_shim`), with the same markers and default.
+Next to the suite, `scripts/checks/` holds three fast checks the repository must pass (`check_install.py`,
+`check_toy.py`, `check_tng.py`; the last one skips cleanly without the data).
 
 ## Regression references
 

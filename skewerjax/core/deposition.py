@@ -8,14 +8,15 @@ the cell's piece of the segment, the signed path offset of that piece's centroid
 Inside a piece the gas properties are constant; the core sums the optical depth over the pieces
 (``core.absorbers.cell_pieces``, ``core.optical_depth``).
 
-* ``voronoi_segments`` (SkewerJAX default): Arepo's own geometry. A point of space belongs to the
-  cell of its nearest mesh-generating point (TNG ``Coordinates``), so along the segment the gas is
-  piecewise constant and single valued. The pieces are found exactly: on a straight half-segment
-  A + t (B - A) the squared distance to generator g is |A - g|^2 + 2 t (A - g).(B - A) + t^2 |B - A|^2,
-  and the last term is common to all generators, so the nearest generator is the lower envelope of
-  *straight lines* in t. Every half-segment is sampled at ``n_sub`` sub-points labelled by a
-  periodic k-d tree, and every change of label is located at the exact crossing of the two
-  lines. Weight 1. ``cell_crossings`` joins the pieces of one cell in consecutive dual segments:
+* ``voronoi_segments`` (SkewerJAX default): Arepo's own geometry. A point of space belongs to the cell of its nearest
+  mesh-generating point (TNG ``Coordinates``), so along the path the gas is piecewise constant and single valued. On a
+  straight line x_0 + s t the squared distance to generator g is (s - u)^2 + r^2, u = t.(g - x_0), r its distance
+  from the line: s^2 is common to all generators, so the nearest one is the lower envelope of *straight lines*
+  -2 u s + u^2 + r^2. **Straight paths** (``straight_paths``) take that envelope directly: the cells crossed and their
+  exact crossings for the whole path in O(K log K) (K candidate generators), cut at the boundaries of the dual
+  segments. **Curved paths** are straight between consecutive points and their midpoints: every half-segment is
+  sampled at ``n_sub`` sub-points labelled by a periodic k-d tree, and every change of label is located at the exact
+  crossing of the two lines. Weight 1. ``cell_crossings`` joins the pieces of one cell in consecutive dual segments:
   the exact intersections of the path with the cells.
 * ``grid_segments``: the same pieces for a regular grid of cells (``cells.cells_on_grid``), whose cells are cubes
   centred on the nodes: the boundaries are the planes halfway between nodes, crossed at exact parameters along
@@ -155,6 +156,7 @@ def voronoi_segments(
     box: float | None,
     *,
     gas_size=None,
+    method: str = "auto",
     n_sub: int | None = None,
     max_sub: int = 4096,
     backend: str = "numpy",
@@ -164,70 +166,70 @@ def voronoi_segments(
 ) -> SegmentComponents:
     """Nearest-generating-point (Voronoi) deposition on the dual segments of ``points``.
 
-    Every half-segment is sampled at ``n_sub`` + 1 sub-points; each sub-point is labelled with its
-    nearest generator (periodic k-d tree over ``gas_positions``), and wherever two consecutive
-    labels differ the boundary between the two cells is located exactly (``_crossing``). The
-    result is exact as long as no cell is crossed in a chord shorter than a sub-interval; with
-    ``gas_size`` and ``n_sub=None``, ``n_sub`` makes every sub-interval shorter than 1/16 of
-    the smallest cell of ``gas_positions`` (capped at ``max_sub``); a grazed cell can then be
-    missed only over less than that length.
+    Two constructions of the same pieces:
+
+    * **envelope** (straight paths, exact): along a straight path the nearest generator at every s is the lower envelope
+      of straight lines in s (``_voronoi_envelope``): the cells crossed and their exact crossings, in O(K log K) per
+      path for K candidate generators, then cut at the boundaries of the dual segments.
+    * **sampled** (any path): every half-segment is sampled at ``n_sub`` + 1 sub-points, each labelled with its nearest
+      generator (periodic k-d tree over ``gas_positions``), and wherever two consecutive labels differ the boundary
+      between the two cells is located exactly (``_crossing``). Exact as long as no cell is crossed in a chord shorter
+      than a sub-interval; with ``gas_size`` and ``n_sub=None``, ``n_sub`` makes every sub-interval shorter than 1/16 of
+      the smallest cell of ``gas_positions`` (capped at ``max_sub``); a grazed cell can then be missed only over less
+      than that length.
 
     Parameters
     ----------
     points : (N_sk, N, 3) sampling points [cMpc] (unwrapped along the path).
     gas_positions : (M, 3) mesh-generating points [cMpc] in [0, box).
     box : periodic box [cMpc] or None.
-    gas_size : (M,) cell sizes V^(1/3) [cMpc] (to choose ``n_sub``).
-    backend : "numpy" (default: SciPy k-d tree labels, NumPy merging) or "jax" (the same algorithm in
-        JAX with static shapes, ``_voronoi_segments_jax``; identical cells, lengths equal to round-off).
-    chunk, k_chunk : "jax" only: consecutive points of a path per chunk and candidate generators per chunk
-        (doubled automatically until the candidate sets are provably complete).
-    threads : "numpy" only: threads over chunks of skewers (default: one per core, at most one per skewer); the result
-        does not depend on it.
+    gas_size : (M,) cell sizes V^(1/3) [cMpc] (to choose ``n_sub``, and the diagnostic below).
+    method : "auto" (default: the envelope for the straight paths, ``straight_paths``, the sampled construction for the
+        others), "envelope" (every path must be straight) or "sampled" (every path).
+    n_sub, max_sub, backend, chunk, k_chunk : the sampled construction only. ``backend``: "numpy" (SciPy k-d tree
+        labels, NumPy merging) or "jax" (the same algorithm in JAX with static shapes, ``_voronoi_segments_jax``;
+        identical cells, lengths equal to round-off); ``chunk``, ``k_chunk`` ("jax"): consecutive points of a path per
+        chunk and candidate generators per chunk (doubled automatically until the candidate sets are provably complete).
+    threads : host threads over chunks of skewers (default: one per core, at most one per skewer); the result does not
+        depend on it.
 
     Returns
     -------
-    SegmentComponents (weight 1); ``diagnostics`` holds ``n_sub``, the sub-interval relative to
-    the smallest cell and, with ``gas_size`` ("numpy"), ``max_distance_over_size``, the largest distance from a
-    sub-point to its nearest generating point in units of that cell's size (a warning when it exceeds
-    ``VORONOI_FACTOR`` without a periodic box: the paths leave the gas); for "jax", the candidate sizes used.
+    SegmentComponents (weight 1); ``diagnostics`` holds ``n_envelope`` and ``n_sampled`` (paths of each construction),
+    for the envelope the candidate images per path (``candidates_per_path``, mean), for the sampled one ``n_sub`` and
+    the sub-interval relative to the smallest cell; with ``gas_size``, ``max_distance_over_size``, the largest distance
+    from a point (envelope) or sub-point (sampled, "numpy") to its nearest generating point in units of that cell's size
+    (a warning when it exceeds ``VORONOI_FACTOR`` without a periodic box: the paths leave the gas).
     """
+    if method not in ("auto", "envelope", "sampled"):
+        raise ValueError(f"method must be 'auto', 'envelope' or 'sampled', got {method!r}.")
     if backend not in ("numpy", "jax"):
         raise ValueError(f"backend must be 'numpy' or 'jax', got {backend!r}.")
     pts = np.asarray(points, dtype=np.float64)
     n_sk, n_p = pts.shape[:2]
-    A, Bl, Bh = _halves(pts)
     gpos = wrap_positions(gas_positions, box)
     size = None if gas_size is None else np.asarray(gas_size, dtype=np.float64)
-    L_half = np.stack([np.linalg.norm(Bl - A, axis=-1), np.linalg.norm(Bh - A, axis=-1)], axis=1)  # (P, 2)
-    if n_sub is not None:
-        S = int(n_sub)
-    elif size is None:
-        S = 8
-    else:  # sub-interval <= 1/16 of the smallest cell near the paths
-        S = int(np.clip(np.ceil(16.0 * L_half.max() / max(size.min(), 1e-12)), 8, max_sub))
-    if backend == "jax":
-        cell, length, offset, kd = _voronoi_segments_jax(A, Bl, Bh, L_half, gpos, box, S, n_sk, chunk, k_chunk)
-        diag = dict(n_sub=S, sub_over_min_cell=float(L_half.max() / S / size.min()) if size is not None else None, **kd)
-        shp = (n_sk, n_p, cell.shape[-1])
-        return SegmentComponents(cell.reshape(shp), length.reshape(shp), offset.reshape(shp), 1.0, "voronoi", diag).compact()
+    straight = np.zeros(n_sk, bool) if method == "sampled" else straight_paths(pts)
+    if method == "envelope" and not straight.all():
+        raise ValueError(f"method='envelope' needs straight paths; {int((~straight).sum())} of {n_sk} are not (straight_paths).")
     tree = cKDTree(gpos, boxsize=box) if box is not None else cKDTree(gpos)
-    # the skewers in chunks, one thread each (one shared tree; NumPy and the tree queries release the GIL): the pieces of
-    # a skewer do not depend on the others, so the result is that of one call, bit for bit
     n_thr = max(1, min(os.cpu_count() or 1, n_sk)) if threads is None else max(1, int(threads))
-    bounds = np.linspace(0, n_sk, min(n_sk, 4 * n_thr) + 1).astype(int)
-    chunks = [slice(int(a), int(b)) for a, b in zip(bounds[:-1], bounds[1:]) if b > a]
-    job = lambda sl: _voronoi_numpy(pts[sl], tree, gpos, box, size, S)
-    if n_thr > 1 and len(chunks) > 1:
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=n_thr) as pool:
-            parts = list(pool.map(job, chunks))
-    else:
-        parts = [job(sl) for sl in chunks]
-    diag = dict(n_sub=S, sub_over_min_cell=float(L_half.max() / S / size.min()) if size is not None else None)
-    if size is not None:  # how far the path gets from the gas, in sizes of its nearest cell
-        diag["max_distance_over_size"] = float(max(p[1] for p in parts))
+    diag = dict(n_envelope=int(straight.sum()), n_sampled=int((~straight).sum()))
+    parts, worst = [], []
+    if straight.any():
+        idx = np.flatnonzero(straight)
+        res = _threaded(lambda sl: _voronoi_envelope(pts[idx[sl]], tree, gpos, box, size), idx.size, n_thr)
+        parts.append((idx, _stack_segments([r[0] for r in res])))
+        worst += [r[1] for r in res]
+        diag["candidates_per_path"] = float(np.concatenate([r[2] for r in res]).mean())
+    if not straight.all():
+        idx = np.flatnonzero(~straight)
+        seg, w, d = _voronoi_sampled(pts[idx], tree, gpos, box, size, n_sub, max_sub, backend, chunk, k_chunk, n_thr)
+        parts.append((idx, seg))
+        worst += [w]
+        diag.update(d)
+    if size is not None and worst:  # how far the path gets from the gas, in sizes of its nearest cell
+        diag["max_distance_over_size"] = float(max(worst))
         if box is None and diag["max_distance_over_size"] > VORONOI_FACTOR:
             warnings.warn(
                 f"voronoi_segments: parts of the paths lie {diag['max_distance_over_size']:.1f} cell sizes from the nearest "
@@ -235,12 +237,63 @@ def voronoi_segments(
                 "stretches take the nearest cell's gas.",
                 stacklevel=2,
             )
-    K = max(p[0].cell.shape[-1] for p in parts)
+    if len(parts) == 1 and np.array_equal(parts[0][0], np.arange(n_sk)):
+        seg = parts[0][1]
+    else:  # straight and curved paths together: back in the order of the paths
+        K = max(p[1].cell.shape[-1] for p in parts)
+        seg = SegmentComponents(-np.ones((n_sk, n_p, K), np.int64), np.zeros((n_sk, n_p, K)), np.zeros((n_sk, n_p, K)), 1.0, "voronoi", {})
+        for idx, sg in parts:
+            k = sg.cell.shape[-1]
+            seg.cell[idx, :, :k], seg.length[idx, :, :k], seg.offset[idx, :, :k] = sg.cell, sg.length, sg.offset
+    return SegmentComponents(seg.cell, seg.length, seg.offset, 1.0, "voronoi", diag).compact()
+
+
+def _threaded(job, n: int, n_thr: int) -> list:
+    """``job(slice)`` over chunks of ``range(n)`` (about 4 per thread), on ``n_thr`` threads (one shared k-d tree; NumPy,
+    numba's nogil kernels and the tree queries release the GIL): the results in order."""
+    bounds = np.linspace(0, n, min(n, 4 * n_thr) + 1).astype(int)
+    chunks = [slice(int(a), int(b)) for a, b in zip(bounds[:-1], bounds[1:]) if b > a]
+    if n_thr > 1 and len(chunks) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=n_thr) as pool:
+            return list(pool.map(job, chunks))
+    return [job(sl) for sl in chunks]
+
+
+def _stack_segments(parts) -> SegmentComponents:
+    """The ``SegmentComponents`` of consecutive chunks of paths in one (the slots padded to the largest K)."""
+    K = max(p.cell.shape[-1] for p in parts)
     pad = lambda x, fill: np.concatenate([x, np.full(x.shape[:-1] + (K - x.shape[-1],), fill, x.dtype)], axis=-1)
-    cell = np.concatenate([pad(p[0].cell, -1) for p in parts])
-    length = np.concatenate([pad(p[0].length, 0.0) for p in parts])
-    offset = np.concatenate([pad(p[0].offset, 0.0) for p in parts])
-    return SegmentComponents(cell, length, offset, 1.0, "voronoi", diag)
+    return SegmentComponents(
+        np.concatenate([pad(p.cell, -1) for p in parts]),
+        np.concatenate([pad(p.length, 0.0) for p in parts]),
+        np.concatenate([pad(p.offset, 0.0) for p in parts]),
+        1.0,
+        "voronoi",
+        {},
+    )
+
+
+def _voronoi_sampled(pts, tree, gpos, box, size, n_sub, max_sub, backend, chunk, k_chunk, n_thr):
+    """The sampled construction of ``voronoi_segments`` for the paths ``pts``: (SegmentComponents, the largest distance
+    from a sub-point to its generator in cell sizes, diagnostics)."""
+    n_sk, n_p = pts.shape[:2]
+    A, Bl, Bh = _halves(pts)
+    L_half = np.stack([np.linalg.norm(Bl - A, axis=-1), np.linalg.norm(Bh - A, axis=-1)], axis=1)  # (P, 2)
+    if n_sub is not None:
+        S = int(n_sub)
+    elif size is None:
+        S = 8
+    else:  # sub-interval <= 1/16 of the smallest cell near the paths
+        S = int(np.clip(np.ceil(16.0 * L_half.max() / max(size.min(), 1e-12)), 8, max_sub))
+    diag = dict(n_sub=S, sub_over_min_cell=float(L_half.max() / S / size.min()) if size is not None else None)
+    if backend == "jax":
+        cell, length, offset, kd = _voronoi_segments_jax(A, Bl, Bh, L_half, gpos, box, S, n_sk, chunk, k_chunk)
+        shp = (n_sk, n_p, cell.shape[-1])
+        return SegmentComponents(cell.reshape(shp), length.reshape(shp), offset.reshape(shp), 1.0, "voronoi", {}).compact(), 0.0, {**diag, **kd}
+    res = _threaded(lambda sl: _voronoi_numpy(pts[sl], tree, gpos, box, size, S), n_sk, n_thr)
+    return _stack_segments([r[0] for r in res]), max(r[1] for r in res), diag
 
 
 def _voronoi_numpy(pts, tree, gpos, box, size, S: int):
@@ -295,6 +348,144 @@ def _merge_pieces(rows, labs, lens, moms, P: int, M: int, shape, diag) -> Segmen
     offset[prow, slot] = np.where(L_ > 0, M_ / np.where(L_ > 0, L_, 1.0), 0.0)
     shp = (n_sk, n_p, K)
     return SegmentComponents(cell.reshape(shp), length.reshape(shp), offset.reshape(shp), 1.0, "voronoi", diag).compact()
+
+
+# --------------------------------------------------------------------------- Voronoi: straight paths, exact
+STRAIGHT_RTOL = 1e-7  # a path is straight when no point is farther than this x its length from the chord of its ends
+
+
+def straight_paths(points, rtol: float = STRAIGHT_RTOL) -> np.ndarray:
+    """(N_sk,) bool: the paths of ``points`` (N_sk, N, 3) [cMpc] that are straight, i.e. whose points lie on the chord
+    from their first to their last point within ``rtol`` x its length, in increasing order along it."""
+    p = np.asarray(points, dtype=np.float64)
+    x0, chord = p[:, :1, :], p[:, -1, :] - p[:, 0, :]
+    length = np.linalg.norm(chord, axis=-1)
+    t = chord / np.maximum(length, 1e-300)[:, None]
+    rel = p - x0
+    s = np.einsum("knc,kc->kn", rel, t)
+    dev = np.linalg.norm(rel - s[..., None] * t[:, None, :], axis=-1).max(axis=-1)
+    return (length > 0) & (dev <= rtol * length) & np.all(np.diff(s, axis=-1) >= 0, axis=-1)
+
+
+def _envelope_kernel():
+    """The lower envelope of the squared distances along a line (numba, no GIL): ``run(u, r2)`` with the candidates
+    sorted by u (ties by r2) returns (k (m,) the candidates on the envelope in order, start (m,) the path coordinate
+    where each takes over (-inf for the first))."""
+    import numba
+
+    @numba.njit(nogil=True, cache=True)
+    def run(u, r2):
+        n = u.shape[0]
+        stack = np.empty(n, np.int64)
+        start = np.empty(n, np.float64)
+        m = 0
+        for i in range(n):
+            if m > 0 and u[stack[m - 1]] == u[i]:  # the same slope, a larger or equal r^2: never below
+                continue
+            x = -np.inf
+            while m > 0:
+                j = stack[m - 1]
+                # (s - u_i)^2 + r2_i < (s - u_j)^2 + r2_j for s > x (u_i > u_j)
+                x = 0.5 * (u[i] + u[j]) + (r2[i] - r2[j]) / (2.0 * (u[i] - u[j]))
+                if x <= start[m - 1]:  # j is never the lowest: drop it
+                    m -= 1
+                    x = -np.inf
+                else:
+                    break
+            stack[m] = i
+            start[m] = x
+            m += 1
+        return stack[:m], start[:m]
+
+    return run
+
+
+_ENVELOPE = {}
+
+
+def _knn_candidates(tree, x, delta: float, k0: int = 16):
+    """The generators that can be nearest to some point within ``delta`` / 2 of each of the points ``x`` (P, 3): every
+    generator within d_1(x_j) + delta of x_j, d_1 the distance to the nearest one (d_1 is 1-Lipschitz along the path, so
+    a generator nearest to a point y with |y - x_j| <= delta / 2 is within d_1(y) + delta / 2 <= d_1(x_j) + delta of x_j).
+    Returns (point index, generator index) of every pair, and d_1 and the nearest generator of every point."""
+    n = tree.n
+    k = min(k0, n)
+    while True:
+        d, i = tree.query(x, k=k, workers=1)
+        d, i = d.reshape(len(x), -1), i.reshape(len(x), -1)
+        keep = d <= d[:, :1] + delta
+        if k == n or not keep[:, -1].any():  # the k-th neighbour is beyond the bound: complete
+            break
+        k = min(2 * k, n)
+    row = np.broadcast_to(np.arange(len(x))[:, None], keep.shape)[keep]
+    return row, i[keep], d[:, 0], i[:, 0]
+
+
+def _voronoi_envelope(pts, tree, gpos, box, size):
+    """The exact Voronoi pieces of the dual segments of straight paths ``pts`` (n, N, 3) [cMpc] (``straight_paths``).
+
+    Along x(s) = x_0 + s t the squared distance to a generator image p is (s - u)^2 + r^2, with u = t.(p - x_0) and
+    r^2 = |p - x_0 - u t|^2, so the nearest generator at every s is the lowest of the straight lines -2 u s + u^2 + r^2:
+    their lower envelope (``_envelope_kernel``, O(K log K) for K candidates) gives the cells crossed and the exact
+    crossings s* = (u_i + u_j) / 2 + (r_i^2 - r_j^2) / (2 (u_i - u_j)). The candidates are the generator images within
+    d_1 + delta of the points (``_knn_candidates``, delta the largest point spacing), each as the minimum image relative
+    to the point that found it, so a path may cross the box faces. The crossings are then cut at the boundaries of the
+    dual segments (the midpoints between points): a piece per cell and segment, its length and its centroid's offset
+    from the point. Returns (SegmentComponents, the largest d_1 / size of the points' nearest cells (0 without
+    ``size``), the number of candidate images per path (n,))."""
+    run = _ENVELOPE.setdefault("numba", _envelope_kernel())
+    n_sk, n_p = pts.shape[:2]
+    cells, lens, offs, counts, worst, n_cand = [], [], [], [], 0.0, np.zeros(n_sk, np.int64)
+    for k in range(n_sk):
+        x = pts[k]
+        x0 = x[0]
+        chord = x[-1] - x0
+        t = chord / np.linalg.norm(chord)
+        s = (x - x0) @ t  # path coordinate of the points [cMpc]
+        delta = float(np.max(np.diff(s))) if n_p > 1 else 0.0
+        row, gi, d1, i1 = _knn_candidates(tree, wrap_positions(x, box), delta)
+        if size is not None:
+            worst = max(worst, float(np.max(d1 / size[i1])))
+        p = x[row] + _min_image_np(gpos[gi] - x[row], box)  # the image near the point that found it
+        if box is not None:  # one entry per (generator, image)
+            shift = np.round((p - gpos[gi]) / box).astype(np.int64) + 512
+            key = (gi.astype(np.int64) << 30) | (shift[:, 0] << 20) | (shift[:, 1] << 10) | shift[:, 2]
+        else:
+            key = gi.astype(np.int64)
+        _, first = np.unique(key, return_index=True)
+        gi, p = gi[first], p[first]
+        n_cand[k] = gi.size
+        rel = p - x0
+        u = rel @ t
+        r2 = np.sum((rel - u[:, None] * t) ** 2, axis=-1)
+        order = np.lexsort((gi, r2, u))
+        win, start = run(u[order], r2[order])
+        lo = np.maximum(np.concatenate([[-np.inf], start[1:]]), s[0])
+        hi = np.minimum(np.concatenate([start[1:], [np.inf]]), s[-1])
+        ok = hi > lo
+        cell_c, lo, hi = gi[order][win][ok], lo[ok], hi[ok]
+        # cut the crossings at the dual-segment boundaries b_0 = s_0, b_i = (s_{i-1} + s_i) / 2, b_N = s_{N-1}
+        b = np.concatenate([[s[0]], 0.5 * (s[1:] + s[:-1]), [s[-1]]])
+        i0 = np.clip(np.searchsorted(b, lo, side="right") - 1, 0, n_p - 1)
+        i1_ = np.clip(np.searchsorted(b, hi, side="left") - 1, 0, n_p - 1)
+        rep = i1_ - i0 + 1
+        c_idx = np.repeat(np.arange(cell_c.size), rep)
+        seg = np.repeat(i0, rep) + (np.arange(c_idx.size) - np.repeat(np.cumsum(rep) - rep, rep))
+        a_ = np.maximum(lo[c_idx], b[seg])
+        b_ = np.minimum(hi[c_idx], b[seg + 1])
+        keep = b_ > a_
+        seg, c_idx, a_, b_ = seg[keep], c_idx[keep], a_[keep], b_[keep]
+        cells.append((seg, cell_c[c_idx]))
+        lens.append(b_ - a_)
+        offs.append(0.5 * (a_ + b_) - s[seg])
+        counts.append(np.bincount(seg, minlength=n_p))
+    K = max(1, max(int(c.max()) for c in counts))
+    cell = -np.ones((n_sk, n_p, K), np.int64)
+    length, offset = np.zeros((n_sk, n_p, K)), np.zeros((n_sk, n_p, K))
+    for k, ((seg, cc), ln, of, cnt) in enumerate(zip(cells, lens, offs, counts)):
+        slot = np.arange(seg.size) - (np.cumsum(cnt) - cnt)[seg]  # the pieces come in order of s, so of segment
+        cell[k, seg, slot], length[k, seg, slot], offset[k, seg, slot] = cc, ln, of
+    return SegmentComponents(cell, length, offset, 1.0, "voronoi", {}), worst, n_cand
 
 
 def grid_segments(points, shape, box: float, *, chunk: int = 1_000_000) -> SegmentComponents:

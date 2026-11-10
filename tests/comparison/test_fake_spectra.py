@@ -42,21 +42,12 @@ def setup():
     H = rd.header
     s = SKEWER_SETS["nset"]
     cofm, axis = s["cofm"][:6].copy(), s["axis"][:6].copy()
-    fs = Spectra(
-        25,
-        str(TNG),
-        cofm.copy(),
-        axis.copy(),
-        res=1.0,
-        savefile="t.hdf5",
-        savedir=tempfile.mkdtemp(),
-        reload_file=True,
-        quiet=True,
-    )
-    native = dict(
-        HI=dict(tau=np.asarray(fs.get_tau("H", 1, 1215)), n=np.asarray(fs.get_density("H", 1))),
-        SiIII=dict(tau=np.asarray(fs.get_tau("Si", 3, 1206)), n=np.asarray(fs.get_density("Si", 3))),
-    )
+    with tempfile.TemporaryDirectory(prefix="fs_") as work:  # fake_spectra recomputes (reload_file); nothing kept
+        fs = Spectra(25, str(TNG), cofm.copy(), axis.copy(), res=1.0, savefile="t.hdf5", savedir=work, reload_file=True, quiet=True)
+        native = dict(
+            HI=dict(tau=np.asarray(fs.get_tau("H", 1, 1215)), n=np.asarray(fs.get_density("H", 1))),
+            SiIII=dict(tau=np.asarray(fs.get_tau("Si", 3, 1206)), n=np.asarray(fs.get_density("Si", 3))),
+        )
     points = axis_aligned_skewer_points(cofm * H.code_length_cMpc, axis, H.box_cMpc, 0.25 / H.velfac_kms_per_cMpc)
     nbins, dv = H.pixel_grid(1.0)
     assert fs.nbins == nbins and abs(fs.dvbin - dv) < 1e-12 and fs.kernel_int == 0
@@ -123,18 +114,9 @@ def test_the_neutral_fraction_rule_through_star_forming_cells():
     _, _, blk = next(iter(rd.iter_blocks(("Coordinates", "Density"), max_rows=4_000_000)))
     centre = np.asarray(blk["Coordinates"][int(np.argmax(blk["Density"]))], dtype=float)
     cofm, axis = np.array([[centre[0], 0.0, centre[2]]]), np.array([2], dtype=np.int32)
-    fs = Spectra(
-        25,
-        str(TNG),
-        cofm.copy(),
-        axis.copy(),
-        res=1.0,
-        savefile="s.hdf5",
-        savedir=tempfile.mkdtemp(),
-        reload_file=True,
-        quiet=True,
-    )
-    native = np.asarray(fs.get_density("H", 1))[0]
+    with tempfile.TemporaryDirectory(prefix="fs_") as work:
+        fs = Spectra(25, str(TNG), cofm.copy(), axis.copy(), res=1.0, savefile="s.hdf5", savedir=work, reload_file=True, quiet=True)
+        native = np.asarray(fs.get_density("H", 1))[0]
     points = axis_aligned_skewer_points(cofm * H.code_length_cMpc, axis, H.box_cMpc, 0.25 / H.velfac_kms_per_cMpc)
     gas = select_cells_near_paths(rd, points)
     assert (np.asarray(gas.fields["sfr"]) > 0).sum() > 100

@@ -143,10 +143,9 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
 - **Physics options** (`ExtractionOptions`): `deposition` (`"voronoi"` default, `"tophat"`, or the opt-in
   `"voronoi_crossings"`: one absorber per sub-piece of each cell crossing, split so that its velocity width stays below
   0.25 b), `mass_unit`, `T_constants`, `x_HI_model`, `cloudy_density`, `cloudy_interpolation`.
-- **Selection back ends:** `selection.select_cells_near_paths(..., backend="cpu" | "jztree" | "auto")` and
-  `SimulationSkewers(..., selection_backend=...)`: `"cpu"` (default, SciPy's periodic `cKDTree`); `"jztree"` (CUDA GPU,
-  needs the optional package jztree; borderline cells re-checked in float64 so the set is the CPU one); `"auto"` (the
-  GPU when jztree and a CUDA device are present, else the CPU).
+- **Selection:** `selection.select_cells_near_paths(reader, points, workers=-1)` reads the snapshot through memory maps
+  with one thread per block of every file, keeps the candidates of a grid of distance bounds to the paths and applies the
+  exact rule (periodic `cKDTree`) to them; `core.select_cells` applies the same rule to cells in memory.
 - **Cells without skewers:** `snapshot_cells(reader, species, lo, hi, margin=...)` gives the cells of a periodic
   sub-box as `core.Cells` (`select_cells_in_region`, then `gas_to_cells`); the margin keeps every cell whose generating
   point can be the nearest to a point of the region. Cost on TNG50-4: one pass over the positions (about 1 s with a
@@ -161,8 +160,8 @@ v, tau = sk.optical_depth(LineBundle(["HI-LyA", "SiIII-1206"], ref_line_id="HI-L
   wrap.
 - **Lower layers:** `sk.absorbers(ion)` gives the deposited pieces (`core.Absorbers`), `sk.pieces(ion, lines)` the same
   as `core.Pieces` (through `core.cell_pieces`, for `compute_optical_depth`), `core.tau_absorbers(A, lines, v, frame)`
-  the τ (options `velocity_period`, `chunk`, `v_chunk`, `dtype`, `devices`, `skewers`), and `sk.tau(...)` the τ cached
-  in an HDF5 file when the object has a `name` and a `cache`. Cells already in memory (a region from `snapshot_cells`,
+  the τ (options `velocity_period`, `chunk`, `v_chunk`, `dtype`, `devices`, `skewers`), and `sk.tau(...)` the τ of one
+  line, computed on every call. Cells already in memory (a region from `snapshot_cells`,
   a toy model) are selected with `core.select_cells`, the same rule as the streamed `select_cells_near_paths`.
 - **Figure tools:**
   - `slab_projection(reader, normal_axis, centre, thickness, n_pix)` gives the gas surface density and the
@@ -190,7 +189,7 @@ default is SkewerJAX's choice and whose alternative is fake_spectra's. Notebook 
 | | `chord_weight`: `None` (1/7) → `1/8` (7/8 of the column) | `singleabs.h` L97–L100, L116 |
 | | `frame`: `bundle_frame` → `SnapshotFrame` (one a, u = aHs + v_pec) | `absorption.cpp` L237 |
 | `core.compute_optical_depth` | `b_constants`: `"codata"` → `"fake_spectra"` | `absorption.cpp` L24, L158 |
-| | `voigt`: `"harris"` (the default since 2026-11) is fake_spectra's below a = 1e-3; above, fake_spectra's exact Faddeeva against SkewerJAX's fourth order (5e-7) | `singleabs.h` L57–L66, `fastvoigt.h` |
+| | `voigt`: `"harris"` (the default) is fake_spectra's below a = 1e-3; above, fake_spectra's exact Faddeeva against SkewerJAX's fourth order (5e-7) | `singleabs.h` L57–L66, `fastvoigt.h` |
 | | `velocity_period`: `False` → the span of the grid | `absorption.cpp` L261–L264 |
 | | `a_eff`: `None` → `a_snap` | `spectra.py` L221, L615 |
 | | `hubble_flow`, `aH_ref`: `"exact"` → `"linear"`, (aH)_snap | `absorption.cpp` L237, `spectra.py` L225–L228 |
@@ -203,7 +202,9 @@ default is SkewerJAX's choice and whose alternative is fake_spectra's. Notebook 
 ## `skewerjax.comparison`
 
 **Benchmark:** `comparison.benchmark` (`PRESETS`, `benchmark_sets(name, data_dir, preset=)`, `make_config`,
-`run_suite(total_budget_s=)`, `collect`, `result_rows`, `print_rows`); see "Validation, tests and benchmarks" below.
+`run_suite(total_budget_s=)`, `collect`, `result_rows`, `print_rows`; `RunClock`, `StageTimer`: notebook 13) and
+`comparison.scaling` (`scaling_points`, `run_points`, `run_point`, `load_records`: notebook 14); see "Validation, tests
+and benchmarks" below.
 
 ## Speed and memory
 
@@ -289,11 +290,11 @@ enable_logging()  # the package's log messages (logger "skewerjax") on stderr
 ```bash
 pytest                                                                  # the fast default (-m "not slow"); tests/README.md
 pytest -m "slow or not slow"                                            # every test; markers: slow, tng, gpu, fake_spectra
-python scripts/dev/run_tests.py [-m EXPR] [--all] [path ...]            # the same, without pytest
 python scripts/dev/update_regression_references.py                     # only for an intended change of the results
 python scripts/dev/check_markdown_math.py notebooks/*.ipynb             # the notebooks' markdown math (MathJax)
-python scripts/figures/optical_depth_vs_analytic.py                     # tau of uniform gas against its closed forms
+python scripts/checks/check_install.py; python scripts/checks/check_toy.py; python scripts/checks/check_tng.py   # the basic checks
 python scripts/benchmarks/benchmark_fake_spectra.py [--preset quick|full] [--sets scaling,threads]   # SkewerJAX vs fake_spectra (quick <= 30 min, full ~10 h; --sets smoke ~4 min)
+python scripts/benchmarks/benchmark_scaling.py [--blocks A,B,C1,C2] [--list]                         # the scaling of notebook 14, one record per point (resumable)
 ```
 
 The suite (`tests/`) mirrors the package: `core/` (one module per area; `test_optical_depth.py` for τ),
@@ -313,8 +314,16 @@ the threads at N = 1, one or two timed runs, a cap and an estimate per point, an
 plus its estimate would exceed `--budget`, 1800 s) and `full` (N up to 1024 on the three snapshots, the threads at
 N = 16; it re-measures the quick points that hold fewer timed runs). Every record keeps its preset. The raw records go to
 `benchmarks/raw/fake_spectra` (git-ignored), and their summary to `benchmarks/results/fake_spectra_benchmark.json`
-(committed; with the runtime per preset and the list of launches), which `14_comparison_fake_spectra_performance` plots (`RUN_BENCHMARKS = True` re-runs the missing
+(committed; with the runtime per preset and the list of launches), which `15_comparison_fake_spectra_benchmark` plots (`RUN_BENCHMARKS = True` re-runs the missing
 configurations of its `PRESET`).
+
+The scaling benchmark (`comparison.scaling`, launched by `scripts/benchmarks/benchmark_scaling.py`, plotted by
+`14_comparison_fake_spectra_scaling`) runs the four entries of notebook 13 (fake_spectra; SkewerJAX default and matched on
+the CPU, default on the GPU) on nested grids of skewers along y, with notebook 13's calls: block A the simulation
+(TNG50-4, -3, -2), B the number of skewers (4² to `N_MAX`²), C1 the pixel width, C2 the sampling along the skewer. Each
+point runs in its own process (32 OpenMP threads, float32, the GPU next to the CPU), SkewerJAX in batches of skewers
+with a warm-up batch and one timed run, and writes `benchmarks/results/scaling/<id>.json`: the stage times, the JIT time,
+the page-cache state, the machine, the agreement over all skewers and the flux of the reference skewer (L/4, L/4).
 
 ## Figures: `skewerjax.utils.plotting`
 
@@ -351,8 +360,7 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   `scripts/dev/make_diagrams.py`, checked by `tests/utils/test_dag.py`).
 - Path geometry: `geometry_style(name)`, the one style of points, midpoints, dual segments, tangents, line elements,
   piece ends and generators (03).
-- Helpers: `add_panel_letters(axes, labels=None, box=True)` ((a), (b), ... or any labels such as "a1", "a2"),
-  `shade_outside_window(ax, v, period, end)` (the part of a velocity axis outside [0, P), with its edge dash-dotted).
+- Helpers: `add_panel_letters(axes, labels=None, box=True)` ((a), (b), ... or any labels such as "a1", "a2").
 - Tutorial figures: `plot_toy_box` (00), `plot_slab_and_skewer`, `plot_cell_crossings`, `plot_voigt_of_piece`,
   `plot_tau_stretches`, `plot_wrap_tiles`, `plot_overflux_p1d_xi` (00b), `plot_grf_draws` (04), `plot_line_table`,
   `plot_scale_factor_solutions`, `plot_skewer_geometry_3d`,
@@ -364,7 +372,7 @@ from skewerjax.utils.plotting import ENTITY_COLORS as EC, PALETTE, CMAPS, FG, BG
   in its colour, legends inside the panel; shaded outside `limits` as `plot_isotropic_recovery`; only line-of-sight (μ = 1) scales as vertical lines, folded into [0, L / 2]: r_BAO and, with `delta_v` the offsets of every line (`LineBundle.delta_v`), for the pairs `pairs` ("all" default, "reference", a list), in the pair's colour, the spot Δv_ij/u (solid) and the echoes |r_BAO + Δv_ij/u| (dashed), |r_BAO − Δv_ij/u| (dotted): `los_scales`), `plot_skewer_slice` (10 C1: the skewers of one layer on the H I density, a line-with-arrow legend handle; 11 C1: on a density map, e.g. `voronoi_slice`, with `spacing=`), `plot_toy_skewer` (10 and 11 C1, any number of lines, `line_ids=`, with the
   sampling grids), `plot_overflux_kpar_kperp(res, kms_per_cMpc, kperp_edges=, unit=, theory=)` (10 B1, D2: P on the lattice's own k∥ rows, k∥ in s/km), `plot_overflux_rpar_rperp(res, kms_per_cMpc, rperp_edges=, delta_v=, line_ids=, pairs=, unit=, theory=)` (10 B1, D2: one row per lattice separation; with `delta_v` a diamond labelled with its pair for every pair of lines and the folded echo branches of the BAO ring of the pairs `pairs`, `echo_curves` (the arcs of the images with n⊥ = 0, any r_BAO); one pair: labelled on the curves, several: a legend), `plot_overflux_3d(..., limits=, theory=, theory_label=, r_marks=, delta_v=, line_ids=, pairs=, box=, n_harmonics=)` (10 D3: with `delta_v` the imprint of every pair, the maxima of j₀(kΔ_ij), and its spot, solid in the pairs' colours; P and
   r²ξ inside the smallest Nyquist frequency and half the period; `theory` one expectation, or one reference per field, e.g. the whole box through a mesh in 11 B2), `plot_p1d_reference(..., k_edges=, k_limits=, unit=, bao_k=, delta_v=, line_ids=, n_harmonics=)` (10 D4: k P1D / π as Fig. 1 of
-  Chaves-Montero et al., with one measurement or `utils.reference_data.P1D_DESI_DR1`, every z alike, small points joined by a thin line, one colour per z with a colour key; `nearest_reference` for the prints; with `delta_v` the imprint of every pair, k∥ = 2πn/Δv_ij,fold); the ensemble figures take `each_label` (the legend of the faint realisations, `EACH_LABEL` "each box ({n})"; 09 and 11: the three lines of sight), `fold_periodic`, `echo_scales`; any number of lines: `LINE_STYLES` and `line_style(key)` (one colour, marker and line style per line and species, the same in every figure), `line_names(line_ids)` (Lyα, Si III, Si II 1193: the wavelength when a species repeats), `species_name`, `field_names`, `line_pair_label(ids, all_ids=)` (Δv_{i–j} from the names of the lines), `line_pairs(line_ids, delta_v, period, pairs=)` (every pair and its separation folded into half the period), `comoving_axis(ax, kms_per_cMpc, "r" | "k")` (a
+  Chaves-Montero et al., with one measurement or `utils.reference_data.P1D_DESI_DR1`, every z alike, small points joined by a thin line, one colour per z with a colour key; `nearest_reference` for the prints; with `delta_v` the imprint of every pair, k∥ = 2πn/Δv_ij,fold); the ensemble figures take `each_label` (the legend of the faint realisations, `EACH_LABEL` "each box ({n})"; 09 and 11: the three lines of sight), `fold_periodic`; any number of lines: `LINE_STYLES` and `line_style(key)` (one colour, marker and line style per line and species, the same in every figure), `line_names(line_ids)` (Lyα, Si III, Si II 1193: the wavelength when a species repeats), `species_name`, `field_names`, `line_pair_label(ids, all_ids=)` (Δv_{i–j} from the names of the lines), `line_pairs(line_ids, delta_v, period, pairs=)` (every pair and its separation folded into half the period), `comoving_axis(ax, kms_per_cMpc, "r" | "k")` (a
   cMpc or cMpc⁻¹ axis on a velocity axis, v = u x; a secondary axis alone draws the ticks of its side); every map takes `cmap`,
   `plot_orders_superimposed`, `plot_terms_by_order` (an `ensemble_1d` with errors, or one `OverfluxStatistics1D`),
   `plot_p1d_orders`, `plot_xi1d_orders`, `plot_p1d_terms`, `plot_xi1d_terms` (10 and 11, D5 and D6: one space each; the terms figures with `max_terms` (default 6 per order, the rest summed), `terms=` and `line_ids=` (the numbering of the lines in P1D); `k_edges`,

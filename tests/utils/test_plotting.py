@@ -115,7 +115,9 @@ def test_toy_box_figures():
     from skewerjax.core import LineBundle, lattice_columns
     from skewerjax.simulations import LINE_IDS, ToyBoxes
     from skewerjax.summary_stats import bao_k_edges, box_grid, field_statistics, grid_limits
-    from skewerjax.utils.reference_data import P1D_DESI_DR1_Z22
+    from skewerjax.utils.reference_data import P1D_DESI_DR1
+
+    P1D_DESI_DR1_Z22 = P1D_DESI_DR1[2.2]
 
     from helpers import toy_lattice_statistics
 
@@ -151,7 +153,13 @@ def test_toy_box_figures():
         assert axs[0, 0].get_xscale() == k_scale and axs[0, 1].get_yscale() == ("symlog" if quantity == "xi" else "linear")
     assert {"P_chi2_dof", "xi_chi2_dof", "xi_mean_pull", "xi_curve_r"} <= set(out)
     labels = [t.get_text() for t in axs[0, 0].get_legend().get_texts()]
+    assert labels == ["per realisation", "expectation", r"mean $\pm$ error"], labels
+    fig_a, axs_a, _ = pl.plot_isotropic_recovery(res, quantity="r2xi", r_bao=2.0, grf=b.grf(), show_analytic=True)
+    labels = [t.get_text() for t in axs_a[0, 0].get_legend().get_texts()]
     assert labels == ["per realisation", "expectation", "analytic input", r"mean $\pm$ error"], labels
+    assert len(axs_a[0, 0].lines) > len(res["P_iso_each"]) + 1, "P, with the continuum"
+    assert any(ln.get_color() == pl.PALETTE["purple"] for ln in axs_a[0, 0].lines), "the continuum in a visible colour"
+    plt.close(fig_a)
     # x_bin: only the drawn x of the bins moves (default: the weighted centres of the measurement)
     a_ = res["axes"]
     for mode, xk in (
@@ -166,10 +174,7 @@ def test_toy_box_figures():
             th.get_ydata(), res["theory"]["P_iso"][ok]
         )
         plt.close(f2)
-    assert axs[0, 0].get_ylabel().startswith("$P(k)$") and len(axs[0, 0].lines) > len(res["P_iso_each"]) + 1, (
-        "P, with the continuum"
-    )
-    assert any(ln.get_color() == pl.PALETTE["purple"] for ln in axs[0, 0].lines), "the continuum in a visible colour"
+    assert axs[0, 0].get_ylabel().startswith("$P(k)$")
     texts = [t.get_text() for t in axs[0, 0].texts]
     assert "$k_1$ " in texts and "$k_2$ " not in texts, "k_1 labelled; k_2 beyond the axis range not drawn"
     assert any("k_{\\min}" in t for t in texts) and any("k_{\\max}" in t for t in texts), "the limits inside the grey bands"
@@ -315,9 +320,6 @@ def test_toy_box_figures():
     assert drawn["spot"]["r_par"][0] == pytest.approx(100.0)
     assert set(drawn) == {"ring", "spots", "spot", "echoes", "echo +", "echo -"} and len(drawn["spots"]) == 1
     np.testing.assert_allclose(pl.fold_periodic([0.3, 0.7, 1.2, -0.2], 1.0), [0.3, 0.3, 0.2, 0.2])
-    sc = pl.echo_scales(40.0, 28.0, 150.0)
-    np.testing.assert_allclose(list(sc.values()), [40.0, 28.0, 12.0, 68.0, np.hypot(40.0, 28.0)])
-    assert pl.echo_scales(40.0, 50.0, 150.0)["$r_{\\rm BAO} + \\Delta$"] == pytest.approx(60.0), "folded beyond L / 2"
     assert not hasattr(pl, "_reference_wedges")
     # the k-space map: k_perp in cMpc^-1 across, k_par in s/km upwards (native units), reference axes through u, no legend
     fig, ax, chi2k = pl.plot_overflux_kpar_kperp(tot, kms_per_cMpc=u, kperp_edges=run["axes3d"]["kperp_edges"])
@@ -732,10 +734,8 @@ def test_quickstart_and_tutorial_figures():
     fig.canvas.draw()
     assert axs[1].get_ylabel() == "y (line of sight) [Mpc]" and axs[2].get_ylabel() == "y [Mpc]"
     fig, ax2 = plt.subplots(1, 2)
-    for k_, end in enumerate(("start", "end")):
-        pl.shade_outside_window(ax2[k_], np.linspace(-50.0, 150.0, 11) + 100.0 * k_, 100.0, end)
     pl.add_panel_letters(ax2, labels=["a1", "a2"], box=False)
-    assert ax2[1].get_xlim() == (50.0, 250.0) and [t.get_text() for a in ax2 for t in a.texts] == ["(a1)", "(a2)"]
+    assert [t.get_text() for a in ax2 for t in a.texts] == ["(a1)", "(a2)"]
 
 
 def test_benchmark_figures():
@@ -1447,3 +1447,23 @@ def test_plot_code_comparison_shade_below():
     fig, axs = pl.plot_code_comparison(curves, residuals=pair, aH=80.0, shade_below=None)
     assert not any(ax.patches for ax in axs)
     plt.close(fig)
+
+
+def test_no_matplotlib_colour_map_anywhere_in_the_package():
+    """Every colour map of the package is one of the theme's (``CMAPS``, Tol's maps): no string naming another one
+    (``cmap="seismic"``, ``"viridis"``, ...) in any source file, default or call, so that none can come back unnoticed."""
+    import re
+    from pathlib import Path
+
+    import matplotlib
+
+    root = Path(pl.__file__).resolve().parents[1]
+    named = re.compile(r"""(?:cmap\w*\s*=\s*|get_cmap\(\s*|colormaps\[\s*)["']([A-Za-z_]+)["']""")
+    builtin = set(matplotlib.colormaps) - {n for n in matplotlib.colormaps if n.startswith("tol_")}
+    bad = []
+    for path in root.rglob("*.py"):
+        if "cloudy_tables" in path.parts:
+            continue
+        for k, line in enumerate(path.read_text().splitlines(), 1):
+            bad += [f"{path.relative_to(root)}:{k}: {m}" for m in named.findall(line) if m in builtin or not m.startswith("tol_")]
+    assert not bad, "colour maps outside the theme:\n" + "\n".join(bad)

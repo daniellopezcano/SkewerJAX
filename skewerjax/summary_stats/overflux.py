@@ -118,15 +118,21 @@ def mean_transmissions(transmissions: jnp.ndarray, mean: str = "redshift", *, gr
       column: (N_lines + 1, N_pix);
     * "skewer": over the pixels of each sample, the same value along it: (N_lines + 1, N_samples, N_pix).
 
-    The means of an ensemble split over several arrays of equal shape (e.g. boxes) are the means of these."""
+    The means of an ensemble split over several arrays of equal shape (e.g. boxes) are the means of these. A NumPy input
+    is averaged in float64 on the host (``DeltaFieldBuilder``, ``ensemble_mean_transmissions``: C = T_bar / prod_j T_bar_j
+    - 1 is a small difference of means, ~1e-7 for weak metal lines, below the rounding of float32 means); a JAX input
+    stays in JAX, in its dtype (jit)."""
     mean = _check_mean(mean)
-    T = jnp.concatenate([transmissions, jnp.prod(transmissions, axis=0)[None]])  # (N_lines + 1, N_samples, N_pix)
+    xp = np if isinstance(transmissions, np.ndarray) else jnp
+    if xp is np:
+        transmissions = np.asarray(transmissions, dtype=np.float64)
+    T = xp.concatenate([transmissions, xp.prod(transmissions, axis=0)[None]])  # (N_lines + 1, N_samples, N_pix)
     if mean == "skewer":
-        return jnp.broadcast_to(jnp.mean(T, axis=2, keepdims=True), T.shape)
-    m = jnp.mean(T, axis=1)
+        return xp.broadcast_to(xp.mean(T, axis=2, keepdims=True), T.shape)
+    m = xp.mean(T, axis=1)
     if mean == "redshift":
         return m if grid is None else _group_mean(m, redshift_groups(grid, T.shape[-1]))
-    return jnp.broadcast_to(jnp.mean(m, axis=1, keepdims=True), m.shape)
+    return xp.broadcast_to(xp.mean(m, axis=1, keepdims=True), m.shape)
 
 
 def ensemble_mean_transmissions(transmissions, mean: str = "redshift", *, grid=None) -> np.ndarray:
@@ -144,9 +150,10 @@ def ensemble_mean_transmissions(transmissions, mean: str = "redshift", *, grid=N
 
     Returns (n_real, N_lines + 1, N_samples, N_pix), the rows T_bar_j of the lines and, last, T_bar of the total
     prod_j T_j: a read-only broadcast view of the means (no copy), so that delta = T / T_bar - 1 is elementwise for every
-    mode, and T_bar[i][:, s] is the mean seen by sample s of realisation i."""
+    mode, and T_bar[i][:, s] is the mean seen by sample s of realisation i. The means are float64 whatever the dtype of
+    the transmissions (``mean_transmissions``)."""
     mean = _check_mean(mean)
-    T = [np.asarray(x) for x in transmissions]
+    T = [np.asarray(x, dtype=np.float64) for x in transmissions]
     n, (n_l, n_s, n_pix) = len(T), T[0].shape
     groups = redshift_groups(grid, n_pix, what="realisations") if mean == "redshift" and grid is not None else None
     shape = (n, n_l + 1, n_s, n_pix)
@@ -183,8 +190,8 @@ def overflux_check(delta, mean_transmission, mean: str = "redshift", *, grid=Non
         decomposition_error: max |[sum_A delta_A - C] / (1 + C) - delta_tot| over every pixel of every sample (the exact
             decomposition, ``summary_stats.orders``))."""
     mean = _check_mean(mean)
-    d = np.asarray(delta)
-    Tb = np.broadcast_to(mean_transmission, d.shape)
+    d = np.asarray(delta, dtype=np.float64)  # the checks in float64: C ~ 1e-7 is below float32's rounding of the means
+    Tb = np.broadcast_to(np.asarray(mean_transmission, dtype=np.float64), d.shape)
     n, m = d.shape[0], d.shape[1] - 1
     H, C, err = np.empty((n,) + d.shape[2:]), np.empty((n,) + d.shape[2:]), 0.0
     for i in range(n):  # one realisation at a time: the products of the lines, C and the decomposition
@@ -266,8 +273,9 @@ class DeltaFieldBuilder:
 
     Samples with NaN in tau or T are dropped before the means are taken (data-dependent shapes: this filtering is the
     eager part); a zero mean transmission at a pixel (of a line or of the total) raises. After ``build()``:
-    ``subset_keys``, ``composite_keys``, ``delta_terms``, ``total``, ``C_per_pixel``, ``mean_transmission``,
-    ``N_samples``.
+    ``subset_keys``, ``composite_keys``, ``delta_terms``, ``total``, ``C_per_pixel`` and ``mean_transmission`` (NumPy,
+    float64: the means are taken on the host in float64, so that C = T_bar / prod_j T_bar_j - 1, ~1e-7 for weak metal
+    lines, is resolved whatever the precision of the overflux fields), ``N_samples``.
     """
 
     def __init__(
@@ -292,7 +300,7 @@ class DeltaFieldBuilder:
             raise ValueError(f"`labels` must have length N_lines={self.N_lines}. Got {len(self.labels)}.")
         self.key_joiner, self.dtype, self.mean = key_joiner, dtype, _check_mean(mean)
         self.keep_transmissions, self.keep_transmission_total = keep_transmissions, keep_transmission_total
-        self.mean_transmission = None if mean_transmission is None else jnp.asarray(mean_transmission, dtype=dtype)
+        self.mean_transmission = None if mean_transmission is None else np.asarray(mean_transmission, dtype=np.float64)
         shapes = ((self.N_lines + 1, self.N_points), (self.N_lines + 1, self.N_samples, self.N_points))
         if self.mean_transmission is not None and self.mean_transmission.shape not in shapes:
             raise ValueError(
@@ -329,19 +337,21 @@ class DeltaFieldBuilder:
                 "This DeltaFieldBuilder has already been built and its temporary transmissions were released. "
                 "Create a new instance to rebuild."
             )
-        T_bar = (
-            mean_transmissions(self.transmissions, self.mean, grid=self.grid)
+        T_bar = (  # float64 on the host, whatever the precision of the transmissions (``mean_transmissions``)
+            mean_transmissions(np.asarray(self.transmissions), self.mean, grid=self.grid)
             if self.mean_transmission is None
             else self.mean_transmission
         )
-        if bool(jnp.any(T_bar == 0.0)):
+        if bool(np.any(T_bar == 0.0)):
             raise ValueError("A mean transmission is zero at some pixel (of a line or of the total): delta is undefined there.")
-        out = overflux_terms(self.transmissions, self.labels, self.key_joiner, T_bar, self.mean)
+        out = overflux_terms(self.transmissions, self.labels, self.key_joiner, jnp.asarray(T_bar, self.transmissions.dtype), self.mean)
         for k, v in out["delta_terms"].items():
             if int(jnp.sum(jnp.isnan(v))):
                 logger.warning("NaNs detected in delta_terms[%r].", k)
-        self.delta_terms, self.total, self.C_per_pixel = out["delta_terms"], out["total"], out["C_per_pixel"]
-        self.mean_transmission = out["mean_transmission"]
+        self.delta_terms, self.total = out["delta_terms"], out["total"]
+        C = T_bar[-1] / np.prod(T_bar[:-1], axis=0) - 1.0  # in float64: a small difference of means
+        self.C_per_pixel = C[None] if C.ndim == 1 else C
+        self.mean_transmission = T_bar
         self.subset_keys = list(self.delta_terms)
         self.composite_keys = self.subset_keys[self.N_lines :]
         self.transmission_total = out["transmission_total"] if self.keep_transmission_total else None

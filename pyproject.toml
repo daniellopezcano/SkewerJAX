@@ -23,7 +23,8 @@ classifiers = [
   "Operating System :: POSIX :: Linux",
 ]
 # What `import skewerjax` needs (the three blocks and the figure style are imported with the package). Lower bounds =
-# the versions this package is developed and validated with (Python 3.11.14); numpy < 2 is required by exojax 2.2.2.
+# the versions this package is developed and validated with (Python 3.11.14); numpy < 2 is required by exojax 2.2.2;
+# numba compiles the prefilter of the streamed cell selection (simulations.selection).
 # JAX: the CPU build comes with `jax`; for NVIDIA GPUs install the `gpu` extra (JAX's own extra, jax[cuda12]) or follow
 # https://docs.jax.dev/en/latest/installation.html (docs/installation.md).
 dependencies = [
@@ -34,10 +35,11 @@ dependencies = [
   "matplotlib>=3.10.8",
   "diffrax>=0.7.0",
   "exojax>=2.2.2",
+  "numba>=0.60",
 ]
 
 [project.optional-dependencies]
-# snapshot readers (Arepo / IllustrisTNG HDF5), the result cache and the fake_spectra comparison files
+# snapshot readers (Arepo / IllustrisTNG HDF5) and the fake_spectra comparison files
 simulations = ["h5py>=3.15.1"]
 # optional figure extras: Tol's colour schemes (a vendored copy is used without it) and interactive notebook figures
 plots = ["tol-colors>=2.2", "ipympl>=0.10.0"]

@@ -24,15 +24,15 @@ casts what the package sends to the device. `skewerjax.config.real_dtype()` is t
 
 A `SkewerBundle` built from concrete values keeps float64 host copies of its points, distances and scale factors
 (`SkewerBundle.host`), which `cell_pieces` and `bundle_frame` read; its JAX arrays are in the policy dtype. One built
-under `jit` (traced) solves a(x) with diffrax in the working dtype, as before, and stays differentiable.
+under `jit` (traced) solves a(x) with diffrax in the working dtype and stays differentiable.
 
 ## The audit
 
 Each item of the float32 audit, what it found and the fix (measured on TNG50-4, four skewers along y, notebook 12's
-calls, against the float64 code at commit `8b70ddd`).
+calls, against the same calls in float64).
 
-1. **Velocity offsets.** The line centre of a piece is v_c = V_H + c (ln(1−β) − ln(1+β))/2. The kernel used to compute
-   V_H = c ln(a†/a_p) from the two scale factors: in float32 their ratio carries ~6e-8, so V_H errs by ~0.02 km/s
+1. **Velocity offsets.** The line centre of a piece is v_c = V_H + c (ln(1−β) − ln(1+β))/2. Computed in float32 from the two
+   scale factors, V_H = c ln(a†/a_p) would carry their ratio's ~6e-8, an error of ~0.02 km/s
    (1 % of the Doppler width of Si III at 1e4 K, 2.4 km/s). **Fix:** V_H is computed in float64 on the host
    (`absorber_pieces`; `compute_optical_depth` fills it for `Pieces` built by hand) and stored per piece (`Pieces.hubble_kms`); the kernel adds the peculiar part (log1p, exact to
    float32 at β ~ 1e-3) and the detuning uses `expm1(−Δv/c)` (Δv/c ~ 1e-5: exact to float32 relative). What remains is
@@ -49,26 +49,27 @@ calls, against the float64 code at commit `8b70ddd`).
    first, then the per-line constant C f (`optical_depth_kernel`), so no intermediate leaves the float32 range.
 5. **Voigt arguments and wings.** ExoJAX's `voigtone` in float32 against SciPy's `wofz`: max relative error 2.1e-6 over
    u ∈ [0, 3000], a ∈ [1e-4, 3e-2] (float64: 1e-6, ExoJAX's own); Harris' expansion 6e-6 (1.4e-5 at a = 1e-3), the same
-   in both precisions. ExoJAX returned float64 for float32 inputs when x64 is on: cast back (`voigt_exojax`), which
-   also fixes `voigt="harris"` with float32 under x64.
+   in both precisions. ExoJAX returns float64 for float32 inputs when x64 is on: `voigt_exojax` casts back, so
+   `voigt="harris"` keeps float32 under x64.
 6. **Sums over many pieces.** Every term is positive, so the error of the sum is bounded by ~eps log2(N) of the sum
    (pairwise in XLA's reductions; the rows of `piece_chunk` pieces are summed last). Measured below.
 7. **τ up to ~1e6 and exp(−τ).** float32 holds τ to 3.4e38 and exp(−τ) underflows to 0 above τ ≈ 104 (F < 1e-45), the
    same F as float64 to the precision of a spectrum. F = 1 − τ for τ < 6e-8: a float32 F of a very weak line is 1;
    compare such lines in τ (or cast τ to float64 before exp).
 8. **Mixed inputs.** Host arrays (weights, offsets) arrive in float64 next to float32 fields: kernels take their working
-   dtype from all their inputs (`summary_stats.stats_1d.p1d_kernel`),. `voigt_convolution`, a standalone reference, works in float64 whenever x64 is on.
+   dtype from all their inputs (`summary_stats.stats_1d.p1d_kernel`). `voigt_convolution`, a standalone reference, works in float64 whenever x64 is on.
 
 ## float32 against float64
 
 | quantity (TNG50-4, 4 skewers, 1 km/s pixels) | default mode | matched mode |
 |---|---|---|
-| Lyα: max \|ΔF\|, rms ΔF | 1.1e-5, 1.7e-6 | 1.3e-5, 9.6e-7 |
+| Lyα: max \|ΔF\|, rms ΔF | 1.1e-5, 1.7e-6 | 2.2e-6, 2.0e-7 |
 | Lyα: max \|Δτ/τ\| (τ > 1e-6 τ_max) | 6.5e-5 | 3.6e-5 |
 | Si III: max \|ΔF\|, rms ΔF | 1.9e-7, 3.2e-9 | 1.9e-7, 3.3e-9 |
 | Si III: max \|Δτ/τ\| (τ > 1e-6 τ_max) | 1.9e-4 | 2.1e-4 |
 
-The residual is the rounding of the velocity coordinate (item 1): ΔF ≈ (dF/dv) δv with δv ~ 2.4e-4 km/s.
+The residual is the rounding of the velocity coordinate (item 1): ΔF ≈ (dF/dv) δv with δv ~ 2.4e-4 km/s. The matched
+mode forms its detunings from float64 offsets on the host (`core.per_cell`), hence its smaller residual in F.
 
 ## Tests
 

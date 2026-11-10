@@ -2,13 +2,15 @@
 
 * ``select_cells`` (cells in memory): the radii, completeness (every cell that owns a point of a curved path through
   the periodic faces is kept, for Voronoi and grid cells; "tophat" is a subset of "voronoi"), the CPU distance
-  (periodic minimum image), and the back ends ("auto" falls back to the CPU without jztree, "jztree" fails clearly);
+  (periodic minimum image);
 * the streamed selections of a snapshot (``simulations.select_cells_near_paths``, ``select_cells_in_region``) on a small
   synthetic Arepo HDF5 snapshot (two files, several blocks, uneven cells): exactly the cells of their rules (brute
   force), for paths through the periodic faces, many paths, regions across the faces; the coarse prefilter of the paths
   (``_PathDistanceGrid``) is conservative. The same on TNG50-4: ``tests/simulations/test_snapshot.py``.
 """
 
+import atexit
+import shutil
 import tempfile
 from functools import cache
 from pathlib import Path
@@ -90,16 +92,6 @@ def test_cpu_distance_is_the_periodic_minimum_image():
     assert np.all(sel.wrap_positions(np.array([-1e-17, BOX, 2.5 * BOX]), BOX) < BOX)
 
 
-def test_backends():
-    assert sel.resolve_backend("auto") == ("jztree" if sel.jztree_available() else "cpu")
-    assert sel.resolve_backend("cpu") == "cpu"
-    with pytest.raises(ValueError):
-        sel.resolve_backend("gpu")
-    if not sel.jztree_available():
-        with pytest.raises(RuntimeError, match="jztree"):
-            sel.resolve_backend("jztree")
-
-
 # --------------------------------------------------------------------------- streamed from a synthetic snapshot
 BOX_CODE, HUBBLE = 10_000.0, 0.7  # [ckpc/h]: a box of 14.29 cMpc
 
@@ -112,7 +104,9 @@ def _reader(n: int = 30_000) -> ArepoHDF5Reader:
     pos[: n // 2, 2] = 0.45 * BOX_CODE + rng.uniform(0.0, 0.1 * BOX_CODE, n // 2)
     vol = (BOX_CODE**3 / n) * rng.lognormal(0.0, 1.0, n)
     mass = rng.uniform(0.5, 2.0, n)
-    root = Path(tempfile.mkdtemp(prefix="sjx_snap_")) / "snapdir_000"
+    tmp = tempfile.mkdtemp(prefix="sjx_snap_")
+    atexit.register(shutil.rmtree, tmp, True)  # an input written for the tests, removed at exit
+    root = Path(tmp) / "snapdir_000"
     root.mkdir()
     for k, rows in enumerate(np.array_split(np.arange(n), 2)):
         with h5py.File(root / f"snap_000.{k}.hdf5", "w") as f:

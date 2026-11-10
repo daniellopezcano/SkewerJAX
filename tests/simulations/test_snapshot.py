@@ -2,8 +2,7 @@
 ``$SKEWERJAX_DATA/TNG50-4``): the reader (header, units, the streamed blocks), the selection streamed from disk
 (``select_cells_near_paths``) against the generic in-memory ``core.select_cells`` on the cells of a region
 (``select_cells_in_region``): the same cells, and complete; the gas cells handed to the core
-(``SimulationSkewers.to_cells`` = ``gas_to_cells``); and the field extraction over the whole snapshot (formerly
-``scripts/validation/check_tng_fields.py``, same tolerances): per-cell H I physics, selection completeness against a
+(``SimulationSkewers.to_cells`` = ``gas_to_cells``); and the field extraction over the whole snapshot: per-cell H I physics, selection completeness against a
 brute-force nearest-generator search over 19.3 M cells, the Voronoi deposition (exact pieces, a column independent of
 the spacing), the pieces handed to the core and the cells of a sub-box without skewers."""
 

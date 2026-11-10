@@ -667,7 +667,6 @@ def deposit(
     points,
     *,
     deposition: str = "voronoi",
-    selection_backend: str = "cpu",
     grid_fast_path: bool = True,
     chord_weight: float | None = None,
     return_info: bool = False,
@@ -682,8 +681,6 @@ def deposit(
         Voronoi pieces, joined per cell crossing by ``cell_pieces``).
     chord_weight : "tophat_chords" only: the weight of each chord point (``tophat_chord_segments``; None: 1/7, the
         column kept; 1/8: fake_spectra's, 7/8 of the column).
-    selection_backend : backend of ``core.selection.select_cells``, which first keeps the cells within reach of the
-        points (skipped by the grid fast path).
     return_info : also return dict(selection (``select_cells``'s info; for the grid fast path every cell), deposition
         (kind, the ``SegmentComponents.diagnostics``, time_s)).
     """
@@ -698,7 +695,7 @@ def deposit(
         use, sel = cells, dict(n_cells=len(cells), n_selected=len(cells), indices=np.arange(len(cells)), mode="grid", time_s=0.0)
         seg = dep.grid_segments(pts, cells.grid, cells.box)
     else:
-        use, sel = select_cells(cells, pts, mode="tophat" if spheres else "voronoi", backend=selection_backend, return_info=True)
+        use, sel = select_cells(cells, pts, mode="tophat" if spheres else "voronoi", return_info=True)
         t0 = time.perf_counter()
         if deposition == "tophat":
             seg = dep.tophat_segments(pts, use.positions, use.size_cMpc, use.box)
@@ -762,7 +759,6 @@ def cell_pieces(
     ii_cosmology: int = 0,
     deposition: str = "voronoi",
     segments=None,
-    selection_backend: str = "cpu",
     grid_fast_path: bool = True,
     crossing_tolerance: float | None = 0.25,
     chord_weight: float | None = None,
@@ -788,7 +784,7 @@ def cell_pieces(
     cells : ``core.Cells`` holding every species of ``line_bundle``.
     skewer_bundle : the paths and their a(x) (``bundle_frame``: a_dagger default its ``a0``); or give ``points``
         (N_sk, N, 3) [cMpc] and a ``frame`` (``ExactFrame`` / ``SnapshotFrame``) instead.
-    deposition, selection_backend, grid_fast_path : see ``deposit``; segments : a ``SegmentComponents`` already
+    deposition, grid_fast_path : see ``deposit``; segments : a ``SegmentComponents`` already
         computed for ``points`` (its cell indices refer to ``cells``), used instead.
     chord_weight : ``deposition="tophat_chords"`` only, see ``deposit``.
     a_data : the scale factor of the data (kept on the ``Absorbers``).
@@ -828,7 +824,6 @@ def cell_pieces(
             cells,
             pts,
             deposition="voronoi" if deposition == "voronoi_crossings" else deposition,
-            selection_backend=selection_backend,
             grid_fast_path=grid_fast_path,
             chord_weight=chord_weight,
             return_info=True,

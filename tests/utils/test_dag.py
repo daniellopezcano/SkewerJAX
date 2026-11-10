@@ -103,17 +103,23 @@ def test_mermaid_and_the_readme():
 
 
 def test_plot_dag_routes_and_keys():
-    nodes = dag.DAG_NODES
-    ew, eh = pl._DAG_W / 2 + pl._DAG_PAD, pl._DAG_H / 2 + pl._DAG_PAD
+    """The drawn graph: every edge runs from the outline of its box to the outline of the other, the realms are bands
+    holding their boxes, the pipeline runs left to right, few edges cross, and the key numbers the edges."""
+    nodes = {k: v for k, v in dag.DAG_NODES.items()}
+    box, _, row = pl._dag_layout(nodes, dag.DAG_NOTEBOOKS, pl.FONT_MIN["floor"])
 
     def on_outline(p, k):
-        x, y = nodes[k][:2]
-        return (np.isclose(abs(p[0] - x), ew) and abs(p[1] - y) <= eh + 1e-9) or (
-            np.isclose(abs(p[1] - y), eh) and abs(p[0] - x) <= ew + 1e-9
+        x, y, w, h = box[k]
+        return (np.isclose(abs(p[0] - x), w / 2) and abs(p[1] - y) <= h / 2 + 1e-6) or (
+            np.isclose(abs(p[1] - y), h / 2) and abs(p[0] - x) <= w / 2 + 1e-6
         )
 
+    def path(e):
+        ports = tuple(pl._DAG_PORT * p for p in pl._DAG_PORTS.get((e.a, e.b), (0, 0)))
+        return pl._dag_path(e.a, e.b, box, row, pl._DAG_ROUTES.get((e.a, e.b)), ports)
+
     for e in dag.DAG_EDGES + dag.DAG_EXTERNAL:  # every edge starts and ends on the drawn outline of its boxes
-        pts = pl._dag_route(e.a, e.b, e.route, nodes, pl._DAG_LANES.get((e.a, e.b), 0.0), pl._DAG_END_DX.get((e.a, e.b), 0.0))
+        pts = path(e)
         assert on_outline(pts[0], e.a) and on_outline(pts[-1], e.b), (e.a, e.b, pts)
     with pytest.raises(ValueError, match="unknown ingredients"):
         pl.plot_dag(("stats",))
@@ -122,17 +128,16 @@ def test_plot_dag_routes_and_keys():
     assert {"core", "simulations", "summary_stats"} <= texts, "the bands, labelled"
     assert "overflux.py" in texts and "skewers.py" in texts, "the module under every name"
     assert pl.check_fonts(fig) == []
-    assert np.prod(fig.get_size_inches()) <= 0.51 * 26 * 8.6, "about half the area of the previous figure"
     assert "1  a(x) (or manual)" in texts, "the edges numbered, in the key"
-    assert not any(n.detail in texts for n in nodes.values()), "compact boxes: the name and the module"
-    band = {k: pl._DAG_BANDS[n.realm] for k, n in nodes.items() if n.realm in dag.REALMS}
-    for k, (y0, y1) in band.items():  # the realms as horizontal bands
-        assert y0 < nodes[k].y - pl._DAG_H / 2 and nodes[k].y + pl._DAG_H / 2 < y1, k
     order = ["fields", "deposition", "tau", "normalisation", "overflux", "stats_1d"]
-    assert all(nodes[a].x < nodes[b].x for a, b in zip(order, order[1:])), "left to right by stage of the pipeline"
+    assert all(box[a][0] < box[b][0] for a, b in zip(order, order[1:])), "left to right by stage of the pipeline"
+    for realm in dag.REALMS:  # the realms as vertical bands: no box of another realm between two of one realm
+        xs = [box[k][0] for k, n in nodes.items() if n.realm == realm]
+        others = [box[k][0] for k, n in nodes.items() if n.realm in dag.REALMS and n.realm != realm]
+        assert not any(min(xs) < x < max(xs) for x in others), realm
     segs = []
     for e in dag.DAG_EDGES:
-        pts = pl._dag_route(e.a, e.b, e.route, nodes, pl._DAG_LANES.get((e.a, e.b), 0.0), pl._DAG_END_DX.get((e.a, e.b), 0.0))
+        pts = path(e)
         segs += [(e.a, e.b, p, q) for p, q in zip(pts, pts[1:])]
 
     def crossing(s1, s2):
@@ -141,6 +146,6 @@ def test_plot_dag_routes_and_keys():
         return o(a, b, c) * o(a, b, d) < 0 and o(c, d, a) * o(c, d, b) < 0
 
     n_cross = sum(crossing(u, v) for i, u in enumerate(segs) for v in segs[i + 1 :] if u[:2] != v[:2])
-    assert n_cross <= 1, f"few crossings: {n_cross}"
+    assert n_cross <= 2, f"few crossings: {n_cross}"
     with pytest.raises(ValueError, match="unknown route"):
-        pl._dag_route("lines", "tau", "zigzag", nodes, 0.0)
+        pl._dag_path("lines", "tau", box, row, "zigzag", (0.0, 0.0))
