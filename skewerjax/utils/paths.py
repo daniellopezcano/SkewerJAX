@@ -6,9 +6,10 @@ variable.
 * ``BENCHMARK_RAW_DIR``: the per-configuration records of ``scripts/benchmarks/benchmark_fake_spectra.py`` (in
   ``fake_spectra/``; rebuilt by that script, git-ignored); ``$SKEWERJAX_BENCHMARK_RAW``, default ``benchmarks/raw`` in the
   repository.
-* ``BENCHMARK_RECORDS_DIR``: the benchmark summary read by notebook 15 (``fake_spectra_benchmark.json``: every record,
-  the machine, the snapshots and the launches; written by the same script, committed); ``$SKEWERJAX_BENCHMARK_RESULTS``,
-  default ``benchmarks/results`` in the repository.
+* ``BENCHMARK_RECORDS_DIR``: the committed benchmark results: the scaling records of notebook 14 (``scaling/``, written by
+  ``scripts/benchmarks/benchmark_scaling.py``) and the summary of ``benchmark_fake_spectra.py``
+  (``fake_spectra_benchmark.json``: every record, the machine, the snapshots and the launches; no notebook reads it since
+  notebook 15 was removed); ``$SKEWERJAX_BENCHMARK_RESULTS``, default ``benchmarks/results`` in the repository.
 """
 
 from __future__ import annotations

@@ -22,14 +22,14 @@ Sets (``benchmark_sets``): ``scaling``, ``threads``, ``smoke`` (TNG50-4, 1 and 4
 configuration runs in its own process; results that exist are kept, so an interrupted run resumes (delete a record to
 measure it again). Limits: the cap per configuration, ``--mem-cap`` GB of worker RSS, ``--mem-floor`` GB of memory left
 on the machine; larger skewer counts of a series that hit a limit (or are predicted to) are skipped and recorded as
-such. Every record keeps its preset (``config["preset"]``); notebook 15 says which point comes from which.
+such. Every record keeps its preset (``config["preset"]``).
 
 Inputs: ``skewerjax.utils.paths.DATA_DIR`` (``$SKEWERJAX_DATA``) / TNG50-4, -3, -2, snapshot 25 (z = 3), read only.
 Outputs: one record per configuration (``.json``, ``.npz`` of tau, a log) in ``--raw`` (default
 ``BENCHMARK_RAW_DIR / "fake_spectra"`` = ``benchmarks/raw/fake_spectra``, git-ignored), and the summary of all records,
 ``--results`` (default ``BENCHMARK_RECORDS_DIR / "fake_spectra_benchmark.json"`` =
-``benchmarks/results/fake_spectra_benchmark.json``, committed), which notebook ``15_comparison_fake_spectra_benchmark``
-reads.
+``benchmarks/results/fake_spectra_benchmark.json``, committed). No notebook reads it since notebook 15 was removed: the
+scaling benchmark of notebook 14 (``benchmark_scaling.py``) supersedes it.
 """
 
 import argparse

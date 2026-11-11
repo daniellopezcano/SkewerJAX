@@ -81,7 +81,8 @@ def test_one_box_along_its_skewers():
     n_sk = lattice_columns(BOXES.n_cells, STRIDE).shape[0]
     m = len(LINE_IDS)
     assert m == 4 and r["tau"].shape == (1, m, n_sk, N_PIX)
-    assert r["warnings"] == [[]] and np.all(r["resolution"][..., 1] < 1e-3), "the resolution check passes"
+    # the pieces are the cells' crossings, wide in velocity, integrated exactly: no warning (the report only informs)
+    assert r["warnings"] == [[]] and np.all(r["resolution"][..., 0] > 0), "no resolution warning with the integrated profile"
     F = r["T"][0]
     assert 0 < F.prod(0).mean() < F.mean(axis=(1, 2)).min() < 1
     s = r["flux"]

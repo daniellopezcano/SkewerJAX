@@ -7,24 +7,30 @@ Four entries compute the same spectra (Lya and Si III 1206) on the same skewers 
   ``SkewerJAX default, GPU`` (the tau sum on the GPU; the host stages are those of the default CPU entry).
 
 The skewers run along y on a nested grid, x, z = i L / n (``nested_grid``), so that the **reference skewer**
-(L/4, L/4) (notebook 12's) belongs to every grid with n a multiple of 4. SkewerJAX processes the skewers in batches of at
-most ``BATCH`` (``batches``: host memory and the GPU's 12 GB), each batch through the whole route; its stages add up over
-the batches. The first batch runs once before the timed run (the warm-up: JIT compilation, numba, page cache), and the
-JIT time of a tau stage is that warm-up minus the same batch in the timed run.
+(L/4, L/4) (notebook 12's) belongs to every grid with n a multiple of 4. SkewerJAX makes one pass over the snapshot for
+all its entries (``simulations.stream.stream_cells``: the cells within reach of each tile of skewers, with both physics
+configurations), then the optical depth tile by tile (``tiles_optical_depth``) for each entry and pixel grid
+(``skewerjax_point``). The stages of the pass (I/O, selection, physics) are its wall time attributed by the shares of its
+threads; the pieces and tau stages are the tiles' times.
+
+Protocol (``run_point``): **cold** for every code (``evict_page_cache`` drops the snapshot from the page cache before each
+code reads it; a snapshot larger than the RAM is cold anyway), fake_spectra first, then a SkewerJAX warm-up on TNG50-4
+(the JIT compilation of the same kernels, timed as ``jit_s``, nothing of the target snapshot read), then the timed
+SkewerJAX run; ``repeats`` runs of each code at small N, where the I/O varies (the fastest is kept, all are recorded).
+Peak resident memory (total and anonymous: ``MemorySampler``) and the GPU's peak are recorded for every stage.
 
 Blocks (``scaling_points``), every point one configuration (``point_config``), deduplicated across blocks:
 
 * **A**, simulation resolution: TNG50-4, TNG50-3, TNG50-2 at n_max^2 skewers, 1 km/s pixels;
-* **B**, number of skewers: TNG50-2, n = 4, 8, ..., n_max per side, 1 km/s;
-* **C1**, pixel width: TNG50-2, n_max^2, pixels of 1, 2, 4, 8, 16 km/s (SkewerJAX at its default 0.25 km/s sampling);
-* **C2**, sampling along the skewer: TNG50-2, n_max^2, 1 km/s, points every 0.125 ... 4 km/s, the SkewerJAX entries only
-  (fake_spectra has no such parameter: its 1 km/s run of block A is the fixed reference).
+* **B**, number of skewers: TNG50-2, n = 4, 16, 32, 64, 128, 256 per side (16 to 65,536 skewers), 1 km/s;
+* **C1**, pixel width: TNG50-2, n_max^2, pixels of 1, 2, 4, 8, 16 km/s, merged into the n_max^2 point of A and B
+  (SkewerJAX's pass is shared by the five grids; fake_spectra runs once per grid);
+* **C2**, the sampling of the midpoint option (``run_c2``): the earlier default sampled each skewer at 0.125 ... 4 km/s;
+  the default integrates the profile over each crossing and has no sampling, so C2 is a precision study of the option
+  against the default, not a timed point.
 
-``run_point`` measures one point in this process and returns its record (one timed run after the warm-up): the stage
-times, the JIT time, the cache state of the snapshot (``cache_state``: the fraction of its files in the page cache before
-each code reads it), the machine, the agreement over all skewers, the resolution check of the sampling, and the flux of
-the reference skewer from every entry with the pixel grid. ``scripts/benchmarks/benchmark_scaling.py`` runs every point
-in its own process and writes one record per point to ``benchmarks/results/scaling/`` (resumable).
+``scripts/benchmarks/benchmark_scaling.py`` runs every point in its own process and writes one record per point to
+``benchmarks/results/scaling/`` (resumable), and C2 with ``--c2``.
 """
 
 from __future__ import annotations
@@ -37,12 +43,11 @@ import shutil
 import subprocess
 import tempfile
 import time
-import warnings
 from pathlib import Path
 
 import numpy as np
 
-from skewerjax.comparison.benchmark import MATCHED_CELLS, STAGES, RunClock, StageTimer, machine_metadata
+from skewerjax.comparison.benchmark import MATCHED_CELLS, STAGES, StageTimer, machine_metadata
 
 FS, CPU_DEF, CPU_MAT, GPU_DEF = "fake_spectra", "SkewerJAX default, CPU", "SkewerJAX matched, CPU", "SkewerJAX default, GPU"
 ENTRIES = (FS, CPU_DEF, CPU_MAT, GPU_DEF)
@@ -51,13 +56,11 @@ LINE_IDS = ("HI-LyA", "SiIII-1206")
 FS_LINES = (("H", 1, 1215), ("Si", 3, 1206))
 SNAP, AXIS = 25, 2  # snapshot 25 (z = 3); the skewers along y (fake_spectra's axis 2)
 REFERENCE = (0.25, 0.25)  # the reference skewer (x, z) / L: notebook 12's
-BATCH = 1024  # skewers per batch at 0.25 km/s; fewer at a finer sampling (``batches``): the matched chords of 4096 TNG50-2 skewers exceed 125 GB
 FS_UPPER_BOUND = 256  # the largest n of the nested grids on which fake_spectra runs within 20 min on TNG50-2 (996 s; 512: > 20 min)
-N_MAX = 128  # the largest grid of notebooks 13 and 14: half of it per side (SkewerJAX's dense CPU tau at 256^2 takes ~6 h per run)
+N_MAX = 128  # the grid of notebook 13 and of blocks A and C1 (16,384 skewers)
+B_SIDES = (4, 16, 32, 64, 128, 256)  # block B: 16 to 65,536 skewers (256: fake_spectra's upper bound, ``FS_UPPER_BOUND``)
 SIMULATIONS = ("TNG50-4", "TNG50-3", "TNG50-2")
 PIXELS_KMS = (1.0, 2.0, 4.0, 8.0, 16.0)
-SPACINGS_KMS = (0.125, 0.25, 0.5, 1.0, 2.0, 4.0)
-DEFAULT_SPACING_KMS = 0.25
 DEFAULT_CELLS = dict(mass_unit="amu", T_constants="codata", x_HI_model="stored_sf", cloudy_density="hydrogen", cloudy_interpolation="linear")
 DEFAULT_TAU = dict(
     velocity_period=False,
@@ -108,41 +111,43 @@ def reference_index(n: int) -> int:
     return i * n + k
 
 
-def batches(n_skewers: int, spacing_kms: float = DEFAULT_SPACING_KMS) -> list:
-    """Slices of at most ``BATCH`` skewers (proportionally fewer below 0.25 km/s: the pieces grow with the points)."""
-    size = max(256, int(BATCH * min(1.0, spacing_kms / DEFAULT_SPACING_KMS)))
-    return [slice(a, min(a + size, n_skewers)) for a in range(0, n_skewers, size)]
-
-
-def point_config(sim: str, n: int, dv_kms: float = 1.0, spacing_kms: float = DEFAULT_SPACING_KMS, entries=ENTRIES) -> dict:
-    """One configuration: the snapshot, n per side, the pixel width, the SkewerJAX sampling and the entries run."""
-    c = dict(sim=sim, snap=SNAP, n=int(n), n_skewers=int(n) ** 2, dv_kms=float(dv_kms), spacing_kms=float(spacing_kms), entries=list(entries))
-    c["id"] = f"{sim}_n{n}_dv{dv_kms:g}_ds{spacing_kms:g}" + ("" if FS in entries else "_sjx")
+def point_config(sim: str, n: int, dv_kms: float = 1.0, entries=ENTRIES, dv_list=None, repeats: int = 1, tile_size: int = 1024) -> dict:
+    """One configuration: the snapshot, n per side, the pixel widths (``dv_list``: the grids sharing one pass), the
+    entries run, the repeats and the tile size."""
+    dvl = [float(dv_kms)] if dv_list is None else [float(x) for x in dv_list]
+    c = dict(sim=sim, snap=SNAP, n=int(n), n_skewers=int(n) ** 2, dv_kms=float(dvl[0]), dv_list=dvl,
+             entries=list(entries), repeats=int(repeats), tile_size=int(tile_size))
+    c["id"] = f"{sim}_n{n}_dv{'-'.join(f'{x:g}' for x in dvl)}" + ("" if FS in entries else "_sjx")
     return c
 
 
-def scaling_points(n_max: int, blocks=("A", "B", "C1", "C2")) -> list:
-    """The configurations of the blocks (module docstring), each once, with the blocks it belongs to (``blocks``)."""
+def scaling_points(n_max: int = N_MAX, blocks=("A", "B", "C1")) -> list:
+    """The configurations of the blocks, each once, with the blocks it belongs to (``blocks``):
+
+    * **A**, simulation resolution: TNG50-4, TNG50-3, TNG50-2 at n_max^2 skewers, 1 km/s pixels;
+    * **B**, number of skewers: TNG50-2, n = 4, 16, 32, 64, 128, 256 per side (16 to 65,536 skewers), 1 km/s; two runs of
+      each code at n <= 16, where the I/O dominates and varies;
+    * **C1**, pixel width: TNG50-2 at n_max^2 skewers, pixels of 1, 2, 4, 8, 16 km/s: SkewerJAX's pass and pieces shared
+      by the five grids (only the optical depth depends on them), fake_spectra once per grid.
+
+    Every entry (fake_spectra; SkewerJAX default CPU, default GPU, matched CPU) runs at every point; the TNG50-2 n_max^2
+    point is shared by A, B and C1. The sampling study of the midpoint option (C2) is a separate precision run
+    (``scripts/benchmarks/benchmark_scaling.py --c2``): the default does not sample."""
     pts = {}
 
     def add(block, c):
         pts.setdefault(c["id"], dict(c, blocks=[]))["blocks"].append(block)
 
+    dv_c1 = PIXELS_KMS if "C1" in blocks else (1.0,)
+    target = point_config("TNG50-2", n_max, dv_list=dv_c1)
     if "A" in blocks:
         for sim in SIMULATIONS:
-            add("A", point_config(sim, n_max))
+            add("A", target if sim == "TNG50-2" else point_config(sim, n_max))
     if "B" in blocks:
-        n = 4
-        while n <= n_max:
-            add("B", point_config("TNG50-2", n))
-            n *= 2
+        for n in B_SIDES:
+            add("B", target if n == n_max else point_config("TNG50-2", n, repeats=2 if n <= 16 else 1))
     if "C1" in blocks:
-        for dv in PIXELS_KMS:
-            add("C1", point_config("TNG50-2", n_max, dv_kms=dv))
-    if "C2" in blocks:
-        for ds in SPACINGS_KMS:
-            entries = ENTRIES if ds == DEFAULT_SPACING_KMS else SKEWERJAX_ENTRIES
-            add("C2", point_config("TNG50-2", n_max, spacing_kms=ds, entries=entries))
+        add("C1", target)
     return list(pts.values())
 
 
@@ -177,33 +182,11 @@ def rebin_average(F, edges_fine, edges_coarse) -> np.ndarray:
     return (F @ w.T) / w.sum(axis=1)
 
 
-def flux_residuals(F, F_ref) -> dict:
-    """rms and max |dF| of F against F_ref (any shape)."""
-    d = np.asarray(F, dtype=np.float64) - np.asarray(F_ref, dtype=np.float64)
-    return dict(rms_dF=float(np.sqrt(np.mean(d**2))), max_dF=float(np.max(np.abs(d))))
-
-
 def fit_slope(x, y) -> float:
     """The slope of log y against log x (least squares), NaN with fewer than two positive points."""
     x, y = np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
     ok = (x > 0) & (y > 0) & np.isfinite(y)
     return float(np.polyfit(np.log(x[ok]), np.log(y[ok]), 1)[0]) if ok.sum() >= 2 else float("nan")
-
-
-class _Agreement:
-    """Running rms and max of the flux differences over the batches."""
-
-    def __init__(self):
-        self.s2, self.n, self.mx = {}, {}, {}
-
-    def add(self, key, F, F_ref):
-        d = np.asarray(F, dtype=np.float64) - np.asarray(F_ref, dtype=np.float64)
-        self.s2[key] = self.s2.get(key, 0.0) + float(np.sum(d**2))
-        self.n[key] = self.n.get(key, 0) + d.size
-        self.mx[key] = max(self.mx.get(key, 0.0), float(np.max(np.abs(d))))
-
-    def result(self) -> dict:
-        return {k: dict(rms_dF=float(np.sqrt(self.s2[k] / self.n[k])), max_dF=self.mx[k]) for k in self.s2}
 
 
 # --------------------------------------------------------------------------- one point
@@ -225,61 +208,152 @@ def run_fake_spectra(snap_base, X, Z, H, dv_kms: float) -> tuple:
     return tau, dict(T.t), int(fs.nbins), float(fs.dvbin)
 
 
-def skewerjax_batch(reader, cofm, v, lines, entries, clock, run, cpu, gpu, spacing_kms: float):
-    """The SkewerJAX entries on one batch of skewers (``cofm`` (n, 3) [cMpc], along y), the calls of notebook 13, each
-    stage timed into ``clock`` (``RunClock``) for ``run``: returns {entry: tau (2, n, N_v)} and the resolution report of the
-    default pieces. ``cpu``, ``gpu``: the ``devices`` of the tau sums."""
-    from skewerjax.core import SkewerBundle, SnapshotFrame, cell_pieces, compute_optical_depth, resolution_report
-    from skewerjax.simulations import gas_to_cells, select_cells_near_paths
+def evict_page_cache(snapdir) -> int:
+    """Drop the snapshot's files from the page cache (``posix_fadvise(DONTNEED)``: a hint to the kernel, nothing is
+    written; pages mapped by a process stay): the cold protocol. Returns the number of files."""
+    n = 0
+    for p in sorted(Path(snapdir).glob("*.hdf5")):
+        fd = os.open(p, os.O_RDONLY)
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+            n += 1
+        finally:
+            os.close(fd)
+    return n
+
+
+def rss_anon_GB() -> float:
+    """Anonymous resident memory of this process [GB] (``RssAnon``: without file pages mapped from the snapshot)."""
+    with open("/proc/self/status") as f:
+        for ln in f:
+            if ln.startswith("RssAnon:"):
+                return int(ln.split()[1]) / 1e6
+    return float("nan")
+
+
+class MemorySampler:
+    """Peak RSS and anonymous RSS [GB] of this process since ``reset``, sampled every ``dt`` seconds."""
+
+    def __init__(self, dt: float = 0.05):
+        import threading
+
+        from skewerjax.comparison.benchmark import rss_GB
+
+        self._rss = rss_GB
+        self.dt, self._stop = dt, threading.Event()
+        self.reset()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while not self._stop.wait(self.dt):
+            self.rss = max(self.rss, self._rss())
+            self.anon = max(self.anon, rss_anon_GB())
+
+    def reset(self):
+        self.rss, self.anon = self._rss(), rss_anon_GB()
+
+    def read(self) -> dict:
+        return dict(rss_GB=max(self.rss, self._rss()), anon_GB=max(self.anon, rss_anon_GB()))
+
+
+def gpu_peak_GB(gpu) -> float | None:
+    """The peak memory in use on the first GPU since the process started [GB] (``peak_bytes_in_use``), or None."""
+    try:
+        return gpu[0].memory_stats()["peak_bytes_in_use"] / 1e9 if gpu else None
+    except Exception:
+        return None
+
+
+def mode_options(mode: str, nbins: int, dv: float, H) -> dict:
+    """The tile options of an entry's mode: "default" (Voronoi crossings, the integrated profile, the exact frame) or
+    "matched" (fake_spectra's chords and every option at its value, ``matched_tau``)."""
+    if mode == "default":
+        return dict(config="default", pieces="crossings", frame="exact", tau=dict(velocity_period=None))
+    mt = matched_tau(nbins * dv, H.a, H.velfac_kms_per_cMpc)
+    mt.pop("resolution_tolerance")
+    return dict(config="matched", pieces="chords", frame="snapshot", tau=dict(mt, profile="midpoint", chord_weight=1 / 8))
+
+
+def skewerjax_point(reader, cofm, grids: dict, lines, entries, *, cpu, gpu, tile_size: int = 1024, threads=None, memory=None, clock=None):
+    """The SkewerJAX entries on the skewers ``cofm`` (n, 3) [cMpc] along y: one pass over the snapshot shared by every
+    entry (``simulations.stream.stream_cells``, both physics configurations when the matched entry runs), then the
+    tiles of every entry on every pixel grid of ``grids`` ({label: v}). Returns ({(entry, label): tau}, the record)."""
+    from skewerjax.core.absorbers import SnapshotFrame
+    from skewerjax.simulations import stream as st
 
     H = reader.header
-    L, AH, a_snap = H.box_cMpc, H.velfac_kms_per_cMpc, H.a
-    species = list(lines.species_keys)
-    nbins, dv = v.size, float(v[1] - v[0])
-    out = {}
-    with clock.time(CPU_DEF, "setup", run):
-        bundle = SkewerBundle.axis_aligned(cofm, AXIS, L, spacing_kms / AH, H.cosmology(), a_ref=a_snap)
-    points = bundle.host["points"]
-    gas, info = select_cells_near_paths(reader, points, mode="voronoi", max_rows=4_000_000, workers=-1, return_info=True)
-    clock.record(CPU_DEF, "io", run, info["timings"]["read"] + info["timings"]["read_selected"])
-    clock.record(CPU_DEF, "selection", run, info["timings"]["prefilter"] + info["timings"]["query"])
-    with clock.time(CPU_DEF, "physics", run):
-        cells = gas_to_cells(gas, species, **DEFAULT_CELLS)
-    with clock.time(CPU_DEF, "pieces", run):
-        pieces = cell_pieces(cells, lines, skewer_bundle=bundle, deposition="voronoi", a_data=a_snap)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        with clock.time(CPU_DEF, "tau", run):
-            out[CPU_DEF] = np.asarray(compute_optical_depth(pieces, v, lines, dtype=None, devices=cpu, **DEFAULT_TAU))
-    rep = resolution_report(pieces, lines, DEFAULT_TAU["resolution_tolerance"])
-    rep = dict(max_ratio=[float(x) for x in rep["max_ratio"]], column_fraction=[float(x) for x in rep["column_fraction"]],
-               warned=any("too wide" in str(w.message) for w in caught))
-    if GPU_DEF in entries and gpu:
-        with clock.time(GPU_DEF, "tau", run):
-            out[GPU_DEF] = np.asarray(compute_optical_depth(pieces, v, lines, dtype=None, devices=gpu, **DEFAULT_TAU))
-    del pieces, cells
+    L = H.box_cMpc
+    rec = dict(entries={}, tiles={})
+    t0 = time.perf_counter()
+    paths, frame = st.box_skewers(cofm, AXIS, L, H.cosmology(), H.a)
+    tile_of = st.tile_skewers(paths, tile_size)
+    snap = SnapshotFrame(H.a, H.velfac_kms_per_cMpc, path_length=np.full(len(paths), L))
+    setup = time.perf_counter() - t0
+    physics = {"default": DEFAULT_CELLS}
     if CPU_MAT in entries:
-        with clock.time(CPU_MAT, "physics", run):
-            cells_m = gas_to_cells(gas, species, **MATCHED_CELLS)
-        frame = SnapshotFrame(a_snap, AH, path_length=np.full(len(cofm), L))
-        with clock.time(CPU_MAT, "pieces", run):
-            pieces_m = cell_pieces(cells_m, lines, points=points, frame=frame, deposition="tophat_chords", chord_weight=1 / 8, a_data=a_snap)
-        with clock.time(CPU_MAT, "tau", run):
-            out[CPU_MAT] = np.asarray(compute_optical_depth(pieces_m, v, lines, devices=cpu, **matched_tau(nbins * dv, a_snap, AH)))
-    return out, rep
+        physics["matched"] = MATCHED_CELLS
+    if memory is not None:
+        memory.reset()
+    store, pinfo = st.stream_cells(reader, paths, tile_of, list(lines.species_keys), physics, threads=threads)
+    rec["pass"] = {k: v for k, v in pinfo.items()}
+    rec["pass_memory"] = None if memory is None else memory.read()
+    tm = pinfo["timings"]  # wall shares of the pass's stages
+    wall_pass = pinfo["pass_s"] + pinfo["setup_s"] + pinfo["assemble_s"]
+    share = lambda keys: sum(tm.get(k, 0.0) for k in keys)
+    io, sel = share(("read", "read_rest")), share(("reach", "tiles"))
+    phys = {cfg: tm.get(f"physics:{cfg}", 0.0) for cfg in physics}
+    other = wall_pass - io - sel - sum(phys.values())  # pass set-up and assembly: shared, with the I/O
+    out = {}
+    runs = [(e, lab) for lab in grids for e in (CPU_DEF, GPU_DEF, CPU_MAT) if e in entries and (e != CPU_MAT or lab == next(iter(grids)))]
+    for e, lab in runs:
+        v = grids[lab]
+        nbins, dv = v.size, float(v[1] - v[0])
+        mode = mode_options("matched" if e == CPU_MAT else "default", nbins, dv, H)
+        devs = gpu if e == GPU_DEF else cpu
+        if memory is not None:
+            memory.reset()
+        t = time.perf_counter()
+        taus, tinfo = st.tiles_optical_depth(
+            store, mode["config"], paths, tile_of, snap if mode["frame"] == "snapshot" else frame, v, lines,
+            pieces=mode["pieces"], engines={"tau": devs}, **mode["tau"],
+        )
+        wall = time.perf_counter() - t
+        rows = tinfo["rows"]
+        pieces_s = sum(r["wait_s"] for r in rows)
+        tau_s = sum(r["tau_s"]["tau"] for r in rows)
+        cfg = mode["config"]
+        stages = dict(setup=setup, io=io + other, selection=sel, physics=phys[cfg], pieces=pieces_s, tau=tau_s)
+        rec["entries"][f"{e}|{lab}"] = dict(stages=stages, total=float(sum(stages.values())), tiles_wall=wall,
+                                            memory=None if memory is None else memory.read(), gpu_peak_GB=gpu_peak_GB(gpu) if e == GPU_DEF else None)
+        rec["tiles"][f"{e}|{lab}"] = [
+            dict(n_skewers=r["n_skewers"], n_cells=r["n_cells"], n_pieces=r["n_pieces"], geometry_s=r["geometry_s"], contributions_s=r["contributions_s"],
+                 wait_s=r["wait_s"], tau_s=r["tau_s"]["tau"], engine=r.get("engine", {}).get("tau"))
+            for r in rows
+        ]
+        out[(e, lab)] = taus["tau"]
+    rec["store_GB"] = store.nbytes / 1e9
+    del store
+    return out, rec
 
 
 def run_point(c: dict, data_dir) -> dict:
-    """Measure the configuration ``c`` (``point_config``) in this process: fake_spectra once (it compiles nothing), then
-    the SkewerJAX entries: the warm-up on the first batch, and one timed run over every batch. Needs JAX configured by
-    the caller (``skewerjax.config.configure_devices``, 32 OpenMP threads for fake_spectra). Returns the record."""
+    """Measure the configuration ``c`` (``point_config``) in this process, with the cold protocol (the snapshot is
+    dropped from the page cache before each code reads it, ``evict_page_cache``):
+
+    1. fake_spectra on every pixel grid (it compiles nothing; ``repeats`` runs at small N, where its I/O is noisy);
+    2. the SkewerJAX warm-up: the same entries on min(N, tile size) TNG50-4 skewers (the JIT compilation of the same
+       kernels, and numba's; nothing of the target snapshot is read), timed as ``jit_s``;
+    3. the SkewerJAX entries: one pass over the snapshot and the tiles of every entry and grid (``skewerjax_point``),
+       ``repeats`` times at small N (the fastest run is kept, every run is recorded).
+
+    Needs JAX configured by the caller (``skewerjax.config.configure_devices``). Returns the record."""
     import jax
 
     from skewerjax import config
     from skewerjax.core import LineBundle
     from skewerjax.simulations import ArepoHDF5Reader
 
-    jax.config.update("jax_default_device", jax.devices("cpu")[0])  # host arrays on the host; the GPU only for its tau sum
+    jax.config.update("jax_default_device", jax.devices("cpu")[0])
     t_start = time.perf_counter()
     snap_base = Path(data_dir) / c["sim"]
     reader = ArepoHDF5Reader(snap_base, SNAP)
@@ -287,86 +361,134 @@ def run_point(c: dict, data_dir) -> dict:
     L = H.box_cMpc
     X, Z = nested_grid(c["n"], L)
     cofm = np.column_stack([X, np.zeros_like(X), Z])
-    iref = reference_index(c["n"])
-    nbins, dv = H.pixel_grid(c["dv_kms"])
-    v = (np.arange(nbins) + 0.5) * dv  # [km/s], fake_spectra's pixels over [0, v_max)
+    grids = {}
+    for dv in c["dv_list"]:
+        nb, d = H.pixel_grid(dv)
+        grids[f"{dv:g}"] = (np.arange(nb) + 0.5) * d
     lines = LineBundle(list(LINE_IDS), ref_line_id="HI-LyA")
     snapdir = Path(reader.files[0]).parent
     cpu, gpu = config.devices("cpu"), config.devices("gpu")
     entries = [e for e in c["entries"] if e != GPU_DEF or gpu]
+    repeats = int(c.get("repeats", 1))
+    tile = int(c.get("tile_size", 1024))
+    mem = MemorySampler()
     rec = dict(
-        id=c["id"],
-        config=c,
-        status="ok",
-        machine=machine_metadata(),
-        gpu=[d.device_kind for d in gpu],
-        precision=config.get_precision(),
-        snapshot=dict(n_gas=int(H.n_gas), box_cMpc=float(L), n_files=int(H.n_files), redshift=float(H.redshift)),
-        pixels=dict(nbins=int(nbins), dv_kms=float(dv)),
-        reference=dict(index=iref, x_cMpc=float(X[iref]), z_cMpc=float(Z[iref]), flux={}),
-        entries={},
-        cache={},
+        id=c["id"], config=c, status="ok", machine=machine_metadata(), gpu=[d.device_kind for d in gpu], precision=config.get_precision(),
+        cpu_devices=len(cpu), snapshot=dict(n_gas=int(H.n_gas), box_cMpc=float(L), n_files=int(H.n_files), redshift=float(H.redshift)),
+        grids={k: dict(nbins=int(v.size), dv_kms=float(v[1] - v[0])) for k, v in grids.items()}, entries={}, runs=[], cache={},
         date=time.strftime("%Y-%m-%d %H:%M"),
     )
-    tau_fs = None
+    iref = reference_index(c["n"]) if c["n"] % 4 == 0 else None
+    flux, tau_fs = {}, {}
     if FS in entries:
-        rec["cache"][FS] = cache_state(snapdir)
-        t0 = time.perf_counter()
-        tau_fs, st, nb_fs, dv_fs = run_fake_spectra(snap_base, X, Z, H, c["dv_kms"])
-        st = {s: float(st.get(s, 0.0)) for s in STAGES}
-        rec["entries"][FS] = dict(stages=st, total=float(sum(st.values())), wall=time.perf_counter() - t0, jit_s=0.0)
-        if (nb_fs, round(dv_fs, 9)) != (nbins, round(dv, 9)):
-            raise RuntimeError(f"fake_spectra's pixels ({nb_fs} of {dv_fs}) differ from SkewerJAX's ({nbins} of {dv}).")
-        rec["reference"]["flux"][FS] = {ln: np.exp(-tau_fs[j, iref]).tolist() for j, ln in enumerate(LINE_IDS)}
+        for lab, v in grids.items():
+            runs = []
+            for r in range(repeats):
+                evict_page_cache(snapdir)
+                rec["cache"][f"fs|{lab}|{r}"] = cache_state(snapdir)
+                mem.reset()
+                t0 = time.perf_counter()
+                tau, st_, nb, dvb = run_fake_spectra(snap_base, X, Z, H, float(lab))
+                stg = {k: float(st_.get(k, 0.0)) for k in STAGES}
+                runs.append(dict(stages=stg, total=float(sum(stg.values())), wall=time.perf_counter() - t0, memory=mem.read()))
+                if (nb, round(dvb, 9)) != (v.size, round(float(v[1] - v[0]), 9)):
+                    raise RuntimeError(f"fake_spectra's pixels ({nb} of {dvb}) differ from SkewerJAX's ({v.size}).")
+            tau_fs[lab] = tau
+            rec["entries"][f"{FS}|{lab}"] = dict(runs[int(np.argmin([x["total"] for x in runs]))], repeats=runs)
+            if iref is not None:
+                flux[f"{FS}|{lab}"] = {ln: np.exp(-tau[j, iref]).tolist() for j, ln in enumerate(LINE_IDS)}
     sj = [e for e in entries if e != FS]
+    agree = {}
     if sj:
-        clock = RunClock()
-        parts = batches(c["n_skewers"], c["spacing_kms"])
-        rec["cache"]["SkewerJAX"] = cache_state(snapdir)
-        warm, _ = skewerjax_batch(reader, cofm[parts[0]], v, lines, sj, clock, 0, cpu, gpu, c["spacing_kms"])
-        first = {e: {s: r[0] for s, r in st.items()} for e, st in clock.t.items()}
-        del warm
-        agree, res = _Agreement(), []
-        batch0 = {}
-        for b, sl in enumerate(parts):
-            tau, rep = skewerjax_batch(reader, cofm[sl], v, lines, sj, clock, 1, cpu, gpu, c["spacing_kms"])
-            res.append(rep)
-            if b == 0:
-                batch0 = {e: {s: r[1] for s, r in st.items()} for e, st in clock.t.items()}
-            F = {e: np.exp(-t.astype(np.float64)) for e, t in tau.items()}
-            if tau_fs is not None:
-                Ffs = np.exp(-tau_fs[:, sl])
-                for j, ln in enumerate(LINE_IDS):
-                    agree.add(("default_vs_fs", ln), F[CPU_DEF][j], Ffs[j])
-                    if CPU_MAT in F:
-                        agree.add(("matched_vs_fs", ln), F[CPU_MAT][j], Ffs[j])
-            if GPU_DEF in F:
-                for j, ln in enumerate(LINE_IDS):
-                    agree.add(("gpu_vs_cpu", ln), F[GPU_DEF][j], F[CPU_DEF][j])
-            if sl.start <= iref < sl.stop:
-                for e, Fe in F.items():
-                    rec["reference"]["flux"][e] = {ln: Fe[j, iref - sl.start].tolist() for j, ln in enumerate(LINE_IDS)}
-            del tau, F
-        for e in sj:  # the host stages of the GPU entry are those of the default CPU entry; the shared ones of the matched
-            for s in STAGES:
-                if s not in clock.t.get(e, {}):
-                    clock.share(CPU_DEF, s, e)
-        med = clock.medians()  # one timed run: its value
-        for e in sj:
-            if e not in clock.t:
-                continue
-            st = {s: float(med[e].get(s, 0.0)) for s in STAGES}
-            jit = {s: float(first[e][s] - batch0[e][s]) for s in ("pieces", "tau") if s in first.get(e, {})}
-            rec["entries"][e] = dict(stages=st, total=float(sum(st.values())), jit_s=jit.get("tau", 0.0), jit=jit, warmup_batch=first.get(e, {}))
-        rec["batches"] = dict(n=len(parts), size=parts[0].stop - parts[0].start)
-        rec["resolution"] = dict(
-            max_ratio=[max(r["max_ratio"][j] for r in res) for j in range(len(LINE_IDS))],
-            column_fraction=[max(r["column_fraction"][j] for r in res) for j in range(len(LINE_IDS))],
-            warned=any(r["warned"] for r in res),
-        )
-        rec["agreement"] = {f"{k[0]}:{k[1]}": v_ for k, v_ in agree.result().items()}
+        t0 = time.perf_counter()
+        warm = ArepoHDF5Reader(Path(data_dir) / "TNG50-4", SNAP)
+        nw = min(int(c["n"]), int(np.sqrt(tile)))
+        Xw, Zw = nested_grid(nw, warm.header.box_cMpc)
+        skewerjax_point(warm, np.column_stack([Xw, np.zeros_like(Xw), Zw]), grids, lines, sj, cpu=cpu, gpu=gpu, tile_size=tile)
+        rec["jit_s"] = time.perf_counter() - t0
+        best = None
+        for r in range(repeats):
+            evict_page_cache(snapdir)
+            rec["cache"][f"SkewerJAX|{r}"] = cache_state(snapdir)
+            out, srec = skewerjax_point(reader, cofm, grids, lines, sj, cpu=cpu, gpu=gpu, tile_size=tile, memory=mem)
+            rec["runs"].append(srec)
+            tot = sum(x["total"] for x in srec["entries"].values())
+            if best is None or tot < best[0]:
+                best = (tot, out, srec)
+            else:
+                del out
+        _, out, srec = best
+        rec["entries"].update(srec["entries"])
+        rec["pass"] = srec["pass"]
+        rec["store_GB"] = srec["store_GB"]
+        for (e, lab), tau in out.items():
+            F = np.exp(-tau.astype(np.float64))
+            if iref is not None:
+                flux[f"{e}|{lab}"] = {ln: F[j, iref].tolist() for j, ln in enumerate(LINE_IDS)}
+            name = "matched" if e == CPU_MAT else "gpu" if e == GPU_DEF else "default"
+            for j, ln in enumerate(LINE_IDS):
+                if lab in tau_fs:
+                    d = F[j] - np.exp(-tau_fs[lab][j])
+                    agree[f"{name}_vs_fs|{lab}:{ln}"] = dict(rms_dF=float(np.sqrt(np.mean(d**2))), max_dF=float(np.abs(d).max()))
+                if e == GPU_DEF and (CPU_DEF, lab) in out:
+                    d = F[j] - np.exp(-out[(CPU_DEF, lab)][j].astype(np.float64))
+                    agree[f"gpu_vs_cpu|{lab}:{ln}"] = dict(rms_dF=float(np.sqrt(np.mean(d**2))), max_dF=float(np.abs(d).max()))
+        del out
+    rec["agreement"] = agree
+    rec["reference"] = dict(index=iref, flux=flux)
     rec["wall_s"] = time.perf_counter() - t_start
     rec["jax"] = jax.__version__
+    return rec
+
+
+# --------------------------------------------------------------------------- C2: the sampling of the midpoint option
+C2_SPACINGS = (0.125, 0.25, 0.5, 1.0, 2.0, 4.0)
+
+
+def run_c2(data_dir, *, n: int = 8, sim: str = "TNG50-2") -> dict:
+    """Block C2 (one process, the package's precision): the n^2 skewers of the nested grid through ``sim``, the dual-segment
+    pieces with the midpoint profile (the earlier default) at every spacing of ``C2_SPACINGS`` against the default (cell
+    crossings, the integrated profile, which has no sampling): rms and max |dF| per line, the pieces per skewer and the
+    tau time per skewer of each. Run it in float64 for the precision, in float32 for the times."""
+    import jax
+
+    from skewerjax import config
+    from skewerjax.core import LineBundle, SkewerBundle, cell_pieces, compute_optical_depth
+    from skewerjax.simulations import ArepoHDF5Reader, gas_to_cells, select_cells_near_paths
+
+    jax.config.update("jax_default_device", jax.devices("cpu")[0])
+    reader = ArepoHDF5Reader(Path(data_dir) / sim, SNAP)
+    H = reader.header
+    L, AH = H.box_cMpc, H.velfac_kms_per_cMpc
+    X, Z = nested_grid(n, L)
+    cofm = np.column_stack([X, np.zeros_like(X), Z])
+    nb, dv = H.pixel_grid(1.0)
+    v = (np.arange(nb) + 0.5) * dv
+    lines = LineBundle(list(LINE_IDS), ref_line_id="HI-LyA")
+    fine = SkewerBundle.axis_aligned(cofm, AXIS, L, min(C2_SPACINGS) / AH, H.cosmology(), a_ref=H.a)
+    cells = gas_to_cells(select_cells_near_paths(reader, fine.host["points"], mode="voronoi"), list(lines.species_keys), **DEFAULT_CELLS)
+    coarse = SkewerBundle.axis_aligned(cofm, AXIS, L, 1.0 / AH, H.cosmology(), a_ref=H.a)
+
+    def timed(fn):
+        fn()  # compile
+        t = time.perf_counter()
+        out = np.asarray(fn())
+        return out, time.perf_counter() - t
+
+    ref, t_int = timed(lambda: compute_optical_depth(coarse, v, lines, cells, resolution_tolerance=None))
+    rec = dict(sim=sim, n=n, precision=config.get_precision(), integrated=dict(tau_s_per_skewer=t_int / n**2), midpoint={})
+    F0 = np.exp(-ref.astype(np.float64))
+    for ds in C2_SPACINGS:
+        b = SkewerBundle.axis_aligned(cofm, AXIS, L, ds / AH, H.cosmology(), a_ref=H.a)
+        p = cell_pieces(cells, lines, skewer_bundle=b, deposition="voronoi_segments", a_data=H.a)
+        tau, t = timed(lambda p=p: compute_optical_depth(p, v, lines, profile_integration="midpoint", resolution_tolerance=None))
+        d = np.exp(-tau.astype(np.float64)) - F0
+        rec["midpoint"][f"{ds:g}"] = dict(
+            pieces_per_skewer=float((np.asarray(p.length_m) > 0).sum() / n**2),
+            tau_s_per_skewer=t / n**2,
+            **{f"{ln}:rms_dF": float(np.sqrt(np.mean(d[j] ** 2))) for j, ln in enumerate(LINE_IDS)},
+            **{f"{ln}:max_dF": float(np.abs(d[j]).max()) for j, ln in enumerate(LINE_IDS)},
+        )
     return rec
 
 
@@ -376,16 +498,51 @@ def load_records(folder) -> dict:
     return {json.loads(p.read_text())["id"]: json.loads(p.read_text()) for p in sorted(Path(folder).glob("*.json"))}
 
 
-def block_records(records: dict, block: str, n_max: int) -> list:
-    """The records of one block, in the order of its parameter (``scaling_points``); missing points are left out."""
-    return [records[c["id"]] for c in scaling_points(n_max, (block,)) if c["id"] in records]
+def block_records(records: dict, block: str, n_max: int, blocks=("A", "B", "C1")) -> list:
+    """The records of one block, in the order of its parameter (``scaling_points(n_max, blocks)``: the ids of the
+    benchmark's points, the shared target included); missing points are left out."""
+    recs = [records[c["id"]] for c in scaling_points(n_max, blocks) if block in c["blocks"] and c["id"] in records]
+    return recs if block == "C1" else sorted(recs, key=lambda r: block_parameter(block, r))
 
 
-def block_parameter(block: str, rec: dict) -> float:
-    """The parameter of a block at a record: the cells of the snapshot (A), the skewers (B), the pixel width (C1), the
-    point spacing (C2)."""
+def block_parameter(block: str, rec: dict, grid: str | None = None) -> float:
+    """The parameter of a block at a record: the cells of the snapshot (A), the skewers (B), the pixel width (C1: of
+    ``grid``)."""
     c = rec["config"]
-    return {"A": rec["snapshot"]["n_gas"], "B": c["n_skewers"], "C1": c["dv_kms"], "C2": c["spacing_kms"]}[block]
+    if block == "C1":
+        return float(rec["grids"][grid]["dv_kms"])
+    return {"A": rec["snapshot"]["n_gas"], "B": c["n_skewers"]}[block]
+
+
+def entry_stages(rec: dict, grid: str) -> dict:
+    """{entry: {stage: s}} of one pixel grid of a record (the matched entry runs on the first grid only)."""
+    out = {}
+    for e in ENTRIES:
+        r = rec["entries"].get(f"{e}|{grid}")
+        if r is not None:
+            out[e] = {k: float(r["stages"].get(k, 0.0)) for k in STAGES}
+    return out
+
+
+def block_rows(records: dict, block: str, n_max: int) -> list:
+    """One row per point of a block (C1: per pixel grid of the shared point), in the order of its parameter: dict(x,
+    title, stages {entry: {stage: s}}, jit {entry: s}, flux {entry: {line: F}} of the reference skewer (or None), nbins,
+    dv_kms, agreement {key: rms / max}, record)."""
+    rows = []
+    for rec in block_records(records, block, n_max):
+        c = rec["config"]
+        grids = list(rec["grids"]) if block == "C1" else [next(iter(rec["grids"]))]
+        for g in grids:
+            stg = entry_stages(rec, g)
+            jit = {e: (0.0 if e == FS else float(rec.get("jit_s", 0.0))) for e in stg}
+            fl = rec.get("reference", {}).get("flux", {})
+            flux = {e: fl[f"{e}|{g}"] for e in ENTRIES if f"{e}|{g}" in fl} or None
+            title = {"A": f"{c['sim']}: {int(rec['snapshot']['n_gas']):,} cells", "B": f"{c['n']} x {c['n']} = {c['n_skewers']:,} skewers",
+                     "C1": f"pixels of {float(rec['grids'][g]['dv_kms']):.3g} km/s"}[block]
+            agree = {k.split("|")[0] + ":" + k.split(":")[-1]: v for k, v in rec.get("agreement", {}).items() if k.split("|")[1].split(":")[0] == g}
+            rows.append(dict(x=block_parameter(block, rec, g), title=title, stages=stg, jit=jit, flux=flux, nbins=int(rec["grids"][g]["nbins"]),
+                             dv_kms=float(rec["grids"][g]["dv_kms"]), agreement=agree, record=rec))
+    return rows
 
 
 def write_record(rec: dict, folder) -> Path:
@@ -430,7 +587,9 @@ def worker_env() -> dict:
 def run_points(points: list, out, *, data_dir, log=print, timeout_s: float | None = None) -> list:
     """Measure every point of ``points`` without a record in ``out``, each in its own process (``main``), in order:
     finished points are skipped, so an interrupted run resumes. Returns the ids measured. The log of every point goes to
-    ``out/logs/<id>.log``."""
+    ``out/logs/<id>.log``. The calling process must not hold the GPU: importing the package starts JAX, which on a GPU
+    preallocates 75% of its memory unless ``JAX_PLATFORMS=cpu`` (or ``XLA_PYTHON_CLIENT_PREALLOCATE=false``) is set
+    before the import, as ``scripts/benchmarks/benchmark_scaling.py`` does."""
     import sys
 
     out = Path(out)
@@ -468,5 +627,5 @@ if __name__ == "__main__":
     os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count()))
     from skewerjax import config as _config
 
-    _config.configure_devices(n_cpu_devices=1, platforms=os.environ.get("JAX_PLATFORMS", "cuda,cpu"))
+    _config.configure_devices(n_cpu_devices=2, platforms=os.environ.get("JAX_PLATFORMS", "cuda,cpu"))
     main()

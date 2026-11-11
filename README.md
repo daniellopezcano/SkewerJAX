@@ -138,26 +138,30 @@ skewerjax/                    # SkewerJAX: absorption along skewers (tau, F = ex
 │   ├── cells.py              # Gas cells: the one representation of the gas, whatever its source (toy models or …
 │   ├── constants.py          # Physical constants and unit conversions (``phys``)
 │   ├── cosmology.py          # Background cosmology: the scale factor along a photon path, a(x) (review notes)
+│   ├── crossings.py          # Cell crossings of straight paths: which Voronoi cells a straight skewer crosses …
 │   ├── deposition.py         # Deposition: the pieces of the path, i.e. which cell lies on the dual segment of …
 │   ├── diagnostics.py        # Debugging tools: what to call when a result looks wrong
 │   ├── line_profiles.py      # Line profiles: the widths and the normalised profile phi(nu) of every transition …
 │   ├── lines.py              # Atomic transitions: the line table (``LINES``) and ``LineBundle``, the lines of …
 │   ├── optical_depth.py      # Line profiles and the optical depth tau(v) along skewers (review notes, Eqs. …
-│   ├── per_cell.py           # fake_spectra's per-cell schemes of the optical depth, windowed and batched over …
 │   ├── selection.py          # Cell selection: the cells within reach of a set of paths (periodic k-d tree), for …
 │   ├── skewers.py            # Skewers: the sampling points of a set of sightlines, their geometry and their …
 │   ├── spectral.py           # Spectral coordinates: the observer's velocity v_dagger, local wavelengths lambda' …
+│   ├── tau_engine.py         # The windowed optical-depth engine: every contribution on a window of pixels around …
 │   ├── validation.py         # Input validation shared by the entry points: informative errors for non-finite or …
-│   └── voigt.py              # The Voigt function V(x; sigma, gamma) = (G * L)(x) (review notes, Eq. …
+│   ├── voigt.py              # The Voigt function V(x; sigma, gamma) = (G * L)(x) (review notes, Eq. …
+│   └── voigt_integral.py     # The Voigt function integrated over a cell crossing: the cumulative profile Phi(a …
 ├── simulations/              # Block B, the field sources: everything that produces the gas cells of the core …
 │   ├── gas_cells.py          # Gas cells (layer 2): a format-independent pytree of gas elements in physical units
 │   ├── gas_physics.py        # Gas physics (layer 3): per-cell n_H, T, ion fractions and ion densities (JAX), and …
 │   ├── grf.py                # Toy field source: power-law Gaussian random fields (``PowerLawGRF``) in 1D, 2D and …
+│   ├── host_physics.py       # The gas physics of ``gas_physics`` fused for the host: the same values, one loop …
 │   ├── maps.py               # Maps of the gas for figures: the projection of a slab of a snapshot, streamed in …
 │   ├── readers.py            # Snapshot readers (layer 1): format-specific HDF5 I/O and units, NumPy only
 │   ├── selection.py          # Cell selection (layer 4): streaming k-d tree selection of the gas cells of a …
 │   ├── snapshot_cells.py     # The snapshot as gas cells, without skewers: the cells of a region of the box after …
 │   ├── snapshot_skewers.py   # Skewers through a simulation snapshot: the gas cells, columns and tau for any …
+│   ├── stream.py             # The streaming route: the optical depth of many straight skewers from one read of …
 │   ├── toy_boxes.py          # Toy boxes (notebooks 08 and 10): periodic 3D Gaussian fields of known spectrum and …
 │   └── toy_cells.py          # Toy field source: the gas cells of a Gaussian random field (``grf_cells``)
 ├── summary_stats/            # The summary statistics of the flux: the overflux of each line and of their …
@@ -202,7 +206,7 @@ subpackage.
 | 1D statistics: P1D, ξ1D (by order and term) | `summary_stats.lattice`, `summary_stats.stats_1d` | `skewer_p1d`, `skewer_xi1d`, `decompose_1d` | 10, 11 |
 | 3D statistics: P3D, ξ3D on the lattice of skewers | `summary_stats.lattice`, `summary_stats.grid3d` | `lattice_grid`, `measure_lattice`, `GridStatistics3D` | 10, 11 |
 | field statistics: P, ξ of the cells' density: mesh (MAS + interlacing) | `summary_stats.field_stats`, `summary_stats.mesh` | `field_statistics`, `cell_weights`, `fourier_mesh` | 08, 09, 11 |
-| fake_spectra: external reference | `comparison.benchmark` | `run_fake_spectra` | 12, 13, 14, 15 |
+| fake_spectra: external reference | `comparison.benchmark` | `run_fake_spectra` | 12, 13, 14 |
 <!-- END generated:concepts -->
 
 ## Quickstart
@@ -309,9 +313,8 @@ flowchart LR
 | `10_skewer_statistics` | the summary statistics on skewers through the toy boxes of 08 (regenerated with the same configuration): A, skewers through every box, step by step (`SkewerBundle`, cells, pieces, τ); B, the (k⊥, k∥) and (r⊥, r∥) planes of the density on the same skewers against their exact expectation; C, the normalisation (the statistics from arrays), where the skewers run and one from the gas to the overflux δ = T / T̄ − 1 (the mean transmission of the ensemble per redshift, `mean="redshift"`; also "global", "box", "skewer"); D, P and ξ of the total overflux in the (k⊥, k∥) and (r⊥, r∥) planes on the lattice's own modes and separations (the Si III–Lyα spot at Δv_{Lyα–Si III}/u and the echoes of the BAO ring; four lines: a spot for every pair), the 3D P and ξ of the overflux of every line and of the total on the lattice of skewers in comoving units (the BAO peak), ξ in μ wedges with r_BAO, the spot and the echoes per wedge; E, the relations of P1D and ξ1D to the 3D statistics, P1D next to DESI DR1, and P1D and ξ1D of the total overflux by term and order |
 | `11_skewer_statistics_tng` | the statistics of 10 on TNG50-4 (snapshot 25, z = 3.008, L = 51.7 cMpc): 32 × 32 periodic skewers along each axis in the snapshot frame (the three lines of sight as the ensemble, not independent), points every 0.5 km/s (the resolution check passes), 256 pixels; four lines (Lyα, Si III, Si II 1193, 1190); B, the density of H I, Si III, Si II and their sum on the skewers against the whole box through a mesh (`field_statistics`, PCS, interlaced); C, the transmission and overflux (one mean: one snapshot); D, the (k⊥, k∥) and (r⊥, r∥) planes with a spot for every pair of lines, P, r²ξ and wedges, the BAO scale r_d through its periodic images, P1D next to DESI DR1 at z = 3.0, by order (0 to 8) and term by term |
 | `12_comparison_fake_spectra_results` | what the two codes compute on the same TNG50-2 skewers (kernel `skewerjax-fs`): the core calls with the defaults, native fake_spectra, the fully matched mode; each option on its own, from the default and from the matched mode (explicit calls, the two expressions and four curves per step); the root causes, generated from the run, with what each option changes on this skewer and its accuracy, impact and expected cost; what to adopt, what is a choice, what to time |
-| `13_comparison_fake_spectra_timing` | where the time goes (kernel `skewerjax-fs`): TNG50-2, 128 × 128 skewers along y (fake_spectra runs up to 256 × 256 within 20 min), 1 km/s pixels, Lyα and Si III; fake_spectra, SkewerJAX default and matched on the CPU, default on the GPU, timed by stage (setup, I/O, selection, gas physics, pieces, τ; SkewerJAX in batches of 1024 skewers, the JIT warm-up apart, medians of 3 runs); the agreement printed; the totals and the speed-ups over fake_spectra |
-| `14_comparison_fake_spectra_scaling` | how each stage of the four entries of 13 scales: A the simulation (TNG50-4, -3, -2), B the number of skewers (4² to 128²), C1 the pixel width (1–16 km/s), C2 the sampling along the skewer (0.125–4 km/s); per point the stages and the speed-ups, per block the scaling with fitted slopes and the flux of a reference skewer from every entry (reads the records of `scripts/benchmarks/benchmark_scaling.py`; `RUN = True` re-runs it) |
-| `15_comparison_fake_spectra_benchmark` | speed and memory against fake_spectra: scaling with the number of skewers (1–1024) and the simulation size (TNG50-4, -3, -2), CPU and GPU, the time per stage, host and GPU memory, threads and one core (reads the results file of `scripts/benchmarks/benchmark_fake_spectra.py`, presets `quick` and `full`; `RUN_BENCHMARKS = True` re-runs it) |
+| `13_comparison_fake_spectra_timing` | where the time goes (kernel `skewerjax-fs`): TNG50-2, 128 × 128 skewers along y, 1 km/s pixels, Lyα and Si III; fake_spectra, SkewerJAX default and matched on the CPU, default on the GPU, timed by stage (setup, I/O, selection, gas physics, pieces, τ), cold; SkewerJAX's one pass over the snapshot for every entry, then tiles of 1,024 skewers (`simulations.stream`), the JIT warm-up apart; the agreement printed; the totals and the speed-ups over fake_spectra |
+| `14_comparison_fake_spectra_scaling` | how each stage of the four entries of 13 scales: A the simulation (TNG50-4, -3, -2), B the number of skewers (4² to 256²), C1 the pixel width (1–16 km/s, one SkewerJAX pass for the five grids), C2 the precision of the midpoint option's sampling against the default's integrated profile; per point the stages and the speed-ups, per block the scaling with fitted slopes and the flux of a reference skewer from every entry (reads the records of `scripts/benchmarks/benchmark_scaling.py`; `RUN = True` re-runs it) |
 
 Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: the white "paper" style by default,
 `use_style("dark")` for the dark one; Paul Tol's colour-blind-safe "bright" colours and colour maps in both, minimum
@@ -338,6 +341,8 @@ arrays. `tests/README.md` explains the markers and when to regenerate the refere
 ```bash
 python scripts/benchmarks/benchmark_fake_spectra.py --sets smoke        # 1 and 4 skewers (~4 min)
 python scripts/benchmarks/benchmark_fake_spectra.py --preset quick     # the reduced scaling study (<= 30 min); --preset full: the whole one
+python scripts/benchmarks/benchmark_scaling.py                          # notebook 14's records, cold (~2.3 h; --list: the points)
+python scripts/benchmarks/benchmark_scaling.py --c2                     # block C2: the midpoint option's sampling, float64 (~1 min)
 ```
 
 When a result looks wrong, `skewerjax.core.check_skewers(cells, bundle, lines)` runs independent checks of the pieces
@@ -349,38 +354,49 @@ shows the package's log messages (see `docs/usage.md`, "Debugging and input chec
 
 The two codes compute Lyα and Si III λ1206 on identical skewers of TNG50 snapshot 25 (z = 3), on fake_spectra's
 pixels of 1 km/s.
-- **Hardware:** Intel i9-13900KF (32 threads), 132 GB RAM, NVIDIA RTX 3060 12 GB.
-- **Software:** JAX 0.6.2 (float32, the package's precision), fake_spectra 2.3.0 (native, OpenMP on 32 threads).
-- **Method:** the warm-up (JIT compilation, the first read) reported apart, medians of the timed runs, every JAX result
-  pulled to the host; SkewerJAX's *matched* mode reproduces fake_spectra's scheme, its *default* is its own (exact
-  Voronoi pieces of 0.25 km/s dual segments, the exact frame).
+- **Hardware:** Intel i9-13900KF (32 threads), 132 GB RAM, NVIDIA RTX 3060 12 GB, NVMe disk (2.5 GB/s cold).
+- **Software:** JAX 0.6.2 (float32, the package's precision; the CPU as two JAX devices), fake_spectra 2.3.0 (native,
+  OpenMP on 32 threads).
+- **Method:** cold runs (the snapshot dropped from the page cache before each code reads it); SkewerJAX's JIT
+  compilation measured apart; every JAX result pulled to the host. SkewerJAX's *matched* mode reproduces fake_spectra's
+  scheme; its *default* is its own (the exact Voronoi cell crossings, each with its profile integrated over the
+  crossing, the exact frame).
 
-**One target** (notebook `13_comparison_fake_spectra_timing`): TNG50-2 (1.2 billion cells, 349 GB, read from the disk),
-128 × 128 = 16,384 skewers along y, median of 3 runs.
+**One target** (notebook `13_comparison_fake_spectra_timing`; this table: the benchmark's record): TNG50-2 (1.2 billion
+cells, 349 GB on disk), 128 × 128 = 16,384 skewers along y.
 
 | entry | I/O | selection | gas physics | pieces | τ sum | total | speed vs fake_spectra |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| fake_spectra | 66 s | — | 138 s | — | 189 s | **393 s** | 1 |
-| SkewerJAX default, CPU | 119 s | 181 s | 48 s | 594 s | 2,026 s | **2,989 s** | 0.13× |
-| SkewerJAX matched, CPU | 119 s | 181 s | 55 s | 2,148 s | 1,841 s | **4,365 s** | 0.09× |
-| SkewerJAX default, GPU | 119 s | 181 s | 48 s | 594 s | 303 s | **1,265 s** | 0.31× |
+| fake_spectra | 168 s | — | 140 s | — | 191 s | **498 s** | 1 |
+| SkewerJAX default, CPU | 47 s | 17 s | 7 s | 4 s | 58 s | **135 s** | 3.7× |
+| SkewerJAX matched, CPU | 47 s | 17 s | 9 s | 4 s | 103 s | **180 s** | 2.8× |
+| SkewerJAX default, GPU | 47 s | 17 s | 7 s | 5 s | 29 s | **105 s** | 4.7× |
 
-(fake_spectra's search and deposition are inside its τ; SkewerJAX's setup adds 21 s.) The matched mode reproduces
-fake_spectra to rms ΔF = 1.5e-7 (Lyα) over every pixel of every skewer; the GPU agrees with the CPU to float32 rounding.
-On the CPU SkewerJAX's time is its τ sum; on the GPU its host stages (pieces, selection, I/O).
+(fake_spectra's search and deposition are inside its τ. SkewerJAX's I/O, selection and gas physics are one pass over
+the snapshot shared by its three entries; its pieces are what the τ stage waited for.) The matched mode reproduces
+fake_spectra to rms ΔF = 1.9e-7 (Lyα) over every pixel of every skewer; the GPU agrees with the CPU to rms 4e-7.
 
 **Scaling** (notebook `14_comparison_fake_spectra_scaling`, records of `scripts/benchmarks/benchmark_scaling.py` in
-`benchmarks/results/scaling/`): the four entries against the simulation (TNG50-4, -3, -2), the number of skewers (4² to
-128²), the pixel width (1–16 km/s) and SkewerJAX's sampling (0.125–4 km/s).
-fake_spectra's time follows the snapshot (30 s on TNG50-4, 526 s on TNG50-2 at 128² skewers) and hardly the skewers
-(≈ 210 s on TNG50-2 from 16 to 1,024); SkewerJAX's follows the skewers (slope 0.9) and its τ sum the sampling and the
-pixels, not the cells. On TNG50-2 SkewerJAX is faster below about 1,000 skewers on the CPU and 2,700 on the GPU (36× and
-46× at 16 skewers); at 128² fake_spectra is 5.7× faster than the CPU and 2.4× than the GPU. Coarser pixels (16 km/s) cut
-SkewerJAX's CPU τ sum 12×; a coarser sampling saturates at 2 km/s, where the host stages (~800 s) remain.
+`benchmarks/results/scaling/`): the four entries against the simulation (TNG50-4, -3, -2 at 128²), the number of
+skewers (16 to 65,536 on TNG50-2), the pixel width (1–16 km/s), and the precision of the midpoint option's sampling.
 
-**Speed and memory at small N** (notebook `15_comparison_fake_spectra_benchmark`, `scripts/benchmarks/benchmark_fake_spectra.py`,
-summary in `benchmarks/results/fake_spectra_benchmark.json`, raw records in `benchmarks/raw/`, git-ignored): 1 to 1024
-skewers on the three snapshots, CPU and GPU, threads, host and GPU memory.
+| TNG50-2 skewers | fake_spectra | default CPU | default GPU | matched CPU |
+|---:|---:|---:|---:|---:|
+| 16 | 308 s | 26 s | 26 s | 26 s |
+| 256 | 313 s | 45 s | 45 s | 47 s |
+| 1,024 | 321 s | 59 s | 56 s | 62 s |
+| 4,096 | 358 s | 69 s | 60 s | 81 s |
+| 16,384 | 498 s | 135 s | 105 s | 180 s |
+| 65,536 | 1,069 s | 386 s | 273 s | 562 s |
+
+fake_spectra reads and converts the whole snapshot (~310 s cold) and then adds 11.6 ms per skewer. SkewerJAX reads the
+snapshot once near the skewers (27 s at 16 skewers, 161 s at 65,536) and adds 3.7 ms per skewer (default CPU), 1.9 ms
+(GPU) or 6.3 ms (matched); its peak memory at 65,536 skewers is 83 GB. On the smallest box, TNG50-4, the matched entry is
+slower than fake_spectra (42 vs 31 s at 128²). The design, its accuracy and its limits: `docs/performance.md`.
+
+**Speed and memory per configuration** (`scripts/benchmarks/benchmark_fake_spectra.py`, summary in
+`benchmarks/results/fake_spectra_benchmark.json`, raw records in `benchmarks/raw/`, git-ignored): 1 to 1024 skewers on
+the three snapshots, CPU and GPU, threads, host and GPU memory (records of the earlier code).
 
 ## Repository layout
 
@@ -402,18 +418,18 @@ skewerjax/            the package
   comparison/         the benchmark of the two codes (wall time, memory, agreement)
   utils/              plotting (style, figures), dag (the architecture as data: DAG, layers, README diagrams),
                       paths (data and benchmark folders)
-notebooks/            00-12 tutorials (committed with outputs cleared)
+notebooks/            00-14 tutorials and comparisons (committed with outputs cleared)
 tests/                one pytest suite: core/, summary_stats/, skewers/, simulations/, utils/, comparison/, regression/ (+ data/),
                       test_import_graph.py, test_mesh.py; README.md
 benchmarks/
-  results/            the benchmark summary read by notebook 15 and the scaling records of notebook 14 (committed)
+  results/            the scaling records of notebook 14 and the summary of benchmark_fake_spectra.py (committed)
   raw/                the per-run records (git-ignored)
 scripts/
-  benchmarks/         benchmark_fake_spectra.py
+  benchmarks/         benchmark_scaling.py (notebook 14), benchmark_fake_spectra.py
   checks/             check_install.py, check_toy.py, check_tng.py: the basic checks the repository must pass
   dev/                update_regression_references.py, check_markdown_math.py, make_diagrams.py (the generated
                       blocks of this README)
-docs/                 installation.md, usage.md
+docs/                 installation.md, usage.md, precision.md, performance.md (how the speed is obtained)
 ```
 
 ## References and acknowledgements

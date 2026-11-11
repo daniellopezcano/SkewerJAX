@@ -78,7 +78,7 @@ def _prefilter_kernel():
     """The fused prefilter (numba, no GIL, one block per thread): mask_i = m_i / rho_i >= V_thr[grid cell of x_i]."""
     import numba
 
-    @numba.njit(nogil=True, cache=True)
+    @numba.njit(nogil=True)  # compiled per process (no disk cache)
     def run(coords, masses, density, inv_h, n, vthr, out):
         for i in range(coords.shape[0]):
             q0 = int(coords[i, 0] * inv_h) % n

@@ -277,10 +277,12 @@ sbq = SkewerBundle(
 )
 pc = cell_pieces(F, lb, skewer_bundle=sbq, a_dagger=0.88)  # host geometry: the pieces of the cells
 check(
-    "compute_optical_depth (bundle + cells) == the sum over cell_pieces",
+    "compute_optical_depth (bundle + cells, midpoint) == the sum over cell_pieces",
     "jit",
     lambda: (
-        od.compute_optical_depth(sbq, vel, lb, F, a_dagger=0.88, resolution_tolerance=None),
+        od.compute_optical_depth(
+            sbq, vel, lb, F, a_dagger=0.88, resolution_tolerance=None, profile_integration="midpoint", method="dense"
+        ),
         od.optical_depth_from_pieces(pc, vel, lb),
     ),
 )
@@ -292,7 +294,9 @@ jit_check(
 )
 jit_check(
     "optical_depth (reference line frame, velocity_period, under jit)",
-    lambda p, l: od.compute_optical_depth(p, vel, l, resolution_tolerance=None, line_frame="reference", velocity_period=250.0),
+    lambda p, l: od.compute_optical_depth(
+        p, vel, l, resolution_tolerance=None, line_frame="reference", velocity_period=250.0, method="dense"
+    ),
     pc,
     lb,
 )

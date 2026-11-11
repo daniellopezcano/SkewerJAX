@@ -1,4 +1,4 @@
-"""The windowed per-cell kernel (``core.per_cell``): the windows and their escalation change the cost, never the result.
+"""The per-cell schemes of the windowed engine (``core.tau_engine.per_cell_line_tau``): the windows and their escalation change the cost, never the result.
 
 fake_spectra's walk of each cell (``tautail``) and its pixel average are checked against fake_spectra's rules in
 ``test_fake_spectra_options.py``; here the same calls are made with windows far too small (every cell escalates through
@@ -7,7 +7,7 @@ several levels) and with one window holding the whole grid, on many skewers at o
 
 import numpy as np
 
-import skewerjax.core.per_cell as pc
+import skewerjax.core.tau_engine as pc
 from skewerjax.core import compute_optical_depth
 
 from helpers import ramp_pieces, tol

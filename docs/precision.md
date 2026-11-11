@@ -20,7 +20,8 @@ casts what the package sends to the device. `skewerjax.config.real_dtype()` is t
 | τ sum (`compute_optical_depth`, the per-cell kernel of `pixel_average` / `tautail`), line profiles, the arrays of the statistics | the policy (float32 default) | the cost: the Voigt profile of every piece at every pixel |
 | path coordinates, a(s) of `SkewerBundle` (`Cosmology.solve_a_of_x_host`, DOP853, rtol 1e-12), the frames, the Hubble velocities V_H = c ln(a†/a) of the line centres (`Pieces.hubble_kms`) | float64 NumPy / SciPy, always | cumulative sums and differences of nearly equal numbers times c (below) |
 | selection, deposition (`voronoi_segments`, `tophat_segments`, `tophat_chord_segments`), absorbers | float64 NumPy, always | host geometry |
-| per-cell gas physics (`simulations.gas_physics`, `gas_to_cells`) on host data | float64 NumPy (JAX for JAX inputs: jit, grad) | the dynamic range of the products (below) |
+| per-cell gas physics (`simulations.gas_physics`, `gas_to_cells`, `host_physics`) on host data | float64 NumPy / numba (JAX for JAX inputs: jit, grad) | the dynamic range of the products (below) |
+| the streaming route's store (`simulations.stream`): n a³, T, velocity and size of every cell | float32, always (positions float64) | the snapshot's own precision (TNG stores these datasets in float32); half the memory of float64 |
 
 A `SkewerBundle` built from concrete values keeps float64 host copies of its points, distances and scale factors
 (`SkewerBundle.host`), which `cell_pieces` and `bundle_frame` read; its JAX arrays are in the policy dtype. One built
@@ -61,15 +62,18 @@ calls, against the same calls in float64).
 
 ## float32 against float64
 
-| quantity (TNG50-4, 4 skewers, 1 km/s pixels) | default mode | matched mode |
+| quantity (TNG50-4, 4 skewers, 1 km/s pixels; the streaming route) | default mode | matched mode |
 |---|---|---|
-| Lyα: max \|ΔF\|, rms ΔF | 1.1e-5, 1.7e-6 | 2.2e-6, 2.0e-7 |
-| Lyα: max \|Δτ/τ\| (τ > 1e-6 τ_max) | 6.5e-5 | 3.6e-5 |
-| Si III: max \|ΔF\|, rms ΔF | 1.9e-7, 3.2e-9 | 1.9e-7, 3.3e-9 |
-| Si III: max \|Δτ/τ\| (τ > 1e-6 τ_max) | 1.9e-4 | 2.1e-4 |
+| Lyα: max \|ΔF\|, rms ΔF | 3.1e-6, 4.0e-7 | 1.7e-7, 1.9e-8 |
+| Lyα: max \|Δτ/τ\| (τ > 1e-6 τ_max) | 2.8e-5 | 5.5e-7 |
+| Si III: max \|ΔF\|, rms ΔF | 2.5e-7, 6.3e-9 | 2.0e-9, 3.7e-11 |
+| Si III: max \|Δτ/τ\| (τ > 1e-6 τ_max) | 3.7e-5 | 1.3e-6 |
 
-The residual is the rounding of the velocity coordinate (item 1): ΔF ≈ (dF/dv) δv with δv ~ 2.4e-4 km/s. The matched
-mode forms its detunings from float64 offsets on the host (`core.per_cell`), hence its smaller residual in F.
+The same cells in both (the store is float32 in both, above): the residual is the τ sum's. In the default mode it is
+the rounding of the float32 kernels (the offsets of the pixels from the line centres, the integrated profile); the
+earlier default (midpoint sums of 0.25 km/s pieces) had 1.1e-5 / 1.7e-6 for Lyα. The matched mode forms its detunings
+from float64 offsets on the host (`core.tau_engine.per_cell_line_tau`), hence its smaller residual in F. τ is returned
+in the working dtype (float64 when the precision is float64).
 
 ## Tests
 

@@ -3,6 +3,77 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — faster than fake_spectra at every number of skewers: crossings, integrated profile, windowed engine, one pass (stem 20261110)
+
+`docs/performance.md` explains the design and its measurements. TNG50-2, cold, 1 km/s, Lyα + Si III, float32
+(fake_spectra / SkewerJAX default CPU / default GPU / matched CPU): 16 skewers 308 / 25.7 / 25.5 / 26.1 s; 1,024 skewers
+321 / 58.8 / 56.1 / 61.6 s; 128² 498 / 134.6 / 105.1 / 180.1 s; 256² 1,069 / 385.5 / 273.0 / 562.0 s, peak 83 GB.
+
+### Added
+- `core.crossings`: straight paths (`StraightPaths`, `paths_from_points`), the cells within reach of every path by
+  bucketed index arithmetic (`line_pairs`, numba; periodic images; brute force for directions off the axes), the exact
+  cell crossings (`straight_crossings`, the lower envelope) and fake_spectra's chords (`straight_chords`).
+- `core.voigt_integral`: the mean of Harris' expansion over an interval in closed form (Dawson-function Chebyshev fits,
+  erfc-paired wide intervals, Taylor series for narrow ones) and the Gaussian moments.
+- `core.tau_engine`: the windowed engine (`windowed_line_tau`: every contribution exact on a window of pixels sized by
+  `wing_tolerance`, its far Lorentz wing from four moments convolved by FFT, circular for the period of the grid;
+  Gauss–Legendre sub-pieces for a > 0.05), the per-cell schemes on escalated windows (`per_cell_line_tau`: `tautail`,
+  `pixel_average`, a core/wing split, compact chords), `LineContributions`, `contributions_from_pieces`, `warm_up`. On
+  the CPU the windows are added on the host (numba, parallel over skewers); on a GPU by device scatter.
+- `core.absorbers`: `crossing_contributions` / `cell_contributions` (the line-centre span of every crossing, its column,
+  the tilt of a^-2 ds/dv_c), `chord_contributions` (one row per chord), `line_centres`; `Pieces.tilt_a2`, `tilt_flow`;
+  `deposition="voronoi_segments"` (the earlier dual-segment pieces).
+- `compute_optical_depth(profile_integration="integrated" | "midpoint", wing_tolerance=, method="auto" | "windowed" |
+  "dense")`; bundle + cells on straight paths take the crossings.
+- `simulations.stream`: one pass over a snapshot for many axis-aligned skewers (`stream_cells`: reach test, the other
+  datasets of the needed rows only, the gas physics of those cells in every configuration, a compact store), tiles of
+  ~1,024 skewers (`tile_skewers`, `tiles_optical_depth`, the host preparing the next tile), `box_skewers`,
+  `snapshot_optical_depth(strategy="auto" | "stream" | "gather")`, `choose_strategy`, `release_memory`.
+- `simulations.host_physics`: the gas physics of `gas_to_cells` as nogil numba loops (the same float32 values; the
+  threads of the pass scale).
+- `comparison.scaling`: the cold protocol (`evict_page_cache`), `MemorySampler`, `skewerjax_point` (one pass for every
+  entry and pixel grid), `run_c2`, `block_rows`; `benchmark_scaling.py --c2`.
+- Tests: `tests/core/test_tau_engine.py`, `tests/simulations/test_host_physics.py`, `tests/simulations/test_stream.py`;
+  `test_scaling.py` rewritten.
+
+### Changed
+- **The default optical depth**: the pieces of straight paths are the cell crossings (no sampling), each absorbing with
+  its profile integrated over its line-centre span. Against the converged result (Richardson extrapolation of the
+  float64 midpoint sums at 0.125 and 0.0625 km/s; 64 TNG50-4 skewers): rms ΔF 2.4e-9 in float64, 4.2e-7 in float32 (the
+  earlier default at 0.25 km/s in float32: 3.9e-6). The resolution check warns only for the midpoint option.
+- The matched mode: chords from the same candidates, one contribution per chord, the walk by reductions on escalated
+  windows, the wings from moments beyond 10 Doppler widths: τ 126 → 6.3 ms per TNG50-2 skewer; vs fake_spectra rms ΔF
+  1.3e-7 (Lyα, earlier 2.5e-7).
+- `config.configure_devices`: default `n_cpu_devices=2` (was `os.cpu_count()`): two devices overlap two kernels.
+- `comparison.scaling`: blocks A, B (4² to 256²), C1 merged into the TNG50-2 128² point (one pass, five grids), C2 a
+  precision study of the midpoint option; records keyed `entry|grid`; batches removed. Notebooks 13 and 14 rebuilt on it;
+  notebooks 05 and 07 describe the crossings and the integrated profile (07's captions and its figure (b) title rewritten
+  for the skewer it shows: they described an earlier one).
+- Notebook 11 asks `cell_pieces` for the dual-segment pieces (`deposition="voronoi_segments"`), which its densities at
+  the sampling points need; notebook 12 takes the cells crossed from `parts["crossings"]` when there are no dual
+  segments (both read `parts["segments"]`, None for straight paths since the crossings became the default).
+- `gas_physics`: the CLOUDY table and the TREECOOL rates read once per process (in memory); Rahmati on the star-forming
+  / dense cells only (the same values).
+- `core.deposition.tophat_chord_segments` on `straight_chords`.
+- numba kernels compile per process (`cache=True` removed: no persistent caches).
+- Regression references regenerated (`tests/regression/data/*.npz`): the new default changes τ by up to 9e-4 of its
+  largest value in the toy and TNG50-4 cases (the integrated profile on the crossings instead of midpoint sums), and
+  the pieces' velocity widths by ~2e-7 relative (the exact span of the line centres instead of H(s_mid) × length).
+
+### Removed
+- `core.per_cell` (its schemes are `tau_engine.per_cell_line_tau`); `comparison.scaling.batches`, `BATCH`,
+  `SPACINGS_KMS`, `skewerjax_batch`.
+
+### Fixed
+- `comparison.scaling.block_records` found the shared target point only under the id of its own block.
+- References to notebook 15 (removed in `01d9900`).
+- `scripts/benchmarks/benchmark_scaling.py`: the launcher imported the package, which starts JAX (exojax runs JAX code
+  at import), on the GPU with its 75% preallocation, held for the whole benchmark: the workers' GPU entry had ~1.4 GB
+  (out of memory at 256²). The launcher now runs JAX on the CPU (`JAX_PLATFORMS=cpu`).
+- `plotting.plot_scaling_block`: no slope in the legend of a series with one point (it read "slope nan").
+- `simulations.stream.tiles_optical_depth` returned τ in float32 whatever the precision: it now returns the working
+  dtype (float64 when the precision is float64). `docs/precision.md`'s float32-against-float64 table re-measured.
+
 ## Unreleased — cleanup, exact straight-skewer pieces, notebook 13 at 128² skewers, scaling notebook 14 (stem 20261108)
 
 ### Added

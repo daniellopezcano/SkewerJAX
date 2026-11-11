@@ -31,7 +31,7 @@ from skewerjax.core import (
     voronoi_volumes,
 )
 
-from helpers import float64_only
+from helpers import float64_only, tol
 
 BOX = 4.0
 SHAPE = (8, 6, 5)
@@ -168,7 +168,10 @@ def test_uniform_cells_column_and_species():
     v = np.linspace(-100.0, 700.0, 400)
     t_b = compute_optical_depth(sb, v, lines, c, resolution_tolerance=None)
     t_p = compute_optical_depth(p, v, lines, resolution_tolerance=None)
-    np.testing.assert_allclose(np.asarray(t_b), np.asarray(t_p), rtol=0, atol=1e-14 * float(np.max(t_p)))
+    # the bundle route (crossings, float64 contributions) and the Pieces route: equal up to the policy's rounding
+    np.testing.assert_allclose(
+        np.asarray(t_b), np.asarray(t_p), rtol=0, atol=tol(1e-7, 2e-6) * float(np.max(t_p))
+    )  # the Simpson column int a^-2 ds vs a(s_p)^-2 l
 
 
 @float64_only

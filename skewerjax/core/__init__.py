@@ -18,8 +18,11 @@ from skewerjax.core.absorbers import (
     absorbers_from_components,
     absorbers_from_crossings,
     bundle_frame,
+    cell_contributions,
     cell_pieces,
+    chord_contributions,
     column_per_pixel,
+    crossing_contributions,
     density_per_pixel,
     deposit,
     sampling_check,
@@ -31,6 +34,7 @@ from skewerjax.core.absorbers import (
 from skewerjax.core.cells import Cells, cells_from_values, cells_on_grid, grid_points, redshift_space_cells, voronoi_volumes
 from skewerjax.core.constants import PhysicalConstants, phys
 from skewerjax.core.cosmology import Cosmology, sound_horizon_drag
+from skewerjax.core.crossings import Chords, Crossings, StraightPaths, paths_from_points, straight_chords, straight_crossings
 from skewerjax.core.deposition import (
     CellCrossings,
     SegmentComponents,
@@ -75,6 +79,8 @@ from skewerjax.core.spectral import (
     local_wavelength_from_observed_A,
     velocities_in_line_frames,
 )
+from skewerjax.core.tau_engine import LineContributions, per_cell_line_tau, windowed_line_tau
 from skewerjax.core.voigt import gaussian, log10_voigt, lorentzian, voigt_convolution, voigt_exojax, voigt_scipy
+from skewerjax.core.voigt_integral import harris_cumulative, harris_mean
 
 __all__ = [n for n in dir() if not n.startswith("_")]

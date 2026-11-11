@@ -373,7 +373,7 @@ def _envelope_kernel():
     where each takes over (-inf for the first))."""
     import numba
 
-    @numba.njit(nogil=True, cache=True)
+    @numba.njit(nogil=True)  # compiled per process (no disk cache)
     def run(u, r2):
         n = u.shape[0]
         stack = np.empty(n, np.int64)
@@ -714,7 +714,8 @@ def tophat_chord_segments(
 
     The chord of half-length z_r = sqrt(h^2 - dr^2) of every sphere touching the path (``absorption.cpp`` L235) is
     sampled at its interior points s_c + z_r (k / 4 - 1), k = 1..7 (``singleabs.h`` L100-L118; NGRID = 8), each one a
-    piece at that position, of density (3 / 4 pi) n (L106) and length 2 z_r w.
+    piece at that position, of density (3 / 4 pi) n (L106) and length 2 z_r w. The chords come from the candidate pairs
+    of ``core.crossings.straight_chords`` (index arithmetic on the paths' plane: no scan of every cell per path).
 
     chord_weight : the weight w of every point. None (default): 1/7, so that the chord keeps its whole column. 1/8:
         fake_spectra's (``deltav`` = 2 v_high / NGRID, L100, L116): the two end points, which have zero weight for an SPH
@@ -724,58 +725,50 @@ def tophat_chord_segments(
     ----------
     points : (N_sk, N, 3) sampling points of straight paths [cMpc]; a chord point belongs to the nearest one, with its
         offset (only where the absorption sits matters: the pieces are not cut at the dual segments).
-    gas_positions (M, 3), gas_size (M,) [cMpc]; box : the periodic box (min image from the middle of the path) or None.
+    gas_positions (M, 3), gas_size (M,) [cMpc]; box : the periodic box (the image nearest to the middle of the path) or None.
 
     A path across a whole periodic box keeps the chord points beyond its ends (s < 0, s > L: the spectrum wraps them,
     ``velocity_period``); a shorter path drops them. Returns SegmentComponents with weight 3 / (4 pi), kind "tophat_chords".
     """
+    from skewerjax.core import crossings as cx
+
     if chord_weight is not None and not chord_weight > 0:
         raise ValueError(f"chord_weight must be None or > 0, got {chord_weight!r}.")
-    w = 1.0 / CHORD_POINTS if chord_weight is None else float(chord_weight)
+    w = 1.0 / cx.CHORD_POINTS if chord_weight is None else float(chord_weight)
     pts = np.asarray(points, dtype=np.float64)
     n_sk, n_p = pts.shape[:2]
-    pos, h = np.asarray(gas_positions, dtype=np.float64), np.asarray(gas_size, dtype=np.float64)
-    s_pt = path_geometry(np.asarray(pts, dtype=np.float64))["s"]
-    k_ = (np.arange(1, CHORD_POINTS + 1) / (0.5 * (CHORD_POINTS + 1)) - 1.0)[None, :]
-
-    def one(k):
-        p0, chord = pts[k, 0], pts[k, -1] - pts[k, 0]
-        L = float(np.linalg.norm(chord))
-        e = chord / L
-        off = pts[k] - p0 - np.outer((pts[k] - p0) @ e, e)
-        if np.abs(off).max() > 1e-9 * L:
-            raise ValueError("deposition='tophat_chords' needs straight paths (fake_spectra's sightlines).")
-        d = pos - 0.5 * (p0 + pts[k, -1])
-        d = d if box is None else d - box * np.round(d / box)
-        par = d @ e
-        dr2 = np.sum(d * d, axis=1) - par * par
-        touch = np.nonzero(h * h - dr2 > 0.0)[0]
-        z_r = np.sqrt(h[touch] ** 2 - dr2[touch])
-        s = (0.5 * L + par[touch])[:, None] + z_r[:, None] * k_  # (M_touch, 7) positions along the path [cMpc]
-        c = np.repeat(touch, CHORD_POINTS)
-        ln = np.repeat(2.0 * z_r * w, CHORD_POINTS)
-        s = s.ravel()
-        if box is None or abs(L - box) > 1e-9 * box:
-            inside = (s >= 0.0) & (s <= L)
-            s, c, ln = s[inside], c[inside], ln[inside]
-        i = np.clip(np.searchsorted(0.5 * (s_pt[k, 1:] + s_pt[k, :-1]), s), 0, n_p - 1)
-        return i, c, ln, s - s_pt[k, i]
-
-    if n_sk > 1:  # one skewer per task (NumPy releases the GIL on these arrays): the same rows as a loop
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=min(n_sk, os.cpu_count() or 1)) as pool:
-            rows = list(pool.map(one, range(n_sk)))
-    else:
-        rows = [one(0)]
-    K = max(max((int(np.bincount(r[0], minlength=n_p).max()) for r in rows if r[0].size), default=1), 1)
-    cell = np.full((n_sk, n_p, K), -1, dtype=np.int64)
+    if not np.all(cx.straight_paths_mask(pts)):
+        raise ValueError("deposition='tophat_chords' needs straight paths (fake_spectra's sightlines).")
+    paths = cx.paths_from_points(pts, box)
+    ch = cx.straight_chords(paths, np.asarray(gas_positions, dtype=np.float64), np.asarray(gas_size, dtype=np.float64))
+    idx, s, ln = ch.points(w)
+    k_of = ch.path[idx]
+    c = ch.cell[idx]
+    L = paths.length[k_of]
+    if box is None or not np.allclose(paths.length, box, rtol=1e-9):
+        inside = (s >= 0.0) & (s <= L)
+        k_of, c, s, ln = k_of[inside], c[inside], s[inside], ln[inside]
+    s_pt = path_geometry(pts)["s"]
+    order = np.lexsort((s, k_of))
+    k_of, c, s, ln = k_of[order], c[order], s[order], ln[order]
+    i = np.empty(s.size, np.int64)
+    for k in np.unique(k_of):
+        sel = np.flatnonzero(k_of == k)
+        i[sel] = np.clip(np.searchsorted(0.5 * (s_pt[k, 1:] + s_pt[k, :-1]), s[sel]), 0, n_p - 1)
+    key = k_of * n_p + i
+    cnt = np.bincount(key, minlength=n_sk * n_p)
+    K = max(int(cnt.max()) if cnt.size else 1, 1)
+    o2 = np.argsort(key, kind="stable")
+    slot = np.arange(key.size) - np.concatenate([[0], np.cumsum(cnt)[:-1]])[key[o2]]
+    cell = np.full((n_sk * n_p, K), -1, dtype=np.int64)
     length, offset = np.zeros(cell.shape), np.zeros(cell.shape)
-    for k, (i, c, ln, o) in enumerate(rows):
-        order = np.argsort(i, kind="stable")
-        slot = np.arange(i.size) - np.searchsorted(i[order], i[order])
-        cell[k, i[order], slot], length[k, i[order], slot], offset[k, i[order], slot] = c[order], ln[order], o[order]
-    return SegmentComponents(cell, length, offset, TOPHAT_NORM, "tophat_chords", dict(chord_points=CHORD_POINTS, chord_weight=w))
+    cell[key[o2], slot] = c[o2]
+    length[key[o2], slot] = ln[o2]
+    offset[key[o2], slot] = (s - s_pt[k_of, i])[o2]
+    shp = (n_sk, n_p, K)
+    return SegmentComponents(
+        cell.reshape(shp), length.reshape(shp), offset.reshape(shp), TOPHAT_NORM, "tophat_chords", dict(chord_points=cx.CHORD_POINTS, chord_weight=w)
+    )
 
 
 # --------------------------------------------------------------------------- cell crossings (Voronoi-adapted segmentation)

@@ -486,13 +486,13 @@ def absorber_pieces(
     ``compute_optical_depth``), and the path fields of ``hubble_flow="linear"`` (``hubble_coordinate``,
     ``path_length_of``, ``first_hubble_rate``, ``first_hubble_velocity`` of the frame). A fixed comoving-to-physical
     conversion, e.g. fake_spectra's column at the data epoch a_data, is ``compute_optical_depth(a_eff=a_data)``. Its
-    width in velocity is the frame's Hubble rate times its length (n, T and v_pec are constant inside a cell).
+    width in velocity is the span of its line centres (n, T and v_pec are constant inside a cell), with the weight
+    gradients of the integrated profile (``Pieces.tilt_a2``, ``tilt_flow``).
     """
     ks = list(range(ab.n_skewers) if skewers is None else [int(k) for k in np.atleast_1d(skewers)])
     s, n, l, T, vl = (np.asarray(getattr(ab, f), dtype=np.float64)[ks] for f in ("s", "n", "length", "T", "v_los"))
     a = np.stack([frame.scale_factors(k, s[i]) for i, k in enumerate(ks)])
     u = np.stack([frame.velocity(k, s[i], vl[i]) for i, k in enumerate(ks)])
-    W = np.stack([frame.hubble_rate(k, s[i]) for i, k in enumerate(ks)]) * l
     opt = lambda x: np.zeros(T.shape) if x is None else np.asarray(x, dtype=np.float64)[ks]
     a_sk = getattr(frame, "a_dagger_per_skewer", None)
     a_d = (
@@ -500,9 +500,26 @@ def absorber_pieces(
         if a_sk is None
         else np.broadcast_to(np.asarray(a_sk, dtype=np.float64)[ks][:, None], s.shape)
     )
-    # The Hubble part of the line centres, c ln(a_dagger / a), in float64 here: in float32 the kernel would take the log of
-    # a ratio rounded to ~6e-8, i.e. ~0.02 km/s of error (docs/precision.md).
-    hub = phys.c_kms * np.log(a_d / a)
+    # The line centres at the two ends and the middle of every piece (float64): the span of the piece's line centres,
+    # W = |v_c(hi) - v_c(lo)|, its centre (the Hubble part kept in hubble_kms, the peculiar part in los_velocity), and
+    # the gradients of the weight per unit line centre, a^-2 ds / dv_c, along it (the integrated profile,
+    # ``core.tau_engine``). In float64 here: in float32 the kernel would take the log of a ratio rounded to ~6e-8, i.e.
+    # ~0.02 km/s of error (docs/precision.md).
+    path = np.repeat(np.arange(len(ks)), s.shape[1])
+    sub = _SkewerSubset(frame, ks)
+    ends = [line_centres(sub, path, (s + d * l).ravel(), vl.ravel()) for d in (-0.5, 0.0, 0.5)]
+    (v_lo, a_lo), (v_mid, _), (v_hi, a_hi) = [(x.reshape(s.shape), y.reshape(s.shape)) for x, y in ends]
+    W = np.abs(v_hi - v_lo)
+    beta = -u / phys.c_kms
+    pec = phys.c_kms * 0.5 * (np.log1p(-beta) - np.log1p(beta))
+    hub = 0.5 * (v_lo + v_hi) - pec  # the Hubble part of the span's centre
+    dvc = v_hi - v_lo
+    with np.errstate(divide="ignore", invalid="ignore"):
+        slope_lo = np.abs(-3.0 * v_lo + 4.0 * v_mid - v_hi)
+        slope_hi = np.abs(v_lo - 4.0 * v_mid + 3.0 * v_hi)
+        ok = (dvc != 0) & (l > 0)
+        tilt_a2 = np.where(ok, 2.0 * np.log(a_lo / a_hi) / dvc, 0.0)
+        tilt_flow = np.where(ok & (slope_lo > 0) & (slope_hi > 0), np.log(slope_lo / slope_hi) / dvc, 0.0)
     dev = lambda x: device_array(np.ascontiguousarray(x))
     lines = lambda x: jnp.broadcast_to(dev(x)[None], (n_lines,) + x.shape)
     return Pieces(
@@ -522,7 +539,35 @@ def absorber_pieces(
         vH_first=dev(np.array([frame.first_hubble_velocity(k) for k in ks])),
         cell=jnp.asarray(np.asarray(ab.cell)[ks]),
         hubble_kms=dev(hub),
+        tilt_a2=dev(tilt_a2),
+        tilt_flow=dev(tilt_flow),
     )
+
+
+class _SkewerSubset:
+    """A frame seen through the skewers ``ks`` (row i is skewer ks[i]); its methods take the row."""
+
+    def __init__(self, frame, ks):
+        self.f, self.ks = frame, list(ks)
+        self.a_dagger = frame.a_dagger
+        self.a_dagger_per_skewer = (
+            None if getattr(frame, "a_dagger_per_skewer", None) is None else np.asarray(frame.a_dagger_per_skewer)[self.ks]
+        )
+
+    def scale_factors(self, k, s):
+        return self.f.scale_factors(self.ks[k], s)
+
+    def velocity(self, k, s, v):
+        return self.f.velocity(self.ks[k], s, v)
+
+    def first_hubble_rate(self, k):
+        return self.f.first_hubble_rate(self.ks[k])
+
+    def first_hubble_velocity(self, k):
+        return self.f.first_hubble_velocity(self.ks[k])
+
+    def hubble_coordinate(self, k, s):
+        return self.f.hubble_coordinate(self.ks[k], s)
 
 
 def tau_absorbers(
@@ -629,6 +674,148 @@ def tau_by_path_bins(ab: Absorbers, line_bundle, velocities_kms, frame, s_edges,
     return np.stack(out)
 
 
+# --------------------------------------------------------------------------- contributions of cell crossings
+def _shared_grid(frame) -> bool:
+    """True for an ``ExactFrame`` whose skewers share one s grid and one a(s) (the box mode)."""
+    if not isinstance(frame, ExactFrame):
+        return False
+    s, a = np.asarray(frame.s_grid), np.asarray(frame.a_grid)
+    return bool(np.array_equal(s, np.broadcast_to(s[:1], s.shape)) and np.array_equal(a, np.broadcast_to(a[:1], a.shape)))
+
+
+def line_centres(frame, path, s, v_los, *, hubble_flow: str = "exact", aH_ref=None):
+    """(v_c [km/s], a) at path coordinates ``s`` [cMpc] of the paths ``path`` (n,), for gas of velocity ``v_los``
+    [km/s, along +s] (float64): v_c = V_H(s) + c (ln(1 - beta) - ln(1 + beta)) / 2, beta = -u / c, u the frame's
+    velocity along the photon (``absorber_pieces``, ``spectral.line_centre_velocity_kms``); V_H = c ln(a_dagger / a(s))
+    ("exact") or V_H(0) + (aH)_ref y(s) ("linear"). Vectorised over the paths in box mode (``_shared_grid``)."""
+    path = np.asarray(path, dtype=np.int64)
+    s = np.asarray(s, dtype=np.float64)
+    v_los = np.asarray(v_los, dtype=np.float64)
+    a = np.empty(s.shape)
+    u = np.empty(s.shape)
+    VH = np.empty(s.shape)
+    a_sk = getattr(frame, "a_dagger_per_skewer", None)
+    if isinstance(frame, SnapshotFrame):  # a = a_snap, u = c tanh((velfac s + v) / c): v_c = velfac s + v exactly
+        a[:] = frame.a_snap
+        u[:] = phys.c_kms * np.tanh((frame.velfac * s + v_los) / phys.c_kms)
+        VH[:] = 0.0
+    elif _shared_grid(frame):
+        lna = np.interp(s, frame.s_grid[0], np.log(frame.a_grid[0]))
+        a[:] = np.exp(lna)
+        a_d = np.full(s.shape, frame.a_dagger) if a_sk is None else np.asarray(a_sk, dtype=np.float64)[path]
+        VH[:] = phys.c_kms * (np.log(a_d) - lna)
+        sign = None if frame.photon_sign is None else np.asarray(frame.photon_sign, dtype=np.float64)[path]
+        u[:] = v_los if sign is None else -sign * v_los
+        if hubble_flow == "linear":
+            y = s - float(frame.s_grid[0, 0])
+            rate = np.array([frame.first_hubble_rate(0)]) if aH_ref is None else np.array([float(aH_ref)])
+            v0 = (
+                np.array([frame.first_hubble_velocity(k) for k in range(np.max(path) + 1)])[path]
+                if a_sk is not None
+                else frame.first_hubble_velocity(0)
+            )
+            VH[:] = v0 + rate[0] * y
+    else:
+        order = np.argsort(path, kind="stable")
+        ps = path[order]
+        bounds = np.flatnonzero(np.diff(np.concatenate([[-1], ps, [ps[-1] + 1 if ps.size else 0]])))
+        for i0, i1 in zip(bounds[:-1], bounds[1:]):
+            idx = order[i0:i1]
+            k = int(path[idx[0]])
+            ss = s[idx]
+            ak = frame.scale_factors(k, ss)
+            a[idx] = ak
+            u[idx] = frame.velocity(k, ss, v_los[idx])
+            if hubble_flow == "linear":
+                rate = frame.first_hubble_rate(k) if aH_ref is None else float(aH_ref)
+                VH[idx] = frame.first_hubble_velocity(k) + rate * frame.hubble_coordinate(k, ss)
+            else:
+                a_d = frame.a_dagger if a_sk is None else float(np.asarray(a_sk)[k])
+                VH[idx] = phys.c_kms * np.log(a_d / ak)
+    beta = -u / phys.c_kms
+    return VH + phys.c_kms * 0.5 * (np.log1p(-beta) - np.log1p(beta)), a
+
+
+def crossing_contributions(
+    crossings,
+    cells,
+    line_bundle,
+    frame,
+    directions,
+    *,
+    a_eff=None,
+    b_constants: str = "codata",
+    hubble_flow: str = "exact",
+    aH_ref=None,
+    paths=None,
+):
+    """The contributions of the cell crossings of straight paths to every line of ``line_bundle``
+    (``core.tau_engine.LineContributions``, host float64), from ``core.crossings.Crossings`` (cell indices into
+    ``cells``, a ``core.Cells``) and the ``frame`` of the paths.
+
+    Every crossing [s_lo, s_hi] of cell c absorbs over the line centres v_c(s) of its path, from v_c(s_lo) to v_c(s_hi):
+    the centre of that span, its extent W, the amplitude C f n int a(s)^-2 ds (Simpson's rule; ``a_eff``: a_eff^-2 l) and
+    the logarithmic gradient of the weight per unit line centre, a^-2 ds / dv_c, along the span
+    (``LineContributions.tilt``: the comoving-to-physical factor and the curvature of the Hubble flow), with n, T and the peculiar
+    velocity of the cell (its component along ``directions`` (N_sk, 3), the unit vectors of the paths).
+    ``paths``: optional (N_sk,) indices of the rows of the result (default: the crossing's path).
+
+    Returns a list of ``LineContributions``, one per line.
+    """
+    from skewerjax.core.tau_engine import LineContributions, line_widths
+
+    path = crossings.path
+    cell = crossings.cell
+    lo, hi = crossings.s_lo, crossings.s_hi
+    mid = 0.5 * (lo + hi)
+    length = hi - lo
+    b2 = check_b_constants(b_constants)
+    out = [None] * line_bundle.n_lines
+    lam, A21, mass, f_osc = (
+        np.asarray(x, dtype=np.float64)
+        for x in (line_bundle.lambda0_A, line_bundle.A21_GHz, line_bundle.mass_amu, line_bundle.f_osc)
+    )
+    # the geometry of the line centres is the same for every species (the cells' velocity): computed once
+    sp0 = list(line_bundle.species_keys)[0]
+    vel = np.asarray(cells.species[sp0]["velocity"], dtype=np.float64)
+    v_los = np.einsum("ij,ij->i", vel[cell], np.asarray(directions, dtype=np.float64)[path])
+    n3 = path.size
+    vc3, a3 = line_centres(
+        frame, np.tile(path, 3), np.concatenate([lo, mid, hi]), np.tile(v_los, 3), hubble_flow=hubble_flow, aH_ref=aH_ref
+    )
+    (v_lo, v_mid, v_hi), (a_lo, a_mid, a_hi) = np.split(vc3, 3), np.split(a3, 3)
+    del vc3, a3
+    # the line centres of the crossing span [v_lo, v_hi]: centre and extent; the weight per unit line centre,
+    # a(s)^-2 ds / dv_c (the quadratic through the three points gives dv_c/ds at the ends), varies along it: its
+    # logarithmic gradient is the tilt (``core.tau_engine``); the column is Simpson's int a^-2 ds
+    vc = 0.5 * (v_lo + v_hi)
+    W = np.abs(v_hi - v_lo)
+    dv = v_hi - v_lo
+    with np.errstate(divide="ignore", invalid="ignore"):
+        slope_lo = np.abs(-3.0 * v_lo + 4.0 * v_mid - v_hi) / length
+        slope_hi = np.abs(v_lo - 4.0 * v_mid + 3.0 * v_hi) / length
+        if a_eff is None:
+            a2 = (a_lo**-2 + 4.0 * a_mid**-2 + a_hi**-2) / 6.0
+            w_lo, w_hi = a_lo**-2 / slope_lo, a_hi**-2 / slope_hi
+        else:
+            a2 = np.full(n3, float(a_eff) ** -2)
+            w_lo, w_hi = 1.0 / slope_lo, 1.0 / slope_hi
+        tilt = np.where((dv != 0) & (w_lo > 0) & (w_hi > 0), np.log(w_hi / w_lo) / dv, 0.0)
+    colgeo = length * phys.Mpc_to_m * a2
+    row = path if paths is None else np.asarray(paths)[path]
+    for sp in line_bundle.species_keys:
+        n_c, T_c, _, turb, coll = _species_values(cells, sp)
+        col = n_c[cell] * colgeo
+        T = T_c[cell] * b2
+        tb = np.zeros(cell.size) if turb is None else turb[cell]
+        co = np.zeros(cell.size) if coll is None else coll[cell]
+        for j in line_bundle.indices_for_species(sp):
+            sig, gam = line_widths(T, tb, co, lam[j], A21[j], mass[j])
+            amp = (phys.cross_section_prefactor * 1e2) * f_osc[j] * col
+            out[j] = LineContributions(row, vc, W, amp, sig, np.ascontiguousarray(gam), cell, tilt)
+    return out
+
+
 # --------------------------------------------------------------------------- columns
 def column_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarray:
     """(N_sk, nbins) physical column [cm^-2] at the data epoch (``a_data``) of the absorbers binned exactly into
@@ -659,7 +846,7 @@ def density_per_pixel(ab: Absorbers, path_length: float, nbins: int) -> np.ndarr
 
 
 # --------------------------------------------------------------------------- the route: cells -> pieces
-DEPOSITIONS = ("voronoi", "tophat", "voronoi_crossings", "tophat_chords")
+DEPOSITIONS = ("voronoi", "voronoi_segments", "tophat", "voronoi_crossings", "tophat_chords")
 
 
 def deposit(
@@ -674,8 +861,8 @@ def deposit(
     """Selection and deposition of ``cells`` along ``points`` (N_sk, N, 3) [cMpc]: (the cells the indices refer to,
     ``SegmentComponents``).
 
-    deposition : "voronoi" (default: the exact pieces of the Voronoi cells in every dual segment; for a grid of cells,
-        ``grid_segments``, unless ``grid_fast_path=False``), "tophat" (spheres of radius V^(1/3), the fake_spectra
+    deposition : "voronoi" or "voronoi_segments" (the exact pieces of the Voronoi cells in every dual segment; for a grid
+        of cells, ``grid_segments``, unless ``grid_fast_path=False``), "tophat" (spheres of radius V^(1/3), the fake_spectra
         option: their exact overlaps with the dual segments), "tophat_chords" (those spheres through fake_spectra's
         quadrature of 7 points per chord, ``tophat_chord_segments``: straight paths) or "voronoi_crossings" (the
         Voronoi pieces, joined per cell crossing by ``cell_pieces``).
@@ -690,6 +877,7 @@ def deposit(
     t0 = time.perf_counter()
     if chord_weight is not None and deposition != "tophat_chords":
         raise ValueError(f"chord_weight applies to deposition='tophat_chords', not {deposition!r}.")
+    deposition = "voronoi" if deposition == "voronoi_segments" else deposition
     spheres = deposition in ("tophat", "tophat_chords")
     if not spheres and grid_fast_path and cells.grid is not None and cells.box is not None:
         use, sel = cells, dict(n_cells=len(cells), n_selected=len(cells), indices=np.arange(len(cells)), mode="grid", time_s=0.0)
@@ -748,6 +936,66 @@ def bundle_frame(skewer_bundle, *, a_dagger=None, ii_cosmology: int = 0) -> Exac
     )
 
 
+def _crossing_pieces(cells, line_bundle, pts, frame, species, a_data, skewers, return_parts, return_info, t0):
+    """``cell_pieces`` for straight paths with ``deposition="voronoi"``: one piece per cell crossing."""
+    from dataclasses import replace
+
+    from skewerjax.core import crossings as cx
+
+    paths = cx.paths_from_points(pts, cells.box)
+    cr = cx.straight_crossings(
+        paths, np.asarray(cells.positions, dtype=np.float64), np.asarray(cells.size_cMpc, dtype=np.float64)
+    )
+    t1 = time.perf_counter()
+    mass = {sp: float(np.asarray(line_bundle.mass_amu)[line_bundle.indices_for_species(sp)[0]]) for sp in species}
+    s_pt = path_geometry(pts)["s"]
+    mid = 0.5 * (cr.s_lo + cr.s_hi)
+    abs_ = {}
+    for sp in species:
+        n_c, T_c, vel, turb, coll = _species_values(cells, sp)
+        rows = _AbsorberRows(turb, coll)
+        for k in range(cr.n_paths):
+            sl = slice(cr.start[k], cr.start[k + 1])
+            c = cr.cell[sl]
+            pt = np.clip(np.searchsorted(0.5 * (s_pt[k][1:] + s_pt[k][:-1]), mid[sl]), 0, s_pt.shape[1] - 1)
+            rows.add(
+                c, s=mid[sl], n=n_c[c], length=cr.s_hi[sl] - cr.s_lo[sl], T=T_c[c], v_los=vel[c] @ paths.direction[k], point=pt
+            )
+        abs_[sp] = rows.build(sp, mass[sp], a_data, dict(kind="voronoi_crossings_exact"))
+    t2 = time.perf_counter()
+    per = {sp: absorber_pieces(abs_[sp], frame, 1, skewers=skewers) for sp in species}
+    p0 = per[species[0]]
+    n_l = line_bundle.n_lines
+    fields = ("temperature", "turbulence", "collisional", "los_velocity", "number_density", "width_kms")
+    rows_ = {f: [None] * n_l for f in fields}
+    for sp in species:
+        for j in line_bundle.indices_for_species(sp):
+            for f in fields:
+                rows_[f][j] = getattr(per[sp], f)[0]
+    pieces = replace(p0, **{f: jnp.stack(v) for f, v in rows_.items()})
+    out = [pieces]
+    if return_parts:
+        out.append(dict(cells=cells, segments=None, absorbers=abs_, frame=frame, crossings=cr, paths=paths))
+    if return_info:
+        t3 = time.perf_counter()
+        ks = list(range(pts.shape[0])) if skewers is None else [int(k) for k in np.atleast_1d(skewers)]
+        A0 = abs_[species[0]]
+        out.append(
+            dict(
+                selection=None,
+                deposition=dict(kind="voronoi_crossings_exact", n_crossings=cr.counts, time_s=t1 - t0),
+                n_pieces=(A0.cell[ks] >= 0).sum(-1),
+                path_length_cMpc=paths.length[ks],
+                piece_length_cMpc=A0.length[ks].sum(-1),
+                column_cm2={sp: (abs_[sp].n[ks] * abs_[sp].length[ks]).sum(-1) * phys.Mpc_to_cm for sp in species},
+                resolution=None,
+                timings=dict(deposit=t1 - t0, absorbers=t2 - t1, pieces=t3 - t2),
+                time_s=t3 - t0,
+            )
+        )
+    return out[0] if len(out) == 1 else tuple(out)
+
+
 def cell_pieces(
     cells,
     line_bundle,
@@ -771,9 +1019,12 @@ def cell_pieces(
 
     The one route from the gas to tau, for every source of cells (toy models, simulations):
 
-    1. selection of the cells within reach of the points, and deposition into the pieces of every dual segment
-       (``deposit``; for ``deposition="voronoi_crossings"`` the pieces are joined per cell crossing and split into
-       equal sub-pieces of velocity width <= ``crossing_tolerance`` b of the narrowest species);
+    1. ``deposition="voronoi"`` (default) on straight paths: the **cell crossings** of every path, one piece per crossing
+       (``core.crossings.straight_crossings``: the lower envelope of the generators within reach of the path; no
+       selection, no sampling points); on curved paths, and with ``"voronoi_segments"`` on any path: selection of the
+       cells within reach of the points and deposition into the pieces of every dual segment (``deposit``; for
+       ``deposition="voronoi_crossings"`` the dual-segment pieces are joined per cell crossing and split into equal
+       sub-pieces of velocity width <= ``crossing_tolerance`` b of the narrowest species);
     2. per species, the ``Absorbers`` of its cells (``absorbers_from_components`` / ``absorbers_from_crossings``);
     3. ``absorber_pieces`` in the frame: a(s) at every centroid and the velocity along the photon.
 
@@ -819,11 +1070,17 @@ def cell_pieces(
         raise ValueError(f"the cells hold no {missing} (they hold {cells.species_keys}).")
     if segments is not None and segments.cell.shape[:2] != pts.shape[:2]:
         raise ValueError(f"segments were deposited for {segments.cell.shape[:2]} points, the paths have {pts.shape[:2]}.")
+    from skewerjax.core import crossings as cx
+
+    if chord_weight is not None and deposition != "tophat_chords":
+        raise ValueError(f"chord_weight applies to deposition='tophat_chords', not {deposition!r}.")
+    if deposition == "voronoi" and segments is None and bool(np.all(cx.straight_paths_mask(pts))):
+        return _crossing_pieces(cells, line_bundle, pts, frame, species, a_data, skewers, return_parts, return_info, t0)
     if segments is None:
         use, seg, dinfo = deposit(
             cells,
             pts,
-            deposition="voronoi" if deposition == "voronoi_crossings" else deposition,
+            deposition="voronoi" if deposition in ("voronoi_crossings", "voronoi_segments") else deposition,
             grid_fast_path=grid_fast_path,
             chord_weight=chord_weight,
             return_info=True,
@@ -853,6 +1110,9 @@ def cell_pieces(
             for f in rows:
                 rows[f][j] = getattr(per[sp], f)[0]
     pieces = replace(p0, **{f: jnp.stack(v) for f, v in rows.items()})
+    if seg.kind == "tophat_chords":  # fake_spectra's chord points are points: their length is a quadrature weight
+        z = jnp.zeros_like(pieces.length_m)
+        pieces = replace(pieces, width_kms=jnp.zeros_like(pieces.width_kms), tilt_a2=z, tilt_flow=z)
     out = [pieces]
     if return_parts:
         out.append(dict(cells=use, segments=seg, absorbers=abs_, frame=frame, crossings=cross))
@@ -881,3 +1141,167 @@ def cell_pieces(
         if return_info:
             out.append(info)
     return out[0] if len(out) == 1 else tuple(out)
+
+
+def cell_contributions(
+    cells,
+    line_bundle,
+    *,
+    skewer_bundle=None,
+    points=None,
+    frame=None,
+    a_dagger=None,
+    ii_cosmology: int = 0,
+    a_eff=None,
+    b_constants: str = "codata",
+    hubble_flow: str = "exact",
+    aH_ref=None,
+    return_info: bool = False,
+):
+    """The contributions (``core.tau_engine.LineContributions``, one per line, host float64) of the Voronoi cells of
+    ``cells`` crossed by the straight paths of ``skewer_bundle`` (or ``points`` (N_sk, N, 3) [cMpc] and a ``frame``):
+    the default route of ``core.compute_optical_depth`` for straight paths. The crossings come from the lower envelope
+    of the candidate generators within reach of each path (``core.crossings.straight_crossings``: no selection, no
+    sampling points: only the ends of each path and its frame are used); each crossing is one contribution
+    (``crossing_contributions``). With ``return_info``: (contributions, dict(n_crossings (N_sk,), n_candidates,
+    n_cells, timings {crossings, contributions} [s], time_s))."""
+    from skewerjax.core import crossings as cx
+
+    t0 = time.perf_counter()
+    if skewer_bundle is not None:
+        points = _bundle_host(skewer_bundle, ii_cosmology)[0]
+        frame = bundle_frame(skewer_bundle, a_dagger=a_dagger, ii_cosmology=ii_cosmology) if frame is None else frame
+    elif points is None or frame is None:
+        raise ValueError("give a skewer_bundle, or points and a frame.")
+    species = list(line_bundle.species_keys)
+    missing = [sp for sp in species if sp not in cells.species]
+    if missing:
+        raise ValueError(f"the cells hold no {missing} (they hold {cells.species_keys}).")
+    paths = cx.paths_from_points(points, cells.box)
+    cr, pairs = cx.straight_crossings(
+        paths, np.asarray(cells.positions, dtype=np.float64), np.asarray(cells.size_cMpc, dtype=np.float64), return_pairs=True
+    )
+    t1 = time.perf_counter()
+    out = crossing_contributions(
+        cr,
+        cells,
+        line_bundle,
+        frame,
+        paths.direction,
+        a_eff=a_eff,
+        b_constants=b_constants,
+        hubble_flow=hubble_flow,
+        aH_ref=aH_ref,
+    )
+    t2 = time.perf_counter()
+    if not return_info:
+        return out
+    info = dict(
+        n_crossings=cr.counts,
+        n_candidates=int(pairs.cell.size),
+        n_cells=int(len(cells)),
+        n_cells_crossed=int(np.unique(cr.cell).size),
+        crossings=cr,
+        timings=dict(crossings=t1 - t0, contributions=t2 - t1),
+        time_s=t2 - t0,
+    )
+    return out, info
+
+
+def chord_contributions(
+    chords,
+    cells,
+    line_bundle,
+    frame,
+    directions,
+    lengths,
+    box,
+    *,
+    chord_weight: float | None = None,
+    a_eff=None,
+    b_constants: str = "codata",
+    hubble_flow: str = "exact",
+    aH_ref=None,
+    compact: bool = True,
+):
+    """The contributions of fake_spectra's chord quadrature (``core.crossings.Chords.points``) to every line: every
+    chord point a point piece (width 0) of density (3 / 4 pi) n and length 2 z w, at its line centre in ``frame``
+    (fake_spectra's ``SnapshotFrame``: velfac s + v_pec), grouped by cell (``LineContributions.group``: the per-cell
+    schemes). A path across the whole periodic box keeps the points beyond its ends (the spectrum wraps them with
+    ``velocity_period``); a shorter path drops them (``core.deposition.tophat_chord_segments``). ``compact`` (paths across
+    the box): one contribution per chord, its 7 points at vc + (k - 4) spacing generated on the device
+    (``LineContributions.spacing``; the same sum)."""
+    from skewerjax.core.deposition import TOPHAT_NORM
+    from skewerjax.core.tau_engine import LineContributions, line_widths
+
+    box_paths = bool(box) and bool(np.allclose(np.asarray(lengths), box, rtol=1e-9))
+    if compact and box_paths:  # one contribution per chord: its 7 points are generated by the per-cell kernel
+        return _compact_chords(
+            chords, cells, line_bundle, frame, directions, chord_weight, a_eff, b_constants, hubble_flow, aH_ref
+        )
+    idx, s, ln = chords.points(chord_weight)
+    path = chords.path[idx]
+    cell = chords.cell[idx]
+    L = np.asarray(lengths, dtype=np.float64)[path]
+    if not (box and np.allclose(np.asarray(lengths), box, rtol=1e-9)):
+        inside = (s >= 0.0) & (s <= L)
+        idx, s, ln, path, cell = idx[inside], s[inside], ln[inside], path[inside], cell[inside]
+    b2 = check_b_constants(b_constants)
+    lam, A21, mass, f_osc = (
+        np.asarray(x, dtype=np.float64)
+        for x in (line_bundle.lambda0_A, line_bundle.A21_GHz, line_bundle.mass_amu, line_bundle.f_osc)
+    )
+    out = [None] * line_bundle.n_lines
+    for sp in line_bundle.species_keys:
+        n_c, T_c, vel, turb, coll = _species_values(cells, sp)
+        v_los = np.einsum("ij,ij->i", vel[cell], np.asarray(directions, dtype=np.float64)[path])
+        vc, a = line_centres(frame, path, s, v_los, hubble_flow=hubble_flow, aH_ref=aH_ref)
+        a2 = a**-2 if a_eff is None else float(a_eff) ** -2
+        col = TOPHAT_NORM * n_c[cell] * ln * phys.Mpc_to_m * a2
+        T = T_c[cell] * b2
+        tb = np.zeros(cell.size) if turb is None else turb[cell]
+        co = np.zeros(cell.size) if coll is None else coll[cell]
+        for j in line_bundle.indices_for_species(sp):
+            sig, gam = line_widths(T, tb, co, lam[j], A21[j], mass[j])
+            amp = (phys.cross_section_prefactor * 1e2) * f_osc[j] * col
+            out[j] = LineContributions(path, vc, np.zeros(cell.size), amp, sig, np.ascontiguousarray(gam), cell)
+    return out
+
+
+def _compact_chords(chords, cells, line_bundle, frame, directions, chord_weight, a_eff, b_constants, hubble_flow, aH_ref):
+    """``chord_contributions`` with one contribution per chord: the line centre of its middle point, the spacing of its 7
+    points in line centre (from its ends, s = u -+ 3 z / 4) and its 7 points' total amplitude."""
+    from skewerjax.core.crossings import CHORD_POINTS
+    from skewerjax.core.deposition import TOPHAT_NORM
+    from skewerjax.core.tau_engine import LineContributions, line_widths
+
+    w = 1.0 / CHORD_POINTS if chord_weight is None else float(chord_weight)
+    path, cell = chords.path, chords.cell
+    sp0 = list(line_bundle.species_keys)[0]
+    vel = np.asarray(cells.species[sp0]["velocity"], dtype=np.float64)
+    v_los = np.einsum("ij,ij->i", vel[cell], np.asarray(directions, dtype=np.float64)[path])
+    n = path.size
+    s3 = np.concatenate([chords.u - 0.75 * chords.z, chords.u, chords.u + 0.75 * chords.z])
+    vc3, a3 = line_centres(frame, np.tile(path, 3), s3, np.tile(v_los, 3), hubble_flow=hubble_flow, aH_ref=aH_ref)
+    v_lo, vc, v_hi = vc3[:n], vc3[n : 2 * n], vc3[2 * n :]
+    a_mid = a3[n : 2 * n]
+    spacing = (v_hi - v_lo) / 6.0
+    a2 = a_mid**-2 if a_eff is None else float(a_eff) ** -2
+    colgeo = TOPHAT_NORM * CHORD_POINTS * 2.0 * chords.z * w * phys.Mpc_to_m * a2
+    b2 = check_b_constants(b_constants)
+    lam, A21, mass, f_osc = (
+        np.asarray(x, dtype=np.float64)
+        for x in (line_bundle.lambda0_A, line_bundle.A21_GHz, line_bundle.mass_amu, line_bundle.f_osc)
+    )
+    out = [None] * line_bundle.n_lines
+    for sp in line_bundle.species_keys:
+        n_c, T_c, _, turb, coll = _species_values(cells, sp)
+        col = n_c[cell] * colgeo
+        T = T_c[cell] * b2
+        tb = np.zeros(n) if turb is None else turb[cell]
+        co = np.zeros(n) if coll is None else coll[cell]
+        for j in line_bundle.indices_for_species(sp):
+            sig, gam = line_widths(T, tb, co, lam[j], A21[j], mass[j])
+            amp = (phys.cross_section_prefactor * 1e2) * f_osc[j] * col
+            out[j] = LineContributions(path, vc, np.zeros(n), amp, sig, np.ascontiguousarray(gam), cell, None, spacing)
+    return out

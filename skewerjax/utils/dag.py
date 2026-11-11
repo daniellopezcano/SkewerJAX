@@ -277,7 +277,7 @@ DAG_NOTEBOOKS = {
     "stats_1d": "10, 11",
     "stats_3d": "10, 11",
     "field_stats": "08, 09, 11",
-    "fake_spectra": "12, 13, 14, 15",
+    "fake_spectra": "12, 13, 14",
 }
 
 # The layers: the subpackages and the notebooks, and who imports whom (``tests/test_import_graph.py``)

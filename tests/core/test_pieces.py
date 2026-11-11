@@ -37,22 +37,28 @@ def test_pieces_tile_the_path_and_centroids():
 
 @float64_only
 def test_finer_sampling_converges_and_keeps_the_column():
-    """Cells of a coarse grid sampled with more and more points: the pieces are the cell crossings cut at the dual
-    segments, so the sum converges at second order in the spacing and the column is exact at every spacing."""
+    """Cells of a coarse grid sampled with more and more points. The default pieces are the cell crossings with the
+    integrated profile: the same tau at any spacing. The dual-segment pieces with the midpoint profile (the earlier
+    default) converge at second order in the spacing, to the same tau; the column is exact at every spacing."""
     L, n0 = 2.0, 1e-12
     grid = np.full((8, 8, 8), n0) * (1.0 + 0.5 * np.sin(2 * np.pi * np.arange(8) / 8))[:, None, None]
     cells = cells_on_grid(L, {"HI": grid}, temperature=2e3)
     v = jnp.linspace(-100.0, 2100.0, 4401)
-    taus, cols = {}, {}
+    taus, cols, crossings = {}, {}, {}
     for n_pt in (161, 321, 641, 5121):
         pos = np.zeros((1, n_pt, 3))
         pos[0, :, 0] = np.linspace(0.0, L * (1 - 1e-9), n_pt)
         pos[0, :, 1:] = 0.25
         a = np.exp(np.linspace(np.log(0.30), np.log(0.302), n_pt))[None, None]
         sb = SkewerBundle(spatial_points=jnp.asarray(pos), manual_scale_factors=jnp.asarray(a), a0=0.302, ICs_defined_at_index=-1)
-        p = cell_pieces(cells, LYA, skewer_bundle=sb)
+        p = cell_pieces(cells, LYA, skewer_bundle=sb, deposition="voronoi_segments")
         cols[n_pt] = float(np.sum(np.asarray(p.number_density[0]) * np.asarray(p.length_m)))
-        taus[n_pt] = np.asarray(compute_optical_depth(p, v, LYA, resolution_tolerance=None))[0, 0]
+        taus[n_pt] = np.asarray(compute_optical_depth(p, v, LYA, resolution_tolerance=None, profile_integration="midpoint"))[0, 0]
+        crossings[n_pt] = np.asarray(compute_optical_depth(sb, v, LYA, cells, resolution_tolerance=None))[0, 0]
     e = [np.abs(taus[n] - taus[5121]).max() for n in (161, 321, 641)]
     assert e[0] > e[1] > e[2] and e[1] / e[2] > 3.0, f"second-order convergence, got {e}"
+    scale = np.abs(crossings[5121]).max()
+    for n in (161, 321, 641):
+        assert np.abs(crossings[n] - crossings[5121]).max() <= 1e-6 * scale, "crossings: independent of the sampling"
+    assert np.abs(taus[5121] - crossings[5121]).max() < e[2], "the midpoint sum converges to the integrated crossings"
     assert np.allclose(list(cols.values()), cols[5121], rtol=1e-12), "the column is exact at any spacing"

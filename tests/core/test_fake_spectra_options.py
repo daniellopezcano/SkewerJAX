@@ -136,7 +136,8 @@ def test_chord_weight_is_seven_eighths_of_the_column():
     np.testing.assert_allclose(np.asarray(low.length_m), 7 / 8 * np.asarray(full.length_m), rtol=1e-14)
     t_full = compute_optical_depth(full, v, LYA, resolution_tolerance=None, velocity_period=V_MAX)
     t_low = compute_optical_depth(low, v, LYA, resolution_tolerance=None, velocity_period=V_MAX)
-    np.testing.assert_allclose(np.asarray(t_low), 7 / 8 * np.asarray(t_full), rtol=1e-12)
+    # linear in the amplitudes, up to the windows they select (the wing tolerance, 1e-9 of tau)
+    np.testing.assert_allclose(np.asarray(t_low), 7 / 8 * np.asarray(t_full), rtol=tol(1e-7, 2e-6), atol=1e-8)
     exact = cell_pieces(gas, LYA, points=pts, frame=frame(), a_data=A, deposition="tophat")
     col = lambda p: float((np.asarray(p.number_density[0]) * np.asarray(p.length_m)).sum())
     np.testing.assert_allclose(col(full), col(exact), rtol=1e-2)  # the same chords; the seam and the touch rule at most differ
@@ -163,9 +164,13 @@ def test_b_constants():
     import dataclasses
 
     scaled = dataclasses.replace(p, temperature=p.temperature * ratio)
-    np.testing.assert_array_equal(
+    # the same sums up to the rounding of T x ratio (in float64 on the host, or in the policy's dtype in the pieces) and the
+    # windows it selects (the wing tolerance, 1e-9 of tau)
+    np.testing.assert_allclose(
         np.asarray(compute_optical_depth(p, v, LYA, b_constants="fake_spectra", resolution_tolerance=None)),
         np.asarray(compute_optical_depth(scaled, v, LYA, resolution_tolerance=None)),
+        rtol=tol(1e-7, 2e-6),
+        atol=1e-8,
     )
 
 
@@ -205,7 +210,7 @@ def test_pixel_average_reproduces_the_trapezoid():
                 compute_optical_depth(one, (v[:, None] + off).ravel(), SI3, velocity_period=V_MAX, resolution_tolerance=None)
             )
             expected += (t[0, 0].reshape(nbins, off.size) * w).sum(-1)
-        np.testing.assert_allclose(got, expected, rtol=1e-9, atol=1e-13)
+        np.testing.assert_allclose(got, expected, rtol=tol(1e-9, 2e-6), atol=tol(1e-8, 1e-7))  # the windows' wing tolerance
         if nbins == 1026:  # dv = 1.5 km/s: narrow cells only; the wider ones stay at the centre
             centre = np.asarray(compute_optical_depth(p, v, SI3, velocity_period=V_MAX, resolution_tolerance=None))[0, 0]
             assert np.abs(got - centre).max() > 0.0
@@ -285,12 +290,18 @@ def test_tautail_needs_the_cells_and_a_grid_over_the_period():
     )
     raises(ValueError, "uniform", compute_optical_depth, p, v**1.01, LYA, tautail=1e-7, resolution_tolerance=None)
     # without a period the walk stops at the ends of the grid, and with a threshold of 0+ it keeps every pixel
+    # (the per-cell route against the windowed engine: equal up to the wing tolerance, 1e-9 of tau, and float32 rounding)
     t = np.asarray(compute_optical_depth(p, v, LYA, tautail=1e-300, resolution_tolerance=None))
-    np.testing.assert_allclose(t, np.asarray(compute_optical_depth(p, v, LYA, resolution_tolerance=None)), rtol=1e-12)
+    np.testing.assert_allclose(
+        t, np.asarray(compute_optical_depth(p, v, LYA, resolution_tolerance=None)), rtol=tol(1e-9, 2e-6), atol=1e-8
+    )
     # no pixel average and no threshold reachable: the per-cell route equals the sum over pieces, whatever the deposition
     tp = np.asarray(compute_optical_depth(p, v, LYA, tautail=1e-300, velocity_period=V_MAX, resolution_tolerance=None))
     np.testing.assert_allclose(
-        tp, np.asarray(compute_optical_depth(p, v, LYA, velocity_period=V_MAX, resolution_tolerance=None)), rtol=1e-12
+        tp,
+        np.asarray(compute_optical_depth(p, v, LYA, velocity_period=V_MAX, resolution_tolerance=None)),
+        rtol=tol(1e-9, 2e-6),
+        atol=1e-8,
     )
     _, info = compute_optical_depth(p, v, LYA, tautail=1e-7, velocity_period=V_MAX, resolution_tolerance=None, return_info=True)
     assert info["n_v"] == v.size and info["timings"]["tau"] > 0.0

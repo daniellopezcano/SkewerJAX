@@ -113,10 +113,12 @@ def device_array(x, dtype=None):
 def configure_devices(n_cpu_devices: int | None = None, cpu_threads: int | None = None, *, platforms: str | None = None) -> dict:
     """Configure XLA's host platform **before JAX is imported** (an error otherwise: the flags are read once).
 
-    n_cpu_devices : expose the CPU as this many JAX devices (``--xla_force_host_platform_device_count``), so that
-        ``core.compute_optical_depth(devices=jax.devices("cpu"))`` runs one shard of the skewers per device; default
-        ``os.cpu_count()``. Each device is an independent XLA client thread pool: sharding over them is how the tau sum
-        uses every core (one device runs its elementwise loops on a few threads only).
+    n_cpu_devices : expose the CPU as this many JAX devices (``--xla_force_host_platform_device_count``); default 2.
+        ``core.compute_optical_depth(devices=skewerjax.config.devices("cpu"))`` deals the windowed engine's chunks to
+        them in turn (the dense sum: one shard of the skewers per device). XLA runs one computation at a time per device,
+        each on part of its intra-op pool; two devices overlap two kernels and use the cores fully (matched-mode tau of
+        1,024 TNG50-2 skewers: 8.6 s on one device, 5.9 s on two, no gain beyond; the default engine is the same on one
+        or two, slower on four: ``docs/performance.md``, section 5).
     cpu_threads : the threads of XLA's CPU intra-op pool (``--xla_cpu_multi_thread_eigen``, ``intra_op_parallelism_threads``);
         default: left to XLA (all the cores).
     platforms : ``JAX_PLATFORMS`` (e.g. "cpu", or "cuda,cpu" for a GPU next to the host devices); default: unchanged.
@@ -125,7 +127,7 @@ def configure_devices(n_cpu_devices: int | None = None, cpu_threads: int | None 
     """
     if "jax" in sys.modules:
         raise RuntimeError("configure_devices must run before the first import of jax (the XLA flags are read once).")
-    n = os.cpu_count() if n_cpu_devices is None else int(n_cpu_devices)
+    n = 2 if n_cpu_devices is None else int(n_cpu_devices)
     flags = [f for f in os.environ.get("XLA_FLAGS", "").split() if not f.startswith("--xla_force_host_platform_device_count")]
     flags.append(f"--xla_force_host_platform_device_count={n}")
     if cpu_threads is not None:

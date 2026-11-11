@@ -108,7 +108,7 @@ def test_route_errors():
     v = np.arange(0.0, 900.0, 2.0)
     _raises(ValueError, "the cells hold no ['SiIII']", cell_pieces, c, LineBundle(["SiIII-1206"]), skewer_bundle=b)
     _raises(ValueError, "deposition", cell_pieces, c, LYA, skewer_bundle=b, deposition="sph")
-    p, parts = cell_pieces(c, LYA, skewer_bundle=b, return_parts=True)
+    p, parts = cell_pieces(c, LYA, skewer_bundle=b, return_parts=True, deposition="voronoi_segments")
     _raises(ValueError, "segments", cell_pieces, c, LYA, points=_line(n=50), frame=parts["frame"], segments=parts["segments"])
     _raises(ValueError, "velocities_kms", compute_optical_depth, p, np.array([0.0, np.nan]), LYA)
     _raises(ValueError, "velocities_kms", compute_optical_depth, p, np.zeros((3, 10)), LYA)
@@ -133,7 +133,7 @@ def test_checks_are_skipped_under_tracing():
     p = cell_pieces(_toy(), LYA, skewer_bundle=_bundle(_line()))
     v = jnp.arange(0.0, 900.0, 3.0)
     tau = jax.jit(lambda q: compute_optical_depth(q, v, LYA, resolution_tolerance=None, velocity_period=500.0))(p)
-    ref = compute_optical_depth(p, v, LYA, resolution_tolerance=None, velocity_period=500.0)
+    ref = compute_optical_depth(p, v, LYA, resolution_tolerance=None, velocity_period=500.0, method="dense")  # jit: the dense sum
     np.testing.assert_allclose(np.asarray(tau), np.asarray(ref), rtol=1e-12, atol=0)
     g = jax.grad(
         lambda s: compute_optical_depth(
@@ -181,8 +181,14 @@ def test_resolution_warning():
     coarse = _bundle(_line(n=12))
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        compute_optical_depth(coarse, np.arange(0.0, 900.0, 2.0), LYA, c)
+        compute_optical_depth(
+            coarse, np.arange(0.0, 900.0, 2.0), LYA, c, deposition="voronoi_segments", profile_integration="midpoint"
+        )
     assert any("too wide in velocity" in str(x.message) for x in w)
+    with warnings.catch_warnings(record=True) as w:  # the integrated profile has no such error: no check
+        warnings.simplefilter("always")
+        compute_optical_depth(coarse, np.arange(0.0, 900.0, 2.0), LYA, c)
+    assert not any("too wide in velocity" in str(x.message) for x in w)
 
 
 def test_paths_leaving_non_periodic_gas():

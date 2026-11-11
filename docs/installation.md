@@ -132,15 +132,15 @@ environment variable:
 ```bash
 export SKEWERJAX_DATA=/path/to/folder/with/TNG50-4   # DATA_DIR: holds TNG50-4/ (and TNG50-3/, TNG50-2/ for the benchmark)
 export SKEWERJAX_BENCHMARK_RAW=/path/to/raw          # BENCHMARK_RAW_DIR: per-configuration benchmark records
-export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the summary notebook 15 reads
+export SKEWERJAX_BENCHMARK_RESULTS=/path/to/records  # BENCHMARK_RECORDS_DIR: the scaling records notebook 14 reads
 ```
 
 Notebooks 08 and 10 recompute their toy boxes every time it runs and stores nothing.
 
 `DATA_DIR` defaults to `/home/STORAGE` (read only). The benchmark folders default to `benchmarks/raw` (one record per
 configuration in `benchmarks/raw/fake_spectra`, git-ignored) and `benchmarks/results`
-(`fake_spectra_benchmark.json`, the summary of every record that notebook 15 reads, committed); both are written by
-`scripts/benchmarks/benchmark_fake_spectra.py`.
+(`scaling/`, the records of notebook 14, written by `scripts/benchmarks/benchmark_scaling.py`, and
+`fake_spectra_benchmark.json`, the summary of `scripts/benchmarks/benchmark_fake_spectra.py`; both committed).
 
 ## 5. Verify the installation
 

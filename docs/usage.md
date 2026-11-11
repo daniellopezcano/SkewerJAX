@@ -314,8 +314,8 @@ the threads at N = 1, one or two timed runs, a cap and an estimate per point, an
 plus its estimate would exceed `--budget`, 1800 s) and `full` (N up to 1024 on the three snapshots, the threads at
 N = 16; it re-measures the quick points that hold fewer timed runs). Every record keeps its preset. The raw records go to
 `benchmarks/raw/fake_spectra` (git-ignored), and their summary to `benchmarks/results/fake_spectra_benchmark.json`
-(committed; with the runtime per preset and the list of launches), which `15_comparison_fake_spectra_benchmark` plots (`RUN_BENCHMARKS = True` re-runs the missing
-configurations of its `PRESET`).
+(committed; with the runtime per preset and the list of launches). No notebook plots it since notebook 15 was removed:
+the scaling benchmark below supersedes it.
 
 The scaling benchmark (`comparison.scaling`, launched by `scripts/benchmarks/benchmark_scaling.py`, plotted by
 `14_comparison_fake_spectra_scaling`) runs the four entries of notebook 13 (fake_spectra; SkewerJAX default and matched on

@@ -139,8 +139,9 @@ def radiation_natural():
     return v, tau, ref, resolution_report(cell_pieces(cells, LINES3, skewer_bundle=sb, a_dagger=a_d), LINES3, 0.25)
 
 
-def radiation_thermal(n):
-    """Radiation domination, A_21 = 0, two temperatures, ``n`` points per skewer: (v, tau, ref)."""
+def radiation_thermal(n, **kw):
+    """Radiation domination, A_21 = 0, two temperatures, ``n`` points per skewer: (v, tau, ref); ``kw``: options of
+    ``compute_optical_depth`` (e.g. the midpoint sum over dual-segment pieces)."""
     v = jnp.linspace(-4000.0, 4000.0, 1024)
     sb = _rad_bundle(n, plane=True)
     tau = compute_optical_depth(
@@ -150,6 +151,7 @@ def radiation_thermal(n):
         _gas(sb.spatial_points, (5e4, 5e6), (5e-11, 5e-11), L_RAD),
         a_dagger=jnp.asarray(sb.a0),
         resolution_tolerance=None,
+        **kw,
     )
     ref = _per_line(
         lambda j, wl: an.tau_radiation_thermal(

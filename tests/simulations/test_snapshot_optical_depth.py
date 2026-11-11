@@ -48,7 +48,9 @@ def tng_tau_checks(quick: bool):
     check(
         "sum of the per-piece profiles = tau of the pieces (rel)",
         np.abs(t_pp.sum(0) - t_sum).max() / t_sum.max(),
-        tol(1e-10, 1e-6),
+        # per_absorber is the dense sum, the total the windowed engine: in float32 the dense sum forms v - v_c from two
+        # velocities near 2300 km/s (ulp 2.4e-4 km/s, ~2e-5 of b), the engine from small pixel offsets
+        tol(1e-8, 3e-5),
     )
     live = A1.n[0] > 0
     N_p = A1.n[0][live] * fr.scale_factors(0, A1.s[0][live]) ** -2 * A1.length[0][live] * 3.085678e24

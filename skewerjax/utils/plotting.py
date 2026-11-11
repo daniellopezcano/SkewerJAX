@@ -2571,6 +2571,7 @@ def plot_scaling_block(x, rows, *, xlabel: str, reference: str = "fake_spectra",
 
     x = np.asarray(x, dtype=np.float64)
     entries = entries or list(dict.fromkeys(e for r in rows for e in r))
+    slope = lambda y: "" if np.isnan(k := fit_slope(x, y)) else f": slope {k:.2f}"  # no slope for a single point
     fig, axs = plt.subplots(2, 3, figsize=figsize or (22, 13), layout="constrained", sharex=True)
     panels = list(axs.ravel())
     for ax in panels:  # keep the corner of the panel letter free: "best" counts each overlapped rectangle once and each
@@ -2583,15 +2584,15 @@ def plot_scaling_block(x, rows, *, xlabel: str, reference: str = "fake_spectra",
             if not np.any(y > 0.01 * np.nanmax(tot[e])):  # stages below 1 % of the total everywhere: left out
                 continue
             ax.plot(x, np.where(y > 0, y, np.nan), color=BENCH_STAGE_COLORS[s], marker="o", ms=7, lw=2.0,
-                    label=f"{BENCH_STAGE_LABELS[s]}: slope {fit_slope(x, y):.2f}")
-        ax.plot(x, tot[e], color=FG, lw=3.2, marker="D", ms=8, label=f"total: slope {fit_slope(x, tot[e]):.2f}")
+                    label=f"{BENCH_STAGE_LABELS[s]}{slope(y)}")
+        ax.plot(x, tot[e], color=FG, lw=3.2, marker="D", ms=8, label=f"total{slope(tot[e])}")
         ax.set_title(e, fontsize=FONT_MIN["title"])
         _legend(ax, loc="best", fontsize=FONT_MIN["legend"])
     for ax in panels[len(entries) : 4]:
         ax.set_visible(False)
     ax = panels[4]
     for e in entries:
-        ax.plot(x, tot[e], label=f"{e}: slope {fit_slope(x, tot[e]):.2f}", ms=8, **SCALING_ENTRY_STYLES.get(e, {}))
+        ax.plot(x, tot[e], label=f"{e}{slope(tot[e])}", ms=8, **SCALING_ENTRY_STYLES.get(e, {}))
     ref = tot.get(reference) if reference_total is None else np.full(x.shape, float(reference_total))
     if reference_total is not None:
         ax.axhline(float(reference_total), color=PALETTE["grey"], lw=2.4, ls=":", label=f"{reference} (fixed)")
@@ -6732,11 +6733,16 @@ def plot_deposition_pieces(
     axs[0].set_ylabel(rf"$n_{{\rm com}}$ of {D['name']} [cm$^{{-3}}$]")
     axs[0].set_title(f"end of the box: s from L − {D['hr']:g} cMpc to L", pad=10)
     axs[1].set_title(f"start of the box: s from 0 to {D['hr']:g} cMpc", pad=10)
+    crossing_pieces = parts.get("segments") is None  # the default on a straight path: one piece per cell crossing
     handles = [
-        Patch(facecolor=PALETTE["grey"], edgecolor=FG, label=r"piece $p$: a cell $\cap$ a dual segment ($n_p$, $\ell_p$)"),
+        Patch(
+            facecolor=PALETTE["grey"],
+            edgecolor=FG,
+            label=r"piece $p$: a cell crossing ($n_p$, $\ell_p$)" if crossing_pieces else r"piece $p$: a cell $\cap$ a dual segment ($n_p$, $\ell_p$)",
+        ),
         Patch(facecolor="none", edgecolor=FG, lw=3.0, label=f"{plab[seam]}: the piece on the velocity seam"),
-        Line2D([], [], color=FG, lw=2.2, label="cell crossing"),
-        Line2D([], [], color=DIM, lw=1.3, ls=(0, (3.0, 2.5)), label="end of a dual segment"),
+        Line2D([], [], color=FG, lw=2.2, label="cell boundary" if crossing_pieces else "cell crossing"),
+    ] + ([] if crossing_pieces else [Line2D([], [], color=DIM, lw=1.3, ls=(0, (3.0, 2.5)), label="end of a dual segment")]) + [
         Line2D([], [], color=green, lw=3.5, label="box face (the seam)"),
         _velocity_arrow_handle(v_key, kpc, extra=" (top right of b2)" + ("; o: cut at the edge" if n_capped else "")),
     ]
@@ -6814,8 +6820,9 @@ def plot_deposition_pieces(
                 fontweight="bold" if i == seam else "normal",
             )
         y_cut = 10 ** (y_ar.max() + 0.12)
-        mids = 0.5 * (s_pts[1:] + s_pts[:-1])
-        b.vlines(mids[(mids > s_lo) & (mids < s_hi)], floor, y_cut, color=DIM, lw=1.3, ls=(0, (3.0, 2.5)), zorder=1)
+        if not crossing_pieces:  # dual-segment pieces: the ends of the dual segments cut the crossings
+            mids = 0.5 * (s_pts[1:] + s_pts[:-1])
+            b.vlines(mids[(mids > s_lo) & (mids < s_hi)], floor, y_cut, color=DIM, lw=1.3, ls=(0, (3.0, 2.5)), zorder=1)
         c_p, s_p, l_p = c_all[idx], s_all[idx], l_all[idx]
         brk = np.nonzero(np.diff(c_p))[0]
         b.vlines(s_p[brk] + 0.5 * l_p[brk], floor, y_cut, color=FG, lw=2.2, zorder=2)

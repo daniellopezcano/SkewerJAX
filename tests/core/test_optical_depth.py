@@ -33,7 +33,7 @@ from skewerjax.core import (
 )
 
 from analytic_cases import radiation_natural, radiation_thermal, static_natural, static_thermal
-from helpers import float64_only, ramp_pieces
+from helpers import float64_only, ramp_pieces, tol
 from helpers import uniform_skewer as uniform
 
 LYA = LineBundle(["HI-LyA"], ref_line_id="HI-LyA")
@@ -171,18 +171,25 @@ def test_radiation_domination_natural_lines_are_flagged():
     assert float(np.min(rep["max_ratio"])) > 0.25  # the resolution check flags them
 
 
-def _thermal_errors(points):
+def _thermal_errors(points, **kw):
     return np.array(
         [
             np.max(np.abs(np.exp(-np.asarray(t)) - np.exp(-np.asarray(r))), axis=(1, 2))
-            for _, t, r in (radiation_thermal(n) for n in points)
+            for _, t, r in (radiation_thermal(n, **kw) for n in points)
         ]
     )  # (n_resolutions, n_lines)
 
 
+MIDPOINT = dict(deposition="voronoi_segments", profile_integration="midpoint")  # the earlier default: pieces of dual segments
+
+
 def test_radiation_domination_thermal_converges():
-    """Second order: the error falls ~N^-2 when the points double (from 84 points on)."""
+    """The default (cell crossings, the integrated profile) is exact at any sampling (the analytic radiation-dominated
+    thermal lines to float32 rounding); the midpoint sum over dual-segment pieces converges at second order: the error
+    falls ~N^-2 when the points double (from 84 points on)."""
     errs = _thermal_errors((84, 168))
+    assert float(errs.max()) <= tol(1e-6, 3e-5), errs  # the linear weight of each crossing: O((W g)^2) in float64
+    errs = _thermal_errors((84, 168), **MIDPOINT)
     assert float(np.min(errs[:-1] / errs[1:])) > 2.5, errs
     assert float(errs[-1].max()) <= 1e-1, errs
 
@@ -191,7 +198,7 @@ def test_radiation_domination_thermal_converges():
 def test_radiation_domination_thermal_converges_full():
     """The full scan (42 to 336 points): from 84 points every step is in the N^-2 regime (42 points is pre-asymptotic
     for the hot line), and 336 points reach max |dF| <= 1e-2."""
-    errs = _thermal_errors((42, 84, 168, 336))[1:]
+    errs = _thermal_errors((42, 84, 168, 336), **MIDPOINT)[1:]
     assert float(np.min(errs[:-1] / errs[1:])) > 2.5, errs
     assert float(errs[-1].max()) <= 1e-2, errs
 
@@ -220,7 +227,7 @@ def test_a_eff_density_conversion():
         optical_depth_from_pieces(smp, v, lb, a_eff=a)
     assert optical_depth_from_pieces._cache_size() - n0 <= 1, "a_eff is traced: one compilation for every value"
     g = jax.grad(lambda a: jnp.sum(optical_depth_from_pieces(smp, v, lb, a_eff=a)))(a_eff)
-    np.testing.assert_allclose(float(g), -2.0 * t_a.sum() / a_eff, rtol=1e-10)
+    np.testing.assert_allclose(float(g), -2.0 * t_a.sum() / a_eff, rtol=1e-7)  # the gradient under jit: the dense sum
     for bad in (-1.0, np.inf, np.ones(2)):
         with pytest.raises(ValueError, match="a_eff"):
             compute_optical_depth(smp, v, lb, a_eff=bad, resolution_tolerance=None)
@@ -343,7 +350,9 @@ def test_hubble_flow_option():
     for h, warned in ((aHq, False), (1e5 * aHq, True)):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            compute_optical_depth(q, vq, LYA, hubble_flow="linear", aH_ref=h, resolution_tolerance=0.25)
+            compute_optical_depth(
+                q, vq, LYA, hubble_flow="linear", aH_ref=h, resolution_tolerance=0.25, profile_integration="midpoint"
+            )
         assert any("too wide" in str(w.message) for w in caught) == warned
     aH0 = float(q.aH_first[0])
     p = q
@@ -354,11 +363,12 @@ def test_hubble_flow_option():
         compute_optical_depth(p, v, LYA, hubble_flow="quadratic")
     with pytest.raises(ValueError, match="path"):
         compute_optical_depth(replace(p, path_cMpc=None), v, LYA, hubble_flow="linear")
-    # SnapshotFrame: one a, the Hubble flow in the velocity: linear == exact, bit for bit
+    # SnapshotFrame: one a, the Hubble flow in the velocity: linear == exact (to the rounding of the pieces' extents)
     L = float(pos[0, -1, 0])
     fr = SnapshotFrame(a_snap=0.3, velfac=80.0, path_length=np.array([L]))
     ps = cell_pieces(f, LYA, skewer_bundle=sb, frame=fr)
     vs = (np.arange(300) + 0.5) * 80.0 * L / 300
     te = np.asarray(compute_optical_depth(ps, vs, LYA, velocity_period=True))
     tl = np.asarray(compute_optical_depth(ps, vs, LYA, velocity_period=True, hubble_flow="linear"))
-    assert np.array_equal(te, tl) and float(velocity_span(ps, "linear")[0]) == pytest.approx(80.0 * L, rel=1e-12)
+    np.testing.assert_allclose(te, tl, rtol=tol(1e-9, 1e-6))
+    assert float(velocity_span(ps, "linear")[0]) == pytest.approx(80.0 * L, rel=1e-12)

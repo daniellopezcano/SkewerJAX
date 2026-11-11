@@ -39,6 +39,7 @@ Conventions and choices (the fake_spectra choices are options, notebook 12 compa
 
 from __future__ import annotations
 
+import functools
 import re
 from importlib.resources import files
 from pathlib import Path
@@ -158,6 +159,12 @@ def doppler_b_kms(T, mass_amu: float):
 
 # ---------------------------------------------------------------------------- UVB and H I
 def treecool_rates(redshift: float, path) -> dict:
+    """Photoionisation rates of H I, He I, He II [s^-1] from a TREECOOL file (``_treecool_rates``; read once per process)."""
+    return dict(_treecool_rates(float(redshift), str(path)))
+
+
+@functools.lru_cache(maxsize=64)
+def _treecool_rates(redshift: float, path: str) -> tuple:
     """Photoionisation rates of H I, He I, He II [s^-1] from a TREECOOL file (columns
     log10(1+z), Gamma_HI, Gamma_HeI, Gamma_HeII, heating rates), interpolated linearly in
     log10(1+z) and log10(Gamma), as Arepo does."""
@@ -166,7 +173,7 @@ def treecool_rates(redshift: float, path) -> dict:
     if not t[0, 0] <= lz <= t[-1, 0]:
         raise ValueError(f"z = {redshift} outside the TREECOOL table {path}.")
     g = [10 ** np.interp(lz, t[:, 0], np.log10(np.maximum(t[:, c], 1e-300))) for c in (1, 2, 3)]
-    return dict(Gamma_HI=g[0], Gamma_HeI=g[1], Gamma_HeII=g[2])
+    return tuple(dict(Gamma_HI=g[0], Gamma_HeI=g[1], Gamma_HeII=g[2]).items())
 
 
 def cloudy_table_dir(subdir: str = "ion_out_photo_atten") -> Path:
@@ -247,13 +254,22 @@ def neutral_fraction(
         if gamma_HI is None:
             gamma_HI = treecool_rates(redshift, default_treecool_path())["Gamma_HI"]
         sf = _arr(xp, cells.fields["sfr"]) > 0
+        if xp is np:  # the star-forming cells only (the same values, elementwise)
+            out = np.array(stored, dtype=np.float64, copy=True)
+            out[sf] = rahmati_neutral_fraction(n_H[sf], 1e4 * np.ones(int(sf.sum())), redshift, gamma_uvb=gamma_HI, f_bar=f_bar)
+            return out
         x_cold = rahmati_neutral_fraction(n_H, 1e4 * xp.ones_like(n_H), redshift, gamma_uvb=gamma_HI, f_bar=f_bar)
         return xp.where(sf, x_cold, stored)
     if model == "fake_sf":
         rho_mp = _arr(xp, cells.fields["rho"]) / CONSTANTS["fake_spectra"][0]
         thr = fake_spectra_sf_threshold()
+        cold = rho_mp > thr / 0.76
+        if xp is np:  # the dense cells only (the same values, elementwise)
+            out = np.array(stored, dtype=np.float64, copy=True)
+            out[cold] = rahmati_neutral_fraction(rho_mp[cold], 1e4 * np.ones(int(cold.sum())), redshift, f_bar=f_bar)
+            return out
         x_cold = rahmati_neutral_fraction(rho_mp, 1e4 * xp.ones_like(rho_mp), redshift, f_bar=f_bar)
-        return xp.where(rho_mp > thr / 0.76, x_cold, stored)
+        return xp.where(cold, x_cold, stored)
     if model == "rahmati_all":
         x = rahmati_neutral_fraction(n_H, T, redshift, f_bar=f_bar)
         sf = _arr(xp, cells.fields["sfr"]) > 0
@@ -301,10 +317,15 @@ class CloudyIonTable:
     LOG_DENS = np.arange(-7.0, 4.0, 0.2)
     LOG_TEMP = np.arange(3.0, 8.6, 0.05)
 
+    _loaded: dict = {}  # the tables read in this process, by file (in memory only)
+
     def __init__(self, redshift: float, directory=None):
         if directory is None:
             directory = cloudy_table_dir()
-        table = np.load(Path(directory) / "cloudy_table.npz")["table"]
+        key = str(Path(directory) / "cloudy_table.npz")
+        if key not in CloudyIonTable._loaded:
+            CloudyIonTable._loaded[key] = np.load(key)["table"]
+        table = CloudyIonTable._loaded[key]
         if table.shape[1:3] != (self.LOG_DENS.size, self.LOG_TEMP.size):
             raise ValueError(f"unexpected CLOUDY table shape {table.shape}")
         reds = np.arange(table.shape[0], dtype=np.float64)

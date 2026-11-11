@@ -32,12 +32,15 @@ options):
 
 * ``optical_depth_kernel``: the pieces of one skewer, arrays in, (N_lines, N_v) out (jit);
 * ``optical_depth_from_pieces``: every skewer of a ``Pieces`` pytree, ``lax.map`` over skewers (jit);
-* ``compute_optical_depth``: the entry point: the pieces (from a bundle and cells, or given), the resolution check,
-  the spectral axis (each line's own frame, or the reference line's) and the one periodicity option of the package,
-  ``velocity_period`` (default: none).
+* ``compute_optical_depth``: the entry point: the pieces (from a bundle and cells: the cell crossings of straight paths;
+  or given), the spectral axis (each line's own frame, or the reference line's) and the one periodicity option of the
+  package, ``velocity_period`` (default: none); the sum by the windowed engine (``core.tau_engine``: each contribution
+  exactly on a window of pixels, its far Lorentz wing by FFT; ``docs/performance.md``), the dense layers above under
+  ``jit``, ``per_piece`` or a non-uniform grid.
 
-Two optional schemes evaluate the sum per cell instead (``core.per_cell``): fake_spectra's pixel average and its early
-stop (``pixel_average``, ``tautail`` of ``compute_optical_depth``), on windows around each cell's line centre.
+Two optional schemes evaluate the sum per cell instead (``tau_engine.per_cell_line_tau``): fake_spectra's pixel average
+and its early stop (``pixel_average``, ``tautail`` of ``compute_optical_depth``), on windows around each cell's line
+centre.
 """
 
 from __future__ import annotations
@@ -72,7 +75,7 @@ logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- the optical depth of one skewer
-@partial(jax.jit, static_argnames=("voigt", "detuning", "per_piece"))
+@partial(jax.jit, static_argnames=("voigt", "detuning", "per_piece", "integrate"))
 def optical_depth_kernel(
     velocities_kms,
     lambda0_A,
@@ -93,6 +96,9 @@ def optical_depth_kernel(
     per_piece: bool = False,
     a_eff=None,
     hubble_kms=None,
+    width_kms=None,
+    tilt=None,
+    integrate: bool = False,
 ):
     """tau = sum_p l_p C f n_p a_p^-2 phi_p(v) for the pieces of one skewer (Eq. tau_straight_los, as a sum over pieces).
 
@@ -109,6 +115,9 @@ def optical_depth_kernel(
         comoving-to-physical factor only (the line centres and the detuning keep ``scale_factor``).
     hubble_kms : None (default: the Hubble part of the line centres from the frame, c ln(a_dagger / a_p)) or (N_p,) the
         Hubble part V_H of every piece [km/s] (``hubble_flow="linear"``: (aH)_ref y_p, possibly traced).
+    integrate : True: the mean of the profile over the line centres of each piece, which span ``width_kms``
+        (N_lines, N_p) [km/s] with the weight gradient ``tilt`` (N_p,) [s/km] (``core.tau_engine``; Harris' expansion);
+        False: the profile at the line centre (the midpoint rule).
 
     Returns
     -------
@@ -125,9 +134,12 @@ def optical_depth_kernel(
         detuning=detuning,
         hubble_kms=hubble_kms,
     )
-    # one profile batch per line: voigt="harris" decides its exact fallback per batch (``voigt_harris``), and the lines
-    # differ in their damping parameters (every Lya element below HARRIS_A_MAX, Si III above it near 1e4 K)
-    phi = jnp.stack([voigt_line_profiles(nu[j], sigma[j], gamma[j], voigt) for j in range(nu.shape[0])])
+    if integrate:
+        phi = _integrated_profiles(nu, sigma, gamma, lambda0_A, width_kms, tilt, detuning)
+    else:
+        # one profile batch per line: voigt="harris" decides its exact fallback per batch (``voigt_harris``), and the lines
+        # differ in their damping parameters (every Lya element below HARRIS_A_MAX, Si III above it near 1e4 K)
+        phi = jnp.stack([voigt_line_profiles(nu[j], sigma[j], gamma[j], voigt) for j in range(nu.shape[0])])
     # dtau/dx [1/m] = C f phi n a^-2 (x comoving); 1e2 turns cm^2 cm^-3 m into a number. The column n l first (the
     # density alone reaches 1e-30 cm^-3 for metals in hot gas, whose product with the prefactor would leave the float32
     # range), then the constant of each line.
@@ -137,6 +149,34 @@ def optical_depth_kernel(
     if per_piece:
         return amp[..., None] * phi
     return jnp.einsum("lp,lpv->lv", amp, phi)
+
+
+def _integrated_profiles(nu, sigma, gamma, lambda0_A, width_kms, tilt, detuning):
+    """(N_lines, N_p, N_v) the mean of the profile [ns] over the line centres of every piece (``core.tau_engine``'s
+    window kernel, every pixel): Harris' expansion (first order for a <= 1e-3, fourth beyond), the tilt of the weights
+    and, with the exact detuning, its Jacobian and the centre of the span in u."""
+    from skewerjax.core.voigt import HARRIS_A_MAX
+    from skewerjax.core.voigt_integral import NARROW_HALF_WIDTH, gaussian_moment_narrow, gaussian_moment_wide, harris_mean
+
+    kappa = (1e4 / lambda0_A)[:, None, None]
+    s2 = jnp.sqrt(2.0) * sigma[..., None]
+    a = gamma[..., None] / s2
+    half0 = kappa * width_kms[..., None] / (2.0 * s2)
+    if detuning == "exact":
+        e = 1.0 + nu / (kappa * phys.c_kms)  # exp(-Delta / c)
+        h = half0 * e
+        u = nu / s2 + h * half0 * (s2 / (2.0 * kappa * phys.c_kms))
+        dt_du = s2 / (kappa * e)
+        g = (0.0 if tilt is None else tilt[None, :, None]) - 1.0 / phys.c_kms
+    else:
+        h = jnp.broadcast_to(half0, nu.shape)
+        u = nu / s2
+        dt_du = s2 / kappa
+        g = 0.0 if tilt is None else tilt[None, :, None]
+    M = jnp.where(a <= HARRIS_A_MAX, harris_mean(u - h, u + h, a), harris_mean(u - h, u + h, a, fourth=True))
+    hh = jnp.maximum(h, 1e-30)
+    M1 = jnp.where(h >= NARROW_HALF_WIDTH, gaussian_moment_wide(u - hh, u + hh), gaussian_moment_narrow(u, h))
+    return (M + g * dt_du * M1) / (jnp.sqrt(jnp.pi) * s2)
 
 
 # --------------------------------------------------------------------------- pieces
@@ -178,6 +218,12 @@ class Pieces:
         on the host and stored in the policy dtype: ``hubble_flow="exact"`` uses it instead of the log of a ratio of
         two rounded scale factors (in float32 an error of ~0.02 km/s; docs/precision.md).
 
+    Optional, for the integrated profile (filled by ``core.absorbers.absorber_pieces``; None: 0): the line centres of a
+    piece span width_kms, and the weight per unit line centre varies along the span (``core.tau_engine``):
+
+    tilt_a2 : (N_sk, N_p) d ln(a^-2) / d v_c [s/km], the comoving-to-physical factor (dropped with ``a_eff``);
+    tilt_flow : (N_sk, N_p) d ln(ds / d v_c) / d v_c [s/km], the curvature of the Hubble flow.
+
     JAX pytree (every field a leaf; a None field has none).
     """
 
@@ -197,6 +243,8 @@ class Pieces:
     vH_first: jnp.ndarray | None = None
     cell: jnp.ndarray | None = None
     hubble_kms: jnp.ndarray | None = None
+    tilt_a2: jnp.ndarray | None = None
+    tilt_flow: jnp.ndarray | None = None
 
     @property
     def shape(self) -> tuple:
@@ -232,6 +280,8 @@ class Pieces:
             vH_first=None if self.vH_first is None else jnp.repeat(self.vH_first, n_rows),
             cell=None if self.cell is None else r(self.cell, False),
             hubble_kms=None if self.hubble_kms is None else r(self.hubble_kms, False),
+            tilt_a2=None if self.tilt_a2 is None else r(self.tilt_a2, True),
+            tilt_flow=None if self.tilt_flow is None else r(self.tilt_flow, True),
         )
 
     def lines(self, sel) -> Pieces:
@@ -274,7 +324,9 @@ def velocity_span(pieces: Pieces, hubble_flow: str = "exact", aH_ref=None) -> jn
     return jnp.abs(_hubble_rates(pieces, aH_ref)) * jnp.asarray(pieces.path_length_cMpc)
 
 
-@partial(jax.jit, static_argnames=("voigt", "detuning", "v_chunk", "batch_size", "per_piece", "dtype", "hubble_flow"))
+@partial(
+    jax.jit, static_argnames=("voigt", "detuning", "v_chunk", "batch_size", "per_piece", "dtype", "hubble_flow", "integrate")
+)
 def optical_depth_from_pieces(
     pieces: Pieces,
     velocities_kms,
@@ -290,6 +342,7 @@ def optical_depth_from_pieces(
     a_eff=None,
     hubble_flow: str = "exact",
     aH_ref=None,
+    integrate: bool = False,
 ) -> jnp.ndarray:
     """tau (N_lines, N_sk, N_v) of every skewer of ``pieces``: ``optical_depth_kernel`` mapped over skewers.
 
@@ -303,6 +356,8 @@ def optical_depth_from_pieces(
     hubble_flow : "exact" (default) or "linear": V_H = (aH)_ref y_p with ``aH_ref`` (None: ``Pieces.aH_first`` of each
         skewer; a scalar, traced and differentiable), y_p = ``Pieces.path_cMpc`` and V_H(0) = ``Pieces.vH_first`` (0 if
         None) (module docstring).
+    integrate : the integrated profile over each piece's line centres (``optical_depth_kernel``; the tilt of
+        ``Pieces.tilt_a2`` (without ``a_eff``) and ``Pieces.tilt_flow``).
     """
     if hubble_flow not in HUBBLE_FLOWS:
         raise ValueError(f"hubble_flow must be one of {HUBBLE_FLOWS}, got {hubble_flow!r}.")
@@ -323,7 +378,7 @@ def optical_depth_from_pieces(
     nv = n_v if v_chunk is None else int(v_chunk)
 
     def one_skewer(s):
-        a_d, a, w, T, tb, co, lv, n, P, y, h, h0, hx = s
+        a_d, a, w, T, tb, co, lv, n, P, y, h, h0, hx, wk, tl = s
         hub = hx if y is None else h0 + h * y  # V_H = V_H(0) + (aH)_ref y_p ("linear"); exact: Pieces.hubble_kms, else in-kernel
         chunks = [
             optical_depth_kernel(
@@ -346,6 +401,9 @@ def optical_depth_from_pieces(
                 per_piece=per_piece,
                 a_eff=a_eff,
                 hubble_kms=hub,
+                width_kms=wk,
+                tilt=tl,
+                integrate=integrate,
             )
             for v0 in range(0, n_v, nv)
         ]
@@ -366,8 +424,27 @@ def optical_depth_from_pieces(
         aH,
         (jnp.zeros_like(aH) if pieces.vH_first is None else jnp.asarray(pieces.vH_first, dtype=aH.dtype)) if linear else None,
         None if linear else pieces.hubble_kms,
+        (
+            jnp.abs(aH)[:, None, None] * pieces.length_m[:, None, :] / phys.Mpc_to_m * jnp.ones_like(sk(pieces.temperature))
+            if linear
+            else sk(pieces.width_kms)
+        )
+        if integrate
+        else None,
+        _tilt(pieces, a_eff, linear) if integrate else None,
     )
     return jnp.moveaxis(jax.lax.map(one_skewer, xs, batch_size=batch_size), 0, 1).astype(out_dtype)
+
+
+def _tilt(pieces: Pieces, a_eff, linear: bool = False):
+    """(N_sk, N_p) the weight gradient of the integrated profile: ``tilt_flow`` (not with a linear Hubble flow) +
+    ``tilt_a2`` (not with ``a_eff``); zeros when the pieces carry neither."""
+    t = jnp.zeros_like(pieces.length_m)
+    if pieces.tilt_flow is not None and not linear:
+        t = t + pieces.tilt_flow
+    if a_eff is None and pieces.tilt_a2 is not None:
+        t = t + pieces.tilt_a2
+    return t
 
 
 def optical_depth_sharded(
@@ -504,6 +581,8 @@ def check_pieces(pieces: Pieces, line_bundle=None) -> None:
         ("vH_first", (n_sk,), None),
         ("cell", (n_sk, n_p), None),
         ("hubble_kms", (n_sk, n_p), None),
+        ("tilt_a2", (n_sk, n_p), None),
+        ("tilt_flow", (n_sk, n_p), None),
     ):
         x = getattr(pieces, f)
         if x is not None:
@@ -515,6 +594,9 @@ def _cast_pieces(pieces: Pieces, dtype) -> Pieces:
     """``pieces`` with every floating field in ``dtype`` (the integer ``cell`` unchanged); no copy for fields already in it."""
     cast = lambda x: x if x is None or not jnp.issubdtype(x.dtype, jnp.floating) or x.dtype == dtype else jnp.asarray(x, dtype)
     return Pieces(**{f: cast(getattr(pieces, f)) for f in pieces.__dataclass_fields__})
+
+
+METHODS = ("auto", "windowed", "dense")
 
 
 def compute_optical_depth(
@@ -530,6 +612,9 @@ def compute_optical_depth(
     velocity_period=False,
     voigt: str = "harris",
     detuning: str = "exact",
+    profile_integration: str = "integrated",
+    wing_tolerance: float | None = None,
+    method: str = "auto",
     resolution_tolerance: float | None = 0.25,
     v_chunk: int | None = None,
     piece_chunk: int | None = None,
@@ -550,80 +635,77 @@ def compute_optical_depth(
 
     Parameters
     ----------
-    source : a ``SkewerBundle`` (with ``cells``: the pieces of ``core.absorbers.cell_pieces``) or ``Pieces`` (e.g.
-        ``SimulationSkewers.pieces``).
+    source : a ``SkewerBundle`` (with ``cells``) or ``Pieces`` (e.g. ``core.absorbers.cell_pieces``).
+        With a bundle of straight paths and the default ``deposition="voronoi"``, the pieces are the **cell crossings**
+        of every path (``core.absorbers.cell_contributions``: the lower envelope of the generators within reach; no
+        sampling points), summed with the integrated profile; any other case goes through ``core.absorbers.cell_pieces``.
     velocities_kms : (N_v,) velocity grid [km/s]: the line-centred velocity v_dagger of each line (``line_frame="own"``)
         or of the reference line (``"reference"``).
     cells : ``core.Cells`` holding every species of ``line_bundle`` (bundle sources only).
     a_dagger, ii_cosmology : reference scale factor of v_dagger (default: the bundle's ``a0``; scalar or (N_sk,)) and
         which cosmology of the bundle's scale factors (bundle sources only).
-    deposition : see ``core.absorbers.deposit`` (bundle sources only; default "voronoi", the exact
-        pieces of the Voronoi cells in every dual segment); chord_weight : ``deposition="tophat_chords"`` only, the weight
-        of each chord point (``core.deposition.tophat_chord_segments``).
+    deposition : see ``core.absorbers.cell_pieces`` (bundle sources only; default "voronoi": the cell crossings of
+        straight paths, the sampled dual-segment pieces of curved ones; "voronoi_segments": the dual-segment pieces of
+        every path); chord_weight : ``deposition="tophat_chords"`` only (``core.deposition.tophat_chord_segments``).
     line_frame : "own" (default): each line on its own line-centred axis; "reference": every line evaluated directly on
         the reference line's axis (``LineBundle.ref_line_id``), at v + delta_v_j: the lines share one axis exactly, with
         no shift, interpolation or wrap (review notes, relative line-centred velocity units).
     velocity_period : the only periodicity option of the package. False (default): no wrap, the spectrum is the direct
-        integral along the path. True: each skewer is periodic over its own velocity span
-        (``Pieces.velocity_span_kms``, set by the scale factors of its first and last points). A number: that period
-        [km/s] for every skewer. With a period P, every detuning v - v_c is replaced by its nearest image in
-        [-P/2, P/2): a piece whose line centre falls outside the period absorbs at the other end, and the wings that
-        cross one end re-enter at the other (only the nearest image is kept).
+        integral along the path. True: each skewer is periodic over its own velocity span (the scale factors of its
+        first and last points). A number: that period [km/s] for every skewer. With a period P, every detuning v - v_c
+        is replaced by its nearest image in [-P/2, P/2): a piece whose line centre falls outside the period absorbs at
+        the other end, and the wings that cross one end re-enter at the other (only the nearest image is kept).
     voigt : "harris" (default; ``core.voigt.voigt_harris``: fake_spectra's first-order expansion in the
-        damping parameter a for a <= 1e-3, the fourth order up to a = 0.05, ExoJAX's exact function beyond; one batch per
-        line) or "ExoJAX" (the exact function everywhere, ~1e-6 against wofz): ``line_profiles.PROFILE_MODES``. Any other
-        value raises ``ValueError``; the FFT convolution and SciPy's wofz are standalone functions of ``core.voigt``.
+        damping parameter a for a <= 1e-3, the fourth order up to a = 0.05, ExoJAX's exact function beyond) or "ExoJAX"
+        (the exact function everywhere, ~1e-6 against wofz; integrated pieces through Gauss-Legendre sub-pieces):
+        ``line_profiles.PROFILE_MODES``. The FFT convolution and SciPy's wofz are standalone functions of ``core.voigt``.
     detuning : "exact" (default) or "linear" (fake_spectra's first-order mapping; matched mode).
-    resolution_tolerance : warn when more than 1e-3 of the column sits in pieces wider than this fraction of the line
-        width in velocity (``resolution_report``); None disables the check.
-    v_chunk, batch_size : memory controls of ``optical_depth_from_pieces``; piece_chunk : pieces per kernel call (the
-        pieces of each skewer are summed in rows of ``piece_chunk``, ``Pieces.rows``).
-    per_piece : True returns every piece's contribution (N_lines, N_sk, N_p, N_v).
+    profile_integration : "integrated" (default): every piece absorbs as the mean of the profile over the line centres
+        it spans (``Pieces.width_kms``, the Hubble flow across it), with the weight of each line centre (a^-2 ds/dv_c):
+        exact for any piece length (``core.voigt_integral``, ``core.tau_engine``). "midpoint": the profile at the
+        piece's line centre (an error O(W^2 / 12 b^2); the earlier default, with pieces cut every 0.25 km/s).
+    wing_tolerance : the optical depth a contribution may misplace at the edge of its window (``core.tau_engine``;
+        default ``tau_engine.WING_TOLERANCE`` = 1e-9): sets the windows, never the far wings (added exactly by FFT).
+    method : "auto" (default): the windowed engine (``core.tau_engine``) for a uniform grid and concrete inputs, the
+        dense sum over every pixel otherwise (under ``jit``, ``per_piece``, a non-uniform grid). "windowed" / "dense":
+        that one (the dense sum integrates with Harris' expansion only).
+    resolution_tolerance : ``profile_integration="midpoint"`` only: warn when more than 1e-3 of the column sits in
+        pieces wider than this fraction of the line width in velocity (``resolution_report``); None disables the check.
+    v_chunk, batch_size, piece_chunk : memory controls of the dense sum (``optical_depth_from_pieces``, ``Pieces.rows``).
+    per_piece : True returns every piece's contribution (N_lines, N_sk, N_p, N_v) (the dense sum).
     dtype : the precision of the sum, "float32" or "float64"; None (default): the package's policy
-        (``skewerjax.config.get_precision``, "float32" unless set). The pieces are cast to it once, and tau is returned in it.
-    devices : None (the default device) or a list of devices, the same API on the CPU and on a GPU:
-        ``skewerjax.config.devices("cpu")`` (the host devices of ``skewerjax.config.configure_devices``) or
-        ``devices("gpu")``. The sum over pieces splits the skewers over them (``optical_depth_sharded``, ``shard_map``);
-        the per-cell schemes (``pixel_average``, ``tautail``) dispatch their chunks of cells to them in turn. One device:
-        everything runs on it. The result does not depend on the devices.
+        (``skewerjax.config.get_precision``, "float32" unless set). tau is returned in it.
+    devices : None (the default device) or a list of devices, the same API on the CPU and on a GPU
+        (``skewerjax.config.devices``): the windowed engine deals its chunks of contributions to them in turn, the dense
+        sum splits the skewers over them (``optical_depth_sharded``). The result does not depend on the devices.
     a_eff : None (default) or a scalar > 0, the effective scale factor of the comoving-to-physical density conversion:
-        None keeps a_p^-2 of every piece (tau_j = C_j f_j sum_p n_com,p l_p a_p^-2 phi_jp); a scalar uses a_eff^-2
-        for every piece (e.g. 1 / (1 + z), a fixed conversion). The line centres v_c,p, the widths, the lengths and
-        the detuning are untouched, so the Jacobian 1 / (a H) of the frame (module docstring) stays. Traced in the
-        kernel (no recompilation per value) and differentiable. A value > 1 (a scale factor in the future, e.g. 1 + z
-        typed for 1 / (1 + z)) issues a warning.
+        None keeps a^-2 along every piece; a scalar uses a_eff^-2 for every piece (e.g. 1 / (1 + z), a fixed
+        conversion). The line centres, the widths, the lengths and the detuning are untouched, so the Jacobian 1 / (a H)
+        of the frame (module docstring) stays. A value > 1 issues a warning.
     hubble_flow : "exact" (default) or "linear": the Hubble part of the line centres (module docstring), V_H(y) =
-        c ln(a_dagger / a(y)) (the frame) or (aH)_ref y (fake_spectra). Only the line centres change; the density factor
-        (``a_eff``), the peculiar velocity, the widths, the lengths and the ``detuning`` do not. With "linear" the period
-        of ``velocity_period=True`` is |(aH)_ref| L and the piece widths of the resolution check |(aH)_ref| l_p
-        (``velocity_span``); needs the path fields of ``Pieces`` (``cell_pieces`` fills them).
-    aH_ref : None (default: the frame's aH at the first point of each skewer, ``Pieces.aH_first``; for the toy boxes
-        ``ToyBoxes.aH``) or a scalar [km/s per cMpc], "linear" only. Traced (no recompilation per value) and
-        differentiable.
+        c ln(a_dagger / a(y)) (the frame) or (aH)_ref y (fake_spectra). Only the line centres change.
+    aH_ref : None (default: the frame's aH at the first point of each skewer; for the toy boxes ``ToyBoxes.aH``) or a
+        scalar [km/s per cMpc], "linear" only.
     b_constants : the constants of the thermal width b^2 = 2 k_B T / m. "codata" (default): k_B / (A m_u). "fake_spectra":
-        its C engine's k_B / (A m_p) (``absorption.cpp`` L24, L158; ``absorption.h`` L4), 0.72 % lower in b^2, a factor of
-        T inside the profile only (``line_profiles.B2_RATIOS``).
-    pixel_average : False (default): the profile at the pixel centres. True: fake_spectra's average over the pixel
-        (``singleabs.h:tau_kern_outer`` L133-L155): a piece of Doppler width b >= 2 dv keeps the centre, a narrower one
-        takes the trapezoid on 2 ceil(dv / b) + 1 points of the pixel. Needs a uniform grid; eager (a host-side loop over
-        the pieces, grouped by number of points: not under ``jit``).
+        its C engine's k_B / (A m_p) (``absorption.cpp`` L24, L158; ``absorption.h`` L4), 0.72 % lower in b^2.
+    pixel_average : fake_spectra's average over the pixel (``singleabs.h:tau_kern_outer`` L133-L155): a cell of Doppler
+        width b >= 2 dv keeps the centre, a narrower one takes the trapezoid on 2 ceil(dv / b) + 1 points of the pixel.
     tautail : None (default): full profiles. A threshold (fake_spectra's is 1e-7, ``spectra.py`` L145): its early stop per
-        cell (``absorption.cpp`` L253-L281): walking out from the pixel of the cell's line centre, forward and backward,
-        each cell adds a pixel up to and including the first one that receives less than the threshold from that cell,
-        at most half a period each way. Cuts the far wings of every cell, whatever their sum. Needs ``Pieces.cell`` and a
-        uniform grid (over exactly the period, with ``velocity_period``); eager, as ``pixel_average``.
-    return_info : also return dict(shape (N_lines, N_sk, N_p), n_v, line_frame, velocity_period (the (N_sk,) periods or
-        None), resolution (``resolution_report``, None without the check), pieces_info (``cell_pieces``'s, bundle sources
-        only), tau_max (N_lines, N_sk), tau_integral_kms (N_lines, N_sk) = sum_v tau dv over the grid, column_integral_kms
-        (N_lines, N_sk) = sum_p C f n_p a_p^-2 l_p lambda_j (a_eff^-2 with ``a_eff``), its value from the pieces (every profile has unit area in
-        frequency; exact for the linear detuning, O(b / c) otherwise), window_fraction = their ratio (what the grid holds
-        of the absorption: 1 on one period with ``velocity_period``, up to the cut at P/2), timings {pieces, checks, tau}
-        [s] (tau waits for the result), time_s). Off by default: no cost.
+        cell (``absorption.cpp`` L253-L281). Needs the cell of every piece and a uniform grid (over exactly the period,
+        with ``velocity_period``). ``pixel_average`` and ``tautail`` evaluate the pieces of each cell together
+        (``tau_engine.per_cell_line_tau``); eager.
+    return_info : also return dict(route ("crossings" or "pieces"), method ("windowed" / "per_cell" / "dense"), shape,
+        n_v, line_frame, velocity_period (the (N_sk,) periods or None), resolution (midpoint only), pieces_info (the
+        crossings' or ``cell_pieces``'s), engine (per line: the window levels, n_full, D_x, wing_tolerance), tau_max
+        (N_lines, N_sk), tau_integral_kms = sum_v tau dv over the grid, column_integral_kms = sum C f n a^-2 l lambda_j,
+        window_fraction = their ratio, timings {pieces, checks, tau} [s], time_s).
 
     Returns
     -------
     (N_lines, N_sk, N_v) optical depth ((N_lines, N_sk, N_p, N_v) with ``per_piece``), and the info.
     """
+    from skewerjax.core import tau_engine as te
+
     t0 = time.perf_counter()
     if line_frame not in ("own", "reference"):
         raise ValueError(f"line_frame must be 'own' or 'reference', got {line_frame!r}.")
@@ -633,11 +715,19 @@ def compute_optical_depth(
         raise ValueError(f"detuning must be 'exact' or 'linear', got {detuning!r}.")
     if hubble_flow not in HUBBLE_FLOWS:
         raise ValueError(f"hubble_flow must be one of {HUBBLE_FLOWS}, got {hubble_flow!r}.")
+    if profile_integration not in te.PROFILE_INTEGRATIONS:
+        raise ValueError(f"profile_integration must be one of {te.PROFILE_INTEGRATIONS}, got {profile_integration!r}.")
+    if method not in METHODS:
+        raise ValueError(f"method must be one of {METHODS}, got {method!r}.")
+    if wing_tolerance is not None and not wing_tolerance > 0:
+        raise ValueError(f"wing_tolerance must be None or > 0, got {wing_tolerance!r}.")
     if tautail is not None and not tautail > 0:
         raise ValueError(f"tautail must be None or a threshold > 0, got {tautail!r}.")
     per_cell = bool(pixel_average) or tautail is not None
     if per_cell and per_piece:
         raise ValueError("pixel_average and tautail sum over the cells: per_piece does not apply.")
+    if per_cell and method == "dense":
+        raise ValueError("pixel_average and tautail are windowed per cell: method='dense' does not apply.")
     if aH_ref is not None:
         if hubble_flow != "linear":
             raise ValueError('aH_ref applies to hubble_flow="linear" only.')
@@ -674,7 +764,97 @@ def compute_optical_depth(
                         stacklevel=2,
                     )
     work = real_dtype() if dtype is None else np.dtype(dtype)  # the precision policy (skewerjax.config), resolved outside jit
+    integrate = profile_integration == "integrated"
+    traced = is_traced(velocities_kms, a_eff, aH_ref, *jax.tree_util.tree_leaves(line_bundle)) or (
+        isinstance(source, Pieces) and is_traced(*jax.tree_util.tree_leaves(source))
+    )
+    v_host = None if traced else np.asarray(velocities_kms, dtype=np.float64)  # the grid, in float64 (concrete inputs)
+    if line_frame == "reference":
+        v = v[None, :] + jnp.asarray(line_bundle.delta_v)[:, None]
+        v_host = None if v_host is None else v_host[None, :] + np.asarray(line_bundle.delta_v, dtype=np.float64)[:, None]
+    windowed_ok = not traced and not per_piece and te.is_uniform(v_host)
+    if method == "windowed" and not windowed_ok:
+        raise ValueError("method='windowed' needs concrete inputs, a uniform grid and no per_piece.")
+    use_windows = method != "dense" and windowed_ok
+    if per_cell and not use_windows:
+        raise ValueError(
+            "pixel_average and tautail need concrete inputs and a uniform grid (they are host-side loops over the cells)."
+        )
+    if integrate and not use_windows and str(voigt).lower() == "exojax":
+        raise ValueError(
+            'the dense sum integrates with voigt="harris" only: use profile_integration="midpoint" or the windowed engine.'
+        )
+    n_l = line_bundle.n_lines
+    vv = None if v_host is None else np.broadcast_to(v_host, (n_l, v_host.shape[-1]))
     pieces_info = None
+    # ---- the crossing route: a bundle of straight paths, the default deposition
+    crossing_route = (
+        not isinstance(source, Pieces)
+        and use_windows
+        and deposition == "voronoi"
+        and cells is not None
+        and _straight_bundle(source, ii_cosmology)
+    )
+    if crossing_route:
+        from skewerjax.core.absorbers import bundle_frame, cell_contributions
+
+        frame = bundle_frame(source, a_dagger=a_dagger, ii_cosmology=ii_cosmology)
+        contr, pieces_info = cell_contributions(
+            cells,
+            line_bundle,
+            skewer_bundle=source,
+            frame=frame,
+            a_dagger=a_dagger,
+            ii_cosmology=ii_cosmology,
+            a_eff=a_eff,
+            b_constants=b_constants,
+            hubble_flow=hubble_flow,
+            aH_ref=aH_ref,
+            return_info=True,
+        )
+        n_sk = int(pieces_info["n_crossings"].size)
+        P = _bundle_periods(velocity_period, frame, n_sk, hubble_flow, aH_ref)
+        rep = None if resolution_tolerance is None else _contribution_resolution(contr, line_bundle, resolution_tolerance)
+        t1 = time.perf_counter()
+        t2 = t1
+        tau, eng = _engine(
+            contr,
+            vv,
+            n_sk,
+            line_bundle,
+            P,
+            profile_integration,
+            detuning,
+            voigt,
+            wing_tolerance,
+            work,
+            devices,
+            tautail,
+            pixel_average,
+        )
+        if not return_info:
+            return tau
+        col = (
+            np.stack([np.bincount(c.row, c.amp, n_sk) for c in contr])
+            * np.asarray(line_bundle.lambda0_A, np.float64)[:, None]
+            * 1e-4
+        )
+        shape = (n_l, n_sk, int(pieces_info["n_crossings"].max()) if n_sk else 0)
+        return _finish_info(
+            tau,
+            col,
+            vv,
+            line_frame,
+            P,
+            rep,
+            t0,
+            t1,
+            t2,
+            dict(
+                route="crossings", method="per_cell" if per_cell else "windowed", shape=shape, pieces_info=pieces_info, engine=eng
+            ),
+        )
+    # ---- the pieces route
     if isinstance(source, Pieces):
         if cells is not None or a_dagger is not None:
             raise ValueError("cells and a_dagger apply to a SkewerBundle source, not to Pieces.")
@@ -705,11 +885,6 @@ def compute_optical_depth(
         a_d = np.asarray(pieces.a_dagger, dtype=np.float64)
         a_d = a_d[:, None] if a_d.ndim == 1 else a_d  # (N_sk,) or per piece (N_sk, N_p)
         pieces = dataclasses.replace(pieces, hubble_kms=phys.c_kms * np.log(a_d / a_p))
-    pieces = _cast_pieces(pieces, work)
-    if per_cell and is_traced(pieces.temperature):
-        raise ValueError("pixel_average and tautail are host-side loops over the cells: they cannot run under jit or vmap.")
-    if b_constants != "codata":
-        pieces = dataclasses.replace(pieces, temperature=pieces.temperature * b2_ratio)
     if hubble_flow == "linear":
         for f in ("path_cMpc", "path_length_cMpc"):
             if getattr(pieces, f) is None:
@@ -721,7 +896,7 @@ def compute_optical_depth(
             w = jnp.abs(_hubble_rates(pieces, aH_ref))[:, None] * jnp.asarray(pieces.length_m) / phys.Mpc_to_m
             checked = dataclasses.replace(pieces, width_kms=jnp.broadcast_to(w[None], pieces.width_kms.shape))
         rep = resolution_report(checked, line_bundle, resolution_tolerance)
-        if not rep["ok"]:
+        if not rep["ok"] and not integrate:  # the integrated profile has no such error: the report only informs
             warnings.warn(
                 "compute_optical_depth: the pieces are too wide in velocity for the line widths: "
                 + ", ".join(
@@ -729,44 +904,76 @@ def compute_optical_depth(
                     f"{rep['column_fraction'][j]:.1e} above tolerance {resolution_tolerance}"
                     for j in range(line_bundle.n_lines)
                 )
-                + ". Sample the skewers more densely.",
+                + ". Sample the skewers more densely, or use profile_integration='integrated'.",
                 stacklevel=2,
             )
-    traced = is_traced(velocities_kms, *jax.tree_util.tree_leaves(line_bundle))
-    v_host = None if traced else np.asarray(velocities_kms, dtype=np.float64)  # the grid, in float64 (concrete inputs)
-    if line_frame == "reference":
-        v = v[None, :] + jnp.asarray(line_bundle.delta_v)[:, None]
-        v_host = None if v_host is None else v_host[None, :] + np.asarray(line_bundle.delta_v, dtype=np.float64)[:, None]
-    v = (v if v_host is None else jnp.asarray(v_host)).astype(work)
-    P = _velocity_periods(velocity_period, pieces, hubble_flow, aH_ref)
     n_sk, m = pieces.scale_factor.shape
-    pieces_all = pieces
-    if per_cell:
-        t2 = time.perf_counter()
-        from skewerjax.core.per_cell import per_cell_optical_depth
-
-        tau = per_cell_optical_depth(
-            pieces,
-            v_host,
+    P = _velocity_periods(velocity_period, pieces, hubble_flow, aH_ref)
+    t2 = time.perf_counter()
+    if use_windows:
+        if per_cell and tautail is not None and pieces.cell is None:
+            raise ValueError("tautail needs Pieces.cell, the cell of every piece (core.absorbers.cell_pieces fills it).")
+        contr = [
+            te.contributions_from_pieces(
+                pieces,
+                j,
+                line_bundle,
+                a_eff=a_eff,
+                b2_ratio=b2_ratio,
+                hubble_flow=hubble_flow,
+                aH_ref=aH_ref,
+                profile=profile_integration,
+            )
+            for j in range(n_l)
+        ]
+        P_host = None if P is None else np.asarray(P, dtype=np.float64)
+        tau, eng = _engine(
+            contr,
+            vv,
+            n_sk,
             line_bundle,
+            P_host,
+            profile_integration,
+            detuning,
+            voigt,
+            wing_tolerance,
+            work,
+            devices,
+            tautail,
+            pixel_average,
+        )
+        if not return_info:
+            return tau
+        col = (
+            np.stack([np.bincount(c.row, c.amp, n_sk) for c in contr])
+            * np.asarray(line_bundle.lambda0_A, np.float64)[:, None]
+            * 1e-4
+        )
+        return _finish_info(
+            tau,
+            col,
+            vv,
+            line_frame,
             P,
-            voigt=voigt,
-            detuning=detuning,
-            a_eff=a_eff,
-            hubble_flow=hubble_flow,
-            aH_ref=aH_ref,
-            dtype=work,
-            tautail=tautail,
-            pixel_average=pixel_average,
-            devices=devices,
+            rep,
+            t0,
+            t1,
+            t2,
+            dict(
+                route="pieces",
+                method="per_cell" if per_cell else "windowed",
+                shape=pieces.shape,
+                pieces_info=pieces_info,
+                engine=eng,
+            ),
         )
-        return (
-            _finish_info(tau, pieces_all, v, line_bundle, source, line_frame, P, rep, a_eff, t0, t1, t2, False, pieces_info)
-            if return_info
-            else tau
-        )
+    # ---- the dense sum (traced inputs, per_piece, non-uniform grids, method="dense")
+    pieces = _cast_pieces(pieces, work)
+    if b_constants != "codata":
+        pieces = dataclasses.replace(pieces, temperature=pieces.temperature * b2_ratio)
     if pieces.cell is not None:  # the sum over pieces does not read it
         pieces = dataclasses.replace(pieces, cell=None)
+    v = (v if v_host is None else jnp.asarray(v_host)).astype(work)
     if piece_chunk is not None:
         pieces = pieces.rows(int(piece_chunk))
         P = None if P is None else jnp.repeat(P, pieces.scale_factor.shape[0] // n_sk)
@@ -781,29 +988,14 @@ def compute_optical_depth(
         a_eff=a_eff,
         hubble_flow=hubble_flow,
         aH_ref=aH_ref,
+        integrate=integrate,
     )
-    logger.debug(
-        "compute_optical_depth: %d lines x %d skewers x %d pieces, %d velocities (%s frame, velocity_period=%s, voigt %s, "
-        "detuning %s, dtype %s)",
-        line_bundle.n_lines,
-        n_sk,
-        m,
-        v.shape[-1],
-        line_frame,
-        velocity_period,
-        voigt,
-        detuning,
-        work.name,
-    )
-    t2 = time.perf_counter()
     run = (
         (lambda p, vj, lb: optical_depth_sharded(p, vj, lb, devices=devices, **kw))
         if devices is not None
         else (lambda p, vj, lb: optical_depth_from_pieces(p, vj, lb, **kw))
     )
-    # one line at a time: each has its own Voigt branch (voigt="harris": the first order for Lya, the fourth for Si III
-    # near 1e4 K), and two one-line batches are faster than one two-line batch (measured 2.4x on CPU)
-    n_l = line_bundle.n_lines
+    # one line at a time: each has its own Voigt branch (the first order for Lya, the fourth for Si III near 1e4 K)
     tau = (
         run(pieces, v, line_bundle)
         if n_l == 1
@@ -812,46 +1004,166 @@ def compute_optical_depth(
         )
     )
     if piece_chunk is not None:
-        n_l, n_v = tau.shape[0], tau.shape[-1]
+        n_v = tau.shape[-1]
         tau = tau.reshape(n_l, n_sk, -1, n_v)[:, :, :m] if per_piece else tau.reshape(n_l, n_sk, -1, n_v).sum(axis=2)
     if not return_info:
         return tau
-    return _finish_info(tau, pieces_all, v, line_bundle, source, line_frame, P, rep, a_eff, t0, t1, t2, per_piece, pieces_info)
-
-
-def _finish_info(tau, p, v, line_bundle, source, line_frame, P, rep, a_eff, t0, t1, t2, per_piece, pieces_info):
-    """(tau, the dict of ``return_info``) of ``compute_optical_depth``."""
-    tau = tau.block_until_ready()
-    t3 = time.perf_counter()
     full = tau.sum(axis=2) if per_piece else tau
-    n_l, n_sk, m = p.shape
     amp = (
         phys.cross_section_prefactor
         * np.asarray(line_bundle.f_osc)[:, None, None]
-        * np.asarray(p.number_density)
-        * (np.asarray(p.scale_factor)[None] ** -2.0 if a_eff is None else float(a_eff) ** -2.0)
+        * np.asarray(pieces.number_density, dtype=np.float64)
+        * (np.asarray(pieces.scale_factor, dtype=np.float64)[None] ** -2.0 if a_eff is None else float(a_eff) ** -2.0)
         * 1e2
-        * np.asarray(p.length_m)[None]
+        * np.asarray(pieces.length_m, dtype=np.float64)[None]
     )
-    col_int = amp.sum(-1) * np.asarray(line_bundle.lambda0_A)[:, None] * 1e-4  # [km/s]: lambda [A] x 1e-4 = km/s per GHz
+    col = amp.sum(-1)[:, :n_sk] * np.asarray(line_bundle.lambda0_A)[:, None] * 1e-4
     vv = np.broadcast_to(np.asarray(v, dtype=np.float64), (n_l, v.shape[-1]))
+    out = _finish_info(
+        full,
+        col,
+        vv,
+        line_frame,
+        P,
+        rep,
+        t0,
+        t1,
+        t2,
+        dict(route="pieces", method="dense", shape=(n_l, n_sk, m), pieces_info=pieces_info, engine=None),
+    )
+    return (tau, out[1]) if per_piece else out
+
+
+def _contribution_resolution(contr, line_bundle, tolerance: float) -> dict:
+    """``resolution_report`` of contributions (``core.tau_engine.LineContributions``, one per line): the extent W of
+    every piece over its Voigt width b (informative with the integrated profile, which has no error O(W^2 / b^2))."""
+    lam = np.asarray(line_bundle.lambda0_A, dtype=np.float64)
+    mr, frac, bmin = [], [], []
+    for j, c in enumerate(contr):
+        kappa = 1e4 / lam[j]
+        b = np.asarray(voigt_width_kms(jnp.asarray(c.sigma), jnp.asarray(c.gamma), jnp.full(1, lam[j])))
+        b = np.broadcast_to(b, np.shape(c.sigma)) if np.ndim(b) else np.full(np.shape(c.sigma), float(b))
+        ratio = np.asarray(c.width) / np.maximum(b, 1e-30)
+        col = np.abs(np.asarray(c.amp))
+        mr.append(float(ratio.max()) if ratio.size else 0.0)
+        frac.append(float((col * (ratio > tolerance)).sum() / max(col.sum(), 1e-300)))
+        bmin.append(float(b.min()) if b.size else np.inf)
+        del kappa
+    frac = np.array(frac)
+    return dict(max_ratio=np.array(mr), column_fraction=frac, ok=bool(np.all(frac < 1e-3)), b_min=np.array(bmin))
+
+
+def _straight_bundle(bundle, ii_cosmology: int) -> bool:
+    """True when every path of the ``SkewerBundle`` is straight (``core.crossings.straight_paths_mask``)."""
+    from skewerjax.core.absorbers import _bundle_host
+    from skewerjax.core.crossings import straight_paths_mask
+
+    try:
+        pts = _bundle_host(bundle, ii_cosmology)[0]
+    except Exception:  # not a bundle
+        return False
+    return bool(np.all(straight_paths_mask(pts)))
+
+
+def _bundle_periods(velocity_period, frame, n_sk: int, hubble_flow: str, aH_ref):
+    """(N_sk,) the periods [km/s] of ``velocity_period`` for the paths of a frame (True: their velocity span), or None."""
+    if velocity_period is None or velocity_period is False:
+        return None
+    if velocity_period is True:
+        from skewerjax.core.absorbers import velocity_span
+
+        P = np.asarray(velocity_span(frame, hubble_flow, aH_ref), dtype=np.float64)
+        if not np.all(np.isfinite(P) & (P > 0)):
+            raise ValueError(
+                "velocity_period=True: a skewer has no velocity span (a(first point) = a(last point)); give the period explicitly."
+            )
+        return P
+    P = np.broadcast_to(np.asarray(velocity_period, dtype=np.float64), (n_sk,))
+    if not np.all(np.isfinite(P) & (P > 0)):
+        raise ValueError(f"velocity_period must be a finite period > 0 [km/s], got {velocity_period}.")
+    return P
+
+
+def _engine(contr, vv, n_sk, line_bundle, P, profile, detuning, voigt, wing_tolerance, dtype, devices, tautail, pixel_average):
+    """tau (N_lines, N_sk, N_v) from the contributions of every line: the windowed engine, or the per-cell schemes."""
+    from skewerjax.core import tau_engine as te
+
+    logger.debug(
+        "compute_optical_depth: %d lines x %d skewers, %s contributions, %d velocities (%s, profile %s, voigt %s, detuning %s, "
+        "period %s, dtype %s)",
+        len(contr),
+        n_sk,
+        [len(c) for c in contr],
+        vv.shape[-1],
+        "per-cell" if (tautail is not None or pixel_average) else "windowed",
+        profile,
+        voigt,
+        detuning,
+        None if P is None else float(np.asarray(P).ravel()[0]),
+        np.dtype(dtype).name,
+    )
+
+    lam = np.asarray(line_bundle.lambda0_A, dtype=np.float64)
+    taus, eng = [], []
+    for j, c in enumerate(contr):
+        if tautail is not None or pixel_average:
+            taus.append(
+                te.per_cell_line_tau(
+                    c,
+                    vv[j],
+                    n_sk,
+                    lam[j],
+                    period=P,
+                    profile=profile,
+                    detuning=detuning,
+                    voigt=voigt,
+                    tautail=tautail,
+                    pixel_average=pixel_average,
+                    dtype=dtype,
+                    devices=devices,
+                )
+            )
+            eng.append(None)
+        else:
+            t, inf = te.windowed_line_tau(
+                c,
+                vv[j],
+                n_sk,
+                lam[j],
+                period=P,
+                profile=profile,
+                detuning=detuning,
+                voigt=voigt,
+                wing_tolerance=te.WING_TOLERANCE if wing_tolerance is None else wing_tolerance,
+                dtype=dtype,
+                devices=devices,
+                return_info=True,
+            )
+            taus.append(t)
+            eng.append({k: inf[k] for k in ("levels", "n_full", "D_x", "kinds", "wing_tolerance")})
+    return jnp.stack(taus), eng
+
+
+def _finish_info(tau, col_int, vv, line_frame, P, rep, t0, t1, t2, extra):
+    """(tau, the dict of ``return_info``) of ``compute_optical_depth``."""
+    tau = tau.block_until_ready()
+    t3 = time.perf_counter()
+    n_l, n_sk, n_v = tau.shape
     dv = np.stack([np.gradient(x) if x.size > 1 else np.ones(1) for x in vv])  # pixel widths (uniform grid: dv)
-    tau_int = (np.asarray(full, dtype=np.float64) * dv[:, None, :]).sum(-1)
+    tau_int = (np.asarray(tau, dtype=np.float64) * dv[:, None, :]).sum(-1)
     info = dict(
-        shape=(n_l, n_sk, m),
-        n_v=int(v.shape[-1]),
+        **extra,
+        n_v=int(n_v),
         line_frame=line_frame,
         velocity_period=None if P is None else np.asarray(P),
         resolution=rep,
-        tau_max=np.asarray(full).max(-1),
+        tau_max=np.asarray(tau).max(-1),
         tau_integral_kms=tau_int,
         column_integral_kms=col_int,
         window_fraction=tau_int / np.maximum(col_int, 1e-300),
         timings=dict(pieces=t1 - t0, checks=t2 - t1, tau=t3 - t2),
         time_s=t3 - t0,
     )
-    if not isinstance(source, Pieces):
-        info["pieces_info"] = pieces_info
     return tau, info
 
 
