@@ -15,7 +15,12 @@ vectors of a bin, in three ways each:
 
 * isotropic: |k| or |r|;
 * the plane (k_par, k_perp) or (r_par, r_perp), with k_par = |k_los| and k_perp = |k| across the line of sight;
-* wedges of mu (|k| or |r| in each interval of mu = k_par / |k| or r_par / r; ``MU_WEDGES``);
+* wedges of mu (|k| or |r| in each interval of mu = k_par / |k| or r_par / r): the wedges of P and of xi have their own
+  edges (``pk_mu_edges``, ``xi_mu_edges``; both ``MU_WEDGES`` by default). mu lies in [0, 1], k_par = |k_los| and
+  r_par = |r_los| along ``los_axis``; k = 0 and r = 0 belong to no wedge. The bins are half-open, [mu_i, mu_{i+1}), the
+  last one closed, [mu_{n-1}, 1] (``binning.bin_index``: a mu within 1e-12 of an edge counts as on it), so a mode or
+  a separation on an inner edge belongs to the upper wedge only, mu = 1 (along the line of sight) to the last one and
+  mu = 0 (across it) to the first; every mode with |k| in the |k| bins of the wedges lies in exactly one wedge;
 
 and, optionally (``multipoles=True``), the Legendre multipoles xi_0, xi_2, xi_4 of xi in the |r| bins of the wedges: in
 each bin, the least-squares fit xi(r) = sum_l xi_l L_l(mu) over its separation vectors, so the monopole xi_0 does not
@@ -51,6 +56,14 @@ def _rfft_weights(n_last: int) -> np.ndarray:
     return w
 
 
+def _mu_edges(edges, name: str) -> np.ndarray:
+    """The edges of the mu wedges as a float array, checked: at least two, strictly increasing, inside [0, 1]."""
+    e = np.asarray(edges, dtype=float)
+    if e.ndim != 1 or e.size < 2 or np.any(np.diff(e) <= 0) or e[0] < 0 or e[-1] > 1:
+        raise ValueError(f"{name} must be at least two increasing edges in [0, 1], got {edges!r}.")
+    return e
+
+
 def _flat2(i, j, n_j):
     """Flat index of two bin indices (-1 if either is outside)."""
     return np.where((i >= 0) & (j >= 0), i * n_j + j, -1)
@@ -64,11 +77,13 @@ class GridStatistics3D:
     shape : (N_x, N_y, N_z); L : box side [cMpc] (scalar or (3,)); los_axis : the axis of the line of sight.
     k_edges : |k| bins [1/cMpc] (default: one mode per bin for the first 12 fundamental modes, then 24 log bins to the
         Nyquist frequency of the coarsest axis); kpar_edges, kperp_edges : the (k_par, k_perp) plane (default: 6 linear
-        and 20 log bins, empty rows or columns merged, ``occupied_edges``); k_mu_edges : |k| bins of the wedges (default:
-        16 log bins).
+        and 20 log bins, empty rows or columns merged, ``occupied_edges``); k_mu_edges : |k| bins of the wedges of P
+        (default: 16 log bins; ``field_stats.box_grid`` and ``lattice.lattice_grid`` pass their |k| edges).
     r_edges : |r| bins [cMpc] (default: width 3 cells up to L / 2); rpar_edges, rperp_edges : the (r_par, r_perp)
-        plane (default: the same edges); r_mu_edges : |r| bins of the wedges (default: ``r_edges``, r = 0 excluded).
-    mu_edges : the wedges (default ``MU_WEDGES``; the last edge inclusive).
+        plane (default: the same edges); r_mu_edges : |r| bins of the wedges of xi (default: ``r_edges``, r = 0 excluded).
+    xi_mu_edges, pk_mu_edges : the edges in mu = r_par / r of the wedges of xi and in mu = k_par / |k| of the wedges of P,
+        increasing in [0, 1] (default ``MU_WEDGES`` both; half-open bins, the last closed: module docstring). Stored as
+        the attributes of the same names and, in ``axes()``, as "mu_edges" (xi) and "pk_mu_edges" (P).
     multipoles : also measure the multipoles l = 0, 2, 4 of xi (key "xi_ell", (3, n_rmu)), NaN in bins whose separations
         do not span enough values of mu to separate them (relative condition number of the fit > 1e8).
 
@@ -94,7 +109,8 @@ class GridStatistics3D:
         rpar_edges=None,
         rperp_edges=None,
         r_mu_edges=None,
-        mu_edges=MU_WEDGES,
+        xi_mu_edges=MU_WEDGES,
+        pk_mu_edges=MU_WEDGES,
         multipoles: bool = False,
     ):
         self.shape = tuple(int(n) for n in shape)
@@ -108,8 +124,9 @@ class GridStatistics3D:
         self.V = float(np.prod(self.L))
         k_f, k_nyq = 2 * np.pi / self.L.max(), float(np.min(np.pi / self.dx))
         r_max = 0.5 * float(self.L.min())
-        self.mu_edges = np.asarray(mu_edges, dtype=float)
-        n_mu = self.mu_edges.size - 1
+        self.xi_mu_edges = _mu_edges(xi_mu_edges, "xi_mu_edges")
+        self.pk_mu_edges = _mu_edges(pk_mu_edges, "pk_mu_edges")
+        n_mu_xi, n_mu_pk = self.xi_mu_edges.size - 1, self.pk_mu_edges.size - 1
 
         # ---- modes (rfft layout, last axis halved): |k|, k_par, k_perp, mu, half-space weights
         axes = [2 * np.pi * np.fft.fftfreq(n, d) for n, d in zip(self.shape[:-1], self.dx[:-1])]
@@ -133,10 +150,10 @@ class GridStatistics3D:
         idx_k = {
             "iso": np.where(live, bin_index(kmod, self.k_edges), -1),
             "map": np.where(live, _flat2(bin_index(kpar, self.kpar_edges), bin_index(kperp, self.kperp_edges), nperp), -1),
-            "mu": np.where(live, _flat2(bin_index(mu_k, self.mu_edges), bin_index(kmod, self.k_mu_edges), nkm), -1),
+            "mu": np.where(live, _flat2(bin_index(mu_k, self.pk_mu_edges), bin_index(kmod, self.k_mu_edges), nkm), -1),
         }
-        self._nb = {"iso": self.k_edges.size - 1, "map": npar * nperp, "mu": n_mu * nkm}
-        self._shape_k = {"iso": (self._nb["iso"],), "map": (npar, nperp), "mu": (n_mu, nkm)}
+        self._nb = {"iso": self.k_edges.size - 1, "map": npar * nperp, "mu": n_mu_pk * nkm}
+        self._shape_k = {"iso": (self._nb["iso"],), "map": (npar, nperp), "mu": (n_mu_pk, nkm)}
         self._idx_k = {b: jnp.asarray(i.astype(np.int32)) for b, i in idx_k.items()}
 
         # ---- separations (the full lag grid, minimum image): |r|, r_par, r_perp, mu
@@ -156,10 +173,10 @@ class GridStatistics3D:
         idx_r = {
             "iso": bin_index(rmod, self.r_edges),
             "map": _flat2(bin_index(rpar, self.rpar_edges), bin_index(rperp, self.rperp_edges), nrperp),
-            "mu": np.where(rmod > 0, _flat2(bin_index(mu_r, self.mu_edges), bin_index(rmod, self.r_mu_edges), nrm), -1),
+            "mu": np.where(rmod > 0, _flat2(bin_index(mu_r, self.xi_mu_edges), bin_index(rmod, self.r_mu_edges), nrm), -1),
         }
-        self._nb.update({"r_iso": self.r_edges.size - 1, "r_map": nrpar * nrperp, "r_mu": n_mu * nrm})
-        self._shape_r = {"iso": (self.r_edges.size - 1,), "map": (nrpar, nrperp), "mu": (n_mu, nrm)}
+        self._nb.update({"r_iso": self.r_edges.size - 1, "r_map": nrpar * nrperp, "r_mu": n_mu_xi * nrm})
+        self._shape_r = {"iso": (self.r_edges.size - 1,), "map": (nrpar, nrperp), "mu": (n_mu_xi, nrm)}
         self._idx_r = {b: jnp.asarray(i.astype(np.int32)) for b, i in idx_r.items()}
         self._ones = jnp.ones(rmod.size)
         self.multipoles = bool(multipoles)
@@ -331,7 +348,8 @@ class GridStatistics3D:
     def axes(self) -> dict:
         """The bin edges and centres (NumPy), e.g. to store them with the measurements."""
         names = ("k_edges", "kpar_edges", "kperp_edges", "k_mu_edges", "r_edges", "rpar_edges", "rperp_edges")
-        out = {n: getattr(self, n) for n in names + ("r_mu_edges", "mu_edges")}
+        out = {n: getattr(self, n) for n in names + ("r_mu_edges",)}
+        out.update(mu_edges=self.xi_mu_edges, pk_mu_edges=self.pk_mu_edges)  # "mu_edges": the wedges of xi, as before
         for n in (
             "k_iso",
             "kpar",

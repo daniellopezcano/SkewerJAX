@@ -253,7 +253,6 @@ def test_toy_box_figures():
     has = lambda o: any("no mode" in t.get_text() for t in o[1][1].get_legend().get_texts())
     assert has(gap) and has(sparse) == bool(np.any(np.all(~np.isfinite(res["P_map"]), axis=0)))
     assert len(chi2) == len(pl.MU_WEDGES) - 1
-    assert not hasattr(pl, "plot_pk_mu_wedges")
     sk = dict(tau=run["tau"][0], v=run["v"], period=run["period"], columns=lattice_columns(b.n_cells, (4, 4)))
     ix, iz = sk["columns"][0]
     fl = b.fields(0)
@@ -1042,6 +1041,98 @@ def _map_inputs(n_cells=16, L=8.0):
     r = np.arange(0, L / 2 + L / n_cells, L / n_cells)
     grid = box_grid(n_cells, L, k_edges=k, r_edges=r, log=None)
     return b, field_statistics((b.cells(i) for i in range(2)), grid, species="HI", power=b.grf().power, log=None)
+
+
+def test_the_wedges_of_p():
+    """``plot_pk_mu_wedges``, the counterpart of ``plot_xi_mu_wedges``: one colour per wedge, that of the same wedge index in
+    the xi wedges; P or k P; the expectation dashed and the pulls below with the chi2 per wedge; the k range outside
+    [k_min, k_max] shaded; legends inside, on top; a top axis in s/km with its own ticks; marks (BAO maxima, labelled
+    lines, the mu = 1 imprints of the pairs at 2 pi n / Delta) inside the drawn range only; the |k| edges checked. The
+    (k_perp, k_par) maps draw the rays of the P edges, the (r_perp, r_par) maps keep those of xi."""
+    from skewerjax.summary_stats import bao_k_edges, box_grid, field_statistics, grid_limits, pair_imprint
+
+    b, _ = _map_inputs()
+    n, L = 16, 8.0
+    lim = grid_limits(n, L)
+    k = bao_k_edges(lim["k_min"], lim["k_max"], lim["k_max"], k_1=None, dk_factor=1.0)
+    grid = box_grid(n, L, k_edges=k, r_edges=np.arange(0, L / 2 + L / n, L / n), pk_mu_edges=(0.0, 0.4, 1.0), log=None)
+    res = field_statistics((b.cells(i) for i in range(2)), grid, species="HI", power=b.grf().power, log=None)
+    u = 100.0
+    bao = [0.5 * lim["k_min"], 0.5 * (lim["k_min"] + lim["k_max"]), 10 * lim["k_max"]]  # one inside, two outside
+    marks = {"$a$": lim["k_max"] / 2, "$b$": 50 * lim["k_max"]}
+    fig, axs, chi2 = pl.plot_pk_mu_wedges(
+        res,
+        k_edges=k,
+        bao_k=bao,
+        k_marks=marks,
+        kms_per_cMpc=u,
+        delta_v=[0.0, 300.0],
+        line_ids=["HI-LyA", "SiIII-1206"],
+        k_scale="log",
+    )
+    fig.canvas.draw()
+    assert len(axs) == 2 and len(chi2) == 2 and all(np.isfinite(chi2)), "two P wedges, not the four of xi"
+    assert not fig._suptitle and not fig.legends and not any(ax.get_title() for ax in axs)
+    lo, hi = axs[0].get_xlim()
+    vx = [ln.get_xdata()[0] for ln in axs[0].lines if len(ln.get_xdata()) == 2 and ln.get_xdata()[0] == ln.get_xdata()[1]]
+    assert all(lo <= x <= hi for x in vx), "every mark inside the drawn range"
+    dotted = [ln for ln in axs[0].lines if ln.get_linestyle() == ":" and ln.get_color() == pl.DIM]
+    assert len(dotted) == 1 and dotted[0].get_linewidth() > pl.SCALE_STYLES["spot"]["lw"], "one BAO maximum, wider"
+    assert [t.get_text() for t in axs[0].texts if t.get_text().startswith("$a")] == ["$a$ "]
+    d = pl.fold_periodic(300.0 / u, L)
+    want = pair_imprint(d, hi, kind="p1d", k_min=lo)
+    col = pl.line_pairs(["HI-LyA", "SiIII-1206"], [0.0, 300.0 / u], L)[0]["color"]
+    vert = [ln for ln in axs[0].lines if len(ln.get_xdata()) == 2 and ln.get_xdata()[0] == ln.get_xdata()[1]]
+    got = sorted(ln.get_xdata()[0] for ln in vert if ln.get_color() == col and ln.get_linestyle() == "-")
+    assert want.size and np.allclose(got, want), "the mu = 1 imprint at 2 pi n / Delta, inside the range"
+    np.testing.assert_allclose(want, 2 * np.pi * np.arange(1, want.size + 1) / d)
+    legs = [c for c in axs[0].get_children() if isinstance(c, matplotlib.legend.Legend)]
+    assert len(legs) == 2 and all(g.get_zorder() == pl.LEGEND_ZORDER for g in legs), "inside and on top"
+    wcols = [h.get_color() for h in legs[0].legend_handles]
+    assert wcols == [pl.PALETTE[c] for c in pl.MU_COLORS[:2]], "the colours of the xi wedges, by index"
+    styles = [t.get_text() for t in legs[1].get_texts()]
+    assert styles[:3] == ["measured", "expected", "per realisation"] and "BAO maxima" in styles
+    assert len(axs[0].child_axes) == 1 and "s km" in axs[0].child_axes[0].get_xlabel()
+    spans = sorted(
+        x for q in axs[0].patches if isinstance(q, matplotlib.patches.Rectangle) for x in (q.get_x(), q.get_x() + q.get_width())
+    )
+    assert np.isclose(spans[1], lim["k_min"]) and np.isclose(spans[2], lim["k_max"]), "shaded outside the full coverage"
+    assert "P(k, \\mu)" in axs[0].get_ylabel() and axs[0].get_yscale() == "log" and axs[0].get_xscale() == "log"
+    fig, axs, _ = pl.plot_pk_mu_wedges(res)
+    assert axs[0].get_xscale() == "linear", "linear in k by default"
+    # one panel per wedge, one column, no pulls: one k axis, one fixed y range, the wedge named inside each
+    fig, axs, chi2p = pl.plot_pk_mu_wedges(res, panels=True, kms_per_cMpc=u)
+    assert axs.shape == (2,) and np.allclose(chi2p, chi2), "one panel per wedge, the same chi2 as on one panel"
+    assert all(ax.get_subplotspec().colspan.start == 0 for ax in fig.axes if ax.get_subplotspec()), "a single column"
+    assert axs[0].get_shared_x_axes().joined(axs[0], axs[1]) and axs[0].get_ylim() == axs[1].get_ylim()
+    assert not [ax for ax in fig.axes if "sigma" in ax.get_ylabel()], "no pulls"
+    for w in range(2):
+        legs = [c for c in axs[w].get_children() if isinstance(c, matplotlib.legend.Legend)]
+        assert legs[0].legend_handles[0].get_color() == pl.mu_colors(2)[w]
+    assert len(axs[0].child_axes) == 1 and not axs[1].child_axes, "the velocity axis above the first panel only"
+    fig, axs, _ = pl.plot_pk_mu_wedges({key: v for key, v in res.items() if key != "theory"}, panels=True)
+    assert axs.shape == (2,)
+    # the colours of many wedges: the bright ones, then the whole line colour map, never repeated
+    assert pl.mu_colors(6) == [pl.PALETTE[c] for c in pl.MU_COLORS] and pl.PALETTE["grey"] not in pl.mu_colors(6)
+    many = pl.mu_colors(16)
+    assert len(set(many)) == 16
+    fig, axs, _ = pl.plot_pk_mu_wedges(res, quantity="kP", k_scale="linear", each_label="{n} boxes")
+    assert axs[0].get_yscale() == "linear" and "k\\,P" in axs[0].get_ylabel()
+    with pytest.raises(ValueError, match="other k_mu_edges"):
+        pl.plot_pk_mu_wedges(res, k_edges=k[:-1])
+    with pytest.raises(ValueError, match="quantity"):
+        pl.plot_pk_mu_wedges(res, quantity="r2xi")
+    bare = {key: v for key, v in res.items() if key != "theory"}
+    fig, axs, chi2 = pl.plot_pk_mu_wedges(bare)
+    assert len(axs) == 1 and chi2 is None
+    # the rays: the P edges on the k maps, the xi edges on the r maps
+    figs, axs, _ = pl.plot_kpar_kperp_maps(res, kpar_scale="linear", kperp_scale="linear")
+    rays = [ln for ln in axs[1].lines if ln.get_linestyle() == "-." and ln.get_color() == "white"]
+    assert len(rays) == 1 and len(axs[1].patches) == 2, "one inner P edge, two sectors"
+    figs, axs, _ = pl.plot_kpar_kperp_maps(res)  # logarithmic axes: the rays, no sectors
+    assert len([ln for ln in axs[1].lines if ln.get_linestyle() == "-."]) == 1 and not axs[1].patches
+    figs, axs, _ = pl.plot_rpar_rperp_maps(res)
+    assert len([ln for ln in axs[1].lines if ln.get_linestyle() == "-."]) == len(pl.MU_WEDGES) - 2
 
 
 def _physical_ratio(ax):

@@ -392,9 +392,9 @@ def test_grid_statistics_on_an_anisotropic_lattice():
     np.testing.assert_allclose(
         m["xi_map"], pair_mean((bin_index(rpar, edges), nb), (bin_index(rperp, gs.rperp_edges), 3)), rtol=1e-12
     )
-    imu = np.where(r > 0, bin_index(mu, gs.mu_edges), -1)
+    imu = np.where(r > 0, bin_index(mu, gs.xi_mu_edges), -1)
     np.testing.assert_allclose(
-        m["xi_mu"], pair_mean((imu, gs.mu_edges.size - 1), (bin_index(r, edges), nb)), rtol=1e-12, equal_nan=True
+        m["xi_mu"], pair_mean((imu, gs.xi_mu_edges.size - 1), (bin_index(r, edges), nb)), rtol=1e-12, equal_nan=True
     )
     f2 = np.abs(np.fft.fftn(d)) ** 2
     f2[0, 0, 0] = 0.0

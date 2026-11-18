@@ -3,6 +3,40 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — μ wedges of the power spectrum, separate μ bins for ξ and P (stem 20261118)
+
+The ξ wedges, the maps and the isotropic statistics are unchanged bit for bit (notebooks 08–11 compared before and
+after on the same settings); only the |k| bins of the P wedges of the mesh path moved (below).
+
+### Added
+- `plot_pk_mu_wedges` (`utils.plotting`): P(k) or k P in wedges of μ = k∥/|k|, the counterpart of `plot_xi_mu_wedges`
+  (the same wedge colours, options and legends; the expectation and the χ² per wedge; shaded outside [k_min, k_max];
+  the BAO maxima and the μ = 1 imprint of every line pair at k = 2πn/Δ_ij, within the drawn range only; a top axis in
+  s/km). Notebooks 08–11 show it after the ξ wedges.
+- `GridStatistics3D(xi_mu_edges=, pk_mu_edges=)`, and the same inputs on `box_grid` and `lattice_grid`: the wedges of ξ
+  and of P take separate edges (default `MU_WEDGES` both); `axes()` adds `pk_mu_edges` ("mu_edges" stays the ξ edges).
+  The edges are checked (increasing, in [0, 1]); the bins are half-open, the last closed (μ = 1 in the last wedge).
+- `grid_power(los_axis=)`, `field_statistics(power_mu=)`, `lattice_density_theory(power_mu=)`: an expectation P(k, μ)
+  (a Kaiser or Fingers-of-God model) on the modes, exact in every binning, the wedges of P included.
+- The k maps (`plot_kpar_kperp_maps`, `plot_overflux_kpar_kperp(mu_edges=)`) draw the rays of the P wedges (white,
+  coloured sectors on linear axes); the r maps keep those of ξ. `_mu_rays` runs to the edges of a rectangle and on
+  logarithmic axes.
+- Notebooks 08–11: `MU_EDGES_XI`, `MU_EDGES_P` in the configuration, passed to every `box_grid` / `lattice_grid`.
+- Tests: `tests/summary_stats/test_pk_wedges.py` (separate edges, the edge rule and the mode counts, the exact
+  expectation on the modes, an isotropic field and a Kaiser one through the mesh), `test_the_wedges_of_p`.
+
+### Changed
+- `plot_pk_mu_wedges(panels=True)`: one panel per wedge as an option (a single column, no pulls, one k axis and one
+  fixed y range); `k_scale="linear"` by default.
+- The wedge colours (`mu_colors`, the curves of both wedge figures and the sectors of the maps): no longer a cycle of
+  four; the six bright colours but grey (`MU_COLORS`, the first four as before) up to six wedges, beyond that the theme's
+  `CMAPS["line"]` sampled evenly, one distinct colour per wedge.
+- Notebooks 08–11: `MU_EDGES_P` 16 wedges evenly spaced in the angle to the line of sight, μ = sin(linspace(0, π/2, 17)).
+- `GridStatistics3D(mu_edges=)` is replaced by `xi_mu_edges` and `pk_mu_edges`; the attribute `mu_edges` by
+  `xi_mu_edges` and `pk_mu_edges`.
+- `box_grid`: the |k| bins of the P wedges are `k_edges` (they were 16 log bins from k_f to k_Nyq, used nowhere), so the
+  counts of the wedges add up to those of P(|k|), as on the lattice already.
+
 ## Unreleased — the algorithm made visible: notebook 07 brought up to date, notebooks 15 (why it is fast) and 16 (memory) (stem 20261111)
 
 No algorithm and no result changed (the regression references and notebook 12's numbers are the same); the internals the

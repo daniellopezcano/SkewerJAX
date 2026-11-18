@@ -12,8 +12,10 @@ an exact discrete Fourier pair (``skewer_p1d``, ``skewer_xi1d``). Nothing is der
 **3D, on the lattice of skewers** (``lattice_grid``, ``on_lattice``, ``measure_lattice``): the skewers along axis 1 at
 the nodes of a regular (n_x, n_z) lattice of spacing d_perp, every pixel one lattice point along the line of sight;
 ``GridStatistics3D`` on exactly that lattice (no regridding), in comoving units: a pixel spans L / n_los, so the box is
-(n_x d_perp_x, L, n_z d_perp_z). Bins: |k| ``k_edges`` (also the k_perp columns of the (k_par, k_perp) plane, whose rows
-are the lattice's own k_par = 2 pi m / L), |r| and the mu wedges ``r_edges``, r_perp ``rperp_edges``, the r_par rows the
+(n_x d_perp_x, L, n_z d_perp_z). Bins: |k| ``k_edges`` (also the |k| bins of the mu wedges of P and the k_perp columns
+of the (k_par, k_perp) plane, whose rows are the lattice's own k_par = 2 pi m / L), |r| and the mu wedges of xi
+``r_edges``, the wedges ``xi_mu_edges`` (mu = r_par / r) and ``pk_mu_edges`` (mu = k_par / |k|, k_par along the skewers
+in cMpc^-1, through u), r_perp ``rperp_edges``, the r_par rows the
 lattice's own separations j L / n_los; every bin beyond the full-coverage limits (the smallest Nyquist frequency, half
 the box) cut (``binning.full_coverage``); ``lattice_limits`` the spacings and those limits; ``on_points`` the values of
 a field uniform in each cell at the points of the skewers (p per cell).
@@ -27,7 +29,7 @@ from __future__ import annotations
 import numpy as np
 
 from skewerjax.summary_stats.binning import full_coverage, native_edges
-from skewerjax.summary_stats.grid3d import GridStatistics3D
+from skewerjax.summary_stats.grid3d import MU_WEDGES, GridStatistics3D
 from skewerjax.summary_stats.mesh import lattice_only
 
 
@@ -54,15 +56,31 @@ def skewer_xi1d(delta, dv: float):
     return dv * np.arange(n // 2 + 1), xi[..., : n // 2 + 1]
 
 
-def lattice_grid(n_x: int, n_z: int, n_los: int, L: float, d_perp, *, k_edges, r_edges=None, rperp_edges=None, log=None):
+def lattice_grid(
+    n_x: int,
+    n_z: int,
+    n_los: int,
+    L: float,
+    d_perp,
+    *,
+    k_edges,
+    r_edges=None,
+    rperp_edges=None,
+    xi_mu_edges=MU_WEDGES,
+    pk_mu_edges=MU_WEDGES,
+    log=None,
+):
     """``GridStatistics3D`` on the lattice of skewers (module docstring): (n_x, n_los, n_z) points, the line of sight
     along axis 1 with n_los points over the period L [cMpc] (a pixel dv spans dv / u = L / n_los), transverse spacing
     ``d_perp`` (scalar or (d_x, d_z)) [cMpc].
 
-    k_edges : the |k| bins [1/cMpc] (required: the bins are explicit), cut at the smallest Nyquist frequency k_N =
-    min(pi n_los / L, pi / d_x, pi / d_z); r_edges : |r| and the mu wedges (default width the coarser spacing, max(d_perp,
-    L / n_los), up to L / 2); rperp_edges : the r_perp columns (default width the smaller transverse spacing, from 0: the
-    first column holds the pairs on the same skewer). ``log``: reports the bins cut by the full-coverage limits."""
+    k_edges : the |k| bins [1/cMpc] (required: the bins are explicit), also those of the mu wedges of P, cut at the
+    smallest Nyquist frequency k_N = min(pi n_los / L, pi / d_x, pi / d_z); r_edges : |r| and the mu wedges of xi (default
+    width the coarser spacing, max(d_perp, L / n_los), up to L / 2); rperp_edges : the r_perp columns (default width the
+    smaller transverse spacing, from 0: the first column holds the pairs on the same skewer). xi_mu_edges, pk_mu_edges :
+    the wedges of xi in mu = r_par / r and of P in mu = k_par / |k|, the line of sight the skewers (default ``MU_WEDGES``
+    both; half-open bins, the last closed, ``GridStatistics3D``). ``log``: reports the bins cut by the full-coverage
+    limits."""
     L = float(L)
     d_perp = np.broadcast_to(np.asarray(d_perp, dtype=float), (2,))
     n_los = int(n_los)
@@ -89,6 +107,8 @@ def lattice_grid(n_x: int, n_z: int, n_los: int, L: float, d_perp, *, k_edges, r
         r_mu_edges=r,
         rpar_edges=native_edges(L / n_los, n_los // 2),
         rperp_edges=rq,
+        xi_mu_edges=xi_mu_edges,
+        pk_mu_edges=pk_mu_edges,
     )
 
 

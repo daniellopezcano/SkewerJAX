@@ -25,17 +25,18 @@ from skewerjax.summary_stats.stats_1d import OverfluxStatistics1D, ensemble_1d
 
 
 # ---------------------------------------------------------------------- the exact expectation on the lattice
-def _lattice_power(power: Callable, n_cells: int, L: float, stride, points_per_cell: int = 1) -> np.ndarray:
+def _lattice_power(power: Callable, n_cells: int, L: float, stride, points_per_cell: int = 1, los_axis=None) -> np.ndarray:
     """The aliased spectrum P_lat on the rfft modes of the lattice of skewers with ``stride`` (s_x, s_z) through an
     ``n_cells``^3 grid of side ``L`` [cMpc], with n_cells p points along y (p = ``points_per_cell``), its k = 0 entry set
     to 0 as in the estimator: xi_lat = xi_grid at the lattice separations (``lattice_density_theory``), xi_grid =
-    irfftn(P on the grid's modes) / dV, and P_lat = dV_lat rfftn(xi_lat) [cMpc^3]. ``power``: callable P(k) of |k|."""
+    irfftn(P on the grid's modes) / dV, and P_lat = dV_lat rfftn(xi_lat) [cMpc^3]. ``power``: callable P(k) of |k|, or
+    P(k, mu) with ``los_axis`` (``field_stats.grid_power``)."""
     N, p = int(n_cells), int(points_per_cell)
     sx, sz = (int(s) for s in stride)
     shape = (N,) * 3
     dx = float(L) / N
     dV = float(np.prod(tuple(float(L) / n for n in shape)))
-    xi = np.fft.irfftn(np.asarray(grid_power(power, shape, L)), s=shape) / dV
+    xi = np.fft.irfftn(np.asarray(grid_power(power, shape, L, los_axis=los_axis)), s=shape) / dV
     xi = xi[::sx, :, ::sz]
     if p > 1:  # two points Delta m = q p + s apart lie q cells apart for a fraction 1 - s / p of the pairs, q + 1 for s / p
         q, s = np.divmod(np.arange(N * p), p)
@@ -61,6 +62,7 @@ def lattice_density_theory(
     points_per_cell: int = 1,
     p1d: bool = False,
     scale: float = 1.0,
+    power_mu: bool = False,
 ):
     """The exact expectation of the 3D statistics on ``grid`` of a field of spectrum ``power`` sampled on the lattice of
     skewers with ``stride`` (s_x, s_z) through an ``n_cells``^3 periodic grid: every s_x-th column in x, every s_z-th
@@ -73,6 +75,11 @@ def lattice_density_theory(
         the box side L [cMpc] and whose bins are those of the expectation (checked against n_cells, stride and p).
     scale : a factor of the spectrum (the global-mean normalisation of the overdensity, ``skewer_density_statistics``'s
         ``density_scale``).
+    power_mu : True when ``power`` is a callable P(k, mu), mu = |k_y| / |k| along the skewers (a Kaiser or
+        Fingers-of-God model, ``PowerLawGRF.power`` with ``los_axis=1``; ``field_stats.grid_power``); default False, P(k).
+
+    The wedges come out on the edges of ``grid`` (``lattice_grid``'s ``xi_mu_edges``, ``pk_mu_edges``): P of every
+    (wedge, |k|) cell is P_lat averaged over exactly its modes (``GridStatistics3D.theory``).
 
     The lattice samples xi_grid = irfftn(P on the modes) / dV at its own separations; along y, two points Delta m =
     q p + s apart lie q or q + 1 cells apart, for the fractions 1 - s / p and s / p of the pairs, so xi_lat is xi_grid
@@ -88,7 +95,7 @@ def lattice_density_theory(
     expect = (N // sx, N * p, N // sz)
     if tuple(grid.shape) != expect:
         raise ValueError(f"grid.shape = {tuple(grid.shape)}, but n_cells, stride, points_per_cell give the lattice {expect}.")
-    P = _lattice_power(power, N, float(grid.L[1]), (sx, sz), p)
+    P = _lattice_power(power, N, float(grid.L[1]), (sx, sz), p, los_axis=1 if power_mu else None)
     P = scale * P if scale != 1.0 else P
     th = grid.theory(P)
     return (th, _lattice_p1d(P, grid)) if p1d else th

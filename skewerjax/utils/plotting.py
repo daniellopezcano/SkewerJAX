@@ -4097,7 +4097,24 @@ def plot_skewer_geometry_3d(ax, points, *, scale_factors=None, label_w=None, tan
 
 
 # ----------------------------------------------------------------------- the fields and their 3D statistics, the skewers (08 to 11)
-MU_COLORS = ("blue", "cyan", "green", "red")  # one colour per wedge, in every panel (PALETTE keys)
+# the discrete colours of the wedges (PALETTE keys; grey marks the styles)
+MU_COLORS = ("blue", "cyan", "green", "red", "yellow", "purple")
+
+
+def mu_colors(n: int) -> list:
+    """One colour per wedge of mu, by index, the same in every figure of a statistic (the curves of
+    ``plot_xi_mu_wedges`` and ``plot_pk_mu_wedges``, the sectors of the maps): up to ``len(MU_COLORS)`` wedges the bright
+    colours of ``MU_COLORS`` in order (every colour of the palette but grey, which marks the styles in the legends);
+    more wedges: ``n`` colours sampled evenly over the whole theme's line colour map (``CMAPS["line"]``), ordered in mu,
+    so that no colour repeats."""
+    n = int(n)
+    if n <= len(MU_COLORS):
+        return [PALETTE[c] for c in MU_COLORS[:n]]
+    _register_tol_cmaps()  # also before use_style
+    cmap = plt.get_cmap(CMAPS["line"])
+    return [mpl.colors.to_hex(cmap(x)) for x in np.linspace(0.0, 1.0, n)]
+
+
 _EACH = dict(lw=0.8, alpha=0.12)  # one realisation, faint, in the background
 _MEAN = dict(fmt="o-", lw=1.0, ms=7, capsize=4, elinewidth=2.2, capthick=2.0, mew=1.5, zorder=6)  # the mean and its error, joined
 _MS_SMALL = 4.5  # the small markers of several series on one panel (shape and colour tell them apart; notebook 10, D3, D4)
@@ -4816,6 +4833,7 @@ def plot_kpar_kperp_maps(
     kperp_scale: str = "log",
     k_marks=None,
     kms_per_cMpc: float | None = None,
+    mu_edges=None,
     figsize=(14, 12.5),
 ):
     """P(k_perp, k_par) of many realisations on the grid's own modes (notebook 08, A3), as two figures with exactly the
@@ -4827,7 +4845,8 @@ def plot_kpar_kperp_maps(
     ``kperp_scale``: "log" or "linear"). Rows: one per mode of the grid along the line of sight, k_par = 2 pi m / L, m =
     1 .. N / 2, each centred on it; columns: the k_perp bins ``kperp_edges`` (default those of the measurement; checked);
     a column with no mode is light grey. ``k_marks`` {label: k}: labelled vertical lines, each within [k_min, k_max]
-    (``res["limits"]``). ``kms_per_cMpc``: reference axes in s/km (e.g. the boxes' aH; None: none). The legend
+    (``res["limits"]``). ``kms_per_cMpc``: reference axes in s/km (e.g. the boxes' aH; None: none). The wedges of the P
+    wedges (``mu_edges``, default those of the measurement, ``axes["pk_mu_edges"]``) as white rays (``_mu_rays``). The legend
     (``_map_legend_entries``): the expected contours, the measured contours with their band, and the empty bins when there are
     some. res : ``summary_stats.field_statistics``; without an expectation (a simulation, notebook 09) the measured
     figure only, on the measurement's colour scale. Returns (figs (2,): expected, measured, or (1,): measured; axs;
@@ -4852,6 +4871,7 @@ def plot_kpar_kperp_maps(
             kperp_scale=kperp_scale,
             k_marks=marks,
             unit="cMpc",
+            mu_edges=mu_edges,
             theory=res.get("theory"),
             show=show,
             norm=norm,
@@ -4864,28 +4884,44 @@ def plot_kpar_kperp_maps(
 
 
 def _mu_rays(
-    ax, mu_edges, r_max: float, *, labels: bool = True, sector: float | None = 0.14, y_scale: float = 1.0, kind: str = "r"
+    ax,
+    mu_edges,
+    r_max,
+    *,
+    labels: bool = True,
+    sector: float | None = 0.14,
+    y_scale: float = 1.0,
+    kind: str = "r",
+    log: bool = False,
 ):
-    """The wedges of mu = r_par / r in the (r_perp, r_par) plane, r_perp horizontal and r_par vertical: one white
-    dash-dot ray from the origin to the edge of the square [0, r_max]^2 per inner edge of ``mu_edges`` (mu = 0 and 1 are
-    the axes), labelled with its mu, and near the origin a small transparent sector per wedge in its colour of
-    ``plot_xi_mu_wedges`` (``MU_COLORS``; radius ``sector`` r_max; None: none). The same edges as
-    ``plot_xi_mu_wedges`` (the ``mu_edges`` of the measurement, ``MU_WEDGES``). mu and r_max are in comoving units on
-    both axes; ``y_scale`` converts the comoving r_par (or k_par) to the units of the y axis (u for r_par in km/s, 1 / u
-    for k_par in s/km; the rays and sectors are drawn in those units). ``kind``: "r" or "k" (the legend label). Returns
-    the legend handle of the rays."""
+    """The wedges of mu = r_par / r (or k_par / k) in the (perp, par) plane, perp horizontal and par vertical: one white
+    dash-dot ray from the origin to the edge of the drawn region per inner edge of ``mu_edges`` (mu = 0 and 1 are the
+    axes), labelled with its mu, and near the origin a small transparent sector per wedge in its colour of
+    ``plot_xi_mu_wedges`` and ``plot_pk_mu_wedges`` (``mu_colors``; radius ``sector`` times the side; None: none). The
+    edges of the statistic drawn: the xi wedges' (``axes["mu_edges"]``) on the (r_perp, r_par) maps, the P wedges'
+    (``axes["pk_mu_edges"]``) on the (k_perp, k_par) maps. ``r_max``: the side of the square [0, r_max]^2, or (x_max,
+    y_max) the rectangle the rays run to; mu and the sides are in comoving units on both axes; ``y_scale`` converts the
+    comoving r_par (or k_par) to the units of the y axis (u for r_par in km/s, 1 / u for k_par in s/km; the rays and
+    sectors are drawn in those units). ``log``: a logarithmic axis (the rays sampled along their length; no sectors, the
+    origin is not on the axes). ``kind``: "r" or "k" (the legend label). Returns the legend handle of the rays."""
     from matplotlib import patheffects as pe
 
     edge = [pe.withStroke(linewidth=3.2, foreground=(0, 0, 0, 0.55))]
     mu = np.asarray(mu_edges, dtype=float)
     ys = float(y_scale)
+    xm, ym = (float(r_max),) * 2 if np.ndim(r_max) == 0 else (float(x) for x in r_max)
     for m in mu[1:-1]:
-        d = np.array([np.sqrt(1.0 - m * m), m])  # (r_perp, r_par)
-        end = r_max / d.max() * d * np.array([1.0, ys])
-        ax.plot([0.0, end[0]], [0.0, end[1]], color="white", ls="-.", lw=1.6, zorder=7, path_effects=edge)
+        d = np.array([np.sqrt(1.0 - m * m), m])  # (perp, par)
+        t_end = min(xm / d[0], ym / d[1])  # = r_max / max(d) on the square
+        end = t_end * d * np.array([1.0, ys])
+        if log:
+            t = np.geomspace(1e-4 * t_end, t_end, 128)
+            ax.plot(t * d[0], ys * t * d[1], color="white", ls="-.", lw=1.6, zorder=7, path_effects=edge)
+        else:
+            ax.plot([0.0, end[0]], [0.0, end[1]], color="white", ls="-.", lw=1.6, zorder=7, path_effects=edge)
         if labels:
             ax.text(
-                *(0.86 * end),
+                *((0.6 if log else 0.86) * end),
                 rf"$\mu = {m:g}$",
                 color="white",
                 fontsize=FONT_MIN["annotation"],
@@ -4894,16 +4930,17 @@ def _mu_rays(
                 zorder=9,
                 path_effects=[pe.withStroke(linewidth=3, foreground="black")],
             )
-    if sector:
+    if sector and not log:
+        cols = mu_colors(mu.size - 1)
         for w in range(mu.size - 1):
             th = np.linspace(np.arcsin(mu[w]), np.arcsin(mu[w + 1]), 40)
-            rho = sector * r_max
+            rho = sector * min(xm, ym)
             xy = np.vstack([[0.0, 0.0], np.column_stack([rho * np.cos(th), ys * rho * np.sin(th)])])
             ax.add_patch(
                 mpl.patches.Polygon(
                     xy,
                     closed=True,
-                    facecolor=PALETTE[MU_COLORS[w % len(MU_COLORS)]],
+                    facecolor=cols[w],
                     alpha=0.8,
                     edgecolor="white",
                     lw=1.0,
@@ -5039,8 +5076,12 @@ def plot_rpar_rperp_maps(
     return np.array([o[0] for o in out], dtype=object), np.array([o[1] for o in out], dtype=object), chi2
 
 
-def _wedge_label(lo: float, hi: float) -> str:
-    return rf"${lo:.2f} < \mu < {hi:.2f}$"
+def _wedge_labels(mu) -> list:
+    """The legend label of every wedge of the edges ``mu``, with the fewest decimals (two to four) that keep the edges
+    distinct (the narrow wedges near mu = 1 of edges even in angle need three)."""
+    mu = np.asarray(mu, dtype=float)
+    d = next((d for d in (2, 3) if np.all(np.diff(np.round(mu, d)) > 0)), 4)
+    return [rf"${lo:.{d}f} < \mu < {hi:.{d}f}$" for lo, hi in zip(mu[:-1], mu[1:])]
 
 
 _UNITS = {  # the r and k labels of the 3D statistics: comoving (the fields, and every isotropic quantity) or velocity
@@ -5292,7 +5333,7 @@ def plot_xi_mu_wedges(
 ):
     """xi(r) in wedges of mu = r_par / r (``MU_WEDGES``) of many realisations, as DESI DR2 shows the Lya auto-correlation
     (arXiv:2503.14739, Fig. 3, top): r^2 xi(r) (``quantity="r2xi"``) or xi (``"xi"``) against r, one colour per wedge
-    (``MU_COLORS``), every realisation as a faint line, the mean with the error of the mean as points joined by thin
+    (``mu_colors``), every realisation as a faint line, the mean with the error of the mean as points joined by thin
     lines (notebook 08, A3; notebook 10, D3). With an expectation (``res["theory"]``: ``summary_stats.field_statistics``, or the
     density of ``skewer_density_statistics`` with its ``lattice_density_theory``): the expectation of each wedge as a dashed line in the
     wedge's colour and, below, (measured - expected) / error. Without (the overflux on the lattice, ``res`` = one
@@ -5333,7 +5374,7 @@ def plot_xi_mu_wedges(
     theory = "theory" in res
     Xth = res["theory"]["xi_mu"] if theory else None
     nm = len(mu) - 1
-    cols = [PALETTE[MU_COLORS[w % len(MU_COLORS)]] for w in range(nm)]
+    cols = mu_colors(nm)
     dr = float(np.diff(a["r_mu_edges"]).mean())
     off = 0.08 * dr * (np.arange(nm) - (nm - 1) / 2)
     weight = _MAP_QUANTITY[quantity][0]
@@ -5419,9 +5460,7 @@ def plot_xi_mu_wedges(
         )
     if kms_per_cMpc is not None:
         (velocity_axis if unit == "cMpc" else comoving_axis)(axs[0], kms_per_cMpc, "r")
-    wedges_h = [
-        mpl.lines.Line2D([], [], color=cols[w], marker="o", ms=7, lw=2.0, label=_wedge_label(mu[w], mu[w + 1])) for w in range(nm)
-    ]
+    wedges_h = [mpl.lines.Line2D([], [], color=c, marker="o", ms=7, lw=2.0, label=lbl) for c, lbl in zip(cols, _wedge_labels(mu))]
     leg = _legend(axs[0], handles=wedges_h, loc="upper right", ncol=1, fontsize=_LEGEND_08, framealpha=0.9)
     axs[0].add_artist(leg)
     leg = _legend(axs[0], handles=styles, loc="lower left", ncol=1, fontsize=_LEGEND_08 - 1, framealpha=0.9)
@@ -5430,6 +5469,217 @@ def plot_xi_mu_wedges(
         below = _legend(axs[-1], **pairs_leg)
         for t, h in zip(below.get_texts()[:n_named], pair_h):  # the names of the pairs in their colours
             t.set_color(h.get_color())
+    return fig, axs, out
+
+
+_PK_QUANTITY = {  # the weight of P in the wedges of P, and its label
+    "P": (lambda k: np.ones_like(k), r"$P(k, \mu)$ [cMpc$^3$]"),
+    "kP": (lambda k: k, r"$k\,P(k, \mu)$ [cMpc$^2$]"),
+}
+
+
+def plot_pk_mu_wedges(
+    res,
+    *,
+    k_edges=None,
+    bao_k=None,
+    k_marks=None,
+    delta_v=None,
+    line_ids=None,
+    pairs="all",
+    box: float | None = None,
+    n_harmonics: int | None = None,
+    limits=None,
+    kms_per_cMpc: float | None = None,
+    quantity: str = "P",
+    x_bin: str = "weighted",
+    k_scale: str = "linear",
+    y_scale: str | None = None,
+    linthresh: float | None = None,
+    linthresh_frac: float = 1e-2,
+    linscale: float = 1.0,
+    each_label: str = "per realisation",
+    panels: bool = False,
+    figsize=None,
+):
+    """P(k) in wedges of mu = k_par / |k| of many realisations, the Fourier counterpart of ``plot_xi_mu_wedges`` with its
+    options and style (notebooks 08 to 11): P(k, mu) (``quantity="P"``) or k P (``"kP"``) against |k|, one colour per
+    wedge (``mu_colors``, the colour of the same wedge index in the xi wedges and in the sectors of the maps), every
+    realisation as a faint line, the mean with the error of the mean as points joined by thin lines. A wedge is the
+    average of P over the modes with |k| in a bin of the |k| edges of the wedges and mu in the wedge
+    (``axes["pk_mu_edges"]``, half-open, the last closed; ``GridStatistics3D``), drawn at the mode-averaged |k| of the
+    cell (``axes["k_mu"]``, ``x_bin="weighted"``; "linear", "log": ``summary_stats.bin_centres``). With an expectation
+    (``res["theory"]``: ``field_statistics``, or the density of ``skewer_density_statistics`` with its
+    ``lattice_density_theory``): the expectation of each wedge, P averaged over exactly the modes of each cell, as a
+    dashed line in the wedge's colour and, below, (measured - expected) / error; without (the overflux on the lattice, a
+    simulation): one panel. The wedges are offset by about 1 % in k so that every point shows. Legends inside the main
+    panel, on top of the data: the wedges (upper right) and the styles and marks (lower left). No titles.
+
+    res : the ``ensemble_mean`` of the ``GRID_KEYS`` statistics with ``res["axes"]`` (``field_statistics``; one entry of
+    ``measure_lattice``'s ensemble or of ``density3d`` with its axes); k [1/cMpc], P [cMpc^3]. k_edges : the |k| bins of the
+    wedges, checked against those of the measurement (``axes["k_mu_edges"]``, ``_check_edges``). limits : dict(k_min,
+    k_max) [1/cMpc], default ``res.get("limits")``: the axis shaded outside, the limits written inside the grey bands, as
+    the other P figures (``plot_isotropic_recovery``); none: no shading. k_scale : "linear" (default) or "log"; y_scale : "log"
+    (default for P), "linear" (default for kP) or "symlog" (``linthresh``, ``linthresh_frac``, ``linscale``: ``_y_scale``).
+
+    Marks, vertical lines through every panel, only those within the drawn k range (``scale_style``): bao_k, the BAO
+    maxima in k (``summary_stats.bao_maxima``: the model's W(k) for a toy, j_0(k r_d) for a simulation) [cMpc^-1], grey,
+    dotted and wider; k_marks {label: k}: labelled lines (``_mark_lines``); delta_v [km/s, with ``kms_per_cMpc`` = u]:
+    the offsets of the lines ``line_ids`` (``LineBundle.delta_v``, or one number, ``_pair_inputs``): for every pair of
+    ``pairs`` (``line_pairs``), solid in the pair's colour, the line-of-sight (mu = 1) Fourier imprint of its cross term,
+    the maxima of cos(k Delta_ij) at k = 2 pi n / Delta_ij, Delta_ij = Delta v_ij,fold / u folded with the period ``box``
+    [cMpc] (default 2 pi over the first k_par row, L; ``summary_stats.pair_imprint`` kind "p1d", ``n_harmonics``; the
+    helper of the other figures, ``_imprint_lines``); in a wedge of mean mu the same imprint sits at k = 2 pi n /
+    (mu Delta_ij), so the drawn lines belong to the mu = 1 limit. kms_per_cMpc : a secondary top axis in s/km (its own
+    ticks only, ``velocity_axis``). each_label : the legend of the faint realisations ("{n}": their number).
+
+    panels : False (default), every wedge on one panel; True, one panel per wedge, stacked in one column (wedge 0 on
+    top), without the pulls (the chi2 is still returned): the same k axis and the same y range on every panel (the
+    limits of every wedge's values), the wedge named inside each, no offset in k; the styles and marks in one legend
+    below the panels, the velocity axis above the first.
+
+    Returns (fig, axs (2,) with an expectation, (1,) without; with ``panels``: (n_wedges,), one per wedge; chi2/dof per wedge against the expectation over every bin
+    drawn (diagonal: the mean of the squared pulls), or None)."""
+    _check_option("quantity", quantity, tuple(_PK_QUANTITY))
+    _check_option("k_scale", k_scale, ("log", "linear"))
+    y_scale = y_scale or ("log" if quantity == "P" else "linear")
+    _check_option("y_scale", y_scale, ("log", "linear", "symlog"))
+    a = res["axes"]
+    _check_edges(a, "k_mu_edges", k_edges, "plot_pk_mu_wedges")
+    mu, k = a["pk_mu_edges"], a["k_mu"]
+    kx = np.broadcast_to(bin_centres(a["k_mu_edges"], x_bin, k), k.shape)  # where the bins are drawn
+    X, Xe = res["P_mu"], res["P_mu_err"]
+    each = res.get("P_mu_each")
+    theory = "theory" in res
+    Xth = res["theory"]["P_mu"] if theory else None
+    nm = len(mu) - 1
+    cols = mu_colors(nm)
+    off = np.ones(nm) if panels else 1.0 + 0.036 * (np.arange(nm) / max(nm - 1, 1) - 0.5)  # a shift per wedge, 3.6 % in all
+    weight, ylabel = _PK_QUANTITY[quantity]
+    if panels:
+        fig, axs = plt.subplots(
+            nm, 1, figsize=figsize or (11, 1.2 + 2.1 * nm), sharex=True, sharey=True, squeeze=False, layout="constrained"
+        )
+        axs = axs[:, 0]
+        main, pulls, bottom = list(axs), [], [axs[-1]]
+    else:
+        if theory:
+            fig, axs = plt.subplots(
+                2, 1, figsize=figsize or (12, 12), sharex=True, gridspec_kw={"height_ratios": [2.0, 1.0]}, layout="constrained"
+            )
+        else:
+            fig, ax = plt.subplots(figsize=figsize or (12, 9), layout="constrained")
+            axs = np.array([ax])
+        main, pulls = [axs[0]] * nm, [axs[1]] * nm if theory else []
+        bottom = [axs[-1]]
+    first = main[0]
+    every = list(dict.fromkeys(main + pulls))  # each Axes once
+    mains = list(dict.fromkeys(main))
+    out = [] if theory else None
+    yv = [[] for _ in range(nm)]
+    for w in range(nm):
+        top = np.isfinite(X[w]) & (Xe[w] > 0) & np.isfinite(k[w])
+        if y_scale == "log":
+            top &= X[w] > 0
+        if theory:
+            top &= np.isfinite(Xth[w])
+            pull = (X[w][top] - Xth[w][top]) / Xe[w][top]
+            out.append(float(np.mean(pull**2)) if pull.size else np.nan)
+            main[w].plot(kx[w][top], weight(k[w][top]) * Xth[w][top], color=cols[w], ls="--", lw=2.0, zorder=7)
+            if pulls:
+                pulls[w].errorbar(kx[w][top] * off[w], pull, np.ones_like(pull), color=cols[w], **dict(_MEAN, ms=6))
+            yv[w].append(weight(k[w][top]) * Xth[w][top])
+        xt, wt = kx[w][top], weight(k[w][top])  # drawn at x_bin, weighted at the mode-averaged |k|
+        if each is not None:
+            for y in each[:, w]:
+                main[w].plot(xt * off[w], wt * y[top], color=cols[w], **_EACH)
+        main[w].errorbar(xt * off[w], wt * X[w][top], wt * Xe[w][top], color=cols[w], **dict(_MEAN, ms=6))
+        yv[w] += [wt * (X[w][top] - Xe[w][top]), wt * (X[w][top] + Xe[w][top])]
+    grey = PALETTE["grey"]
+    styles = [mpl.lines.Line2D([], [], color=grey, marker="o", ms=6, lw=1.0, label="measured")]
+    if theory:
+        styles.append(mpl.lines.Line2D([], [], color=grey, ls="--", lw=2.0, label="expected"))
+        for ax in dict.fromkeys(pulls):
+            ax.set(ylim=(-5, 5))
+            ax.axhline(0.0, color=FG, lw=1.0)
+            ax.axhspan(-2, 2, color=DIM, alpha=0.15, lw=0)
+            ax.set(ylabel=r"$(\hat P - P_{\rm th})/\sigma$")
+    if each is not None:
+        styles.append(mpl.lines.Line2D([], [], color=grey, lw=1.2, alpha=0.5, label=each_label.format(n=len(each))))
+    yy = np.concatenate([v for w in range(nm) for v in yv[w]]) if nm else np.zeros(1)
+    for ax in mains:  # the values of every wedge: one panel, or the panels sharing one y range
+        if y_scale == "log":
+            ax.set_yscale("log")
+        else:
+            if each is not None and y_scale == "linear":  # the limits of the means and their errors
+                lo, hi = float(np.nanmin(yy)), float(np.nanmax(yy))
+                ax.set_ylim(lo - 0.12 * (hi - lo), hi + 0.12 * (hi - lo))
+            _y_scale(ax, y_scale, yy, linthresh=linthresh, linthresh_frac=linthresh_frac, linscale=linscale)
+            ax.axhline(0.0, color=DIM, lw=0.8)
+    if panels:  # one y range, fixed: that of every wedge's values, with a margin
+        fin = yy[np.isfinite(yy) & (yy > 0)] if y_scale == "log" else yy[np.isfinite(yy)]
+        if fin.size:
+            lo, hi = float(fin.min()), float(fin.max())
+            if y_scale == "log":
+                pad = 0.06 * np.log10(hi / lo) if hi > lo else 0.1
+                axs[0].set_ylim(lo / 10**pad, hi * 10**pad)
+            else:
+                pad = 0.06 * (hi - lo) if hi > lo else 0.1 * (abs(hi) or 1.0)
+                axs[0].set_ylim(lo - pad, hi + pad)
+        fig.supylabel(ylabel)
+    else:
+        for ax in mains:
+            ax.set(ylabel=ylabel)
+    for ax in bottom:
+        ax.set(xlabel=_units("cMpc")["k"])
+        ax.xaxis.set_tick_params(labelbottom=True)
+    for ax in every:
+        ax.set_xscale(k_scale)
+    lim = res.get("limits") if limits is None else limits
+    if lim:  # outside the full-coverage range: as the other P figures
+        for ax in every:
+            _shade_outside(
+                ax,
+                lim["k_min"],
+                lim["k_max"],
+                log=k_scale == "log",
+                labels=_limit_labels("k", lim["k_min"], lim["k_max"]) if ax is first else None,
+            )
+            ax.set_xscale(k_scale)
+    n_bao = 0
+    for ax in every:  # the marks, inside the drawn range only
+        n = _bao_lines(ax, bao_k, label=None)
+        n_bao = n if ax is first else n_bao
+        _mark_lines(ax, k_marks, labels=ax is first)
+    if n_bao:
+        styles.append(mpl.lines.Line2D([], [], label="BAO maxima", **scale_style("bao")))
+    prs = []
+    if delta_v is not None:
+        if kms_per_cMpc is None:
+            raise ValueError("delta_v needs kms_per_cMpc (u) to convert the separations to cMpc.")
+        L = 2.0 * np.pi / float(a["kpar"][0]) if box is None else float(box)
+        ids, offs = _pair_inputs(delta_v, line_ids)
+        prs = [p for p in line_pairs(ids, offs / float(kms_per_cMpc), L, pairs) if p["fold"] > 0]
+        _imprint_lines(every, prs, "p1d", n_harmonics=n_harmonics)
+        if prs:
+            styles.append(
+                mpl.lines.Line2D([], [], label=r"pair imprint, $\mu = 1$: $k = 2\pi n/\Delta_{ij}$", **scale_style("spot"))
+            )
+            styles += [mpl.lines.Line2D([], [], color=p["color"], lw=3.0, label=p["text"]) for p in prs]
+    if kms_per_cMpc is not None:
+        velocity_axis(first, kms_per_cMpc, "k")
+    wedges_h = [mpl.lines.Line2D([], [], color=c, marker="o", ms=7, lw=2.0, label=lbl) for c, lbl in zip(cols, _wedge_labels(mu))]
+    if panels:  # each panel names its wedge
+        for w in range(nm):
+            main[w].add_artist(_legend(main[w], handles=[wedges_h[w]], loc="upper right", ncol=1, fontsize=_LEGEND_08 - 1))
+    else:
+        first.add_artist(_legend(first, handles=wedges_h, loc="upper right", ncol=1, fontsize=_LEGEND_08))
+    if panels:  # below the grid, out of the data
+        leg = _legend(fig, handles=styles, loc="outside lower center", ncol=min(len(styles), 4), fontsize=_LEGEND_08 - 1)
+    else:
+        leg = _legend(first, handles=styles, loc="lower left", ncol=1, fontsize=_LEGEND_08 - 1)
+    for t, h in zip(leg.get_texts()[len(styles) - len(prs) :], styles[len(styles) - len(prs) :]):
+        t.set_color(h.get_color())  # the names of the pairs in their colours
     return fig, axs, out
 
 
@@ -5836,6 +6086,7 @@ def plot_overflux_kpar_kperp(
     k_marks=None,
     kpar_max: float | None = None,
     unit: str = "km/s",
+    mu_edges=None,
     theory=None,
     show: str = "measured",
     norm=None,
@@ -5850,7 +6101,9 @@ def plot_overflux_kpar_kperp(
     level lies within the mean +- ``n_sigma`` times its error (the error of the mean over the boxes); ``theory`` (a
     ``GRID_KEYS`` dict, e.g. ``lattice_density_theory``): the expected contours, dashed; a column of the
     k_perp bins that holds no mode is left empty, in light grey; ``k_marks`` {label: k_perp [cMpc^-1]}: labelled
-    vertical lines. No title. ``show``: "measured" (default) or "expected" (the map of ``theory`` with its dashed
+    vertical lines; the boundaries of the wedges of P (``mu_edges``, default those of the measurement,
+    ``axes["pk_mu_edges"]``: the wedges of ``plot_pk_mu_wedges``) as white rays labelled with their mu, with a coloured
+    sector per wedge near the origin on linear axes (``_mu_rays``; mu = k_par / |k| in comoving units). No title. ``show``: "measured" (default) or "expected" (the map of ``theory`` with its dashed
     contours only: the expected panel of ``plot_kpar_kperp_maps``, which shares one ``norm`` and ``levels`` between the
     two); ``norm``: a colour norm instead of the default; ``legend``: the legend of ``_map_legend_entries`` (default none). The
     single-panel map of every (k_perp, k_par) figure of notebook 10.
@@ -5910,6 +6163,10 @@ def plot_overflux_kpar_kperp(
         _secondary(ax, (lambda k: k / u, lambda k: k * u), "top", r"$k_\perp$ [s km$^{-1}$]")
         _secondary(ax, (lambda k: k / u, lambda k: k * u), "right", r"$k_\parallel$ [s km$^{-1}$]")
     ax.set(xscale=kperp_scale, yscale=kpar_scale, xlim=(eq[0], eq[-1]), ylim=(ys * ep[0], ys * y_top))
+    _mu_rays(
+        ax, a["pk_mu_edges"] if mu_edges is None else mu_edges, (eq[-1], y_top), y_scale=ys, kind="k", log=not linear
+    )  # the wedges of P, to the edges of the drawn map
+    ax.set(xlim=(eq[0], eq[-1]), ylim=(ys * ep[0], ys * y_top))
     for c in ax.child_axes:  # the reference axes: a few ticks (their numbers are long)
         (c.xaxis if c.get_xlabel() else c.yaxis).set_major_locator(mpl.ticker.MaxNLocator(4))
     _mark_lines(ax, {k: v for k, v in (k_marks or {}).items() if eq[0] <= v <= eq[-1]}, color=FG)

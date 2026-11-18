@@ -26,7 +26,7 @@ import numpy as np
 
 from skewerjax.core.cells import Cells
 from skewerjax.summary_stats.binning import ensemble_mean, full_coverage, native_edges
-from skewerjax.summary_stats.grid3d import GRID_KEYS, GridStatistics3D
+from skewerjax.summary_stats.grid3d import GRID_KEYS, MU_WEDGES, GridStatistics3D
 from skewerjax.summary_stats.mesh import PAINT_CHUNK, TRUSTED_K_NYQ, TRUSTED_R_H
 
 
@@ -40,14 +40,26 @@ def grid_limits(n_cells: int, L: float) -> dict:
     return dict(k_min=2 * np.pi / L, k_max=np.pi / dx, r_min=dx, r_max=0.5 * L)
 
 
-def box_grid(n_cells: int, L: float, *, k_edges, r_edges, los_axis: int = 1, log=print) -> GridStatistics3D:
+def box_grid(
+    n_cells: int,
+    L: float,
+    *,
+    k_edges,
+    r_edges,
+    xi_mu_edges=MU_WEDGES,
+    pk_mu_edges=MU_WEDGES,
+    los_axis: int = 1,
+    log=print,
+) -> GridStatistics3D:
     """``GridStatistics3D`` on an ``n_cells``^3 periodic grid of side ``L`` [cMpc], line of sight ``los_axis``, with the
     bins [1/cMpc], [cMpc]:
 
-    * |k| ``k_edges``, also the k_perp columns of the (k_par, k_perp) map; the map's rows are the grid's own
-      k_par = 2 pi m / L, m = 1 .. N / 2, one row per mode centred on it;
-    * |r| ``r_edges``, also the |r| bins of the mu wedges and the r_perp columns of the (r_par, r_perp) map; the map's
-      rows are the grid's own r_par = j dx, j = 0 .. N / 2.
+    * |k| ``k_edges``, also the |k| bins of the mu wedges of P and the k_perp columns of the (k_par, k_perp) map; the
+      map's rows are the grid's own k_par = 2 pi m / L, m = 1 .. N / 2, one row per mode centred on it;
+    * |r| ``r_edges``, also the |r| bins of the mu wedges of xi and the r_perp columns of the (r_par, r_perp) map; the
+      map's rows are the grid's own r_par = j dx, j = 0 .. N / 2;
+    * the wedges: ``xi_mu_edges`` in mu = r_par / r, ``pk_mu_edges`` in mu = k_par / |k| (default ``MU_WEDGES`` both;
+      half-open bins, the last closed, ``GridStatistics3D``).
 
     Every |k|, k_perp, |r| and r_perp bin that extends beyond the full-coverage limits (``grid_limits``: pi / dx, L / 2)
     is cut (``binning.full_coverage``, reported by ``log``)."""
@@ -61,27 +73,39 @@ def box_grid(n_cells: int, L: float, *, k_edges, r_edges, los_axis: int = 1, log
         L,
         los_axis=los_axis,
         k_edges=k,
+        k_mu_edges=k,
         kpar_edges=native_edges(lim["k_min"], half, start=1),
         kperp_edges=k,
         r_edges=r,
         r_mu_edges=r,
         rpar_edges=native_edges(lim["r_min"], half),
         rperp_edges=r,
+        xi_mu_edges=xi_mu_edges,
+        pk_mu_edges=pk_mu_edges,
     )
 
 
-def grid_power(power: Callable, shape, L):
-    """P(|k|) [cMpc^3] on the rfft modes of a grid of ``shape`` and side(s) ``L`` [cMpc] (the layout of
-    ``GridStatistics3D.theory`` and ``xi_iso_covariance``): ``power`` a callable of |k| [1/cMpc] (an isotropic
-    expectation, e.g. ``PowerLawGRF.power``; P(0) is the caller's, the estimators drop the k = 0 mode). |k| is built as
-    ``PowerLawGRF.k_grid`` builds it, so the result equals ``PowerLawGRF.power_grid`` bit for bit."""
+def grid_power(power: Callable, shape, L, *, los_axis: int | None = None):
+    """P [cMpc^3] on the rfft modes of a grid of ``shape`` and side(s) ``L`` [cMpc] (the layout of
+    ``GridStatistics3D.theory`` and ``xi_iso_covariance``). P(0) is the caller's: the estimators drop the k = 0 mode.
+
+    los_axis : None (default): ``power`` is a callable of |k| [1/cMpc], an isotropic expectation (e.g.
+        ``PowerLawGRF.power``); an axis: ``power`` is a callable P(|k|, mu) with mu = |k_los| / |k| along that axis (0 at
+        k = 0), an anisotropic one (e.g. ``PowerLawGRF.power`` with a Kaiser or Fingers-of-God term and that
+        ``los_axis``).
+
+    |k| and mu are built as ``PowerLawGRF.k_grid`` and ``mu_grid`` build them, so the result equals
+    ``PowerLawGRF.power_grid`` bit for bit."""
     shape = tuple(int(n) for n in shape)
     Ls = np.broadcast_to(np.asarray(L, dtype=float), (len(shape),))
     dx = tuple(float(l) / n for l, n in zip(Ls, shape))
     axes = [2.0 * jnp.pi * jnp.fft.fftfreq(n, d=d) for n, d in zip(shape, dx)]
     axes[-1] = 2.0 * jnp.pi * jnp.fft.rfftfreq(shape[-1], d=dx[-1])
     k_vec = jnp.meshgrid(*axes, indexing="ij", sparse=True)
-    return power(jnp.sqrt(sum(k**2 for k in k_vec)))
+    k_mod = jnp.sqrt(sum(k**2 for k in k_vec))
+    if los_axis is None:
+        return power(k_mod)
+    return power(k_mod, jnp.abs(k_vec[int(los_axis)]) / jnp.where(k_mod > 0, k_mod, 1.0))
 
 
 def _as_cells_iter(cells):
@@ -118,6 +142,7 @@ def field_statistics(
     interlace: bool = True,
     power: Callable | None = None,
     power_nw: Callable | None = None,
+    power_mu: bool = False,
     chunk: int | None = PAINT_CHUNK,
     log=print,
 ) -> dict:
@@ -129,7 +154,8 @@ def field_statistics(
     1. every cell deposits its number of particles n_X V at its generating point (``cell_weights``) on the mesh with
        the scheme ``mas`` (default "pcs"), interlaced (``interlace``, default True): ``mesh.fourier_mesh``, periodic;
     2. the mesh is normalised by its mean (1 + delta; the k = 0 mode is dropped), the window divided;
-    3. P and xi binned as ``GridStatistics3D`` (isotropic, (par, perp), wedges of mu).
+    3. P and xi binned as ``GridStatistics3D`` (isotropic, (par, perp), wedges of mu: those of xi in ``grid.xi_mu_edges``,
+       those of P in ``grid.pk_mu_edges``, ``box_grid``).
 
     species : a key of the cells' species (e.g. "HI") or a sequence of them (the result is then {species: result}).
     power : callable P(k) [cMpc^3] of |k| [1/cMpc], optional: the spectrum of the field (e.g. ``PowerLawGRF.power``),
@@ -138,10 +164,16 @@ def field_statistics(
         measurement approaches it at k << k_Nyq: for fields given at the nodes of the mesh (a toy grid of the mesh's
         shape) the exact expectation is ``mesh.node_transfer`` x P, a bias ~3e-4 at k_Nyq / 2 for interlaced PCS.
     power_nw : callable, optional: a second expectation, ``theory_nw`` (e.g. the power law without the BAO bump).
+    power_mu : False (default): ``power`` and ``power_nw`` are callables of |k|; True: callables P(|k|, mu), mu = |k_par| /
+        |k| along ``grid.los_axis`` (``grid_power``): an anisotropic model (e.g. ``PowerLawGRF.power`` with a Kaiser or
+        Fingers-of-God term), whose expectation of every binning, the wedges of P and xi included, is then exact on the
+        modes as well.
     chunk : cells painted at a time (memory, ``mesh.paint``).
 
     Returns (per species) ``ensemble_mean`` over the realisations of every ``GRID_KEYS`` statistic (mean, ``_err``: the
-    error of the mean, std / sqrt(n) with ddof = 1, of each bin alone; ``_each``), ``theory``, ``theory_nw`` and
+    error of the mean, std / sqrt(n) with ddof = 1, of each bin alone; ``_each``; the wedges of P "P_mu" (n_mu_pk, n_k) on
+    the |k| bins and of xi "xi_mu" (n_mu_xi, n_r), their mode-averaged |k| "k_mu" and separation-averaged |r| "r_mu" and
+    counts "n_modes_P_mu", "n_lags_xi_mu" in ``axes``), ``theory``, ``theory_nw`` and
     ``cov_xi_iso`` (with ``power`` / ``power_nw``), the bin ``axes``, ``min_one_plus_delta`` (n,) (the smallest n_X / n_bar
     of the cells of every realisation, n_bar the volume-weighted mean), ``limits`` (``grid_limits``), ``mas``,
     ``interlace``, ``n_mesh``, ``k_nyq`` (pi / H), ``trusted`` (the trusted range of the mesh path: k_max = k_Nyq / 2,
@@ -165,7 +197,7 @@ def field_statistics(
         if log and (n + 1) % 16 == 0:
             log(f"field statistics: {n + 1} realisations, {time.perf_counter() - t0:.0f} s")
     t_meas = time.perf_counter() - t0
-    on_modes = lambda f: grid_power(f, gs.shape, gs.L)  # noqa: E731
+    on_modes = lambda f: grid_power(f, gs.shape, gs.L, los_axis=gs.los_axis if power_mu else None)  # noqa: E731
     out = {}
     for sp in names:
         res = _ensemble(recs[sp], mins[sp], gs, power, power_nw, on_modes, t_meas)
