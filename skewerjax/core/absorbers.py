@@ -7,12 +7,17 @@ not a field: it enters through the scale factor a(s), set by the frame at every 
 The route from the gas to tau is the same for every source of gas (``core.cells.Cells``, from a toy model or from a
 simulation):
 
-    Cells + sampling points --selection--> cells within reach --deposition--> pieces of every dual segment
-          --``absorbers_from_components``--> ``Absorbers`` (one species) --``absorber_pieces``--> ``core.Pieces``
-          --``core.compute_optical_depth``--> tau(v) = sum_p  C f  n_com,p a_p^-2  phi_p(v)  l_p .
+    Cells + straight paths --``core.crossings`` (the cells within reach of the line, the lower envelope)--> cell crossings
+          --``crossing_contributions``--> ``core.tau_engine.LineContributions``
+          --``core.tau_engine``--> tau(v) = sum_p A_p <phi_p>(v)   (the profile averaged over each crossing's line centres)
 
-``cell_pieces`` runs the whole chain for every species of a ``LineBundle``; ``compute_optical_depth(bundle, v, lines,
-cells)`` calls it. ``tau_absorbers`` integrates the absorbers of one species skewer by skewer (bounded memory,
+    Cells + curved paths (or ``deposition="voronoi_segments"``) --selection--> cells within reach of the points
+          --deposition--> pieces of every dual segment --``absorbers_from_components``--> ``Absorbers`` (one species)
+          --``absorber_pieces``--> ``core.Pieces`` --``core.compute_optical_depth``--> tau(v).
+
+``cell_pieces`` runs the whole chain for every species of a ``LineBundle`` (the crossings as ``Pieces`` on straight
+paths); ``compute_optical_depth(bundle, v, lines, cells)`` takes the crossings route on straight paths
+(``cell_contributions``). ``tau_absorbers`` integrates the absorbers of one species skewer by skewer (bounded memory,
 optional sub-pixel points).
 
 Periodicity is not a property of the frame or of the pieces: it is ``compute_optical_depth``'s ``velocity_period``

@@ -6,10 +6,11 @@ The optical depth is a line integral along the path (x comoving, dl_phys = a dx)
 
 evaluated as a sum over **pieces** p, fragments of the path within which the gas properties are constant:
 
-    tau_j(v) = C_j f_j sum_p l_p n_com,p a_p^-2 phi_pj(v),
+    tau_j(v) = sum_p A_p <phi_pj>(v),   A_p = C_j f_j n_com,p int_p a(s)^-2 ds,
 
-with every quantity of a piece, its scale factor a_p included, evaluated at the piece's centroid (the midpoint rule
-on each piece). The factor a_p^-2 converts the comoving density and length to physical ones; the option ``a_eff``
+with <phi_pj> the profile averaged over the line centres the piece spans (``profile_integration="integrated"``, the
+default: ``core.voigt_integral``, ``core.tau_engine``), or taken at its centroid (``"midpoint"``, the midpoint rule on
+each piece). The factor a^-2 converts the comoving density and length to physical ones; the option ``a_eff``
 (``compute_optical_depth``) replaces it by one a_eff^-2 for every piece (a fixed comoving-to-physical conversion,
 e.g. a_eff = 1 / (1 + z) of a snapshot) and touches nothing else: the line centres v_c,p, the widths and the detuning
 keep the a(x) of the frame. Through the line centres the frame still sets the Jacobian of the column into velocity:
@@ -22,10 +23,11 @@ the toy boxes), fake_spectra's Hubble flow (``absorption.cpp`` L237: vel = velfa
 a H(z)), which makes the Jacobian constant. It changes nothing else (the density factor, the peculiar velocity, the
 widths, the lengths, the detuning), and the period of ``velocity_period=True`` and the piece widths of the resolution
 check follow it (``velocity_span``). The gas is a set of Voronoi cells (``core.cells.Cells``, from a toy model or a simulation), constant
-inside every cell, and the pieces are the exact intersections of the path with the cells, cut also at the ends of
-the dual segments of the sampling points (``core.absorbers.cell_pieces``). So the column sum_p n_p l_p is exact; the
-profile has an error O((W_p / b_p)^2), W_p the variation of the line centre across the piece (the Hubble flow only:
-the peculiar velocity is constant in a cell).
+inside every cell, and the pieces are the exact intersections of the path with the cells: the cell crossings of a
+straight path (``core.crossings``), cut also at the ends of the dual segments of the sampling points on curved paths and
+with ``deposition="voronoi_segments"`` (``core.absorbers.cell_pieces``). So the column sum_p n_p l_p is exact; the
+integrated profile is exact for a piece of any length, the midpoint option errs by O((W_p / b_p)^2), W_p the variation
+of the line centre across the piece (the Hubble flow only: the peculiar velocity is constant in a cell).
 
 The line profiles phi_pj come from ``core.line_profiles``. Layers (all pure; the last one only adds eager checks and
 options):
@@ -1107,23 +1109,33 @@ def _engine(contr, vv, n_sk, line_bundle, P, profile, detuning, voigt, wing_tole
     taus, eng = [], []
     for j, c in enumerate(contr):
         if tautail is not None or pixel_average:
-            taus.append(
-                te.per_cell_line_tau(
-                    c,
-                    vv[j],
-                    n_sk,
-                    lam[j],
-                    period=P,
-                    profile=profile,
-                    detuning=detuning,
-                    voigt=voigt,
-                    tautail=tautail,
-                    pixel_average=pixel_average,
-                    dtype=dtype,
-                    devices=devices,
+            t, inf = te.per_cell_line_tau(
+                c,
+                vv[j],
+                n_sk,
+                lam[j],
+                period=P,
+                profile=profile,
+                detuning=detuning,
+                voigt=voigt,
+                tautail=tautail,
+                pixel_average=pixel_average,
+                dtype=dtype,
+                devices=devices,
+                return_info=True,
+            )
+            taus.append(t)
+            lv, le = inf["levels"], inf.get("level_end", np.zeros(0, np.int64))
+            eng.append(
+                dict(
+                    n_cells=int(le.size),
+                    levels={int(lv[L]) if L >= 0 else -1: int(n) for L, n in zip(*np.unique(le, return_counts=True))},
+                    escalated=int(np.sum(le > inf["level_start"])) if le.size else 0,
+                    cores={int(k): int(n) for k, n in zip(*np.unique(inf["core"], return_counts=True))} if le.size else {},
+                    evaluations=int(inf.get("evaluations", 0)),
+                    walk_evaluations=inf.get("walk_evaluations"),
                 )
             )
-            eng.append(None)
         else:
             t, inf = te.windowed_line_tau(
                 c,
@@ -1140,7 +1152,7 @@ def _engine(contr, vv, n_sk, line_bundle, P, profile, detuning, voigt, wing_tole
                 return_info=True,
             )
             taus.append(t)
-            eng.append({k: inf[k] for k in ("levels", "n_full", "D_x", "kinds", "wing_tolerance")})
+            eng.append({k: inf[k] for k in ("levels", "n_full", "D_x", "kinds", "wing_tolerance", "evaluations")})
     return jnp.stack(taus), eng
 
 

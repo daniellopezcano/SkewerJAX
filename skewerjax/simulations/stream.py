@@ -77,10 +77,11 @@ class _Layout:
         d = self.info[fi][GEOMETRY[0]]
         return 0 if d is None else int(d[2][0])
 
-    def read(self, reader, fi: int, name: str, r0: int, r1: int, rows=None):
+    def read(self, reader, fi: int, name: str, r0: int, r1: int, rows=None, stats: dict | None = None):
         """Rows [r0, r1) of a dataset (or the absolute ``rows`` of it): one contiguous read (``np.fromfile``), or an
         indexed gather through a memory map of the block's range when the rows touch few pages; h5py when the dataset
-        is not contiguous."""
+        is not contiguous. ``stats`` (read-only diagnostics): a dict that receives, under ``name``, (pages touched,
+        pages spanned, contiguous, bytes requested) of a read of ``rows``."""
         d = self.info[fi][name]
         if d is None or d[0] is None:
             lo, hi = (r0, r1) if rows is None else (int(rows[0]), int(rows[-1]) + 1)
@@ -90,12 +91,22 @@ class _Layout:
         row_bytes = int(np.prod(shape[1:], dtype=np.int64)) * dt.itemsize
         if rows is None:
             n = r1 - r0
+            if stats is not None:
+                stats[name] = (-(-n * row_bytes // PAGE), -(-n * row_bytes // PAGE), True, n * row_bytes)
             x = np.fromfile(self.files[fi], dtype=dt, count=n * (row_bytes // dt.itemsize), offset=off + r0 * row_bytes)
             return x.reshape((n,) + tuple(shape[1:]))
         lo, hi = int(rows[0]), int(rows[-1]) + 1
         pages = np.unique((rows - lo) * row_bytes // PAGE)
         span_pages = (hi - lo) * row_bytes // PAGE + 1
-        if pages.size > GATHER_FRACTION * span_pages:  # most pages: one contiguous read of the span
+        contiguous = pages.size > GATHER_FRACTION * span_pages
+        if stats is not None:
+            stats[name] = (
+                int(pages.size),
+                int(span_pages),
+                bool(contiguous),
+                (hi - lo) * row_bytes if contiguous else int(pages.size) * PAGE,
+            )
+        if contiguous:  # most pages: one contiguous read of the span
             x = np.fromfile(self.files[fi], dtype=dt, count=(hi - lo) * (row_bytes // dt.itemsize), offset=off + lo * row_bytes)
             return x.reshape((hi - lo,) + tuple(shape[1:]))[rows - lo]
         mm = np.memmap(self.files[fi], dtype=dt, mode="r", offset=off + lo * row_bytes, shape=(hi - lo,) + tuple(shape[1:]))
@@ -142,6 +153,20 @@ class StreamStore:
     def nbytes(self) -> int:
         n = self.pos.nbytes + self.size.nbytes + self.vel.nbytes + self.ids.nbytes + self.tile_cells.nbytes
         return int(n + sum(a.nbytes + b.nbytes for f in self.fields.values() for a, b in f.values()))
+
+    def nbytes_components(self) -> dict:
+        """The bytes of every part of the store (read-only diagnostics): positions (float64), sizes, velocities
+        (float32), ids, the (cell, tile) pairs (``tile_cells``, int64) and per physics configuration its n and T."""
+        out = dict(
+            positions=self.pos.nbytes,
+            sizes=self.size.nbytes,
+            velocities=self.vel.nbytes,
+            ids=self.ids.nbytes,
+            tile_pairs=self.tile_cells.nbytes + self.tile_start.nbytes,
+        )
+        for name, f in self.fields.items():
+            out[f"fields:{name}"] = int(sum(a.nbytes + b.nbytes for a, b in f.values()))
+        return {k: int(v) for k, v in out.items()}
 
     def cells(self, idx, config: str) -> Cells:
         """The cells ``idx`` as ``core.Cells`` with the species of one physics configuration."""
@@ -214,8 +239,9 @@ def _block(reader, layout, fi, r0, r1, paths, buckets, tile_of, species, physics
 
     H = reader.header
     tm = {}
+    rd = {}  # what is read (``_Layout.read``'s stats)
     t0 = time.perf_counter()
-    geo = {k: layout.read(reader, fi, k, r0, r1) for k in GEOMETRY}
+    geo = {k: layout.read(reader, fi, k, r0, r1, stats=rd) for k in GEOMETRY}
     t1 = time.perf_counter()
     pos = reader.positions_cMpc(geo["Coordinates"])
     size = np.cbrt(reader.volumes_cMpc3(geo["Masses"], geo["Density"]))
@@ -224,10 +250,19 @@ def _block(reader, layout, fi, r0, r1, paths, buckets, tile_of, species, physics
     need = np.flatnonzero(counts > 0)
     t2 = time.perf_counter()
     tm.update(read=t1 - t0, reach=t2 - t1)
+    stats = dict(
+        file=fi,
+        rows=r1 - r0,
+        needed=int(need.size),
+        pairs=int(counts.sum()),
+        tests=buckets.tests(pos, reach),
+        tests_h=buckets.tests(pos, size),
+        read=rd,
+    )
     if not need.size:
         tm["read_rest"] = 0.0
         tm.update({f"physics:{name}": 0.0 for name in physics})
-        return None, tm, 0
+        return None, tm, 0, stats
     # the tiles of every needed cell
     pc, ps = buckets.pairs(pos[need], reach[need])
     key = np.unique(pc.astype(np.int64) * (int(tile_of.max()) + 1) + tile_of[ps])
@@ -237,7 +272,7 @@ def _block(reader, layout, fi, r0, r1, paths, buckets, tile_of, species, physics
     rows = r0 + need
     raw = {k: geo[k][need] for k in GEOMETRY}
     for k in REST:
-        raw[k] = layout.read(reader, fi, k, r0, r1, rows=rows)
+        raw[k] = layout.read(reader, fi, k, r0, r1, rows=rows, stats=rd)
     t4 = time.perf_counter()
     fields = {}
     fast = all(host_physics.supported(species, **opts) for opts in physics.values())
@@ -267,7 +302,34 @@ def _block(reader, layout, fi, r0, r1, paths, buckets, tile_of, species, physics
                     vel = c.species[species[0]]["velocity"].astype(np.float32)
     tm.update(tiles=t3 - t2, read_rest=t4 - t3)
     ch = _Chunk(pos[need], size[need].astype(np.float32), vel, fields, pair_cell, pair_tile, ids, timings=tm)
-    return ch, tm, int(need.size)
+    return ch, tm, int(need.size), stats
+
+
+_TESTS = {}
+
+
+def _bucket_tests():
+    """numba: the number of buckets the reach of every cell overlaps, summed (``_Buckets.tests``)."""
+    if _TESTS:
+        return _TESTS["f"]
+    import numba
+
+    @numba.njit(nogil=True)
+    def f(x, z, r, g0, g1, nb0, nb1, box):
+        tot = 0.0
+        for i in range(x.shape[0]):
+            a0, b0 = np.floor((x[i] - r[i]) / g0), np.floor((x[i] + r[i]) / g0)
+            a1, b1 = np.floor((z[i] - r[i]) / g1), np.floor((z[i] + r[i]) / g1)
+            if box:
+                n0, n1 = min(b0 - a0 + 1.0, nb0), min(b1 - a1 + 1.0, nb1)
+            else:
+                n0 = max(min(b0, nb0 - 1.0) - max(a0, 0.0) + 1.0, 0.0)
+                n1 = max(min(b1, nb1 - 1.0) - max(a1, 0.0) + 1.0, 0.0)
+            tot += n0 * n1
+        return tot
+
+    _TESTS["f"] = f
+    return f
 
 
 class _Buckets:
@@ -320,6 +382,16 @@ class _Buckets:
         p[:, self.ax1] -= self.lo1
         return p
 
+    def tests(self, pos, reach) -> float:
+        """The distance tests of the reach test of the cells ``pos`` with reach ``reach`` (read-only diagnostics): the
+        buckets each cell looks at times the mean number of skewers per bucket (exact for a lattice of n^2 skewers, one
+        per bucket). A numba loop without temporaries: it costs the pass nothing measurable."""
+        p = self._shift(pos)
+        n = _bucket_tests()(
+            p[:, self.ax0], p[:, self.ax1], np.asarray(reach, np.float64), self.g0, self.g1, self.nb0, self.nb1, bool(self.box)
+        )
+        return float(n) * len(self.paths) / (self.nb0 * self.nb1)
+
     def count(self, pos, reach):
         counts = np.zeros(pos.shape[0], np.int64)
         di, df = np.zeros(1, np.int64), np.zeros(1)
@@ -341,10 +413,24 @@ class _Buckets:
 
 
 def stream_cells(
-    reader, paths: cx.StraightPaths, tile_of, species, physics: dict, *, max_rows: int = 2_000_000, threads: int | None = None
+    reader,
+    paths: cx.StraightPaths,
+    tile_of,
+    species,
+    physics: dict,
+    *,
+    max_rows: int = 2_000_000,
+    threads: int | None = None,
+    marker=None,
 ):
     """The pass over the snapshot (module docstring): (``StreamStore``, info). ``physics``: {name: ``gas_to_cells``
-    options}; ``species`` the species keys of the lines."""
+    options}; ``species`` the species keys of the lines; ``marker``: optional callable(name) called when the blocks
+    start ("pass") and when the store is assembled ("assemble") (a memory or CPU sampler's stage markers).
+
+    info: n_blocks, n_cells, n_needed, fraction, threads, thread_seconds and timings (per stage), setup_s, pass_s,
+    assemble_s, store_GB, store_bytes (``StreamStore.nbytes_components``), and blocks (read-only diagnostics, one list
+    entry per block): rows, needed, pairs (cell, skewer) within reach, tests (the distance tests of the reach test;
+    tests_h: with reach h = V^(1/3) instead), and per dataset read (pages touched, pages spanned, contiguous, bytes)."""
     if paths.axis is None:
         raise NotImplementedError("the streaming route takes axis-aligned skewers (any other straight paths: strategy='gather').")
     t0 = time.perf_counter()
@@ -364,9 +450,14 @@ def stream_cells(
         return _block(reader, layout, *task, paths, buckets, tile_of, species, physics, True)
 
     t1 = time.perf_counter()
+    if marker is not None:
+        marker("pass")
     with ThreadPoolExecutor(max_workers=n_thr) as pool:
         results = list(pool.map(job, tasks))
     t2 = time.perf_counter()
+    if marker is not None:
+        marker("assemble")
+    blocks = [r[3] for r in results]
     chunks = [r[0] for r in results if r[0] is not None]
     tm = {}
     for r in results:
@@ -424,6 +515,8 @@ def stream_cells(
         pass_s=wall,
         assemble_s=t3 - t2,
         store_GB=store.nbytes / 1e9,
+        store_bytes=store.nbytes_components(),
+        blocks=blocks,
     )
     return store, info
 
@@ -542,7 +635,11 @@ def tiles_optical_depth(
     tiles while the devices compute (``pipeline``).
 
     Returns ({name: tau (N_lines, N_sk, N_v) host array of the working dtype (``dtype``, or the package's precision:
-    float32 by default)}, info with the per-tile stage times)."""
+    float32 by default)}, info with the per-tile stage times): n_tiles, t0 (the perf_counter origin) and rows, one per
+    tile: n_skewers, n_cells, n_pieces, n_contributions, contributions_bytes (the host arrays of the tile's
+    contributions), geometry_s, contributions_s, wait_s, tau_s {engine: s}, engine {engine: per-line info of
+    ``core.optical_depth._engine``}, and the timeline (read-only diagnostics, seconds from t0): prep_start, prep_end,
+    prep_thread (the host thread that prepared the tile), tau_start, tau_end {engine: s})."""
     from skewerjax.config import real_dtype
     from skewerjax.core.absorbers import chord_contributions, crossing_contributions
     from skewerjax.core.optical_depth import _engine
@@ -560,6 +657,8 @@ def tiles_optical_depth(
     if velocity_period is True:
         raise ValueError("velocity_period=True: give the period [km/s] (the skewers' span) to the streaming route.")
     P = None if velocity_period in (None, False) else float(velocity_period)
+
+    t_origin = time.perf_counter()
 
     def prepare(k):
         t = time.perf_counter()
@@ -582,6 +681,7 @@ def tiles_optical_depth(
         else:
             contr = crossing_contributions(geo, cells, line_bundle, fr, sub.direction, **kw)
         t2 = time.perf_counter()
+        nbytes = sum(int(x.nbytes) for c in contr for x in vars(c).values() if isinstance(x, np.ndarray))
         return dict(
             k=k,
             sk=sk,
@@ -590,6 +690,11 @@ def tiles_optical_depth(
             n_cells=int(idx.size),
             geometry_s=t1 - t,
             contributions_s=t2 - t1,
+            prep_start=t - t_origin,
+            prep_end=t2 - t_origin,
+            prep_thread=threading.get_ident(),
+            n_contributions=[len(c) for c in contr],
+            contributions_bytes=nbytes,
         )
 
     rows = []
@@ -612,6 +717,13 @@ def tiles_optical_depth(
             contributions_s=prep["contributions_s"],
             wait_s=t_wait,
             tau_s={},
+            n_contributions=prep["n_contributions"],
+            contributions_bytes=prep["contributions_bytes"],
+            prep_start=prep["prep_start"],
+            prep_end=prep["prep_end"],
+            prep_thread=prep["prep_thread"],
+            tau_start={},
+            tau_end={},
         )
         for name, devs in engines.items():
             t = time.perf_counter()
@@ -632,11 +744,12 @@ def tiles_optical_depth(
             )
             taus[name][:, sk] = np.asarray(tau, dtype=dt)
             row["tau_s"][name] = time.perf_counter() - t
+            row["tau_start"][name], row["tau_end"][name] = t - t_origin, time.perf_counter() - t_origin
             row.setdefault("engine", {})[name] = eng
         rows.append(row)
     if pool is not None:
         pool.shutdown()
-    return taus, dict(n_tiles=n_tiles, rows=rows)
+    return taus, dict(n_tiles=n_tiles, rows=rows, t0=t_origin)
 
 
 def sub_frame(frame, sk):

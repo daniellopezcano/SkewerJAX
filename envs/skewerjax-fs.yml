@@ -30,5 +30,6 @@ dependencies:
       - exojax==2.2.2
       - numba==0.68.1
       - psutil==7.2.1
+      - nvidia-ml-py==13.615.71  # NVML: the GPU memory of a process (the memory benchmark, notebook 16)
       - setuptools>=68
       - wheel

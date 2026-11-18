@@ -558,7 +558,7 @@ def chunk_size(width: int) -> int:
     return max(_pow2(max(EVALUATIONS_PER_CALL // max(int(width), 1), 1)), 16)
 
 
-def windowed_line_tau(
+def window_plan(
     c: LineContributions,
     v,
     n_sk: int,
@@ -566,37 +566,30 @@ def windowed_line_tau(
     *,
     period=None,
     profile: str = "integrated",
-    detuning: str = "exact",
     voigt: str = "harris",
     wing_tolerance: float = WING_TOLERANCE,
-    dtype=None,
-    device=None,
-    devices=None,
-    return_info: bool = False,
-):
-    """tau (n_sk, N_v) of one line from its contributions (module docstring) on the uniform grid ``v`` (N_v,) [km/s].
+    small_problem: float | None = None,
+) -> dict:
+    """The host-side plan of ``windowed_line_tau`` (what it evaluates where; read-only, NumPy float64), so that the
+    engine's parts can be shown and checked (notebooks 07, 15).
 
-    period : None (no wrap) or (n_sk,) periods [km/s] (``velocity_period``).
-    profile : "integrated" (default: the mean of the profile over each piece's line centres) or "midpoint" (at v_c).
-    voigt : "harris" (default: first order for a <= 1e-3, fourth to 0.05, the exact function beyond) or "ExoJAX" (the
-        exact function everywhere; integrated pieces through Gauss-Legendre sub-pieces).
-    wing_tolerance : epsilon of the window bound (module docstring).
-    device : the device of the kernels (None: JAX's default); devices : a list of devices instead, over which the
-        chunks of contributions are dealt (e.g. several CPU devices, ``skewerjax.config.configure_devices``).
-    Returns the (n_sk, N_v) device array, and with ``return_info`` a dict (levels {D: count}, n_full, D_x, kinds, calls,
-    time_s)."""
-    t0 = time.perf_counter()
+    Returns dict(c: the contributions evaluated (those with a > 0.05, or every integrated one with ``voigt="ExoJAX"``,
+    replaced by their Gauss-Legendre sub-pieces), v0, dv, n_v, kappa [GHz per km/s], P_sk (n_sk,) periods or None,
+    circular (a period equal to the grid's span), cpix (n,) the centre pixel of every contribution (wrapped when
+    circular), delta (n,) v_c minus that pixel's velocity [km/s], half0 (n,) half extent in u, kind (n,) 0 point /
+    1 narrow / 2 wide, order (n,) the Voigt order (1, 4: Harris; 0: exact), level (n,) the index in ``LEVELS`` from
+    ``wing_levels`` (len(LEVELS): none suffices), D (n,) the window half width [pixels] (n_v for the full grid),
+    full (n,) bool: every pixel of the grid with the exact profile and no far term, win (indices of the windowed ones),
+    D_x the smallest window of the line (the far kernels are zero within it; None without windows), m (4, n) the far
+    moments about the centre pixel (w, w delta, w (delta^2 + W^2 / 12), 1.5 w b^2), small (the small-problem rule
+    applied: every contribution on the whole grid)).
+
+    small_problem : contributions x pixels at or below which every contribution takes the whole grid (default
+        ``SMALL_PROBLEM``; 0 shows the windows of a small problem, the same result to the window bound)."""
     if profile not in PROFILE_INTEGRATIONS:
         raise ValueError(f"profile must be one of {PROFILE_INTEGRATIONS}, got {profile!r}.")
     v0, dv, n_v = _grid(v)
     kappa = 1e4 / float(lambda0_A)  # GHz per km/s
-    dt = _dtype(dtype)
-    devs = list(devices) if devices else [device]
-    put = (lambda x: jnp.asarray(x)) if devs[0] is None else (lambda x: jax.device_put(x, devs[0]))
-    info = dict(n=len(c), levels={}, n_full=0, D_x=None, kinds={}, calls={}, wing_tolerance=wing_tolerance, time_s=0.0)
-    if len(c) == 0:
-        z = put(np.zeros((n_sk, n_v), dt))
-        return (z, info) if return_info else z
     exact_all = str(voigt).lower() == "exojax"
     width = np.asarray(c.width, dtype=np.float64) if profile == "integrated" else np.zeros(len(c))
     tilt = np.zeros(len(c)) if c.tilt is None else np.asarray(c.tilt, dtype=np.float64)
@@ -629,13 +622,118 @@ def windowed_line_tau(
     margin = far_margin(n_v)
     off_grid = (not circular) & ((cpix < -margin) | (cpix > n_v - 1 + margin))  # beyond the far term's domain
     full = (lev >= len(LEVELS)) | (D_of > max_D) | general | off_grid
-    if len(c) * n_v <= SMALL_PROBLEM:  # a small problem: every contribution on the whole grid (exact; few kernels to compile)
+    small = len(c) * n_v <= (SMALL_PROBLEM if small_problem is None else small_problem)
+    if small:  # a small problem: every contribution on the whole grid (exact; few kernels to compile)
         full[:] = True
     win = np.flatnonzero(~full)
     D_x = int(D_of[win].min()) if win.size else None
     b = np.sqrt(2.0) * c.sigma / kappa
     w = c.amp * c.gamma / (np.pi * kappa * kappa)
     m = np.stack([w, w * delta, w * (delta**2 + c.width**2 / 12.0), 1.5 * w * b * b])  # (4, n), about the centre pixel
+    return dict(
+        c=c,
+        a=a,
+        v0=v0,
+        dv=dv,
+        n_v=n_v,
+        kappa=kappa,
+        P_sk=P_sk,
+        circular=circular,
+        cpix=cpix,
+        delta=delta,
+        half0=half0,
+        kind=kind,
+        order=order,
+        level=lev,
+        D=np.where(full, n_v, D_of),
+        full=full,
+        win=win,
+        D_x=D_x,
+        m=m,
+        small=bool(small),
+    )
+
+
+def far_wing_term(plan: dict, n_sk: int, *, detuning: str = "exact", dtype=None) -> np.ndarray:
+    """(n_sk, N_v) the far-wing term of a ``window_plan`` alone (read-only diagnostic): the moments of the windowed
+    contributions deposited at their centre pixels and convolved with the far kernels, zero within D_x pixels
+    (``_far_term``, the same call as ``windowed_line_tau``; zeros without windows). Inside each window the engine
+    subtracts the part of it on the ring D_x < |k - c| <= D (``_window_body``)."""
+    win = plan["win"]
+    dt = _dtype(dtype)
+    if not win.size:
+        return np.zeros((n_sk, plan["n_v"]))
+    c = plan["c"]
+    far = _far_term(
+        c.row[win],
+        plan["cpix"][win],
+        plan["m"][:, win],
+        _pow2(n_sk),
+        plan["n_v"],
+        plan["dv"],
+        plan["D_x"],
+        detuning,
+        plan["circular"],
+        dt,
+        lambda x: jnp.asarray(x),
+    )
+    return np.asarray(far, dtype=np.float64)[:n_sk]
+
+
+def windowed_line_tau(
+    c: LineContributions,
+    v,
+    n_sk: int,
+    lambda0_A: float,
+    *,
+    period=None,
+    profile: str = "integrated",
+    detuning: str = "exact",
+    voigt: str = "harris",
+    wing_tolerance: float = WING_TOLERANCE,
+    dtype=None,
+    device=None,
+    devices=None,
+    small_problem: float | None = None,
+    return_info: bool = False,
+):
+    """tau (n_sk, N_v) of one line from its contributions (module docstring) on the uniform grid ``v`` (N_v,) [km/s].
+
+    period : None (no wrap) or (n_sk,) periods [km/s] (``velocity_period``).
+    profile : "integrated" (default: the mean of the profile over each piece's line centres) or "midpoint" (at v_c).
+    voigt : "harris" (default: first order for a <= 1e-3, fourth to 0.05, the exact function beyond) or "ExoJAX" (the
+        exact function everywhere; integrated pieces through Gauss-Legendre sub-pieces).
+    wing_tolerance : epsilon of the window bound (module docstring).
+    device : the device of the kernels (None: JAX's default); devices : a list of devices instead, over which the
+        chunks of contributions are dealt (e.g. several CPU devices, ``skewerjax.config.configure_devices``).
+    small_problem : see ``window_plan`` (default ``SMALL_PROBLEM``).
+    Returns the (n_sk, N_v) device array, and with ``return_info`` a dict (levels {D: count}, n_full, D_x, kinds, calls,
+    time_s, evaluations: the profile evaluations, sum of 2 D + 1 over the windows and N_v per full-grid contribution)."""
+    t0 = time.perf_counter()
+    if profile not in PROFILE_INTEGRATIONS:
+        raise ValueError(f"profile must be one of {PROFILE_INTEGRATIONS}, got {profile!r}.")
+    v0, dv, n_v = _grid(v)
+    kappa = 1e4 / float(lambda0_A)  # GHz per km/s
+    dt = _dtype(dtype)
+    devs = list(devices) if devices else [device]
+    put = (lambda x: jnp.asarray(x)) if devs[0] is None else (lambda x: jax.device_put(x, devs[0]))
+    info = dict(n=len(c), levels={}, n_full=0, D_x=None, kinds={}, calls={}, wing_tolerance=wing_tolerance, time_s=0.0)
+    if len(c) == 0:
+        z = put(np.zeros((n_sk, n_v), dt))
+        return (z, info) if return_info else z
+    pl = window_plan(
+        c,
+        v,
+        n_sk,
+        lambda0_A,
+        period=period,
+        profile=profile,
+        voigt=voigt,
+        wing_tolerance=wing_tolerance,
+        small_problem=small_problem,
+    )
+    c, a, P_sk, circular, cpix, delta = pl["c"], pl["a"], pl["P_sk"], pl["circular"], pl["cpix"], pl["delta"]
+    half0, kind, order, lev, full, win, D_x, m = (pl[k] for k in ("half0", "kind", "order", "level", "full", "win", "D_x", "m"))
     n_rows = _pow2(n_sk)  # the output is padded to a power of two of skewers: the same shapes for every tile
     host = all((d.platform == "cpu") if d is not None else jax.default_backend() == "cpu" for d in devs)
     disp = _Dispatcher(n_rows, n_v, dt, devs, host)
@@ -692,6 +790,7 @@ def windowed_line_tau(
     else:
         tau = (tau if far is None else tau + far)[:n_sk]
     info.update(n_full=int(full.sum()), D_x=D_x, calls=disp.calls, time_s=time.perf_counter() - t0)
+    info["evaluations"] = int(np.sum(2 * np.asarray(pl["D"])[win] + 1) + int(full.sum()) * n_v)  # profile evaluations
     info["kinds"] = {KINDS[k]: int((kind == k).sum()) for k in range(3)}
     return (tau, info) if return_info else tau
 
@@ -894,12 +993,22 @@ def per_cell_line_tau(
     dtype=None,
     devices=None,
     levels=None,
+    return_info: bool = False,
 ):
     """tau (n_sk, N_v) of one line with fake_spectra's per-cell schemes (module docstring): the pieces of one cell
     (``c.group``, per skewer) form one absorber, centred on the pixel of its column-weighted line centre; ``tautail``:
     its early stop (``absorption.cpp`` L253-L281) on windows escalated until the walk stops inside (the full-grid
     result); ``pixel_average``: the trapezoid over each pixel for cells of Doppler width b < 2 dv (``singleabs.h``
-    L133-L155). Uniform grid; ``period`` (n_sk,) must be the grid's span with ``tautail``."""
+    L133-L155). Uniform grid; ``period`` (n_sk,) must be the grid's span with ``tautail``. ``levels``: the window half
+    widths [pixels] (default ``WINDOW_LEVELS``; one level of N_v or more: the full-grid walk).
+
+    With ``return_info`` (read-only diagnostics, notebook 15) also a dict of per-cell arrays (N_cells,), in the engine's
+    order of the cells: row (skewer), centre (pixel), n_pieces, points (sub-pixel points of ``pixel_average``),
+    level_start and level_end (indices into ``levels``: the first window and the one the walk stopped inside; -1:
+    every pixel, no walk), half_width (the final window's half width [pixels]), core (the core half width [pixels]
+    evaluated piece by piece, the wings from the cell's moments; 0: every pixel piece by piece), levels, evaluations
+    (the profile evaluations of the kernels, every window tried) and walk_evaluations (``tautail``: those of
+    fake_spectra's walk, estimated as 2 x each cell's window estimate x its points x its pieces)."""
     v0, dv, n_v = _grid(v)
     levels = np.asarray(WINDOW_LEVELS if levels is None else levels)
     kappa = 1e4 / float(lambda0_A)
@@ -918,7 +1027,8 @@ def per_cell_line_tau(
     half = n_v // 2 if periodic else n_v
     live = np.flatnonzero(c.amp != 0)
     if not live.size:
-        return puts[0](np.zeros((n_sk, n_v), dt))
+        z = puts[0](np.zeros((n_sk, n_v), dt))
+        return (z, dict(levels=levels)) if return_info else z
     c = c.take(live)
     chord = c.spacing is not None
     integrate = profile == "integrated" and bool(np.any(c.width > 0)) and not chord
@@ -1011,6 +1121,9 @@ def per_cell_line_tau(
     else:
         vorder = np.where(a_f <= HARRIS_A_MAX, 1, np.where(a_f <= HARRIS4_A_MAX, 4, 0))
     state = dict(next=0)
+    level_end = np.full(first.size, -1, np.int64)
+    core_used = np.zeros(first.size, np.int64)
+    evals = [0]  # the profile evaluations of the kernels (every window tried, every point)
     for n_points in np.unique(pts):
         off, wts = pixel_rule(int(n_points), dv)
         for K in np.unique(K_of):
@@ -1030,6 +1143,11 @@ def per_cell_line_tau(
                         for J in np.unique(jl):
                             jc = 0 if J >= len(CORE_LEVELS) or CORE_LEVELS[J] >= wb else int(CORE_LEVELS[J])
                             sub = jl == J
+                            core_used[cells_L[sub]] = jc
+                            Kw = 7 if chord else int(K)
+                            evals[0] += int(sub.sum()) * (
+                                (2 * jc * int(off.size) * Kw + wb + wf) if jc else (wb + wf) * int(off.size) * Kw
+                            )
                             flags[sub] = _run_cells(
                                 cells_L[sub],
                                 first,
@@ -1064,14 +1182,36 @@ def per_cell_line_tau(
                             )
                         nxt_lev[np.flatnonzero(sel)[flags]] = L + 1
                         nxt_lev[np.flatnonzero(sel)[~flags]] = -2
+                        level_end[cells_L[~flags]] = L
                     keep = nxt_lev != -2
                     todo, lev = todo[keep], nxt_lev[keep]
     if host:
-        return puts[0](outs[0][:n_sk].astype(dt))
-    total = outs[0]
-    for o in outs[1:]:
-        total = total + (o if devs[0] is None else jax.device_put(o, devs[0]))
-    return total.reshape(n_rows, n_v)[:n_sk]
+        tau = puts[0](outs[0][:n_sk].astype(dt))
+    else:
+        total = outs[0]
+        for o in outs[1:]:
+            total = total + (o if devs[0] is None else jax.device_put(o, devs[0]))
+        tau = total.reshape(n_rows, n_v)[:n_sk]
+    if not return_info:
+        return tau
+    wl = np.where(level_end >= 0, np.minimum(levels[np.maximum(level_end, 0)], half), n_v)
+    walk = None
+    if tautail is not None:  # fake_spectra's walk, estimated from each cell's profile: 2 x the window estimate, every point
+        walk = int(np.sum(np.minimum(2 * est, n_v) * pts * np.where(chord, 7, sizes)))
+    info = dict(
+        row=row,
+        centre=centre,
+        n_pieces=sizes,
+        points=pts,
+        level_start=level,
+        level_end=level_end,
+        half_width=np.where(level_end >= levels.size - 1, half, wl),
+        core=core_used,
+        levels=levels,
+        evaluations=evals[0],
+        walk_evaluations=walk,
+    )
+    return tau, info
 
 
 def _run_cells(

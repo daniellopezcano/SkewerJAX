@@ -91,3 +91,29 @@ def test_store_layout_and_memory():
     n, pairs = store.n_cells, store.tile_cells.size
     assert store.nbytes == n * (24 + 4 + 12 + 8) + 2 * n * 16 + 8 * pairs
     assert S.rss_anon_GB() - before < store.nbytes / 1e9 + 1.5
+
+
+@pytest.mark.tng
+def test_pass_statistics_and_tile_timeline():
+    """The diagnostics of the pass and the tiles (read-only): the blocks' rows add up to the snapshot, the needed rows to
+    the store, every needed cell has a pair; the tiles' timeline is ordered and the store's components add up."""
+    reader, H, cofm = _setup(n=8)
+    paths, frame = stream.box_skewers(cofm, S.AXIS, H.box_cMpc, H.cosmology(), H.a)
+    tile_of = stream.tile_skewers(paths, 16)
+    marks = []
+    store, info = stream.stream_cells(
+        reader, paths, tile_of, list(LINES.species_keys), {"default": S.DEFAULT_CELLS}, marker=marks.append
+    )
+    assert marks == ["pass", "assemble"]
+    B = info["blocks"]
+    assert sum(b["rows"] for b in B) == H.n_gas and sum(b["needed"] for b in B) == store.n_cells
+    assert sum(b["pairs"] for b in B) >= store.n_cells and all(b["tests"] >= b["pairs"] - 1e-9 for b in B)
+    assert all(set(b["read"]) >= set(stream.GEOMETRY) for b in B)
+    assert sum(info["store_bytes"].values()) == store.nbytes + store.tile_start.nbytes  # the components also count the CSR offsets
+    nb, dv = H.pixel_grid(4.0)
+    v = (np.arange(nb) + 0.5) * dv
+    _, ti = stream.tiles_optical_depth(store, "default", paths, tile_of, frame, v, LINES)
+    for r in ti["rows"]:
+        assert r["prep_start"] <= r["prep_end"] <= r["tau_start"]["tau"] <= r["tau_end"]["tau"]
+        assert r["contributions_bytes"] > 0 and len(r["n_contributions"]) == 2
+        assert all("evaluations" in e for e in r["engine"]["tau"])

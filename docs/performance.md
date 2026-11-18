@@ -4,7 +4,13 @@ This document explains the design that makes SkewerJAX faster than fake_spectra 
 TNG50-2 (snapshot 25, 1 km/s pixels, Lyα and Si III 1206, 32 CPU threads, float32): what each part of the code does,
 why it is fast, what it costs in accuracy, and which options keep the alternatives. It is written for a physicist who
 wants to know what happens to the gas between the snapshot and τ, not for a software engineer. The measurements are
-those of notebook 14 (`benchmarks/results/scaling/`) and of the development runs listed in each section.
+those of notebook 14 (`benchmarks/results/scaling/`), of notebook 16 (`benchmarks/results/memory/`: memory, CPU
+utilisation and bytes read) and of the development runs listed in each section.
+
+**The notebooks.** Notebook 07 shows *what* is computed, step by step on one TNG50-4 skewer (the crossings, the integrated
+profile, the windowed engine against the dense sum); notebook 15 is the visual companion of this document, section by
+section (*why* it is cheap, each design element against its naive alternative, live on TNG50-4); notebook 16 measures
+the memory (§4); §8 compares the work of the matched mode and of fake_spectra stage by stage.
 
 **In short** (TNG50-2, cold page cache, 1 km/s pixels, Lyα + Si III, float32, 32 threads; §6 has every entry):
 
@@ -318,28 +324,67 @@ N_pieces × N_v (§D3).
 
 ## 4. Memory
 
-The memory of a run is the compact store of the cells within reach, the blocks being read, and the spectra.
+Notebook 16 measures it (`scripts/benchmarks/benchmark_memory.py`, `benchmarks/results/memory/`): one fresh process per
+(point, entry), cold, `/proc/<pid>/status` sampled at 20 Hz with stage markers (`RssAnon`: what the code allocates;
+`RssFile`: the file pages mapped, reclaimable), the GPU's memory from NVML (CUDA context included); each SkewerJAX entry
+runs its own physics configuration. Peak anonymous / file-backed host memory, and the GPU's (TNG50-2, 1 km/s):
 
-| TNG50-2, both physics configurations | 128² skewers | 256² skewers |
-|---|---|---|
-| cells within reach | 23% (2.7e8) | 58% (6.9e8) |
-| compact store | 24 GB | 61 GB |
-| peak during the pass | 28 GB | 74 GB |
-| peak of the run (all three entries, benchmark process) | 45 GB | 83 GB |
+| skewers | fake_spectra | default, CPU | default, GPU | matched, CPU |
+|---:|---|---|---|---|
+| 16 | 1.6 / 0.3 GB | 5.4 / 0.5 GB | 5.3 / 0.7 GB, GPU 0.3 GB | 5.4 / 0.5 GB |
+| 1,024 | 1.7 / 0.3 GB | 7.1 / 1.9 GB | 7.1 / 1.9 GB, GPU 1.6 GB | 7.1 / 1.8 GB |
+| 16,384 | 2.8 / 0.3 GB | 29.8 / 1.2 GB | 29.8 / 1.3 GB, GPU 1.6 GB | 30.9 / 1.2 GB |
+| 65,536 | 7.5 / 0.3 GB | 65.7 / 0.4 GB | 65.7 / 0.5 GB, GPU 3.7 GB | 65.7 / 0.4 GB |
 
-- **The store** holds, per needed cell, its position (float64), size, velocity and id (48 bytes), and for each physics
-  configuration n and T of each species (16 bytes for two species), plus 8 bytes per (cell, tile) pair (12 while the store is built). A run with one
-  configuration needs 16 bytes per cell less.
+**Where the peak is.**
+
+- **Below ~4,096 skewers: the pass's blocks.** 32 threads each hold a block of 2 million rows (the geometry of every row,
+  its float64 conversion, the other datasets of the needed rows): ~5 GB whatever N.
+- **At 128²: the tiles.** The store holds 72 bytes per cell within reach with one physics configuration (19.8 GB for
+  2.7e8 cells), and three tiles in preparation add ~8.7 GB: each keeps its candidate pairs (17,000 per skewer, 64 bytes
+  each with the sorted copy) and a float64 copy of its cells.
+- **At 256²: the store's assembly.** 50 GB of store, plus the blocks' chunks not yet freed.
+- **The GPU** holds the CUDA context (0.1 GB) and the pool XLA grows for one tile's buffers; it follows the tile size,
+  not N.
+- **fake_spectra** holds one file at a time (~0.9 GB of arrays) and its float64 spectra, so it grows with N only through
+  them.
+
+**Models** (block B, least squares on the relative residuals):
+
+- SkewerJAX: anonymous peak ≈ 5.7 GB + 92 bytes × cells within reach (the store's 72 and the tiles in preparation). The
+  cells within reach follow a coverage law, N_cells [1 − exp(−kN)] with k = 1.42e-5: 98% of TNG50-2's cells at 512²
+  skewers, an extrapolated peak of 113–116 GB, just below this machine's 125 GB.
+- fake_spectra: ≈ 1.6 GB + 85 kB per skewer.
+
+**The knobs** (128², against 29.8 GB and 152 s):
+
+| knob | memory | time |
+|---|---:|---:|
+| tiles of 256 skewers | −3.1 GB | +6.6 s |
+| tiles of 4,096 skewers | +27 GB | +19 s |
+| two physics configurations in one pass | +4.3 GB | 0 s |
+| 8 or 16 pass threads | −0.3 to −0.6 GB | none |
+
+On the GPU the device peak follows the tile: 1.2, 1.6 and 5.8 GB.
+
+**Ranked ways to lower it** (estimated at 128² / 256²):
+
+1. **The tiles in preparation** (~8.7 GB at 128²): float32 views of the store, pairs sorted in place, or one tile
+   prepared ahead instead of three.
+2. **One physics configuration per pass** (16 B per cell: 4.4 / 11 GB; notebook 14's shared pass holds two).
+3. **Float32 positions relative to the tile** (12 B per cell: 3.3 / 8.3 GB).
+4. **No ids, and int32 (cell, tile) pairs** (12 B per cell: 3.3 / 8.3 GB).
+5. **Fewer rows per block** at small N.
+
+Items 3 and 4 bring the store from 72 to 48 bytes per cell (~57 GB at 512²). With item 1 as well, the peak at 512²
+would be ~75 GB.
+
 - **The allocator.** The pass allocates and frees many arrays of a few MB on 32 threads. glibc's default raises its mmap
   threshold to the largest freed block, after which such arrays come from per-thread heaps that keep their pages. At
   128² that kept 19 GB beyond the store (peak 48 GB). The pass fixes the threshold at 1 MB
-  (`simulations.stream.release_memory`) and trims the heaps after assembling the store: peak 28 GB, the pass no slower.
-  The tiles then allocate many short-lived arrays of 1–30 MB per chunk of contributions, where a fresh mapping for each
-  costs page faults (the matched engine ran 1.9× slower at 1 MB): when the pass ends the threshold goes to 32 MB,
-  glibc's own steady state.
-- **The tiles** add one tile's crossings and contributions at a time (three tiles in preparation) and the spectra,
-  N × N_v × 2 lines × 4 bytes per entry (2.1 GB at 256²).
-- **The GPU** holds one tile's contributions and spectra: 1.3 GB at its peak at 128², 2.4 GB at 256².
+  (`simulations.stream.release_memory`) and trims the heaps after assembling the store. The tiles then allocate many
+  short-lived arrays of 1–30 MB per chunk of contributions, where a fresh mapping for each costs page faults (the
+  matched engine ran 1.9× slower at 1 MB): when the pass ends the threshold goes to 32 MB, glibc's own steady state.
 
 The old route held the selected cells of a batch of 1,024 skewers with every field and their sampled pieces: 125 GB of
 resident memory at 32² in the matched mode.
@@ -444,3 +489,80 @@ The default against the converged result: §D2.
   meets the rms (8.6e-7 ≤ 1e-6) but not the maximum for Si III (2.8e-5 > 2e-5): that reference is itself 2.7e-5 from the
   converged result at that pixel (§D2), so the comparison with the converged result is the meaningful one (rms 4.2e-7,
   max 4.4e-6 in float32).
+
+
+## 8. Why the matched mode beats fake_spectra
+
+The matched mode computes fake_spectra's physics with fake_spectra's algorithm (spheres, chords of 7 points, the linear
+flow, `tautail`, `pixel_average`; ~1e-7 in F), yet it is 2.8 times faster at 128² TNG50-2 skewers, 1.9 times at 256² and
+12 times at 16 skewers. Notebook 15, §6, shows the measurements (notebook 16's records: one process per code, cold, the
+CPU time sampled every 0.05 s); its figure plots the busy cores against time for both codes, with the stages shaded,
+next to the time of every stage.
+
+**What fake_spectra does** (its code, `MAT/fake_spectra/fake_spectra/`, the copy installed, upstream `ff5844d`):
+
+- **Reading.** `spectra.py:compute_spectra` (L838–868) runs `_interpolate_single_file` file after file. Every dataset of
+  every cell is read whole through h5py in the main thread (`abstractsnapshot.py:get_data`, L209–224), with no spatial
+  selection, and once per line: `Density` is read three times per file for H I.
+- **Gas physics.** Vectorised NumPy on one core, on every cell, once per line (`gas_properties.py`; Si III through a
+  cubic CLOUDY interpolation). The arrays are then cast to float64 for C (`spectra.py`, L711–716).
+- **Search.** `index_table.cpp:get_near_particles` (L274–338) uses a mesh of the sightlines, the same index arithmetic
+  as SkewerJAX's. It is rebuilt per file and line, and every cell is tested.
+- **C engine.** `part_int.cpp:compute_tau` (L75–105) and `absorption.cpp` (L215–282) run OpenMP over sightlines with a
+  static schedule. For each particle near a sightline, the code walks out to `tautail` with 7 profile calls per pixel
+  (×3 or more for cold Si III). The profile is a tabulated Harris expansion, or the complex Faddeeva function for every
+  Si III point, in double precision with `-O2 -ffast-math`. The GIL is held, and the read and physics of a file never
+  overlap the C call of the previous one.
+
+**The gap, stage by stage** (128² TNG50-2 skewers; `comparison.memory.gap_table`). Two definitions:
+
+- **Work**: bytes read; cell-species whose physics is computed; distance tests of the search; chord points prepared on
+  the host; profile evaluations. fake_spectra's search and walk are counted on the same cells by SkewerJAX's pass and
+  per-cell engine.
+- **Busy cores**: the derivative of the process's CPU time over each stage.
+
+| stage | fake_spectra | matched | ratio | work fs / SJX | busy cores fs / SJX | algorithmic | hardware use | implementation |
+|---|---:|---:|---:|---|---|---:|---:|---:|
+| read | 216 s | 42 s | 5.2 | 163 / 119 GB | 0.5 / 11.2 | 33 s | – | 142 s |
+| gas physics | 147 s | 9 s | 16.3 | 2.4e9 / 5.5e8 | 1.0 / 11.2 | 73 s | – | 65 s |
+| search | 70 s | 20 s | 3.5 | 3.4e9 / 2.7e9 | 2.5 / 11.2 | 10 s | – | 40 s |
+| chords | (in its C engine) | 4 s | – | 6.2e8 / 8.9e7 points | – | – | – | – |
+| τ accumulation | 130 s | 112 s | 1.16 | 1.32e11 / 1.39e11 | 2.9 / 15.0 | −7 s | 200 s | −175 s |
+| **total** | **562 s** | **186 s** | | | **1.5 / 13.3** | **109 s (29%)** | **200 s (53%)** | **71 s (19%)** |
+
+How the split works:
+
+- Each stage's gap is split in proportion to the logarithms of the ratio's factors: the work ratio (algorithmic), the
+  busy-cores ratio (hardware use), and the rest (implementation).
+- The pass's stages overlap on shared threads, so their use of the cores cannot be told apart from the implementation.
+  For read, gas physics and search, hardware use is therefore counted under implementation; for the read, implementation
+  is the throughput of parallel block reads, ~3 GB/s against ~0.75 GB/s.
+- fake_spectra's search is the C call of a run with `tautail` = 1e30, where the walk stops after one pixel. That call
+  includes the casts to float64.
+
+In short:
+
+- **Algorithmic (~30%).** SkewerJAX reads each byte once, computes the physics of the 23% of the cells within reach, and
+  tests each cell once.
+- **Hardware use (~50%).** fake_spectra keeps 1.5 cores busy on average, and 2.9 in its C calls (short, with serial parts).
+  SkewerJAX keeps 11 busy in its pass and 15 in its tiles.
+- **Implementation (~20%).** Parallel block reads and fused physics loops. In the τ stage this term is negative:
+  per core and per evaluation, fake_spectra's C engine is ~4 times faster (2.8 against 12 core-ns per evaluation), and
+  SkewerJAX wins that stage only by using more cores.
+
+**What limits fake_spectra**, ranked by what it costs at 128²:
+
+1. Reading every cell, for each line, serially: 216 s.
+2. The gas physics of every cell, for each line, on one core: 147 s.
+3. Its C engine at 2.9 busy cores: 130 s. It needs larger batches per call, a dynamic schedule and parallel casts; a
+   core / wing split would also cut its far-wing evaluations.
+4. The search per file and per line: 70 s.
+5. No overlap between the reads and the C calls.
+
+**What it implies for SkewerJAX.**
+
+- **The disk is the floor.** The 119 GB the pass reads, at ~2.5 GB/s cold, take ~48 s; the pass at 128² takes 70–81 s.
+- **The matched engine** costs 6.3 ms per skewer against the default's 3.7 ms. Its per-core speed is ~4 times below
+  fake_spectra's: fewer padded window pixels and the 7 points of a chord evaluated together could gain up to ~2 ms.
+- **The GPU entry** is bound by the host's preparation (~4 thread-ms per skewer).
+- **Memory**: see §4.

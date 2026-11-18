@@ -130,6 +130,7 @@ flowchart LR
 skewerjax/                    # SkewerJAX: absorption along skewers (tau, F = exp(-tau)) for many transitions, and …
 ├── comparison/               # Block C, comparison with fake_spectra: what remains is the benchmark of the two …
 │   ├── benchmark.py          # Wall time and memory of SkewerJAX against fake_spectra on identical skewers (Lya …
+│   ├── memory.py             # How much memory SkewerJAX and fake_spectra use, where and when (notebook 16 …
 │   └── scaling.py            # How SkewerJAX and fake_spectra scale (notebook 14 …
 ├── config.py                 # The package's precision policy and its parallel set-up (CPU threads and host …
 ├── core/                     # Block A, the core backbone: lines, cosmology, skewers, gas cells, the route cells …
@@ -196,17 +197,17 @@ subpackage.
 | cosmology: Cosmology, a(x) | `core.cosmology` | `Cosmology` | 02 |
 | skewers: SkewerBundle; lattice of paths | `core.skewers` | `SkewerBundle`, `lattice_columns`, `lattice_points` | 03, 10, 11 |
 | toy fields: PowerLawGRF → cells | `simulations.grf`, `simulations.toy_cells` | `PowerLawGRF`, `grf_cells` | 04, 08 |
-| simulation outputs: TNG snapshot → cells | `simulations.snapshot_cells` | `snapshot_cells`, `select_cells_in_region` | 05, 09, 11 |
+| simulation outputs: TNG snapshot → cells | `simulations.snapshot_cells` | `snapshot_cells`, `select_cells_in_region` | 05, 09, 11, 15 |
 | gas cells: Cells: n, T, v | `core.cells` | `Cells`, `cells_on_grid` | 04, 05, 08, 09, 11 |
-| deposition: cells → pieces | `core.absorbers`, `core.deposition` | `cell_pieces`, `voronoi_segments`, `absorber_pieces` | 07 |
+| deposition: cells → pieces | `core.absorbers`, `core.deposition` | `cell_pieces`, `voronoi_segments`, `absorber_pieces` | 07, 15 |
 | line profiles: Voigt φ_j(v) per piece | `core.line_profiles` | `line_profiles`, `voigt_widths_GHz` | 06 |
-| optical depth: τ(v), T = e^−τ | `core.optical_depth` | `compute_optical_depth`, `Pieces` | 07, 10, 11 |
+| optical depth: τ(v), T = e^−τ | `core.optical_depth` | `compute_optical_depth`, `Pieces` | 07, 10, 11, 15 |
 | mean transmission: T̄ = ⟨T⟩ over a set of pixels | `summary_stats.overflux` | `ensemble_mean_transmissions`, `mean_transmissions` | 10, 11 |
 | overflux: δ = T/T̄ − 1, per line and total | `summary_stats.overflux` | `DeltaFieldBuilder`, `overflux_check` | 10, 11 |
 | 1D statistics: P1D, ξ1D (by order and term) | `summary_stats.lattice`, `summary_stats.stats_1d` | `skewer_p1d`, `skewer_xi1d`, `decompose_1d` | 10, 11 |
 | 3D statistics: P3D, ξ3D on the lattice of skewers | `summary_stats.lattice`, `summary_stats.grid3d` | `lattice_grid`, `measure_lattice`, `GridStatistics3D` | 10, 11 |
 | field statistics: P, ξ of the cells' density: mesh (MAS + interlacing) | `summary_stats.field_stats`, `summary_stats.mesh` | `field_statistics`, `cell_weights`, `fourier_mesh` | 08, 09, 11 |
-| fake_spectra: external reference | `comparison.benchmark` | `run_fake_spectra` | 12, 13, 14 |
+| fake_spectra: external reference | `comparison.benchmark` | `run_fake_spectra` | 12, 13, 14, 15, 16 |
 <!-- END generated:concepts -->
 
 ## Quickstart
@@ -272,13 +273,14 @@ venv/conda environments, the JAX CPU/GPU builds, the data paths and troubleshoot
 Two entry points: `00_quickstart` (the whole chain on a toy box, compact) and `00_quickstart_step_by_step` (one
 simulated skewer followed from the snapshot to the statistics, one figure and the equations per step). Notebooks
 01–07 then open one ingredient each, 08 and 09 measure the statistics of the gas cells (toy boxes, TNG50-4), 10 and 11 the
-summary statistics on skewers (toy boxes, TNG50-4), 12 and 13 compare with fake_spectra, in the order of the dependency graph (derived from the code; an arrow points
+summary statistics on skewers (toy boxes, TNG50-4), 12–14 and 16 compare with fake_spectra (results, time, scaling, memory) and 15
+shows why SkewerJAX is fast, in the order of the dependency graph (derived from the code; an arrow points
 to what needs an ingredient; dashed: optional input or data only; the two field sources are interchangeable):
 
 ```mermaid
 flowchart LR
     L["lines (01)"] -- "atomic data" --> LP["line profiles (06)"]
-    LP --> T["optical depth τ, F (07)"]
+    LP --> T["optical depth τ, F (07, 15)"]
     C["cosmology (02)"] -. "a(x), or manual" .-> K["skewers (03)"]
     subgraph SRC["sources of cells (interchangeable)"]
         TS["toy fields: GRF → cells (04)"]
@@ -287,14 +289,14 @@ flowchart LR
     L -. "ion masses" .-> SIM
     TS --> F["gas cells (04, 05)"]
     SIM --> F
-    F --> D["deposition: cells → pieces (07)"]
+    F --> D["deposition: cells → pieces (07, 15)"]
     K -- "points, a(x)" --> D
     D -- pieces --> T
     F --> FS["P, ξ of the cells: mesh (08, 09)"]
     T --> O["overflux δ_F (10, 11)"]
     L -. "line offsets Δv" .-> O
     O --> P["P1D, ξ1D, P3D, ξ3D (10, 11)"]
-    SIM -. "fake_spectra, external (12, 13)" .-> T
+    SIM -. "fake_spectra, external (12–14, 16)" .-> T
 ```
 
 | notebook | content |
@@ -307,7 +309,7 @@ flowchart LR
 | `04_fields_and_samplers` | toy fields: Gaussian random fields in 1D/2D/3D, isotropic and with a Kaiser-like anisotropy, Fingers of God and a BAO bump, and their gas cells (`grf_cells`: the cells of the grid; H I and Si III along one skewer in 3D) |
 | `05_simulation_outputs` | from a TNG50-4 snapshot to gas cells: the ion-density equations (self-shielding, CLOUDY), the n_H–T plane, and a region of the snapshot as `core.Cells` without skewers (`snapshot_cells`: H I and Si III on the Voronoi cells along one skewer, in 3D), the container of the toy fields |
 | `06_voigt_and_line_profiles` | the Voigt function (ExoJAX, FFT convolution, SciPy's Faddeeva function; Gaussian and Lorentzian limits) and the line profiles of gas elements (`core.line_profiles`) |
-| `07_deposition_and_optical_depth` | the τ integral as a sum over pieces; from cells to τ step by step on one TNG50-4 skewer through the box centre (selection → deposition into pieces → τ, with the package's own route): the cells in 3D, the pieces, and the same pieces on the ring of s, on the ring of v (periodicity as an option, `velocity_period`) and as their dτ; line-centred frames, the global axis, the observed wavelength and `wrap_to_ref_line` for Lyα and Si III on the same skewer |
+| `07_deposition_and_optical_depth` | the τ integral as a sum over pieces; from cells to τ step by step on one TNG50-4 skewer through the box centre (selection → the cell crossings (lower envelope) → contributions with their profile integrated over each crossing → τ by the windowed engine, each contribution on its window and the far wings by FFT, against the dense sum; the package's own route): the cells in 3D, the pieces, and the same pieces on the ring of s, on the ring of v (periodicity as an option, `velocity_period`) and as their dτ; line-centred frames, the global axis, the observed wavelength and `wrap_to_ref_line` for Lyα and Si III on the same skewer |
 | `08_toy_field_statistics` | the toy boxes (`ToyBoxes`: periodic boxes, power law + Gaussian BAO bump (valid below R_max), isotropic, zero or linear-theory velocities; the model written out once; regenerated from their seeds, everything recomputed every run) and their statistics: A, the fields and their P and ξ in explicit bins (isotropic, (⊥, ∥) planes on the grid's own modes and separations, μ wedges as DESI DR2), the cells through a mesh (`field_statistics`: PCS, interlaced; the trusted range k < k_Nyq/2, r ≥ 6H), against the exact expectation and the continuous P(k) and closed-form ξ(r), with the exact covariance of ξ |
 | `09_field_statistics_tng` | the statistics of 08 on the cells of TNG50-4 (snapshot 25): the total gas, H I, Si III and Si II through the same mesh, real space and redshift space along each axis (the three orientations as the ensemble), the header's cosmology against IllustrisTNG's, r_d (Aubourg et al. 2015) and its periodic images (r_d > L/2) |
 | `10_skewer_statistics` | the summary statistics on skewers through the toy boxes of 08 (regenerated with the same configuration): A, skewers through every box, step by step (`SkewerBundle`, cells, pieces, τ); B, the (k⊥, k∥) and (r⊥, r∥) planes of the density on the same skewers against their exact expectation; C, the normalisation (the statistics from arrays), where the skewers run and one from the gas to the overflux δ = T / T̄ − 1 (the mean transmission of the ensemble per redshift, `mean="redshift"`; also "global", "box", "skewer"); D, P and ξ of the total overflux in the (k⊥, k∥) and (r⊥, r∥) planes on the lattice's own modes and separations (the Si III–Lyα spot at Δv_{Lyα–Si III}/u and the echoes of the BAO ring; four lines: a spot for every pair), the 3D P and ξ of the overflux of every line and of the total on the lattice of skewers in comoving units (the BAO peak), ξ in μ wedges with r_BAO, the spot and the echoes per wedge; E, the relations of P1D and ξ1D to the 3D statistics, P1D next to DESI DR1, and P1D and ξ1D of the total overflux by term and order |
@@ -315,11 +317,13 @@ flowchart LR
 | `12_comparison_fake_spectra_results` | what the two codes compute on the same TNG50-2 skewers (kernel `skewerjax-fs`): the core calls with the defaults, native fake_spectra, the fully matched mode; each option on its own, from the default and from the matched mode (explicit calls, the two expressions and four curves per step); the root causes, generated from the run, with what each option changes on this skewer and its accuracy, impact and expected cost; what to adopt, what is a choice, what to time |
 | `13_comparison_fake_spectra_timing` | where the time goes (kernel `skewerjax-fs`): TNG50-2, 128 × 128 skewers along y, 1 km/s pixels, Lyα and Si III; fake_spectra, SkewerJAX default and matched on the CPU, default on the GPU, timed by stage (setup, I/O, selection, gas physics, pieces, τ), cold; SkewerJAX's one pass over the snapshot for every entry, then tiles of 1,024 skewers (`simulations.stream`), the JIT warm-up apart; the agreement printed; the totals and the speed-ups over fake_spectra |
 | `14_comparison_fake_spectra_scaling` | how each stage of the four entries of 13 scales: A the simulation (TNG50-4, -3, -2), B the number of skewers (4² to 256²), C1 the pixel width (1–16 km/s, one SkewerJAX pass for the five grids), C2 the precision of the midpoint option's sampling against the default's integrated profile; per point the stages and the speed-ups, per block the scaling with fitted slopes and the flux of a reference skewer from every entry (reads the records of `scripts/benchmarks/benchmark_scaling.py`; `RUN = True` re-runs it) |
+| `15_how_skewerjax_is_fast` | why SkewerJAX is cheap, step by step, the visual companion of `docs/performance.md` (live on TNG50-4, timings from the records): the cost model; one pass over the snapshot (the reach by index arithmetic, what the pass reads, the compact store and the tiles, the pipeline's timeline); the exact crossings (the lower envelope) and the integrated profile against the midpoint rule; the windowed engine (windows, the far wings as one FFT, why not truncate, CPU and GPU); the matched mode (chords, the per-cell walk on escalating windows); fixed shapes; why even the matched mode beats fake_spectra (fake_spectra's code read, CPU utilisation, the gap stage by stage with its causes); the chain of savings |
+| `16_comparison_fake_spectra_memory` | how much memory each code and mode uses, where (host anonymous / file-backed, GPU) and in which stage (kernel `skewerjax-fs`): the protocol, memory timelines at 128² TNG50-2 skewers, the peaks by component, the scaling with the simulation, the number of skewers and the pixel width (fitted models, the extrapolation to 512²), SkewerJAX's memory knobs (tile size, physics configurations, pass threads), the ranked ways to lower it (reads the records of `scripts/benchmarks/benchmark_memory.py`; `RUN = True` re-runs it) |
 
 Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: the white "paper" style by default,
 `use_style("dark")` for the dark one; Paul Tol's colour-blind-safe "bright" colours and colour maps in both, minimum
 font sizes). `use_backend()` (interactive ipympl figures in a live notebook) is left commented out in the setup cell.
-Every notebook opens with the dependency graph highlighting the ingredients it uses. Notebooks `00_quickstart_step_by_step`, 05, 07, 09, 11, 12 and 13 need TNG50 snapshots, and 14 and 15 to re-run their benchmarks (see
+Every notebook opens with the dependency graph highlighting the ingredients it uses. Notebooks `00_quickstart_step_by_step`, 05, 07, 09, 11, 12, 13 and 15 need TNG50 snapshots, and 14 and 16 to re-run their benchmarks (see
 "Simulation data" in `docs/installation.md`).
 
 ## Tests

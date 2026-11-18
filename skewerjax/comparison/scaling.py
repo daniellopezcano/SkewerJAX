@@ -208,6 +208,21 @@ def run_fake_spectra(snap_base, X, Z, H, dv_kms: float) -> tuple:
     return tau, dict(T.t), int(fs.nbins), float(fs.dvbin)
 
 
+def fit_cost_model(n, t) -> tuple:
+    """(T_fixed [s], t_skewer [s]) of the cost model T = T_fixed + N t_skewer fitted to totals ``t`` at ``n`` skewers by
+    least squares on the relative residuals (each point weighs 1 / T, so the small N set T_fixed and the large N
+    t_skewer); both are kept >= 0."""
+    n, t = np.asarray(n, dtype=np.float64), np.asarray(t, dtype=np.float64)
+    ok = np.isfinite(t) & (t > 0)
+    A = np.stack([np.ones(ok.sum()), n[ok]], 1) / t[ok][:, None]
+    sol = np.linalg.lstsq(A, np.ones(ok.sum()), rcond=None)[0]
+    if sol[0] < 0:  # no fixed cost: the slope alone
+        return 0.0, float(np.sum(n[ok] / t[ok]) / np.sum((n[ok] / t[ok]) ** 2))
+    if sol[1] < 0:
+        return float(1.0 / np.mean(1.0 / t[ok])), 0.0
+    return float(sol[0]), float(sol[1])
+
+
 def evict_page_cache(snapdir) -> int:
     """Drop the snapshot's files from the page cache (``posix_fadvise(DONTNEED)``: a hint to the kernel, nothing is
     written; pages mapped by a process stay): the cold protocol. Returns the number of files."""

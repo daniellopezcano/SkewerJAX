@@ -1,0 +1,5 @@
+/home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/SkewerJAX/skewerjax/comparison/memory.py:209: RuntimeWarning: All-NaN slice encountered
+  pool = lambda x, f: np.array([f(x[a:b]) for a, b in zip(edges[:-1], edges[1:])])
+/home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/SkewerJAX/skewerjax/comparison/memory.py:236: RuntimeWarning: All-NaN slice encountered
+  pk = lambda key: float(np.nanmax(np.asarray(timeline[key], dtype=float)[sel])) if timeline.get(key) else float("nan")
+/home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/SkewerJAX/benchmarks/results/memory/TNG50-2_n4_dv1_fs.json

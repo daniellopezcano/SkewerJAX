@@ -3,6 +3,43 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — the algorithm made visible: notebook 07 brought up to date, notebooks 15 (why it is fast) and 16 (memory) (stem 20261111)
+
+No algorithm and no result changed (the regression references and notebook 12's numbers are the same); the internals the
+figures need are exposed read-only.
+
+### Added
+- `core.tau_engine.window_plan` (the host-side plan of `windowed_line_tau`: the window of every contribution, D_x, the
+  far moments; `windowed_line_tau` now runs from it) and `far_wing_term` (the FFT far-wing term alone);
+  `windowed_line_tau(small_problem=)` (default unchanged: 0 shows the windows of a small problem); the engine's info
+  reports its profile evaluations; `per_cell_line_tau(return_info=True)` (per cell: the windows tried, the core, the
+  evaluations, fake_spectra's walk estimated), summarised in `compute_optical_depth`'s `engine` info.
+- `simulations.stream`: per-block statistics of the pass (`stream_cells` info `blocks`: rows, cells within reach, pairs,
+  distance tests, pages touched and contiguous reads per dataset), `stream_cells(marker=)` (stage markers),
+  `StreamStore.nbytes_components`, the tiles' timeline (`tiles_optical_depth` info: preparation and engine start / end,
+  host thread, contributions' bytes).
+- `comparison.memory` and `scripts/benchmarks/benchmark_memory.py`: the memory benchmark (one fresh process per point and
+  entry, cold; `/proc` sampled at 20 Hz: RssAnon, RssFile, RssShmem, VmHWM, MemAvailable, CPU time, bytes read; NVML and
+  JAX GPU memory; stage markers; blocks A, B, C1, D; `peak_components`, `gap_table`, `work_counts`); records in
+  `benchmarks/results/memory/`. `comparison.scaling.fit_cost_model`.
+- Notebooks `15_how_skewerjax_is_fast` and `16_comparison_fake_spectra_memory`; their figure functions in
+  `utils.plotting` (`plot_engine_anatomy`, `engine_parts_summary`, `plot_cost_model`, `plot_reach_test`,
+  `plot_pass_reads`, `plot_store_tiles`, `plot_tile_timeline`, `plot_envelope`, `plot_integrated_profile`,
+  `plot_accuracy_cost`, `plot_window_levels`, `plot_far_convolution`, `plot_truncation`, `plot_chord`,
+  `plot_cell_walk`, `plot_fixed_shapes`, `plot_cpu_profile`, `plot_memory_timelines`, `plot_memory_peaks`,
+  `plot_memory_scaling`, `plot_memory_knobs`); `plot_deposition_pieces(sampled_counts=)`.
+- The `bench` extra (psutil, nvidia-ml-py); `nvidia-ml-py` in `envs/skewerjax-fs.yml`.
+
+### Changed
+- Notebook 07 describes the default chain as it runs: the three grids and their jobs, the reach, the crossings of the
+  lower envelope (the sampled pieces as the option, with their counts), the profile integrated over each crossing
+  (Φ in closed form, the tilt, a > 0.05), the windowed engine with far wings by FFT (a new figure against the dense
+  sum), the wrap as implemented, the matched mode; a mis-detected warning and two outdated numbers fixed. Notebooks 04
+  and 05: minimal fixes of the same statements. Docstrings of `core.optical_depth` and `core.absorbers` (the crossings,
+  the integrated profile).
+- `docs/performance.md`: "Why the matched mode beats fake_spectra", §4 (memory) with notebook 16's measurements,
+  pointers to notebooks 07, 15 and 16. README, `utils.dag` (notebooks 15 and 16), notebook 00's list.
+
 ## Unreleased — faster than fake_spectra at every number of skewers: crossings, integrated profile, windowed engine, one pass (stem 20261110)
 
 `docs/performance.md` explains the design and its measurements. TNG50-2, cold, 1 km/s, Lyα + Si III, float32

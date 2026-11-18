@@ -268,16 +268,16 @@ DAG_NOTEBOOKS = {
     "skewers": "03, 10, 11",
     "samplers": "04, 08",
     "fields": "04, 05, 08, 09, 11",
-    "simulation": "05, 09, 11",
+    "simulation": "05, 09, 11, 15",
     "profiles": "06",
-    "deposition": "07",
-    "tau": "07, 10, 11",
+    "deposition": "07, 15",
+    "tau": "07, 10, 11, 15",
     "normalisation": "10, 11",
     "overflux": "10, 11",
     "stats_1d": "10, 11",
     "stats_3d": "10, 11",
     "field_stats": "08, 09, 11",
-    "fake_spectra": "12, 13, 14",
+    "fake_spectra": "12, 13, 14, 15, 16",
 }
 
 # The layers: the subpackages and the notebooks, and who imports whom (``tests/test_import_graph.py``)

@@ -6653,6 +6653,7 @@ def plot_deposition_pieces(
     species: str = "HI",
     arrow_kms=None,
     arrow_cMpc=None,
+    sampled_counts=None,
     figsize=(22, 8.5),
 ):
     """Row (b) of the deposition figures of notebook 07: the pieces of one simulation skewer around its seam, along s.
@@ -6666,7 +6667,10 @@ def plot_deposition_pieces(
     label are stacked (``_arrow_levels``), at one scale with ``plot_deposition_rings`` (from the v_par drawn: the
     90th-percentile |v_par| 0.8 median cell sizes long; every arrow inside its panel; one
     still too long after the limits grow a little is cut at the edge and ends with an open circle), with a reference
-    arrow of a round speed in a box at the top of (b2). Returns (fig, (ax_end, ax_start), info).
+    arrow of a round speed in a box at the top of (b2). ``sampled_counts`` (crossing pieces only): dict(crossings=,
+    sampled=) the pieces of the whole skewer with the default and with the option ``deposition="voronoi_segments"``;
+    given, the ends of the dual segments of the sampling points, where the option would also cut, are drawn dotted with
+    both counts in the legend. Returns (fig, (ax_end, ax_start), info).
     """
     from matplotlib import patheffects as pe
     from matplotlib.lines import Line2D
@@ -6742,7 +6746,11 @@ def plot_deposition_pieces(
         ),
         Patch(facecolor="none", edgecolor=FG, lw=3.0, label=f"{plab[seam]}: the piece on the velocity seam"),
         Line2D([], [], color=FG, lw=2.2, label="cell boundary" if crossing_pieces else "cell crossing"),
-    ] + ([] if crossing_pieces else [Line2D([], [], color=DIM, lw=1.3, ls=(0, (3.0, 2.5)), label="end of a dual segment")]) + [
+    ] + ([] if crossing_pieces else [Line2D([], [], color=DIM, lw=1.3, ls=(0, (3.0, 2.5)), label="end of a dual segment")]) + (
+        [Line2D([], [], color=DIM, lw=1.3, ls=(0, (3.0, 2.5)),
+                label=f"end of a dual segment: where the option voronoi_segments also cuts\n"
+                      f"(the skewer: {sampled_counts['sampled']:,} pieces instead of {sampled_counts['crossings']:,} crossings)")]
+        if crossing_pieces and sampled_counts is not None else []) + [
         Line2D([], [], color=green, lw=3.5, label="box face (the seam)"),
         _velocity_arrow_handle(v_key, kpc, extra=" (top right of b2)" + ("; o: cut at the edge" if n_capped else "")),
     ]
@@ -6820,7 +6828,7 @@ def plot_deposition_pieces(
                 fontweight="bold" if i == seam else "normal",
             )
         y_cut = 10 ** (y_ar.max() + 0.12)
-        if not crossing_pieces:  # dual-segment pieces: the ends of the dual segments cut the crossings
+        if not crossing_pieces or sampled_counts is not None:  # the ends of the dual segments (pieces, or the option)
             mids = 0.5 * (s_pts[1:] + s_pts[:-1])
             b.vlines(mids[(mids > s_lo) & (mids < s_hi)], floor, y_cut, color=DIM, lw=1.3, ls=(0, (3.0, 2.5)), zorder=1)
         c_p, s_p, l_p = c_all[idx], s_all[idx], l_all[idx]
@@ -7240,3 +7248,965 @@ def plot_frames_axes(
         ax.set_xlim(*x_frame)
         figs["wrapped"] = (fig, ax)
     return figs
+
+
+# --------------------------------------------------------------------------- notebooks 07 and 15: how tau is computed
+ENGINE_SHOW_COLORS = ("purple", "green", "yellow", "cyan")  # the contributions shown one by one (``plot_engine_anatomy``)
+
+
+def engine_parts_summary(v, dtau, plan, far, tau_windowed, tau_dense, tau_full=None):
+    """The parts of the windowed engine on one skewer, from its plan (``core.tau_engine.window_plan``) and the dense
+    per-contribution profiles (read-only; the arrays of ``plot_engine_anatomy``): dict(truncated: every contribution on
+    its window only (the wings dropped), wings_naive: the dense sum beyond the windows, wings_engine: what the engine
+    adds beyond the windows (windowed total minus the windows), far (the FFT term itself), and the statistics max_dtau,
+    rel_dtau (over the peak), rms_dF / max_dF of the windowed sum and of the truncated one against the dense sum;
+    with ``tau_full``, the engine's own kernels on every pixel: full_max_dtau, the error of the windows and the FFT
+    alone)."""
+    dtau = np.asarray(dtau, dtype=np.float64)
+    k = np.arange(np.size(v))
+    inwin = np.abs(k[None, :] - np.asarray(plan["cpix"])[:, None]) <= np.asarray(plan["D"])[:, None]
+    trunc = (dtau * inwin).sum(0)
+    tw, td = np.asarray(tau_windowed, dtype=np.float64), np.asarray(tau_dense, dtype=np.float64)
+    F = lambda t: np.exp(-t)
+    dw, dt_ = F(tw) - F(td), F(trunc) - F(td)
+    full = {} if tau_full is None else dict(full_max_dtau=float(np.abs(tw - np.asarray(tau_full, dtype=np.float64)).max()))
+    return dict(
+        **full,
+        truncated=trunc,
+        wings_naive=td - trunc,
+        wings_engine=tw - trunc,
+        far=np.asarray(far, dtype=np.float64),
+        max_dtau=float(np.abs(tw - td).max()),
+        rel_dtau=float(np.abs(tw - td).max() / max(td.max(), 1e-300)),
+        rms_dF=float(np.sqrt(np.mean(dw**2))),
+        max_dF=float(np.abs(dw).max()),
+        trunc_max_dtau=float(np.abs(trunc - td).max()),
+        trunc_rms_dF=float(np.sqrt(np.mean(dt_**2))),
+        trunc_max_dF=float(np.abs(dt_).max()),
+    )
+
+
+def plot_engine_anatomy(v, dtau, plan, far, tau_windowed, tau_dense, *, show, tau_full=None, wing_tolerance: float = 1e-9,
+                        line: str = "HI-LyA", floor: float = 1e-10, figsize=(22, 17)):
+    """How the windowed engine evaluates tau on one skewer (notebooks 07 and 15), against the naive dense sum.
+
+    v : (N_v,) the uniform grid [km/s]; dtau : (N_c, N_v) the dense profile of every contribution on every pixel
+    (``compute_optical_depth(..., per_piece=True)``, in the order of the plan's contributions); plan : the engine's plan
+    (``core.tau_engine.window_plan``: cpix, D, D_x of every contribution); far : (N_v,) the far-wing term alone
+    (``tau_engine.far_wing_term``); tau_windowed, tau_dense : (N_v,) the engine's total and the dense sum; show : the
+    indices of a few contributions to draw one by one; tau_full : optional (N_v,) the engine's own kernels on every pixel
+    (``windowed_line_tau`` on a small problem): the error of the windows and the FFT alone, on (c); wing_tolerance : the
+    engine's epsilon (drawn on (b) and (c)).
+
+    (a) tau of the shown contributions on every pixel (log axis), solid within their windows |k - c| <= D (shaded in
+    their colour) and dotted beyond, with the total; (b) the far wings: the FFT term (convolution of the four moment
+    deposits; it is zero within D_x of every centre, and the windows remove its part on their rings D_x < |k - c| <= D),
+    what the engine adds beyond the windows, and the naive sum of the exact wings beyond the windows (thick, light,
+    underneath); (c) |tau - tau_dense| of the engine and of the windows alone (the wings dropped), and |tau - tau_full|,
+    with epsilon. Values
+    below ``floor`` are drawn at it. Returns (fig, axs, info): info = ``engine_parts_summary``."""
+    v = np.asarray(v, dtype=np.float64)
+    dtau = np.asarray(dtau, dtype=np.float64)
+    info = engine_parts_summary(v, dtau, plan, far, tau_windowed, tau_dense, tau_full)
+    cpix, D = np.asarray(plan["cpix"]), np.asarray(plan["D"])
+    dv = float(v[1] - v[0])
+    lc = ENTITY_COLORS.get(line, FG)
+    clip = lambda y: np.maximum(np.abs(y), floor)
+    fig, axs = plt.subplots(3, 1, figsize=figsize, sharex=True, layout="constrained", gridspec_kw={"height_ratios": [1.25, 1.0, 1.0]})
+    ax = axs[0]
+    ax.plot(v, clip(tau_dense), color=lc, label=r"the dense sum: every contribution on every pixel", **MODE_STYLES["reference"])
+    ax.plot(v, clip(tau_windowed), color=lc, lw=1.6, label=r"the engine: windows + far wings by FFT")
+    for n, i in enumerate(show):
+        col = PALETTE[ENGINE_SHOW_COLORS[n % len(ENGINE_SHOW_COLORS)]]
+        k = np.arange(v.size)
+        inside = np.abs(k - cpix[i]) <= D[i]
+        lo, hi = v[max(cpix[i] - D[i], 0)] - 0.5 * dv, v[min(cpix[i] + D[i], v.size - 1)] + 0.5 * dv
+        for a in axs:
+            a.axvspan(lo, hi, color=col, alpha=0.10, lw=0)
+        ax.plot(v, np.where(inside, clip(dtau[i]), np.nan), color=col, lw=2.2,
+                label=f"contribution {n + 1}: window D = {int(D[i])} px")
+        ax.plot(v, np.where(inside, np.nan, clip(dtau[i])), color=col, lw=1.6, ls=":")
+    ax.set_yscale("log")
+    ax.set_ylim(floor, 3.0 * max(np.max(tau_dense), 1.0))
+    ax.set_ylabel(LABELS["tau"])
+    ax.set_title("each contribution exactly on its window (shaded); beyond it (dotted) only its Lorentz wing remains", loc="left")
+    _legend(ax, loc="upper left", bbox_to_anchor=(1.005, 1.0), fontsize=FONT_MIN["legend"])
+    ax = axs[1]
+    ax.plot(v, clip(info["wings_naive"]), color=FG, label="naive: the exact wings beyond every window, summed", **MODE_STYLES["reference"])
+    ax.plot(v, clip(info["far"]), color=PALETTE["purple"], lw=1.4, ls="--",
+            label=f"the FFT term: 4 moments per contribution\nconvolved with $1/\\Delta'^2$ ... (zero within $D_x$ = {plan['D_x']} px)")
+    ax.plot(v, clip(info["wings_engine"]), color=lc, lw=1.6, label="what the engine adds beyond the windows")
+    ax.axhline(wing_tolerance, color=DIM, lw=1.4, ls="-.", label=rf"wing_tolerance $\epsilon$ = {wing_tolerance:.0e}")
+    ax.set_yscale("log")
+    ax.set_ylim(max(floor, 0.1 * wing_tolerance), 3.0 * max(np.max(info["far"]), 10 * wing_tolerance))
+    ax.set_ylabel(r"$\tau$ of the far wings")
+    ax.set_title("the far wings of all the contributions: small, but on every pixel", loc="left")
+    _legend(ax, loc="upper left", bbox_to_anchor=(1.005, 1.0), fontsize=FONT_MIN["legend"])
+    ax = axs[2]
+    ax.plot(v, clip(info["truncated"] - tau_dense), color=PALETTE["red"], lw=1.6, ls=":",
+            label=f"windows only, wings dropped:\nmax {info['trunc_max_dtau']:.1e}, rms $\\Delta F$ {info['trunc_rms_dF']:.1e}")
+    ax.plot(v, clip(np.asarray(tau_windowed, dtype=np.float64) - tau_dense), color=lc, lw=1.6,
+            label=f"the engine against the dense sum: max {info['max_dtau']:.1e}\n({info['rel_dtau']:.0e} of the peak), rms $\\Delta F$ {info['rms_dF']:.1e}")
+    if tau_full is not None:
+        ax.plot(v, clip(np.asarray(tau_windowed, dtype=np.float64) - tau_full), color=PALETTE["green"], lw=1.4, ls="-.",
+                label=f"the engine against its own kernels on every pixel\n(the windows and the FFT alone): max {info['full_max_dtau']:.1e}")
+    ax.axhline(wing_tolerance, color=DIM, lw=1.4, ls="-.", label=rf"$\epsilon$ = {wing_tolerance:.0e}")
+    ax.set_yscale("log")
+    ax.set_ylim(floor, 3.0 * max(info["trunc_max_dtau"], info["max_dtau"]))
+    ax.set_ylabel(r"$|\Delta\tau|$")
+    ax.set_xlabel(LABELS["v_dagger"])
+    ax.set_title("the windows and the FFT are exact to the tolerance; dropping the wings is not", loc="left")
+    _legend(ax, loc="upper left", bbox_to_anchor=(1.005, 1.0), fontsize=FONT_MIN["legend"])
+    ax.set_xlim(v[0], v[-1])
+    add_panel_letters(axs)
+    return fig, axs, info
+
+
+# --------------------------------------------------------------------------- notebook 15: how SkewerJAX is fast
+def plot_cost_model(n, totals: dict, fits: dict, *, fixed_measured: dict | None = None, figsize=(22, 8)):
+    """The cost model T = T_fixed + N t_skewer (notebook 15, section 0): the total time of every entry against the number
+    of skewers N (log-log; ``totals`` {entry: (len(n),) s}), its fit (``fits`` {entry: (T_fixed, t_skewer)}, thin) and
+    both terms of the fit: T_fixed (dotted, horizontal) and N t_skewer (dashed, slope 1). ``fixed_measured`` {entry:
+    (len(n),) s}: a fixed part measured at every N (SkewerJAX's pass), drawn as open markers. Returns (fig, axs): the
+    totals of every entry together (a), and one panel per term (b: fixed, c: per skewer)."""
+    n = np.asarray(n, dtype=np.float64)
+    nn = np.geomspace(n.min() / 1.5, n.max() * 1.5, 200)
+    fig, axs = plt.subplots(1, 3, figsize=figsize, layout="constrained", gridspec_kw={"width_ratios": [1.5, 1.0, 1.0]})
+    ax = axs[0]
+    for e, t in totals.items():
+        st = SCALING_ENTRY_STYLES.get(e, dict(color=FG, marker="o"))
+        a, b = fits[e]
+        ax.plot(n, t, ms=9, ls="none", marker=st.get("marker", "o"), color=st["color"], mfc=st.get("mfc", st["color"]),
+                label=f"{e}: {a:.0f} s + N x {1e3 * b:.2g} ms")
+        ax.plot(nn, a + b * nn, color=st["color"], ls=st.get("ls", "-"), lw=1.6)
+    ax.set(xscale="log", yscale="log", xlabel="number of skewers N", ylabel="total wall time [s]")
+    ax.set_title(r"the totals and the fits $T = T_{\rm fixed} + N\,t_{\rm skewer}$", loc="left")
+    _legend(ax, loc="lower right", fontsize=FONT_MIN["legend"])
+    for ax, term in zip(axs[1:], ("fixed", "skewer")):
+        for e in totals:
+            st = SCALING_ENTRY_STYLES.get(e, dict(color=FG, marker="o"))
+            a, b = fits[e]
+            y = np.full_like(nn, a) if term == "fixed" else b * nn
+            ax.plot(nn, y, color=st["color"], ls=":" if term == "fixed" else "--", lw=2.2, label=e)
+            if term == "fixed" and fixed_measured and e in fixed_measured:
+                ax.plot(n, fixed_measured[e], ls="none", marker=st.get("marker", "o"), mfc="none", mec=st["color"], ms=9, mew=1.8)
+        ax.set(xscale="log", yscale="log", xlabel="number of skewers N")
+        ax.set_title(r"$T_{\rm fixed}$ (open: the pass, measured)" if term == "fixed" else r"$N\,t_{\rm skewer}$", loc="left")
+    ylo = min(min(np.nanmin(t) for t in totals.values()), min(max(f[1] * nn[0], 1e-2) for f in fits.values())) / 2
+    yhi = max(np.nanmax(t) for t in totals.values()) * 2
+    for ax in axs:
+        ax.set_ylim(ylo, yhi)
+    axs[1].set_ylabel("seconds")
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def plot_reach_test(sk_xy, box: float, nb: int, cells_xy, reach, *, region, figsize=(22, 9.5)):
+    """The reach test by index arithmetic (notebook 15, section 1a), on the plane perpendicular to the skewers: the lattice
+    of skewers ``sk_xy`` (N_sk, 2) [cMpc], the grid of nb x nb buckets of side box / nb, a few cells ``cells_xy`` (m, 2)
+    with their reach circles ``reach`` (m,) [cMpc], the buckets each one looks at (shaded in its colour) and the
+    skewers it reaches (ringed). ``region`` ((x0, x1), (z0, z1)) [cMpc] is drawn. Returns (fig, ax, info): info
+    tests (per cell: the skewers in the buckets looked at), reached (per cell)."""
+    from matplotlib.patches import Circle, Rectangle
+
+    sk_xy, cells_xy, reach = np.asarray(sk_xy, float), np.asarray(cells_xy, float), np.asarray(reach, float)
+    g = box / nb
+    fig, ax = plt.subplots(figsize=figsize, layout="constrained")
+    (x0, x1), (z0, z1) = region
+    for k in range(int(np.floor(x0 / g)), int(np.ceil(x1 / g)) + 1):
+        ax.axvline(k * g, color=DIM, lw=0.9, zorder=0)
+    for k in range(int(np.floor(z0 / g)), int(np.ceil(z1 / g)) + 1):
+        ax.axhline(k * g, color=DIM, lw=0.9, zorder=0)
+    inr = (sk_xy[:, 0] >= x0 - g) & (sk_xy[:, 0] <= x1 + g) & (sk_xy[:, 1] >= z0 - g) & (sk_xy[:, 1] <= z1 + g)
+    ax.plot(sk_xy[inr, 0], sk_xy[inr, 1], "o", color=FG, ms=7, zorder=3, label="a skewer (one per bucket)")
+    tests, reached = [], []
+    cols = [PALETTE[c] for c in ("blue", "red", "green", "yellow", "purple", "cyan")]
+    for i, ((x, z), r) in enumerate(zip(cells_xy, reach)):
+        col = cols[i % len(cols)]
+        ia, ib = int(np.floor((x - r) / g)), int(np.floor((x + r) / g))
+        ja, jb = int(np.floor((z - r) / g)), int(np.floor((z + r) / g))
+        ax.add_patch(Rectangle((ia * g, ja * g), (ib - ia + 1) * g, (jb - ja + 1) * g, facecolor=col, alpha=0.18, lw=0, zorder=1))
+        ax.add_patch(Rectangle((ia * g, ja * g), (ib - ia + 1) * g, (jb - ja + 1) * g, fill=False, edgecolor=col, lw=1.6, zorder=2))
+        ax.add_patch(Circle((x, z), r, fill=False, edgecolor=col, lw=2.2, zorder=4))
+        ax.plot([x], [z], "*", color=col, ms=16, mec=FG, mew=0.8, zorder=5)
+        bi = np.floor(np.mod(sk_xy[:, 0], box) / g).astype(int)
+        bj = np.floor(np.mod(sk_xy[:, 1], box) / g).astype(int)
+        look = np.isin(bi, np.arange(ia, ib + 1) % nb) & np.isin(bj, np.arange(ja, jb + 1) % nb)
+        d = sk_xy - np.array([x, z])
+        d -= box * np.round(d / box)
+        hit = look & (np.hypot(d[:, 0], d[:, 1]) <= r)
+        tests.append(int(look.sum()))
+        reached.append(int(hit.sum()))
+        ax.plot(sk_xy[hit, 0], sk_xy[hit, 1], "o", ms=15, mfc="none", mec=col, mew=2.4, zorder=4)
+        ax.annotate(f"{look.sum()} tests, {hit.sum()} reached", (x, z + r), xytext=(0, 8), textcoords="offset points", ha="center",
+                    va="bottom", fontsize=FONT_MIN["annotation"], color=FG, path_effects=_halo(), zorder=6)
+    ax.set(xlim=(x0, x1), ylim=(z0, z1), aspect="equal", xlabel=LABELS["x"], ylabel=LABELS["z"])
+    handles = [
+        mpl.lines.Line2D([], [], color=FG, marker="o", ls="none", ms=7, label="a skewer (one per bucket)"),
+        mpl.lines.Line2D([], [], color=DIM, lw=0.9, label=f"the buckets: {nb} x {nb}, side {g:.2f} cMpc"),
+        mpl.lines.Line2D([], [], color=PALETTE["blue"], marker="*", ls="none", ms=14, label=r"a cell's generator, its reach $R = 2.5\,V^{1/3}$"),
+        mpl.patches.Patch(facecolor=PALETTE["blue"], alpha=0.25, edgecolor=PALETTE["blue"], label=r"the buckets of $[x \pm R] \times [z \pm R]$: the only skewers tested"),
+        mpl.lines.Line2D([], [], color=PALETTE["blue"], marker="o", mfc="none", ls="none", ms=13, mew=2.2, label="a skewer within reach"),
+    ]
+    _legend(ax, handles=handles, loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=FONT_MIN["legend"])
+    return fig, ax, dict(tests=tests, reached=reached)
+
+
+def plot_pass_reads(lattices: dict, *, figsize=(22, 7.5)):
+    """What the pass reads (notebook 15, section 1b), for several lattices of skewers: ``lattices`` {label: dict(
+    within (fraction of the cells within reach), physics (fraction whose physics is computed), pages (per block: the
+    fraction of the pages of the other datasets touched by the needed rows), contiguous (per block: True where they are
+    read whole), bytes_GB (read), total_GB (the snapshot's datasets))}. (a) the fractions against 100%; (b) the pages
+    touched per block (one dot per block), the switch from gathers to contiguous reads at ``GATHER_FRACTION``; (c) the
+    bytes read against the whole snapshot. Returns (fig, axs)."""
+    from skewerjax.simulations.stream import GATHER_FRACTION
+
+    labs = list(lattices)
+    x = np.arange(len(labs))
+    fig, axs = plt.subplots(1, 3, figsize=figsize, layout="constrained")
+    ax = axs[0]
+    w = 0.36
+    ax.bar(x - w / 2, [100 * lattices[k]["within"] for k in labs], w, color=PALETTE["green"], label="cells within reach")
+    ax.bar(x + w / 2, [100 * lattices[k]["physics"] for k in labs], w, color=PALETTE["purple"], hatch="//", edgecolor=BG,
+           label="cells whose gas physics is computed")
+    ax.axhline(100, color=PALETTE["grey"], lw=2.4, ls="--", label="every cell (fake_spectra: each line)")
+    for xi, k in zip(x, labs):
+        ax.text(xi - w / 2, 100 * lattices[k]["within"] + 2, f"{100 * lattices[k]['within']:.2g}%", ha="center", fontsize=FONT_MIN["annotation"])
+    ax.set(xticks=x, ylabel="% of the snapshot's cells", ylim=(0, 165))
+    ax.set_xticklabels(labs)
+    ax.set_title("the cells kept", loc="left")
+    _legend(ax, loc="upper right", fontsize=FONT_MIN["legend"])
+    ax = axs[1]
+    rng = np.random.default_rng(0)
+    for xi, k in zip(x, labs):
+        pg = np.asarray(lattices[k]["pages"], float)
+        cont = np.asarray(lattices[k]["contiguous"], bool)
+        jit = xi + 0.25 * (rng.random(pg.size) - 0.5)
+        ax.plot(jit[~cont], 100 * pg[~cont], "o", ms=5, color=PALETTE["cyan"], alpha=0.8, label="gathered row by row" if xi == 0 else None)
+        ax.plot(jit[cont], 100 * pg[cont], "s", ms=5, color=PALETTE["yellow"], alpha=0.8, label="read whole (contiguous)" if xi == 0 else None)
+    ax.axhline(100 * GATHER_FRACTION, color=FG, lw=1.4, ls="-.", label=f"the switch: {100 * GATHER_FRACTION:.0f}% of the pages")
+    ax.set(xticks=x, ylabel="% of a block's pages touched", ylim=(-3, 105))
+    ax.set_xticklabels(labs)
+    ax.set_title("pages of the other datasets, per block", loc="left")
+    _legend(ax, loc="center right", fontsize=FONT_MIN["legend"])
+    ax = axs[2]
+    ax.bar(x, [lattices[k]["bytes_GB"] for k in labs], 0.55, color=PALETTE["yellow"], label="read by the pass")
+    tot = lattices[labs[0]]["total_GB"]
+    ax.axhline(tot, color=PALETTE["grey"], lw=2.4, ls="--", label=f"every dataset needed, every cell: {tot:.1f} GB")
+    for xi, k in zip(x, labs):
+        ax.text(xi, lattices[k]["bytes_GB"] + 0.02 * tot, f"{lattices[k]['bytes_GB']:.2g} GB", ha="center", fontsize=FONT_MIN["annotation"])
+    ax.set(xticks=x, ylabel="GB read", ylim=(0, 1.25 * tot))
+    ax.set_xticklabels(labs)
+    ax.set_title("bytes read", loc="left")
+    _legend(ax, loc="lower right", fontsize=FONT_MIN["legend"])
+    for a in axs:
+        a.set_xlabel("skewers")
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def plot_store_tiles(sk_xy, tile_of, box: float, shared_xy, components: dict, *, n_cells: int, n_pairs: int, figsize=(22, 9)):
+    """The compact store and the tiles (notebook 15, section 1c): (a) the skewers' plane, each skewer coloured by its
+    tile (``tile_of``), and cells within reach of skewers of two tiles or more (``shared_xy`` (m, 2), a sample) ringed;
+    (b) the bytes per needed cell of the store, stacked by component (``components`` {name: bytes}, from
+    ``StreamStore.nbytes_components``; ``n_cells`` cells, ``n_pairs`` (cell, tile) pairs). Returns (fig, axs)."""
+    sk_xy = np.asarray(sk_xy, float)
+    tile_of = np.asarray(tile_of)
+    fig, axs = plt.subplots(1, 2, figsize=figsize, layout="constrained", gridspec_kw={"width_ratios": [1.25, 1.0]})
+    ax = axs[0]
+    n_t = int(tile_of.max()) + 1
+    cyc = [PALETTE[c] for c in ("blue", "red", "green", "yellow", "purple", "cyan")]
+    G = int(round(np.sqrt(n_t)))
+    colour = [cyc[((t // G) + 2 * (t % G)) % len(cyc)] for t in range(n_t)]  # neighbours differ
+    ax.scatter(sk_xy[:, 0], sk_xy[:, 1], c=[colour[t] for t in tile_of], s=10, lw=0, zorder=2)
+    sh = np.asarray(shared_xy, float)
+    if sh.size:
+        ax.plot(sh[:, 0], sh[:, 1], "o", ms=5, mfc="none", mec=FG, mew=0.9, alpha=0.7, zorder=3, label="a cell needed by two tiles or more")
+    ax.set(xlim=(0, box), ylim=(0, box), aspect="equal", xlabel=LABELS["x"], ylabel=LABELS["z"])
+    ax.set_title(f"{len(sk_xy):,} skewers in {n_t} tiles (colour: the tile)", loc="left")
+    if sh.size:
+        _legend(ax, loc="upper left", bbox_to_anchor=(0.0, -0.1), fontsize=FONT_MIN["legend"])
+    ax = axs[1]
+    order = ["positions", "sizes", "velocities", "ids"] + sorted(k for k in components if k.startswith("fields:")) + ["tile_pairs"]
+    names = {"positions": "position (3 float64)", "sizes": "size (float32)", "velocities": "peculiar velocity (3 float32)", "ids": "id (int64)",
+             "tile_pairs": f"(cell, tile) pairs: {n_pairs / max(n_cells, 1):.2f} per cell"}
+    cols = dict(positions=PALETTE["blue"], sizes=PALETTE["cyan"], velocities=PALETTE["yellow"], ids=PALETTE["grey"], tile_pairs=PALETTE["green"])
+    bottom = 0.0
+    for k in order:
+        if k not in components:
+            continue
+        b = components[k] / max(n_cells, 1)
+        lab = names[k] if k in names else f"n, T of every species: {k.split(':', 1)[-1]} physics"
+        ax.bar(0, b, 0.5, bottom=bottom, color=cols.get(k, PALETTE["purple"]), edgecolor=BG, label=f"{lab}: {b:.1f} B",
+               hatch="//" if k.endswith("matched") else None)
+        bottom += b
+    ax.text(0, bottom * 1.02, f"{bottom:.0f} bytes per needed cell", ha="center", va="bottom", fontsize=FONT_MIN["annotation"] + 2)
+    ax.set(xlim=(-0.6, 2.4), ylim=(0, bottom * 1.15), xticks=[], ylabel="bytes per needed cell")
+    ax.set_title("the compact store", loc="left")
+    _legend(ax, loc="center right", fontsize=FONT_MIN["legend"])
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def plot_tile_timeline(rows, *, t_pass=None, figsize=(22, 8)):
+    """The tiles' pipeline (notebook 15, section 1d), from ``tiles_optical_depth``'s info rows (seconds from its t0):
+    one line per tile, its preparation on the host (crossings and contributions; colour: the host thread) and the
+    engine's sum (red). ``t_pass`` (t0, t1): the pass before the tiles, drawn as a band. Returns (fig, ax, info):
+    info prep_s, tau_s (summed), wall_s (first start to last end), overlap (sum of the parts over the wall time)."""
+    fig, ax = plt.subplots(figsize=figsize, layout="constrained")
+    threads = {}
+    cyc = [PALETTE[c] for c in ("cyan", "green", "purple", "yellow", "blue")]
+    t0 = min(r["prep_start"] for r in rows)
+    for k, r in enumerate(rows):
+        th = threads.setdefault(r["prep_thread"], len(threads))
+        ax.barh(k, r["prep_end"] - r["prep_start"], left=r["prep_start"] - t0, height=0.38, color=cyc[th % len(cyc)], align="edge")
+        ts, te_ = (r["tau_start"], r["tau_end"]) if not isinstance(r["tau_start"], dict) else (r["tau_start"]["tau"], r["tau_end"]["tau"])
+        ax.barh(k - 0.4, te_ - ts, left=ts - t0, height=0.38, color=PALETTE["red"], align="edge")
+    if t_pass is not None:
+        ax.axvspan(t_pass[0] - t0, t_pass[1] - t0, color=PALETTE["yellow"], alpha=0.2, lw=0)
+    ends = [(r["tau_end"]["tau"] if isinstance(r["tau_end"], dict) else r["tau_end"]) for r in rows]
+    wall = max(ends) - t0
+    prep = sum(r["prep_end"] - r["prep_start"] for r in rows)
+    tau = sum((r["tau_end"]["tau"] - r["tau_start"]["tau"]) if isinstance(r["tau_end"], dict) else (r["tau_end"] - r["tau_start"]) for r in rows)
+    ax.set(xlabel="time since the first tile started [s]", ylabel="tile", xlim=(0, wall * 1.02), ylim=(len(rows), -1))
+    handles = [mpl.patches.Patch(color=cyc[i % len(cyc)], label=f"host thread {i + 1}: crossings + contributions of a tile") for i in range(len(threads))]
+    handles.append(mpl.patches.Patch(color=PALETTE["red"], label=r"the engine: the $\tau$ sum of a tile"))
+    _legend(ax, handles=handles, loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=FONT_MIN["legend"])
+    return fig, ax, dict(prep_s=prep, tau_s=tau, wall_s=wall, overlap=(prep + tau) / wall)
+
+
+def plot_envelope(u, r2, s_range, crossings, *, sampled_edges=None, counts=None, figsize=(22, 11)):
+    """The lower envelope on a segment of a straight skewer (notebook 15, section 2a). ``u``, ``r2`` (K,) [cMpc,
+    cMpc^2]: the candidates' coordinate along the path and squared distance from it; ``s_range`` (s0, s1) [cMpc];
+    ``crossings`` (s_lo (n,), s_hi (n,), index of the candidate (n,)) of the segment. (a) the lines -2 u s + u^2 + r^2 of
+    the candidates, the envelope (the lowest at every s, bold, in the colour of its crossing) and its corners s*; (b) the
+    crossings (one bar each) and, below, the option's sampled pieces, cut also at ``sampled_edges`` [cMpc] (the ends of
+    the dual segments); ``counts`` dict(crossings=, sampled=) per skewer. Returns (fig, axs)."""
+    u, r2 = np.asarray(u, float), np.asarray(r2, float)
+    s0, s1 = s_range
+    s = np.linspace(s0, s1, 800)
+    lo, hi, who = (np.asarray(x) for x in crossings)
+    fig, axs = plt.subplots(2, 1, figsize=figsize, sharex=True, layout="constrained", gridspec_kw={"height_ratios": [2.2, 1.0]})
+    ax = axs[0]
+    cyc = [PALETTE[c] for c in ("blue", "red", "green", "yellow", "purple", "cyan")]
+    um = float(np.median(u[who])) if np.size(who) else float(np.median(u))
+    line = lambda k, ss: -2 * (u[k] - um) * ss + u[k] ** 2 + r2[k]  # -2 u s + u^2 + r^2, minus the common -2 u_m s
+    for k in range(u.size):
+        ax.plot(s, line(k, s), color=DIM, lw=0.8, alpha=0.7, zorder=1)
+    env_lo, env_hi = np.inf, -np.inf
+    for i, (a_, b_, c_) in enumerate(zip(lo, hi, who)):
+        ss = np.linspace(max(a_, s0), min(b_, s1), 50)
+        y = line(c_, ss)
+        env_lo, env_hi = min(env_lo, y.min()), max(env_hi, y.max())
+        ax.plot(ss, y, color=cyc[i % len(cyc)], lw=4.0, zorder=3)
+    corners = lo[(lo > s0) & (lo < s1)]
+    for sc in corners:
+        c_ = who[np.flatnonzero(lo == sc)[0]]
+        ax.plot([sc], [line(c_, sc)], "o", color=FG, ms=8, zorder=4)
+    span = env_hi - env_lo
+    ax.set_ylim(env_lo - 0.3 * span, env_hi + 1.5 * span)
+    ax.set_ylabel(r"$-2u_g s + u_g^2 + r_g^2 + 2\bar u s$ [cMpc$^2$]")
+    ax.set_title(r"every candidate is a straight line (a common $-2\bar u s$ subtracted); the lowest is the cell the path is in", loc="left")
+    handles = [mpl.lines.Line2D([], [], color=DIM, lw=0.8, label=f"a candidate within reach ({u.size} here)"),
+               mpl.lines.Line2D([], [], color=PALETTE["blue"], lw=4.0, label="the lower envelope: one colour per crossing"),
+               mpl.lines.Line2D([], [], color=FG, marker="o", ls="none", ms=8, label=r"a corner $s^*$: a cell boundary")]
+    _legend(ax, handles=handles, loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=FONT_MIN["legend"])
+    ax = axs[1]
+    for i, (a_, b_) in enumerate(zip(lo, hi)):
+        ax.barh(1.0, min(b_, s1) - max(a_, s0), left=max(a_, s0), height=0.6, color=cyc[i % len(cyc)], edgecolor=FG, lw=1.0)
+    if sampled_edges is not None:
+        cuts = np.sort(np.concatenate([lo[(lo > s0) & (lo < s1)], np.asarray(sampled_edges)[(np.asarray(sampled_edges) > s0) & (np.asarray(sampled_edges) < s1)]]))
+        edges = np.concatenate([[s0], cuts, [s1]])
+        for a_, b_ in zip(edges[:-1], edges[1:]):
+            j = np.searchsorted(lo, 0.5 * (a_ + b_), side="right") - 1
+            ax.barh(0.0, b_ - a_, left=a_, height=0.6, color=cyc[max(j, 0) % len(cyc)], edgecolor=FG, lw=0.6, alpha=0.7)
+    c = counts or {}
+    ax.set_yticks([1.0, 0.0], [f"the crossings\n({c.get('crossings', len(lo)):,} per skewer)",
+                               f"the option voronoi_segments\n({c.get('sampled', 0):,} per skewer)"], fontsize=FONT_MIN["legend"])
+    ax.set(xlim=(s0, s1), ylim=(-0.6, 1.6), xlabel=LABELS["s"])
+    ax.set_title("the pieces: the crossings alone, or cut again at the ends of the dual segments of the sampling points", loc="left")
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def plot_integrated_profile(b_kms: float, a: float, W_kms: float, *, tilt_kms=0.0, n_sub=(1, 2, 4, 8, 16, 32), figsize=(22, 13)):
+    """The profile of one crossing integrated over its span of line centres (notebook 15, section 2b), in Doppler units
+    u = (v - v_c) / b: the mean of H(a, u) over the span W, [Phi(u + h) - Phi(u - h)] / 2h (h = W / 2b,
+    ``core.voigt_integral.harris_mean``), against the midpoint rule with n sub-pieces (``n_sub``); (b) its maximum error
+    against n (slope -2); (c) Phi(u) and its terms (Harris' expansion to fourth order); (d) the tilt term g b <(u - u_mid)
+    H> of a weight gradient ``tilt_kms`` = g [s/km], relative to the peak. Returns (fig, axs, info)."""
+    from skewerjax.core.voigt import harris_H4
+    from skewerjax.core.voigt_integral import SQRT_PI, dawson, gaussian_moment_wide, harris_mean
+
+    h = 0.5 * W_kms / b_kms
+    u = np.linspace(-4.0 - h, 4.0 + h, 1601)
+    exact = np.asarray(harris_mean(jnp_asarray(u - h), jnp_asarray(u + h), a, fourth=True), dtype=np.float64)
+    fig, axs = plt.subplots(2, 2, figsize=figsize, layout="constrained")
+    ax = axs[0, 0]
+    ax.axvspan(-h * b_kms, h * b_kms, color=PALETTE["grey"], alpha=0.25, lw=0, label=f"the span of line centres, W = {W_kms:.1f} km/s = {W_kms / b_kms:.2f} b")
+    ax.plot(u * b_kms, exact, color=FG, label=r"integrated: $[\Phi(u+h) - \Phi(u-h)]/2h$", **MODE_STYLES["reference"])
+    ax.plot(u * b_kms, exact, color=FG, lw=1.8)
+    errs = []
+    cols = [PALETTE[c] for c in ("red", "yellow", "green", "cyan", "blue", "purple")]
+    for i, n in enumerate(n_sub):
+        centres = -h + (np.arange(n) + 0.5) * 2 * h / n
+        mid = np.mean([np.asarray(harris_H4(jnp_asarray(u - c), a), dtype=np.float64) for c in centres], axis=0)
+        errs.append(float(np.abs(mid - exact).max() / exact.max()))
+        if i < 4:
+            ax.plot(u * b_kms, mid, color=cols[i], lw=1.6, ls="--", label=f"midpoint rule, {n} sub-piece{'s' if n > 1 else ''}")
+    ax.set(xlabel=r"$v - v_c$ [km s$^{-1}$]", ylabel=r"$\langle H\rangle$ (peak 1 for a point)")
+    ax.set_title(f"one crossing: b = {b_kms:.1f} km/s, W = {W_kms:.1f} km/s", loc="left")
+    _legend(ax, loc="upper right", fontsize=FONT_MIN["legend"])
+    ax = axs[0, 1]
+    ns = np.asarray(n_sub, float)
+    ax.loglog(ns, errs, "o-", color=PALETTE["red"], ms=9, lw=2.0, label="midpoint rule: max error / peak")
+    ax.loglog(ns, errs[0] * ns**-2.0, color=DIM, ls=":", lw=1.6, label=r"$\propto n^{-2}$ ($W^2/12b^2$ per sub-piece)")
+    ax.axhline(2e-7, color=FG, lw=1.4, ls="-.", label=r"the integral's own accuracy (Harris' expansion, $\leq 2\times10^{-7}$)")
+    ax.set(xlabel="sub-pieces n", ylabel="max |midpoint - integrated| / peak")
+    ax.set_title("the midpoint rule converges at second order; the integral is exact at once", loc="left")
+    _legend(ax, loc="lower left", fontsize=FONT_MIN["legend"])
+    ax = axs[1, 0]
+    uu = np.linspace(0.0, 6.0, 600)
+    F = np.asarray(dawson(jnp_asarray(uu)), dtype=np.float64)
+    e2 = np.exp(-uu**2)
+    terms = {
+        r"$\frac{\sqrt{\pi}}{2}\,\mathrm{erf}\,u$": 0.5 * SQRT_PI * np.vectorize(math_erf)(uu),
+        r"$-a\,\frac{2}{\sqrt{\pi}} F(u)$": -a * 2 / SQRT_PI * F,
+        r"$a^2 u\, e^{-u^2}$": a**2 * uu * e2,
+        r"$-a^3 \frac{2}{3\sqrt{\pi}}[(1-2u^2)F + u]$": -(a**3) * 2 / (3 * SQRT_PI) * ((1 - 2 * uu**2) * F + uu),
+        r"$a^4 (u/2 - u^3/3) e^{-u^2}$": a**4 * (uu / 2 - uu**3 / 3) * e2,
+    }
+    for (lab, y), col in zip(terms.items(), (FG, PALETTE["blue"], PALETTE["green"], PALETTE["yellow"], PALETTE["purple"])):
+        ax.semilogy(uu, np.maximum(np.abs(y), 1e-30), color=col, lw=2.0, label=lab)
+    ax.set(xlabel="u", ylabel=r"$|$term of $\Phi(u)|$", ylim=(1e-22, 3))
+    ax.set_title(rf"$\Phi(u) = \int_0^u H\,du'$ term by term (a = {a:.1e})", loc="left")
+    _legend(ax, loc="lower left", fontsize=FONT_MIN["legend"], ncols=2)
+    ax = axs[1, 1]
+    M1 = np.asarray(gaussian_moment_wide(jnp_asarray(u - h), jnp_asarray(u + h)), dtype=np.float64)
+    tilt_term = tilt_kms * b_kms * M1
+    rel = tilt_term / exact.max()
+    sc = 10.0 ** np.floor(np.log10(max(np.abs(rel).max(), 1e-300)))
+    ax.plot(u * b_kms, rel / sc, color=PALETTE["purple"], lw=2.2, label=rf"$g\,b\,\langle(u - \bar u)H\rangle$ / peak, g = {tilt_kms:.2e} s/km")
+    ax.axhline(0.0, color=DIM, lw=1.0)
+    ax.set(xlabel=r"$v - v_c$ [km s$^{-1}$]", ylabel=rf"tilt term / peak [$10^{{{int(np.log10(sc))}}}$]")
+    ax.set_title(f"the tilt: the weight varies along the span (max {np.abs(rel).max():.1e} of the peak)", loc="left")
+    _legend(ax, loc="upper right", fontsize=FONT_MIN["legend"])
+    add_panel_letters(np.ravel(axs))
+    return fig, axs, dict(midpoint_errors=dict(zip(n_sub, errs)), tilt_max=float(np.abs(rel).max()), h=h)
+
+
+def jnp_asarray(x):
+    """A float64 NumPy array as JAX's (jax.numpy.asarray; float32 unless x64 is on): for the figure helpers."""
+    import jax.numpy as jnp
+
+    return jnp.asarray(x)
+
+
+def math_erf(x):
+    import math
+
+    return math.erf(x)
+
+
+def plot_accuracy_cost(c2: dict, *, integrated_error=None, target: float = 1e-6, figsize=(22, 8)):
+    """Accuracy against cost (notebook 15, section 2c), from the C2 record (``comparison.scaling.run_c2``): rms (a) and
+    max (b) |Delta F| of the midpoint option at every sampling spacing against the integrated crossings, against its tau
+    time per skewer, one curve per line; the integrated crossings at their own time (a vertical line; their error against
+    the converged result, ``integrated_error`` {line: rms}, as a star when given); the target ``target``."""
+    lines = ("HI-LyA", "SiIII-1206")
+    mp = c2["midpoint"]
+    sp = sorted(mp, key=float)
+    t = np.array([mp[k]["tau_s_per_skewer"] for k in sp]) * 1e3
+    t_int = c2["integrated"]["tau_s_per_skewer"] * 1e3
+    fig, axs = plt.subplots(1, 2, figsize=figsize, layout="constrained", sharex=True)
+    for ax, stat in zip(axs, ("rms", "max")):
+        for ln in lines:
+            y = np.array([mp[k][f"{ln}:{stat}_dF"] for k in sp])
+            ax.loglog(t, y, marker="o", color=ENTITY_COLORS[ln], ms=9, lw=2.2, ls=LINE_STYLES[ln][1], label=f"{ln}: the midpoint option")
+            for tx, yy, k in zip(t, y, sp):
+                if ln == "HI-LyA":
+                    ax.annotate(f"{float(k):g} km/s\n({mp[k]['pieces_per_skewer']:,.0f} pieces)", (tx, yy), xytext=(6, 6),
+                                textcoords="offset points", fontsize=FONT_MIN["floor"], color=FG)
+            if integrated_error and stat == "rms" and ln in integrated_error:
+                ax.plot([t_int], [integrated_error[ln]], "*", color=ENTITY_COLORS[ln], ms=20, mec=FG,
+                        label=f"{ln}: integrated crossings vs the converged result")
+        ax.axvline(t_int, color=FG, lw=2.2, label=f"the integrated crossings: {t_int:.1f} ms per skewer (the reference)")
+        ax.axhline(target, color=DIM, lw=1.6, ls="-.", label=f"target {target:.0e}")
+        ax.set(xlabel=r"$\tau$ time per skewer [ms]", ylabel=rf"{stat} $|\Delta F|$ against the integrated crossings")
+        ax.set_ylim(top=ax.get_ylim()[1] * 4)
+        ax.xaxis.set_major_locator(mpl.ticker.FixedLocator([3, 5, 10, 20, 30]))
+        ax.xaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda x, _: f"{x:g}"))
+        ax.xaxis.set_minor_formatter(mpl.ticker.NullFormatter())
+    axs[0].set_title("rms over every pixel", loc="left")
+    axs[1].set_title("the worst pixel", loc="left")
+    _legend(axs[1], loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=FONT_MIN["legend"])
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def plot_window_levels(levels: dict, evaluations: dict, *, figsize=(22, 7.5)):
+    """Window sizes (notebook 15, section 3b): (a) the number of contributions at every window half width D, one bar
+    series per line (``levels`` {line: {D: count}}); (b) the profile evaluations per skewer (``evaluations`` {label:
+    {line: count}}: e.g. the dense sum N_contributions x N_v against the windows' sum of 2D + 1), log axis, with the
+    factor written. Returns (fig, axs)."""
+    fig, axs = plt.subplots(1, 2, figsize=figsize, layout="constrained", gridspec_kw={"width_ratios": [1.5, 1.0]})
+    ax = axs[0]
+    Ds = sorted({int(d) for lv in levels.values() for d in lv})
+    x = np.arange(len(Ds))
+    w = 0.8 / max(len(levels), 1)
+    for i, (ln, lv) in enumerate(levels.items()):
+        tot = sum(lv.values())
+        y = np.array([lv.get(d, lv.get(str(d), 0)) for d in Ds], float) / tot
+        ax.bar(x + (i - (len(levels) - 1) / 2) * w, 100 * y, w, color=ENTITY_COLORS.get(ln, FG), hatch=None if i == 0 else "//",
+               edgecolor=BG, label=f"{ln}: median D = {_median_level(lv)} px")
+    ax.set_xticks(x, [str(d) for d in Ds])
+    ax.set(xlabel="window half width D [pixels of 1 km/s]", ylabel="% of the contributions")
+    ax.set_title("each contribution gets the smallest window its profile needs", loc="left")
+    _legend(ax, loc="upper right", fontsize=FONT_MIN["legend"])
+    ax = axs[1]
+    labs = list(evaluations)
+    lines = list(next(iter(evaluations.values())))
+    xx = np.arange(len(lines))
+    w = 0.8 / len(labs)
+    for i, lab in enumerate(labs):
+        y = np.array([evaluations[lab][ln] for ln in lines], float)
+        ax.bar(xx + (i - (len(labs) - 1) / 2) * w, y, w, color=[ENTITY_COLORS.get(ln, FG) for ln in lines], alpha=1.0 if i else 0.45,
+               edgecolor=FG, lw=0.8, hatch="//" if i == 0 else None, label=lab)
+    for j, ln in enumerate(lines):
+        r = evaluations[labs[0]][ln] / evaluations[labs[-1]][ln]
+        ax.text(xx[j], evaluations[labs[0]][ln] * 1.6, f"{r:.0f}x fewer", ha="center", fontsize=FONT_MIN["annotation"] + 1)
+    ax.set_yscale("log")
+    ax.set_xticks(xx, lines)
+    ax.set_ylim(min(evaluations[labs[-1]].values()) / 5, max(evaluations[labs[0]].values()) * 8)
+    ax.set_ylabel("profile evaluations per skewer")
+    ax.set_title("the cost: windows + one FFT against every pixel", loc="left")
+    _legend(ax, loc="lower left", fontsize=FONT_MIN["legend"])
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def _median_level(lv: dict) -> int:
+    ks = sorted(lv, key=lambda d: int(d))
+    c = np.cumsum([lv[k] for k in ks])
+    return int(ks[int(np.searchsorted(c, 0.5 * c[-1]))])
+
+
+def plot_far_convolution(v, cpix, moments, offsets, kernels, far_fft, far_direct, *, D_x: int, figsize=(22, 15)):
+    """The far wings as one convolution (notebook 15, section 3c), on one skewer: (a) the four moments every windowed
+    contribution deposits at its centre pixel (stems, ``moments`` (4, n) at ``cpix`` (n,)); (b) the kernels K = 1 / Delta'^2,
+    -K', K'' / 2 and 1 / Delta'^4 against the pixel offset (``offsets`` [km/s], ``kernels`` (4, m)), zero within ``D_x``
+    pixels; (c) their convolution (``far_fft``, by FFT) against the direct sum over the contributions (``far_direct``)
+    and their difference. Returns (fig, axs, info)."""
+    v = np.asarray(v, float)
+    fig, axs = plt.subplots(3, 1, figsize=figsize, layout="constrained", gridspec_kw={"height_ratios": [1.2, 1.0, 1.2]})
+    names = (r"$m_0 = w$", r"$m_1 = w\,\delta$", r"$m_2 = w(\delta^2 + W^2/12)$", r"$m_3 = \frac{3}{2} w b^2$")
+    cols = (PALETTE["blue"], PALETTE["green"], PALETTE["yellow"], PALETTE["purple"])
+    ax = axs[0]
+    for k in range(4):
+        m = np.asarray(moments[k], float)
+        sc = np.abs(m).max() or 1.0
+        mk, st, bs = ax.stem(v[cpix], m / sc + 0.0, linefmt="-", markerfmt="o", basefmt=" ")
+        plt.setp(st, color=cols[k], lw=1.2, alpha=0.8)
+        plt.setp(mk, color=cols[k], ms=4)
+        mk.set_label(f"{names[k]} / {sc:.1e}")
+    ax.set(xlim=(v[0], v[-1]), ylabel="moment / its max", xlabel=LABELS["v_dagger"])
+    ax.set_title("four numbers per contribution, at its centre pixel", loc="left")
+    _legend(ax, loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=FONT_MIN["legend"])
+    ax = axs[1]
+    labs = (r"$K = 1/\Delta'^2$", r"$-K'$", r"$K''/2$", r"$1/\Delta'^4$")
+    off = np.asarray(offsets, float)
+    pos = off > 0
+    for k in range(4):
+        kk = np.abs(np.asarray(kernels[k], float)[pos])
+        ax.loglog(off[pos], np.where(kk > 0, kk, np.nan), color=cols[k], lw=2.2, label=labs[k])
+    ax.axvline(D_x * (v[1] - v[0]), color=FG, lw=1.4, ls="-.", label=f"$D_x$ = {D_x} px: zero within it")
+    ax.set(xlabel=r"pixel offset $|k - c|\,dv$ [km s$^{-1}$]", ylabel="|kernel| [s$^{n}$ km$^{-n}$]")
+    ax.set_title("the same kernels for every contribution of a line", loc="left")
+    _legend(ax, loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=FONT_MIN["legend"])
+    ax = axs[2]
+    ff, fd = np.asarray(far_fft, float), np.asarray(far_direct, float)
+    ax.semilogy(v, np.maximum(np.abs(fd), 1e-16), color=FG, label="the direct sum over the contributions", **MODE_STYLES["reference"])
+    ax.semilogy(v, np.maximum(np.abs(ff), 1e-16), color=PALETTE["purple"], lw=1.6, label="one FFT convolution")
+    ax.semilogy(v, np.maximum(np.abs(ff - fd), 1e-16), color=PALETTE["red"], lw=1.2, ls=":",
+                label=f"their difference: max {np.abs(ff - fd).max():.1e} ({np.abs(ff - fd).max() / np.abs(fd).max():.0e} of the term)")
+    ax.set(xlim=(v[0], v[-1]), xlabel=LABELS["v_dagger"], ylabel=r"far-wing $\tau$")
+    ax.set_title("the convolution is the sum, at the cost of an FFT", loc="left")
+    _legend(ax, loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=FONT_MIN["legend"])
+    add_panel_letters(axs)
+    return fig, axs, dict(max_diff=float(np.abs(ff - fd).max()), rel_diff=float(np.abs(ff - fd).max() / np.abs(fd).max()))
+
+
+def plot_truncation(dtau_trunc, dF_trunc, dtau_engine, dF_engine, *, wing_tolerance: float = 1e-9, target: float = 1e-6, figsize=(22, 7)):
+    """Why not truncate (notebook 15, section 3d): histograms over every pixel of |Delta tau| (a) and |Delta F| (b) of
+    the windows alone (the far wings dropped) and of the engine (windows + FFT), against the dense sum; the engine's
+    tolerance and the accuracy target marked. Returns (fig, axs)."""
+    fig, axs = plt.subplots(1, 2, figsize=figsize, layout="constrained")
+    for ax, (a, b), lim, xl in ((axs[0], (dtau_trunc, dtau_engine), wing_tolerance, r"$|\Delta\tau|$ against the dense sum"),
+                                (axs[1], (dF_trunc, dF_engine), target, r"$|\Delta F|$ against the dense sum")):
+        a, b = np.maximum(np.abs(np.ravel(a)), 1e-14), np.maximum(np.abs(np.ravel(b)), 1e-14)
+        bins = np.logspace(-14, max(np.log10(max(a.max(), b.max())) + 0.5, -6), 80)
+        ax.hist(a, bins=bins, color=PALETTE["red"], alpha=0.6, label=f"windows only (wings dropped): median {np.median(a):.0e}")
+        ax.hist(b, bins=bins, color=PALETTE["blue"], alpha=0.6, label=f"windows + FFT: median {np.median(b):.0e}")
+        ax.axvline(lim, color=FG, lw=1.6, ls="-.", label=(rf"wing_tolerance $\epsilon$ = {lim:.0e}" if ax is axs[0] else f"target {lim:.0e}"))
+        ax.set(xscale="log", xlabel=xl, ylabel="pixels")
+        _legend(ax, loc="upper left", fontsize=FONT_MIN["legend"])
+    axs[0].set_title("in tau", loc="left")
+    axs[1].set_title("in the flux", loc="left")
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def plot_chord(h: float, r: float, b_kms: float, a: float, spacing_kms: float, *, tau0: float = 1.0, figsize=(22, 8)):
+    """fake_spectra's chord through one cell (notebook 15, section 4a): (a) the sphere of radius h = V^(1/3) [cMpc] around
+    the generator, the path at impact parameter r, the chord of half length z = sqrt(h^2 - r^2) and its 7 points
+    s = u + z (k/4 - 1), k = 1..7; (b) the 7 points' profiles, equally spaced in line centre (``spacing_kms``), each with
+    1/7 of the cell's column (Doppler width ``b_kms``, damping ``a``; peak of the sum ``tau0``), and their sum: what the
+    per-cell kernel generates from one contribution (its middle line centre, its spacing, its amplitude). Returns (fig,
+    axs)."""
+    from matplotlib.patches import Circle
+
+    from skewerjax.core.voigt import harris_H4
+
+    z = np.sqrt(max(h * h - r * r, 0.0))
+    fig, axs = plt.subplots(1, 2, figsize=figsize, layout="constrained", gridspec_kw={"width_ratios": [1.0, 1.4]})
+    ax = axs[0]
+    ax.add_patch(Circle((0, 0), h, fill=True, facecolor=PALETTE["grey"], alpha=0.25, edgecolor=FG, lw=2.0))
+    ax.plot([0], [0], "*", color=FG, ms=16)
+    ax.axhline(r, color=PALETTE["blue"], lw=2.2)
+    ax.plot([-z, z], [r, r], color=PALETTE["red"], lw=5.0, solid_capstyle="butt")
+    k = np.arange(1, 8)
+    sk = z * (k / 4.0 - 1.0)
+    cols = [mpl.colormaps[CMAPS["sequential"]](0.2 + 0.7 * i / 6) for i in range(7)]
+    ax.scatter(sk, np.full(7, r), c=cols, s=110, zorder=5, edgecolor=FG)
+    ax.annotate("", (0, r), (0, 0), arrowprops=dict(arrowstyle="<->", color=FG, lw=1.6))
+    ax.text(0.03 * h, 0.5 * r, "r", fontsize=FONT_MIN["label"], color=FG)
+    ax.annotate("", (h * np.cos(3.8), h * np.sin(3.8)), (0, 0), arrowprops=dict(arrowstyle="->", color=FG, lw=1.6))
+    ax.text(0.55 * h * np.cos(3.8), 0.55 * h * np.sin(3.8) - 0.12 * h, r"$h = V^{1/3}$", fontsize=FONT_MIN["label"], color=FG, ha="center")
+    ax.text(0.0, 1.08 * h, r"chord $2z$, $z = \sqrt{h^2 - r^2}$; points $s = u + z(k/4 - 1)$", ha="center", fontsize=FONT_MIN["annotation"], color=FG)
+    ax.set(xlim=(-1.25 * h, 1.25 * h), ylim=(-1.25 * h, 1.3 * h), aspect="equal", xlabel="along the path [cMpc]", ylabel="across [cMpc]")
+    ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(4))
+    ax.yaxis.set_major_locator(mpl.ticker.MaxNLocator(5))
+    ax.set_title("the sphere, the path and its chord", loc="left")
+    ax = axs[1]
+    v = np.linspace(-4 * spacing_kms - 4 * b_kms, 4 * spacing_kms + 4 * b_kms, 801)
+    ph = [np.asarray(harris_H4(jnp_asarray((v - (kk - 4) * spacing_kms) / b_kms), a), dtype=np.float64) for kk in k]
+    tot = np.sum(ph, axis=0) / 7.0
+    sc = tau0 / tot.max()
+    for kk, p_, c in zip(k, ph, cols):
+        ax.plot(v, sc * p_ / 7.0, color=c, lw=1.8, label=f"point {kk}" if kk in (1, 4, 7) else None)
+    ax.plot(v, sc * tot, color=FG, lw=3.0, label="their sum: the cell's tau")
+    ax.set(xlabel=r"$v - v_c$ [km s$^{-1}$]", ylabel=r"$\tau$")
+    ax.set_title(f"7 points equally spaced in line centre ({spacing_kms:.2f} km/s apart, b = {b_kms:.1f} km/s): one contribution, 7 on the device", loc="left",
+                 fontsize=FONT_MIN["title"] - 2)
+    _legend(ax, loc="upper right", fontsize=FONT_MIN["legend"])
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def plot_cell_walk(offsets, tau_profile, tau_walk, tau_full_walk, *, tautail: float, levels, level_start: int, level_end: int, core: int,
+                   b_px: float, figsize=(22, 10)):
+    """fake_spectra's per-cell walk on escalating windows (notebook 15, section 4b), for one cell, against the pixel
+    offset from its centre pixel (``offsets``): the cell's profile on every pixel (``tau_profile``: no early stop), the
+    walk (``tau_walk``: the pixels kept up to and including the first one below ``tautail`` each way) and the full-grid
+    walk (``tau_full_walk``); the windows of ``levels`` (half widths [pixels]) tried, from ``level_start`` to
+    ``level_end`` (indices), and the core |j| < ``core`` evaluated point by point (the wings beyond, 10 Doppler widths
+    out, from the cell's moments; 0: no split); ``b_px`` the Doppler width in pixels. Returns (fig, axs, info)."""
+    o = np.asarray(offsets, float)
+    tp, tw, tf = (np.asarray(x, float) for x in (tau_profile, tau_walk, tau_full_walk))
+    fig, axs = plt.subplots(2, 1, figsize=figsize, sharex=True, layout="constrained", gridspec_kw={"height_ratios": [2.2, 1.0]})
+    ax = axs[0]
+    ax.semilogy(o, np.maximum(tp, 1e-16), color=DIM, lw=1.6, ls=":", label="the cell's profile on every pixel")
+    ax.semilogy(o, np.where(tw > 0, tw, np.nan), color=PALETTE["blue"], lw=3.0, label="the walk on its window")
+    ax.semilogy(o, np.where(tf > 0, tf, np.nan), color=FG, label="the walk on the whole grid", **MODE_STYLES["reference"])
+    ax.axhline(tautail, color=PALETTE["red"], lw=1.8, ls="-.", label=f"tautail = {tautail:.0e}: the walk stops at the first pixel below")
+    if core:
+        ax.axvspan(-core, core, color=PALETTE["yellow"], alpha=0.15, lw=0, label=f"the core: {core} px each way, point by point")
+    kept = np.flatnonzero(tw > 0)
+    ax.set_ylim(tautail / 100, max(tp.max(), tw.max()) * 5)
+    ax.set_ylabel(r"$\tau$ of the cell")
+    ax.set_title("the walk of fake_spectra, computed on a window around the cell", loc="left")
+    _legend(ax, loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=FONT_MIN["legend"])
+    ax = axs[1]
+    for L in range(max(level_start, 0), max(level_end, 0) + 1):
+        D = int(levels[L])
+        last = L == level_end
+        ax.barh(L, 2 * D, left=-D, height=0.6, color=PALETTE["blue"] if last else PALETTE["grey"], alpha=0.9 if last else 0.5, edgecolor=FG)
+        ax.text(D, L, f"  D = {D} px" + (": the walk stops inside" if last else ": the walk reaches the edge, next level"), va="center",
+                fontsize=FONT_MIN["annotation"])
+    if kept.size:
+        for a_ in axs:
+            a_.axvline(o[kept[0]], color=PALETTE["red"], lw=1.0)
+            a_.axvline(o[kept[-1]], color=PALETTE["red"], lw=1.0)
+    ax.set(xlabel="pixel offset from the cell's centre pixel", ylabel="window level", ylim=(max(level_end, 0) + 0.8, max(level_start, 0) - 0.8))
+    ax.set_title(f"the windows tried (Doppler width {b_px:.1f} px)", loc="left")
+    add_panel_letters(axs)
+    lim = max(int(levels[max(level_end, 0)]) * 1.15, 10)
+    axs[0].set_xlim(-lim, lim * 1.6)
+    return fig, axs, dict(max_diff=float(np.abs(tw - tf).max()), walk_px=int(kept.size))
+
+
+def plot_fixed_shapes(rows_per_tile, compiled: dict, jit: dict, *, figsize=(22, 7.5)):
+    """Fixed shapes and fixed costs (notebook 15, section 5): (a) the skewers of every tile against its rows padded to a
+    power of two (``rows_per_tile``: (N_tiles,) skewers); (b) the kernels compiled (``compiled`` {label: count}: with
+    fixed shapes, measured, against one per shape met, counted); (c) the JIT compilation of the benchmark's points
+    (``jit`` {label: s}). Returns (fig, axs)."""
+    fig, axs = plt.subplots(1, 3, figsize=figsize, layout="constrained", gridspec_kw={"width_ratios": [1.4, 1.0, 1.0]})
+    ax = axs[0]
+    r = np.asarray(rows_per_tile, int)
+    pad = 1 << np.maximum(r - 1, 0).astype(np.int64).bit_length() if np.ndim(r) == 0 else np.array([1 << max(int(x) - 1, 0).bit_length() for x in r])
+    x = np.arange(r.size)
+    ax.bar(x, pad, color=PALETTE["grey"], alpha=0.5, label="rows of the tile's kernels (a power of two)")
+    ax.bar(x, r, color=PALETTE["blue"], label="skewers of the tile")
+    ax.set(xlabel="tile", ylabel="rows")
+    ax.set_title(f"{r.size} tiles, {len(np.unique(r))} sizes, {len(np.unique(pad))} padded shape(s)", loc="left")
+    _legend(ax, loc="lower right", fontsize=FONT_MIN["legend"])
+    ax = axs[1]
+    labs = list(compiled)
+    ax.bar(np.arange(len(labs)), [compiled[k] for k in labs], color=[PALETTE["blue"], PALETTE["grey"]][: len(labs)], edgecolor=FG)
+    for i, k in enumerate(labs):
+        ax.text(i, compiled[k] * 1.03, f"{compiled[k]:,}", ha="center", fontsize=FONT_MIN["annotation"] + 1)
+    ax.set_xticks(np.arange(len(labs)), [lb.replace(": ", ":\n") for lb in labs], fontsize=FONT_MIN["legend"])
+    ax.set_ylabel("compiled kernels")
+    ax.set_ylim(0, max(compiled.values()) * 1.15)
+    ax.set_title("each kernel compiles once per window level", loc="left")
+    ax = axs[2]
+    jl = list(jit)
+    ax.barh(np.arange(len(jl)), [jit[k] for k in jl], color=PALETTE["purple"])
+    ax.set_yticks(np.arange(len(jl)), jl, fontsize=FONT_MIN["legend"])
+    for i, k in enumerate(jl):
+        ax.text(jit[k], i, f" {jit[k]:.0f} s", va="center", fontsize=FONT_MIN["annotation"])
+    ax.set(xlabel="JIT compilation [s]", xlim=(0, max(jit.values()) * 1.3))
+    ax.invert_yaxis()
+    ax.set_title("the fixed cost of compiling", loc="left")
+    add_panel_letters(axs)
+    return fig, axs
+
+
+PROFILE_STAGE_COLORS = {"io": BENCH_STAGE_COLORS["io"], "physics": BENCH_STAGE_COLORS["physics"], "tau": BENCH_STAGE_COLORS["tau"],
+                        "pass": BENCH_STAGE_COLORS["io"], "assemble": PALETTE["grey"], "tiles": BENCH_STAGE_COLORS["tau"],
+                        "setup": PALETTE["grey"], "search": BENCH_STAGE_COLORS["selection"], "pieces": BENCH_STAGE_COLORS["pieces"],
+                        "selection": BENCH_STAGE_COLORS["selection"]}
+PROFILE_STAGE_LABELS = {"io": "I/O", "physics": "gas physics", "tau": r"C engine (search + $\tau$)", "pass": "the pass (I/O, reach, physics)",
+                        "assemble": "store assembly", "tiles": r"tiles (crossings / chords, $\tau$)", "setup": "set-up",
+                        "search": "search", "selection": "reach / search", "pieces": "pieces"}
+
+
+def plot_cpu_profile(timelines: dict, stages: dict, *, cores: int = 32, figsize=(22, 12)):
+    """CPU utilisation against time (notebook 15, section 6): one row per code (``timelines`` {label: (t (n,), busy cores
+    (n,), [(t0, t1, stage), ...])}, the stages shaded), and the time of every stage of both codes side by side
+    (``stages`` {stage label: {code label: s}}), with the ratio. ``cores``: the machine's (drawn). Returns (fig, axs)."""
+    labs = list(timelines)
+    fig = plt.figure(figsize=figsize, layout="constrained")
+    gs = fig.add_gridspec(len(labs), 2, width_ratios=[2.2, 1.0])
+    axs = [fig.add_subplot(gs[i, 0]) for i in range(len(labs))]
+    tmax = max(np.max(t) for t, _, _ in timelines.values())
+    seen = set()
+    for ax, lab in zip(axs, labs):
+        t, c, spans = timelines[lab]
+        for t0, t1, st in spans:
+            col = PROFILE_STAGE_COLORS.get(st, PALETTE["grey"])
+            name = PROFILE_STAGE_LABELS.get(st, st)
+            ax.axvspan(t0, t1, color=col, alpha=0.25, lw=0, label=None if name in seen else name)
+            seen.add(name)
+        ax.plot(t, c, color=FG, lw=1.4)
+        ax.axhline(cores, color=DIM, lw=1.2, ls="--")
+        mean = np.trapz(c, t) / (t[-1] - t[0]) if t.size > 1 else 0.0
+        ax.set(xlim=(0, tmax), ylim=(0, cores * 1.12), ylabel="busy cores")
+        ax.set_title(f"{lab}: {t[-1] - t[0]:.0f} s, {mean:.1f} cores busy on average", loc="left")
+    axs[-1].set_xlabel("time since the start of the run [s]")
+    h, l_ = [], []
+    for ax in axs:
+        hh, ll = ax.get_legend_handles_labels()
+        h += hh
+        l_ += ll
+    _legend(fig, handles=h, labels=l_, loc="outside lower left", ncols=4, fontsize=FONT_MIN["legend"])
+    ax = fig.add_subplot(gs[:, 1])
+    st = list(stages)
+    y = np.arange(len(st))
+    w = 0.8 / len(labs)
+    for i, lab in enumerate(labs):
+        vals = [stages[s].get(lab, 0.0) for s in st]
+        ax.barh(y + (i - (len(labs) - 1) / 2) * w, vals, w, color=[PALETTE["grey"], PALETTE["blue"]][i % 2], edgecolor=FG, hatch="//" if i else None,
+                label=lab)
+    for j, s in enumerate(st):
+        a_, b_ = (stages[s].get(lab, 0.0) for lab in labs[:2])
+        if b_ > 0 and a_ > 0:
+            ax.text(max(a_, b_) * 1.02, y[j], f" {a_ / b_:.1f}x", va="center", fontsize=FONT_MIN["annotation"] + 1)
+    ax.set_yticks(y, st, fontsize=FONT_MIN["legend"])
+    ax.invert_yaxis()
+    ax.set_xlabel("wall time [s]")
+    ax.set_xlim(0, max(max(v.values()) for v in stages.values()) * 1.35)
+    ax.set_title("by stage", loc="left")
+    _legend(ax, loc="lower right", fontsize=FONT_MIN["legend"])
+    add_panel_letters(axs + [ax])
+    return fig, axs + [ax]
+
+
+# --------------------------------------------------------------------------- notebook 16: memory
+MEMORY_COMPONENT_COLORS = {
+    "baseline": PALETTE["grey"],
+    "store": PALETTE["blue"],
+    "pass blocks": PALETTE["yellow"],
+    "tiles": PALETTE["cyan"],
+    "spectra": PALETTE["red"],
+    "per-file arrays": PALETTE["yellow"],
+    "tau arrays": PALETTE["red"],
+    "device buffers": PALETTE["green"],
+    "CUDA context": PALETTE["grey"],
+    "unaccounted": PALETTE["purple"],
+}
+
+
+def _stage_spans(markers, t_end):
+    out = []
+    for (t0, n), (t1, _) in zip(markers, list(markers[1:]) + [(t_end, None)]):
+        out.append((t0, t1, n))
+    return out
+
+
+def plot_memory_timelines(records: dict, *, ram_GB: float = 125.0, vram_GB: float = 12.0, t_from: str | None = "setup", figsize=None):
+    """Memory against time (notebook 16), one row per entry (``records`` {label: record of ``comparison.memory``}):
+    host anonymous memory (solid), host file-backed pages (dashed), the system's available memory (dotted, light), and,
+    for a GPU entry, the process's device memory (NVML, CUDA context included; right axis, green); the stages shaded
+    (``PROFILE_STAGE_COLORS``); this machine's RAM and VRAM marked. ``t_from``: the marker the time axis starts at (the
+    measured run, after the warm-up). Returns (fig, axs)."""
+    labs = list(records)
+    fig, axs = plt.subplots(len(labs), 1, figsize=figsize or (22, 4.2 * len(labs) + 1.5), layout="constrained", squeeze=False)
+    axs = axs[:, 0]
+    seen = set()
+    for ax, lab in zip(axs, labs):
+        r = records[lab]
+        tl = r["timeline"]
+        t = np.asarray(tl["t"], float)
+        t_set = next((m[0] for m in r["markers"] if m[1] == t_from), t[0]) if t_from else t[0]
+        keep = t >= t_set
+        tt = t[keep] - t_set
+        marks = [(m[0] - t_set, m[1]) for m in r["markers"] if m[0] >= t_set and m[1] not in ("done",)]
+        for t0, t1, st in _stage_spans(marks, tt[-1]):
+            if st == "start":
+                continue
+            name = PROFILE_STAGE_LABELS.get(st, st)
+            ax.axvspan(t0, t1, color=PROFILE_STAGE_COLORS.get(st, PALETTE["grey"]), alpha=0.22, lw=0, label=None if name in seen else name)
+            seen.add(name)
+        an = np.asarray(tl["anon_GB"], float)[keep]
+        fi = np.asarray(tl["file_GB"], float)[keep]
+        ax.plot(tt, an, color=FG, lw=2.2, label=None if "anon" in seen else "host: anonymous (RssAnon)")
+        ax.plot(tt, fi, color=FG, lw=1.6, ls="--", label=None if "file" in seen else "host: file-backed (RssFile)")
+        seen |= {"anon", "file"}
+        ax.axhline(ram_GB, color=PALETTE["red"], lw=1.4, ls="-.", label=None if "ram" in seen else f"this machine's RAM: {ram_GB:.0f} GB")
+        seen.add("ram")
+        top = max(np.nanmax(an), np.nanmax(fi))
+        ax.set(xlim=(0, tt[-1]), ylabel="host memory [GB]", yscale="log", ylim=(0.05, ram_GB * 1.6))
+        ax.set_title(f"{lab}: peak {np.nanmax(an):.1f} GB anonymous, {np.nanmax(fi):.2f} GB file-backed", loc="left")
+        g = np.asarray(tl["gpu_GB"], dtype=float)[keep] if tl.get("gpu_GB") else None
+        if g is not None and np.any(np.isfinite(g)):
+            a2 = ax.twinx()
+            a2.plot(tt, g, color=PALETTE["green"], lw=2.2)
+            a2.axhline(vram_GB, color=PALETTE["green"], lw=1.4, ls="-.")
+            a2.set_ylim(0, vram_GB * 1.1)
+            a2.set_ylabel("GPU memory [GB]", color=PALETTE["green"])
+            a2.tick_params(axis="y", colors=PALETTE["green"])
+            ax.set_title(f"{lab}: peak {np.nanmax(an):.1f} GB anonymous, {np.nanmax(fi):.2f} GB file-backed; GPU {np.nanmax(g):.2f} GB"
+                         f" (green; {vram_GB:.0f} GB VRAM dash-dotted)", loc="left")
+        del top
+    axs[-1].set_xlabel("time since the run started (after the JIT warm-up) [s]")
+    h, l_ = [], []
+    for ax in axs:
+        hh, ll = ax.get_legend_handles_labels()
+        h += hh
+        l_ += ll
+    _legend(fig, handles=h, labels=l_, loc="outside lower center", ncols=4, fontsize=FONT_MIN["legend"])
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def plot_memory_peaks(bars: list, *, figsize=(22, 9)):
+    """The peak memory by component (notebook 16): one stacked bar per entry and point, host (a) and GPU (b) apart.
+    ``bars``: [dict(label, host {component: GB}, gpu {component: GB} or None)], components coloured by
+    ``MEMORY_COMPONENT_COLORS``. Returns (fig, axs)."""
+    fig, axs = plt.subplots(1, 2, figsize=figsize, layout="constrained", gridspec_kw={"width_ratios": [2.4, 1.0]})
+    for ax, key in zip(axs, ("host", "gpu")):
+        items = [b for b in bars if b.get(key)]
+        seen = set()
+        for i, b in enumerate(items):
+            left = 0.0
+            for comp, val in b[key].items():
+                if val <= 0:
+                    continue
+                ax.barh(i, val, left=left, color=MEMORY_COMPONENT_COLORS.get(comp, PALETTE["grey"]), edgecolor=BG, lw=0.6,
+                        hatch="//" if comp == "unaccounted" else None, label=None if comp in seen else comp)
+                seen.add(comp)
+                left += val
+            ax.text(left, i, f" {left:.1f} GB", va="center", fontsize=FONT_MIN["annotation"])
+        ax.set_yticks(np.arange(len(items)), [b["label"] for b in items], fontsize=FONT_MIN["legend"])
+        ax.invert_yaxis()
+        ax.set_xlabel("peak anonymous host memory [GB]" if key == "host" else "peak GPU memory [GB]")
+        ax.set_xlim(0, max(sum(v for v in b[key].values() if v > 0) for b in items) * 1.3 if items else 1)
+        ax.set_title("host RAM" if key == "host" else "GPU VRAM (NVML)", loc="left")
+        h, l_ = ax.get_legend_handles_labels()
+        _legend(ax, handles=h, labels=l_, loc="upper left", bbox_to_anchor=(0.0, -0.09), ncols=4 if key == "host" else 1,
+                fontsize=FONT_MIN["legend"])
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def plot_memory_scaling(x, series: dict, *, xlabel: str, fits: dict | None = None, limits=(125.0, 12.0), extrapolate=None,
+                        log_x: bool = True, figsize=(22, 7.5)):
+    """Peak memory against a block's parameter (notebook 16): (a) host anonymous, (b) host file-backed, (c) GPU, one
+    line per entry (``series`` {entry: dict(anon=, file=, gpu=) (len(x),) GB}, styles of ``SCALING_ENTRY_STYLES``); the
+    fitted models (``fits`` {entry: {panel: (a, b) of a + b x, or a callable of x}}, dotted) extrapolated to
+    ``extrapolate`` (an x, marked);
+    this machine's RAM and VRAM (``limits``). Returns (fig, axs)."""
+    x = np.asarray(x, float)
+    fig, axs = plt.subplots(1, 3, figsize=figsize, layout="constrained")
+    xx = np.geomspace(x.min(), max(x.max(), extrapolate or x.max()) * 1.2, 200) if log_x else np.linspace(x.min(), max(x.max(), extrapolate or 0) * 1.05, 200)
+    for ax, key, title in zip(axs, ("anon", "file", "gpu"), ("host: anonymous", "host: file-backed", "GPU (NVML)")):
+        for e, s in series.items():
+            y = np.asarray(s.get(key, [np.nan] * x.size), dtype=float)
+            if not np.any(np.isfinite(y)):
+                continue
+            st = SCALING_ENTRY_STYLES.get(e, dict(color=FG, marker="o"))
+            ax.plot(x, y, ms=9, label=e, **st)
+            f = (fits or {}).get(e, {}).get(key)
+            if f is not None:
+                fx = f if callable(f) else (lambda z, f=f: f[0] + f[1] * z)
+                ax.plot(xx, fx(xx), color=st["color"], lw=1.0, ls=":")
+                if extrapolate:
+                    ye = float(fx(np.asarray(extrapolate, dtype=float)))
+                    ax.plot([extrapolate], [ye], marker="X", ms=12, color=st["color"], mec=FG)
+                    k_ = list(series).index(e)
+                    ax.annotate(f"{ye:.0f} GB", (extrapolate, ye), xytext=(-10, -18 * k_ + 10), textcoords="offset points", ha="right",
+                                fontsize=FONT_MIN["annotation"], color=st["color"])
+        lim = limits[0] if key != "gpu" else limits[1]
+        ax.axhline(lim, color=PALETTE["red"], lw=1.6, ls="-.", label=f"this machine: {lim:.0f} GB")
+        ax.set(xscale="log" if log_x else "linear", yscale="log", xlabel=xlabel, ylabel="peak [GB]")
+        ax.set_title(title, loc="left")
+    h, l_ = axs[0].get_legend_handles_labels()
+    _legend(fig, handles=h, labels=l_, loc="outside lower center", ncols=len(l_), fontsize=FONT_MIN["legend"])
+    add_panel_letters(axs)
+    return fig, axs
+
+
+def plot_memory_knobs(rows: list, *, reference: str, figsize=(22, 7.5)):
+    """The memory knobs (notebook 16): every run's peak anonymous host memory (a) and GPU memory (b) against its wall
+    time, labelled; ``rows`` [dict(label, anon_GB, gpu_GB (or None), time_s, color, offset (optional: (dx, dy) of the label
+    [points]; negative dx: to the left))], ``reference`` the label of the
+    default. Returns (fig, axs)."""
+    fig, axs = plt.subplots(1, 2, figsize=figsize, layout="constrained")
+    ref = next(r for r in rows if r["label"] == reference)
+    for ax, key in zip(axs, ("anon_GB", "gpu_GB")):
+        for r in rows:
+            if r.get(key) is None:
+                continue
+            ax.plot(r["time_s"], r[key], "o", ms=12, color=r.get("color", PALETTE["blue"]), mec=FG)
+            dx, dy = r.get("offset", (8, 4))  # the label's offset [points] (crowded points: set per row)
+            ax.annotate(r["label"], (r["time_s"], r[key]), xytext=(dx, dy), textcoords="offset points", fontsize=FONT_MIN["annotation"],
+                        ha="right" if dx < 0 else "left")
+        if ref.get(key) is not None:
+            ax.axhline(ref[key], color=DIM, lw=1.0, ls=":")
+            ax.axvline(ref["time_s"], color=DIM, lw=1.0, ls=":")
+        ax.set(xlabel="wall time of the run [s]", ylabel="peak anonymous host memory [GB]" if key == "anon_GB" else "peak GPU memory [GB]")
+    axs[0].set_title("host: memory saved against time", loc="left")
+    axs[1].set_title("GPU", loc="left")
+    add_panel_letters(axs)
+    return fig, axs

@@ -48,6 +48,8 @@ comparison = ["h5py>=3.15.1", "fake-spectra>=2.2.4", "psutil>=7.2.1"]
 notebooks = ["jupyter>=1.1.1", "ipykernel>=7.2.0", "ipympl>=0.10.0", "ipywidgets>=8.1.8", "nbformat>=5.10.4", "nbconvert>=7.17.1"]
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.17", "pre-commit>=4", "nbstripout>=0.8", "nbformat>=5.10.4", "nbconvert>=7.17.1",
        "psutil>=7.2.1"]
+# the memory benchmark (scripts/benchmarks/benchmark_memory.py, notebook 16): the GPU memory of a process (NVML)
+bench = ["psutil>=7.2.1", "nvidia-ml-py>=13.615"]
 gpu = ["jax[cuda12]>=0.6.2"]
 gpu-local = ["jax[cuda12-local]>=0.6.2"]
 
