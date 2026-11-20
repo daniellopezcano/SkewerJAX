@@ -26,7 +26,7 @@ import numpy as np
 
 from skewerjax.core.cells import Cells
 from skewerjax.summary_stats.binning import ensemble_mean, full_coverage, native_edges
-from skewerjax.summary_stats.grid3d import GRID_KEYS, MU_WEDGES, GridStatistics3D
+from skewerjax.summary_stats.grid3d import GRID_KEYS, MU_WEDGES, GridStatistics3D, coverage_limits
 from skewerjax.summary_stats.mesh import PAINT_CHUNK, TRUSTED_K_NYQ, TRUSTED_R_H
 
 
@@ -34,10 +34,9 @@ def grid_limits(n_cells: int, L: float) -> dict:
     """The full-coverage limits of an ``n_cells``^3 grid of side ``L`` [cMpc], in [1/cMpc] and [cMpc]: k_min = 2 pi / L
     (the fundamental mode) and k_max = pi / dx (the Nyquist frequency of each axis: inside the sphere |k| <= pi / dx every
     direction is available, beyond it only the corners of the cube of modes); r_min = dx and r_max = L / 2 (|r| <= L / 2
-    holds every direction of the minimum-image separations, beyond it only the corners)."""
-    L = float(L)
-    dx = L / int(n_cells)
-    return dict(k_min=2 * np.pi / L, k_max=np.pi / dx, r_min=dx, r_max=0.5 * L)
+    holds every direction of the minimum-image separations, beyond it only the corners): ``grid3d.coverage_limits``, equal to
+    ``box_grid(...).limits()``."""
+    return coverage_limits(float(L), float(L) / int(n_cells))  # the rule of every figure that shades them
 
 
 def box_grid(
@@ -46,6 +45,7 @@ def box_grid(
     *,
     k_edges,
     r_edges,
+    rperp_edges=None,
     xi_mu_edges=MU_WEDGES,
     pk_mu_edges=MU_WEDGES,
     los_axis: int = 1,
@@ -56,8 +56,10 @@ def box_grid(
 
     * |k| ``k_edges``, also the |k| bins of the mu wedges of P and the k_perp columns of the (k_par, k_perp) map; the
       map's rows are the grid's own k_par = 2 pi m / L, m = 1 .. N / 2, one row per mode centred on it;
-    * |r| ``r_edges``, also the |r| bins of the mu wedges of xi and the r_perp columns of the (r_par, r_perp) map; the
-      map's rows are the grid's own r_par = j dx, j = 0 .. N / 2;
+    * |r| ``r_edges``, also the |r| bins of the mu wedges of xi; the r_perp columns of the (r_par, r_perp) map
+      ``rperp_edges`` (default ``r_edges``; ``binning.set_rperp_edges``: the first column r_perp = 0 alone, while
+      ``set_r_edges`` leaves the zero lag out of the |r| bins); the map's rows are the grid's own r_par = j dx,
+      j = 0 .. N / 2;
     * the wedges: ``xi_mu_edges`` in mu = r_par / r, ``pk_mu_edges`` in mu = k_par / |k| (default ``MU_WEDGES`` both;
       half-open bins, the last closed, ``GridStatistics3D``).
 
@@ -67,6 +69,7 @@ def box_grid(
     lim = grid_limits(n, L)
     k = full_coverage(np.asarray(k_edges, dtype=float), lim["k_max"], "|k| bins", log)
     r = full_coverage(np.asarray(r_edges, dtype=float), lim["r_max"], "|r| bins", log)
+    rq = r if rperp_edges is None else full_coverage(np.asarray(rperp_edges, dtype=float), lim["r_max"], "r_perp bins", log)
     half = n // 2
     return GridStatistics3D(
         (n,) * 3,
@@ -79,7 +82,7 @@ def box_grid(
         r_edges=r,
         r_mu_edges=r,
         rpar_edges=native_edges(lim["r_min"], half),
-        rperp_edges=r,
+        rperp_edges=rq,
         xi_mu_edges=xi_mu_edges,
         pk_mu_edges=pk_mu_edges,
     )

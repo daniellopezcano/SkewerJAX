@@ -29,7 +29,7 @@ from __future__ import annotations
 import numpy as np
 
 from skewerjax.summary_stats.binning import full_coverage, native_edges
-from skewerjax.summary_stats.grid3d import MU_WEDGES, GridStatistics3D
+from skewerjax.summary_stats.grid3d import MU_WEDGES, GridStatistics3D, coverage_limits
 from skewerjax.summary_stats.mesh import lattice_only
 
 
@@ -114,15 +114,17 @@ def lattice_grid(
 
 def lattice_limits(L: float, d_perp, n_los: int, period: float) -> dict:
     """The lattice of skewers of ``lattice_grid`` and its full-coverage limits, from its geometry: the period L [cMpc]
-    and ``period`` [km/s] of the line of sight (u = period / L), n_los pixels, the transverse spacing ``d_perp`` (scalar
-    or (d_x, d_z)) [cMpc].
+    and ``period`` [km/s] of the line of sight (u = period / L), n_los pixels (or points), the transverse spacing
+    ``d_perp`` (scalar or (d_x, d_z)) [cMpc].
 
     Native units: d_perp [cMpc] per axis, k_x, k_z from k_fund = 2 pi / L to k_nyq_perp = pi / d_perp [1/cMpc]; along
     the line of sight the pixel dv = period / n_los [km/s], k_par from k_par_min_skm = 2 pi / period to k_par_max_skm =
     pi / dv [s/km], r_par from dv to period / 2 [km/s] (period_kms, kms_per_cMpc = u). Comoving units (the isotropic
     quantities): k_nyq_par = pi u / dv = pi n_los / L, k_nyq = the smallest Nyquist frequency, dr_iso = max(d_perp,
-    dv / u) (the coarser spacing), r_max = L / 2, r_perp_min = the smaller transverse spacing; and the full-coverage
-    limits of the isotropic bins: k_min = k_fund, k_max = k_nyq, r_min = dr_iso, r_max."""
+    dv / u) (the coarser spacing), r_perp_min = the smaller transverse spacing; and the full-coverage limits of the
+    isotropic bins, ``grid3d.coverage_limits`` of the lattice (the rule of every figure that shades them, equal to
+    ``lattice_grid(...).limits()``): k_min = k_fund, k_max = k_nyq, r_min = min(d_perp, L / n_los) (the smallest non-zero
+    separation), r_max = L / 2."""
     L, period = float(L), float(period)
     d_perp = np.broadcast_to(np.asarray(d_perp, dtype=float), (2,)).copy()
     dv = period / int(n_los)
@@ -140,11 +142,8 @@ def lattice_limits(L: float, d_perp, n_los: int, period: float) -> dict:
         k_par_min_skm=2 * np.pi / period,
         k_par_max_skm=np.pi / dv,
         dr_iso=dr,
-        r_max=0.5 * L,
         r_perp_min=float(d_perp.min()),
-        k_min=2 * np.pi / L,
-        k_max=k_nyq,
-        r_min=dr,
+        **coverage_limits(L, (d_perp[0], L / int(n_los), d_perp[1])),
     )
 
 

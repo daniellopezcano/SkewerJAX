@@ -160,6 +160,8 @@ skewerjax/                    # SkewerJAX: absorption along skewers (tau, F = ex
 │   ├── maps.py               # Maps of the gas for figures: the projection of a slab of a snapshot, streamed in …
 │   ├── readers.py            # Snapshot readers (layer 1): format-specific HDF5 I/O and units, NumPy only
 │   ├── selection.py          # Cell selection (layer 4): streaming k-d tree selection of the gas cells of a …
+│   ├── skewer_extraction.py  # Filling the skewer store: the options of a dataset, written out in full, and the …
+│   ├── skewer_store.py       # A store of skewers on disk: the optical depth of nested lattices of axis-aligned …
 │   ├── snapshot_cells.py     # The snapshot as gas cells, without skewers: the cells of a region of the box after …
 │   ├── snapshot_skewers.py   # Skewers through a simulation snapshot: the gas cells, columns and tau for any …
 │   ├── stream.py             # The streaming route: the optical depth of many straight skewers from one read of …
@@ -168,6 +170,7 @@ skewerjax/                    # SkewerJAX: absorption along skewers (tau, F = ex
 ├── summary_stats/            # The summary statistics of the flux: the overflux of each line and of their …
 │   ├── binning.py            # Binning of the two-point statistics: bin indices, jitted weighted bin means, bin …
 │   ├── contaminants.py       # P1D metal-contamination models (McDonald et al. 2006; Ma et al.) and their fits to …
+│   ├── convergence.py        # The statistics of the overflux on nested lattices of skewers and their convergence …
 │   ├── density.py            # The density sampled along a lattice of periodic skewers (notebook 10, Part B) …
 │   ├── field_stats.py        # P and xi of the density of gas cells in a periodic box, over an ensemble of …
 │   ├── fourier.py            # The Fourier conventions of the two-point statistics: lag and mode axes, and the …
@@ -197,15 +200,15 @@ subpackage.
 | cosmology: Cosmology, a(x) | `core.cosmology` | `Cosmology` | 02 |
 | skewers: SkewerBundle; lattice of paths | `core.skewers` | `SkewerBundle`, `lattice_columns`, `lattice_points` | 03, 10, 11 |
 | toy fields: PowerLawGRF → cells | `simulations.grf`, `simulations.toy_cells` | `PowerLawGRF`, `grf_cells` | 04, 08 |
-| simulation outputs: TNG snapshot → cells | `simulations.snapshot_cells` | `snapshot_cells`, `select_cells_in_region` | 05, 09, 11, 15 |
+| simulation outputs: TNG snapshot → cells | `simulations.snapshot_cells` | `snapshot_cells`, `select_cells_in_region` | 05, 09, 11, 15, 17 |
 | gas cells: Cells: n, T, v | `core.cells` | `Cells`, `cells_on_grid` | 04, 05, 08, 09, 11 |
 | deposition: cells → pieces | `core.absorbers`, `core.deposition` | `cell_pieces`, `voronoi_segments`, `absorber_pieces` | 07, 15 |
 | line profiles: Voigt φ_j(v) per piece | `core.line_profiles` | `line_profiles`, `voigt_widths_GHz` | 06 |
 | optical depth: τ(v), T = e^−τ | `core.optical_depth` | `compute_optical_depth`, `Pieces` | 07, 10, 11, 15 |
-| mean transmission: T̄ = ⟨T⟩ over a set of pixels | `summary_stats.overflux` | `ensemble_mean_transmissions`, `mean_transmissions` | 10, 11 |
-| overflux: δ = T/T̄ − 1, per line and total | `summary_stats.overflux` | `DeltaFieldBuilder`, `overflux_check` | 10, 11 |
-| 1D statistics: P1D, ξ1D (by order and term) | `summary_stats.lattice`, `summary_stats.stats_1d` | `skewer_p1d`, `skewer_xi1d`, `decompose_1d` | 10, 11 |
-| 3D statistics: P3D, ξ3D on the lattice of skewers | `summary_stats.lattice`, `summary_stats.grid3d` | `lattice_grid`, `measure_lattice`, `GridStatistics3D` | 10, 11 |
+| mean transmission: T̄ = ⟨T⟩ over a set of pixels | `summary_stats.overflux` | `ensemble_mean_transmissions`, `mean_transmissions` | 10, 11, 17 |
+| overflux: δ = T/T̄ − 1, per line and total | `summary_stats.overflux` | `DeltaFieldBuilder`, `overflux_check` | 10, 11, 17 |
+| 1D statistics: P1D, ξ1D (by order and term) | `summary_stats.lattice`, `summary_stats.stats_1d` | `skewer_p1d`, `skewer_xi1d`, `decompose_1d` | 10, 11, 17 |
+| 3D statistics: P3D, ξ3D on the lattice of skewers | `summary_stats.lattice`, `summary_stats.grid3d` | `lattice_grid`, `measure_lattice`, `GridStatistics3D` | 10, 11, 17 |
 | field statistics: P, ξ of the cells' density: mesh (MAS + interlacing) | `summary_stats.field_stats`, `summary_stats.mesh` | `field_statistics`, `cell_weights`, `fourier_mesh` | 08, 09, 11 |
 | fake_spectra: external reference | `comparison.benchmark` | `run_fake_spectra` | 12, 13, 14, 15, 16 |
 <!-- END generated:concepts -->
@@ -273,8 +276,8 @@ venv/conda environments, the JAX CPU/GPU builds, the data paths and troubleshoot
 Two entry points: `00_quickstart` (the whole chain on a toy box, compact) and `00_quickstart_step_by_step` (one
 simulated skewer followed from the snapshot to the statistics, one figure and the equations per step). Notebooks
 01–07 then open one ingredient each, 08 and 09 measure the statistics of the gas cells (toy boxes, TNG50-4), 10 and 11 the
-summary statistics on skewers (toy boxes, TNG50-4), 12–14 and 16 compare with fake_spectra (results, time, scaling, memory) and 15
-shows why SkewerJAX is fast, in the order of the dependency graph (derived from the code; an arrow points
+summary statistics on skewers (toy boxes, TNG50-4), 12–14 and 16 compare with fake_spectra (results, time, scaling, memory), 15
+shows why SkewerJAX is fast and 17 reads the skewers of the skewer store (below) and their convergence with the number of skewers, in the order of the dependency graph (derived from the code; an arrow points
 to what needs an ingredient; dashed: optional input or data only; the two field sources are interchangeable):
 
 ```mermaid
@@ -319,6 +322,8 @@ flowchart LR
 | `14_comparison_fake_spectra_scaling` | how each stage of the four entries of 13 scales: A the simulation (TNG50-4, -3, -2), B the number of skewers (4² to 256²), C1 the pixel width (1–16 km/s, one SkewerJAX pass for the five grids), C2 the precision of the midpoint option's sampling against the default's integrated profile; per point the stages and the speed-ups, per block the scaling with fitted slopes and the flux of a reference skewer from every entry (reads the records of `scripts/benchmarks/benchmark_scaling.py`; `RUN = True` re-runs it) |
 | `15_how_skewerjax_is_fast` | why SkewerJAX is cheap, step by step, the visual companion of `docs/performance.md` (live on TNG50-4, timings from the records): the cost model; one pass over the snapshot (the reach by index arithmetic, what the pass reads, the compact store and the tiles, the pipeline's timeline); the exact crossings (the lower envelope) and the integrated profile against the midpoint rule; the windowed engine (windows, the far wings as one FFT, why not truncate, CPU and GPU); the matched mode (chords, the per-cell walk on escalating windows); fixed shapes; why even the matched mode beats fake_spectra (fake_spectra's code read, CPU utilisation, the gap stage by stage with its causes); the chain of savings |
 | `16_comparison_fake_spectra_memory` | how much memory each code and mode uses, where (host anonymous / file-backed, GPU) and in which stage (kernel `skewerjax-fs`): the protocol, memory timelines at 128² TNG50-2 skewers, the peaks by component, the scaling with the simulation, the number of skewers and the pixel width (fitted models, the extrapolation to 512²), SkewerJAX's memory knobs (tile size, physics configurations, pass threads), the ranked ways to lower it (reads the records of `scripts/benchmarks/benchmark_memory.py`; `RUN = True` re-runs it) |
+| `17_TNG_skewers` | loading one lattice from the skewer store (`scripts/production/extract_skewers.py`, [`docs/skewer_store.md`](docs/skewer_store.md)): the inputs (store, simulation, snapshot, hash, axis, `N_PER_AXIS`), the levels of the nested lattices it is read from (`SkewerDataset.sources`), checks of the shapes, positions and nesting (bit for bit), one skewer's transmission |
+| `18_TNG_skewers_convergence` | the convergence with the number of skewers of the stored lattices `N_MIN` … `N_MAX` (the reference; 16 for a quick check): P1D per line and total and the 16 P(k, μ) wedges of the total (notebook 10's and 11's bins), each panel with its residual against `N_MAX` in percent, a progress bar with the time of every step, and a table of the percentage levels per lattice |
 
 Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: the white "paper" style by default,
 `use_style("dark")` for the dark one; Paul Tol's colour-blind-safe "bright" colours and colour maps in both, minimum
@@ -402,6 +407,20 @@ slower than fake_spectra (42 vs 31 s at 128²). The design, its accuracy and its
 `benchmarks/results/fake_spectra_benchmark.json`, raw records in `benchmarks/raw/`, git-ignored): 1 to 1024 skewers on
 the three snapshots, CPU and GPU, threads, host and GPU memory (records of the earlier code).
 
+## Skewer store
+
+Long runs of skewers (convergence tests, production) go through `scripts/production/extract_skewers.py`, which writes
+the optical depth of nested N × N lattices of skewers (N a power of two) to a store outside the repository: doubling N
+reuses every skewer already computed, other simulations, axes, pixel widths or options are other datasets, and an
+interrupted run resumes when the same command is run again. `skewerjax.simulations.load_skewers` and `list_datasets`
+read it; notebook 17 loads one lattice and checks it; notebook 18 shows the convergence of P1D and of the P(k, μ) wedges. Layout, identity of a dataset, examples and the API:
+[`docs/skewer_store.md`](docs/skewer_store.md).
+
+```bash
+python scripts/production/extract_skewers.py --sim TNG50-2 --snap 25 --axis 1 2 3 --n-per-axis 2 4 8 16 32 64 128 \
+    --spacing-kms 1.0 --out ~/skewer_store          # --dry-run first: what is stored, what would be computed
+```
+
 ## Repository layout
 
 ```
@@ -417,12 +436,13 @@ skewerjax/            the package
                       interlacing, the window (mesh)
   skewers/            lattices of skewers: columns and points of a SkewerBundle (lattice), the Hubble velocity (frame)
   simulations/        the sources of gas cells: toy fields (PowerLawGRF, grf_cells, ToyBoxes) and snapshots (readers, gas physics,
-                      streamed selection, snapshot_cells, SimulationSkewers, maps)
+                      streamed selection, snapshot_cells, SimulationSkewers, maps; the skewer store: skewer_store,
+                      skewer_extraction)
     cloudy_tables/    CLOUDY ionisation tables (git submodule sbird/cloudy_tables)
   comparison/         the benchmark of the two codes (wall time, memory, agreement)
   utils/              plotting (style, figures), dag (the architecture as data: DAG, layers, README diagrams),
                       paths (data and benchmark folders)
-notebooks/            00-14 tutorials and comparisons (committed with outputs cleared)
+notebooks/            00-17 tutorials and comparisons (committed with outputs cleared)
 tests/                one pytest suite: core/, summary_stats/, skewers/, simulations/, utils/, comparison/, regression/ (+ data/),
                       test_import_graph.py, test_mesh.py; README.md
 benchmarks/
@@ -431,9 +451,11 @@ benchmarks/
 scripts/
   benchmarks/         benchmark_scaling.py (notebook 14), benchmark_fake_spectra.py
   checks/             check_install.py, check_toy.py, check_tng.py: the basic checks the repository must pass
+  production/         extract_skewers.py: skewers through a snapshot into the skewer store (docs/skewer_store.md)
   dev/                update_regression_references.py, check_markdown_math.py, make_diagrams.py (the generated
                       blocks of this README)
-docs/                 installation.md, usage.md, precision.md, performance.md (how the speed is obtained)
+docs/                 installation.md, usage.md, precision.md, performance.md (how the speed is obtained),
+                      skewer_store.md (the store of skewers: layout, runs, reading)
 ```
 
 ## References and acknowledgements

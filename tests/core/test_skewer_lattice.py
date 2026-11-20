@@ -9,7 +9,7 @@ import pytest
 
 from skewerjax.core import SkewerBundle, hubble_velocity, lattice_columns, lattice_points, phys, velocity_span
 from skewerjax.simulations import ToyBoxes
-from skewerjax.summary_stats import bao_k_edges, lattice_grid, lattice_limits
+from skewerjax.summary_stats import lattice_grid, lattice_limits, set_k_edges
 
 from helpers import float64_only
 
@@ -55,7 +55,7 @@ def test_the_3d_grid_of_the_lattice():
     d_perp = np.array(STRIDE, dtype=float) * BOXES.dx
     k_f = 2 * np.pi / L
     k_nyq = min(np.pi / dv * u, *(np.pi / d_perp))  # the sphere where every direction is available
-    gs = lattice_grid(4, 4, N_PIX, L, d_perp, k_edges=bao_k_edges(k_f, k_nyq, 3.0 / BOXES.sigma_bao))
+    gs = lattice_grid(4, 4, N_PIX, L, d_perp, k_edges=set_k_edges(k_f, k_1=3.5 * k_f, k_2=3.0 / BOXES.sigma_bao, k_max=k_nyq))
     assert gs.shape == (4, N_PIX, 4) and np.allclose(gs.L, L) and gs.los_axis == 1
     assert gs.dx[1] == pytest.approx(dv / u), "a pixel spans dv / u cMpc"
     lim = lattice_limits(L, d_perp, N_PIX, period)

@@ -12,6 +12,8 @@ peculiar velocity: the same container as the toy fields), either for a region of
 skewers) or for the cells within reach of a set of skewers (``selection``, streamed from disk;
 ``SimulationSkewers.to_cells``). ``snapshot_skewers`` (``SimulationSkewers``) then runs the core's route (deposition,
 ``core.absorbers``, ``core.compute_optical_depth``) for any options; ``maps`` projects slabs of the gas and cuts the Voronoi cells by a plane, for figures.
+``skewer_store`` keeps the tau of nested lattices of skewers on disk and ``skewer_extraction`` fills it, resumably
+(``scripts/production/extract_skewers.py``, ``docs/skewer_store.md``).
 
 Depends on ``skewerjax.core`` only (not on ``summary_stats``: ``tests/test_import_graph.py``); the
 boundary with the core is ``core.Cells``.
@@ -23,6 +25,14 @@ from skewerjax.simulations.grf import PowerLawGRF
 from skewerjax.simulations.maps import slab_projection, voronoi_slice
 from skewerjax.simulations.readers import TNG_COSMOLOGY, ArepoHDF5Reader, SnapshotHeader
 from skewerjax.simulations.selection import select_cells_near_paths
+from skewerjax.simulations.skewer_store import (
+    SkewerDataset,
+    StoredSkewers,
+    format_datasets,
+    list_datasets,
+    load_skewers,
+    select_datasets,
+)
 from skewerjax.simulations.snapshot_cells import GAS_SPECIES, gas_to_cells, select_cells_in_region, snapshot_cells
 from skewerjax.simulations.snapshot_skewers import ExtractionOptions, IntegrationOptions, SimulationSkewers
 from skewerjax.simulations.stream import (

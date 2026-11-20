@@ -618,32 +618,42 @@ def tiles_optical_depth(
     velocity_period=None,
     tautail=None,
     pixel_average=False,
+    line_frame: str = "own",
+    resolution_tolerance: float | None = None,
     dtype=None,
     device=None,
     engines: dict | None = None,
     pipeline: bool = True,
     prep_workers: int = 3,
+    on_tile=None,
 ):
     """tau of every tile from the compact store (module docstring), the host preparing tile k + 1 while the devices
     compute tile k.
 
     config : the physics configuration of the store to use; pieces : "crossings" (the Voronoi cell crossings, the
     default) or "chords" (fake_spectra's top-hat chords, ``core.crossings.straight_chords``, with ``chord_weight``);
-    the tau options as ``core.compute_optical_depth`` (``tautail`` / ``pixel_average``: the per-cell schemes);
+    the tau options as ``core.compute_optical_depth`` (``tautail`` / ``pixel_average``: the per-cell schemes;
+    ``line_frame`` "own" (default: every line on its own line-centred axis ``v``) or "reference" (every line on the
+    reference line's axis, at v + delta_v_j); ``resolution_tolerance``: None (default, nothing computed) or the
+    tolerance of ``compute_optical_depth``'s resolution report, computed per tile on the host threads that prepare it
+    (``row["resolution"]``: max_ratio, column_fraction, ok, b_min per line));
     engines : {name: list of devices} to compute every tile on several device sets from the same host work (e.g. the
     CPU and the GPU entries of a benchmark); default {"tau": [device]}; prep_workers : host threads preparing the next
-    tiles while the devices compute (``pipeline``).
+    tiles while the devices compute (``pipeline``); on_tile : optional callable(k, skewers, {name: tau of the tile
+    (N_lines, n, N_v)}, row) called after each tile, in tile order (e.g. to write it to disk: ``skewer_extraction``).
 
     Returns ({name: tau (N_lines, N_sk, N_v) host array of the working dtype (``dtype``, or the package's precision:
     float32 by default)}, info with the per-tile stage times): n_tiles, t0 (the perf_counter origin) and rows, one per
     tile: n_skewers, n_cells, n_pieces, n_contributions, contributions_bytes (the host arrays of the tile's
     contributions), geometry_s, contributions_s, wait_s, tau_s {engine: s}, engine {engine: per-line info of
-    ``core.optical_depth._engine``}, and the timeline (read-only diagnostics, seconds from t0): prep_start, prep_end,
+    ``core.optical_depth._engine``}, resolution (None without ``resolution_tolerance``), and the timeline (read-only diagnostics, seconds from t0): prep_start, prep_end,
     prep_thread (the host thread that prepared the tile), tau_start, tau_end {engine: s})."""
     from skewerjax.config import real_dtype
     from skewerjax.core.absorbers import chord_contributions, crossing_contributions
-    from skewerjax.core.optical_depth import _engine
+    from skewerjax.core.optical_depth import _contribution_resolution, _engine
 
+    if line_frame not in ("own", "reference"):
+        raise ValueError(f"line_frame must be 'own' or 'reference', got {line_frame!r}.")
     v = np.asarray(v, dtype=np.float64)
     n_l, n_sk, n_v = line_bundle.n_lines, len(paths), v.shape[-1]
     dt = real_dtype() if dtype is None else np.dtype(dtype)
@@ -654,6 +664,8 @@ def tiles_optical_depth(
     bounds = np.concatenate([[0], np.cumsum(np.bincount(tile_of, minlength=n_tiles))])
     members = [order[bounds[k] : bounds[k + 1]] for k in range(n_tiles)]
     vv = np.broadcast_to(v, (n_l, n_v))
+    if line_frame == "reference":  # as compute_optical_depth: line j evaluated at v + delta_v_j
+        vv = v[None, :] + np.asarray(line_bundle.delta_v, dtype=np.float64)[:, None]
     if velocity_period is True:
         raise ValueError("velocity_period=True: give the period [km/s] (the skewers' span) to the streaming route.")
     P = None if velocity_period in (None, False) else float(velocity_period)
@@ -682,7 +694,9 @@ def tiles_optical_depth(
             contr = crossing_contributions(geo, cells, line_bundle, fr, sub.direction, **kw)
         t2 = time.perf_counter()
         nbytes = sum(int(x.nbytes) for c in contr for x in vars(c).values() if isinstance(x, np.ndarray))
+        res = None if resolution_tolerance is None else _contribution_resolution(contr, line_bundle, resolution_tolerance)
         return dict(
+            resolution=res,
             k=k,
             sk=sk,
             contr=contr,
@@ -724,6 +738,7 @@ def tiles_optical_depth(
             prep_thread=prep["prep_thread"],
             tau_start={},
             tau_end={},
+            resolution=prep["resolution"],
         )
         for name, devs in engines.items():
             t = time.perf_counter()
@@ -747,6 +762,8 @@ def tiles_optical_depth(
             row["tau_start"][name], row["tau_end"][name] = t - t_origin, time.perf_counter() - t_origin
             row.setdefault("engine", {})[name] = eng
         rows.append(row)
+        if on_tile is not None:
+            on_tile(k, sk, {name: taus[name][:, sk] for name in engines}, row)
     if pool is not None:
         pool.shutdown()
     return taus, dict(n_tiles=n_tiles, rows=rows, t0=t_origin)

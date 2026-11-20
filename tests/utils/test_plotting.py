@@ -114,7 +114,7 @@ def test_toy_box_figures():
 
     from skewerjax.core import LineBundle, lattice_columns
     from skewerjax.simulations import LINE_IDS, ToyBoxes
-    from skewerjax.summary_stats import bao_k_edges, box_grid, field_statistics, grid_limits
+    from skewerjax.summary_stats import box_grid, field_statistics, grid_limits, set_k_edges
     from skewerjax.utils.reference_data import P1D_DESI_DR1
 
     P1D_DESI_DR1_Z22 = P1D_DESI_DR1[2.2]
@@ -137,7 +137,7 @@ def test_toy_box_figures():
     gs = box_grid(
         b.n_cells,
         b.box_cMpc,
-        k_edges=bao_k_edges(lim["k_min"], lim["k_max"], 3.0 / b.sigma_bao),
+        k_edges=set_k_edges(lim["k_min"], k_1=3.5 * lim["k_min"], k_2=3.0 / b.sigma_bao, k_max=lim["k_max"]),
         r_edges=np.arange(0, b.box_cMpc / 2 + b.dx, b.dx),
         log=None,
     )
@@ -307,7 +307,7 @@ def test_toy_box_figures():
     dv = period / n_pix
     top = u * run["axes3d"]["rpar"][-1]  # the last row, centred on half the period [km/s]
     assert top == pytest.approx(period / 2)
-    np.testing.assert_allclose(ax.get_ylim(), (-dv / 2, period / 2 + dv / 2))
+    np.testing.assert_allclose(ax.get_ylim(), (0.0, period / 2 + dv / 2))  # from the origin: the first row half shown
     assert ax.get_xlim()[0] == 0, "one row per pixel separation j dv, j = 0 .. n_pix / 2, each centred on it"
     np.testing.assert_allclose(u * run["axes3d"]["rpar"], dv * np.arange(n_pix // 2 + 1), atol=1e-9)
     # the echoes: r_par = |sqrt(r_bao^2 - r_perp^2) +- Delta|, folded with the period L, in km/s
@@ -325,8 +325,25 @@ def test_toy_box_figures():
     fig.canvas.draw()
     assert chi2k is None and not fig.legends and ax.get_legend() is None and len(ax.child_axes) == 2
     assert "cMpc" in ax.get_xlabel() and "s km" in ax.get_ylabel() and "parallel" in ax.get_ylabel()
-    np.testing.assert_allclose(ax.get_ylim(), np.array(run["axes3d"]["kpar_edges"])[[0, -1]] / u)
+    np.testing.assert_allclose(ax.get_ylim(), (0.0, run["axes3d"]["kpar_edges"][-1] / u))  # from the origin
+    assert ax.get_xlim()[0] == 0.0
     assert "P(k_" in fig.axes[-1].get_ylabel() and "cMpc$^3$" in fig.axes[-1].get_ylabel(), "P, not k P"
+    # the options: the dots at the mode- / pair-weighted mean of every cell (axes kperp_map, kpar_map, rperp_map, rpar_map),
+    # under the contours; no rays, no contours
+    a3 = run["axes3d"]
+    fig, ax, _ = pl.plot_overflux_kpar_kperp(
+            tot, kms_per_cMpc=u, show_modes=True, show_mu=False, show_contours=False, show_axis_modes=False
+        )  # the map's dots (the strips': test_axis_mode_strips)
+    dots = [ln for ln in ax.lines if ln.get_marker() == "o" and ln.get_linestyle() == "None"]
+    ok = np.isfinite(tot["P_map"])
+    assert len(dots) == 1 and len(dots[0].get_xdata()) == ok.sum() and dots[0].get_zorder() < 2
+    np.testing.assert_allclose(np.sort(dots[0].get_xdata()), np.sort(np.asarray(a3["kperp_map"])[ok]))
+    assert not ax.collections[1:] and not any(ln.get_color() == "white" for ln in ax.lines), "no contours, no rays"
+    assert "mode-weighted mean of each cell" in [t.get_text() for t in ax.get_legend().get_texts()]
+    fig, ax, drawn = pl.plot_overflux_rpar_rperp(tot, kms_per_cMpc=u, show_pairs=True, show_contours=False)
+    np.testing.assert_allclose(drawn["pairs"]["y"], u * np.asarray(a3["rpar_map"])[np.isfinite(tot["xi_map"])])
+    assert not any(isinstance(c, matplotlib.contour.ContourSet) for c in ax.collections)
+    assert any(ln.get_color() == "white" for ln in ax.lines), "the rays by default"
     # the wedges: only the line-of-sight scales, each folded into [0, L / 2]: r_BAO, the spot and the echoes of every pair
     fig, axs, chi2 = pl.plot_xi_mu_wedges(tot, kms_per_cMpc=u, r_bao=2.0, delta_v=100.0, box=L)
     fig.canvas.draw()
@@ -372,6 +389,10 @@ def test_toy_box_figures():
     k_lim = (2 * np.pi / period, np.pi / (period / n_pix))
     fig, ax = pl.plot_p1d_reference(run["p1d"], P1D_DESI_DR1_Z22, kms_per_cMpc=u, k_limits=k_lim, k_max=1.2 * k_lim[1])
     fig.canvas.draw()
+    k_native = 2 * np.pi * np.arange(1, n_pix // 2 + 1) / period  # the native modes, k > 0 up to pi / dv
+    np.testing.assert_allclose(ax.containers[0].lines[0].get_xdata(), k_native), "one point per mode, no rebinning"
+    m = np.asarray(run["p1d"]["p1d_each"])[:, 0, 1:]
+    np.testing.assert_allclose(ax.containers[0].lines[0].get_ydata(), k_native * m.mean(0) / np.pi)
     assert not fig.legends and len(ax.get_legend().get_texts()) == 5  # three overfluxes, the boxes and the reference
     assert len(ax.child_axes) == 1 and "cMpc" in ax.child_axes[0].get_xlabel(), "one reference top axis"
     spans = sorted((p.get_x(), p.get_x() + p.get_width()) for p in ax.patches if isinstance(p, matplotlib.patches.Rectangle))
@@ -449,9 +470,22 @@ def test_toy_box_figures():
     assert xi_lines, "xi1D: points with error bars too"
     line = [c for c in pl.plot_p1d_orders(ens)[1][0].lines if c.get_marker() == "o"][0]
     assert line.get_linestyle() == "-" and line.get_markersize() == pl._MS_SMALL, "small points joined by a thin line"
-    # explicit display bins: P1D in the bins of bao_k_edges along the line of sight, xi1D at every lag
+    # the default (k_edges None): the native modes k_m = 2 pi m / v_per, m = 1 .. N_pix / 2, one point per mode
+    k_native = 2 * np.pi * np.arange(1, n_pix // 2 + 1) / period
+    np.testing.assert_allclose(np.asarray(ens["k"])[1:], k_native)
+    np.testing.assert_allclose(line.get_xdata(), k_native)
+    o2 = np.asarray(ens["P_order_each"])[:, 2, 1:]
+    ax_o = pl.plot_p1d_orders(ens)[1][0]
+    c2 = [c for c in ax_o.containers if c.get_label() == r"$\mathcal{O}(2)$"][0]
+    np.testing.assert_allclose(c2.lines[0].get_ydata(), o2.mean(0))  # the mean per mode
+    np.testing.assert_allclose(c2.lines[0].get_xdata(), k_native)
+    terms = pl.plot_p1d_terms(ens, orders=[2])[1][0]
+    tot2 = [c for c in terms.lines if c.get_label() == r"$\mathcal{O}(2)$ total"][0]
+    np.testing.assert_allclose(tot2.get_xdata(), k_native)
+    plt.close("all")
+    # explicit display bins: P1D in the bins of set_k_edges along the line of sight, xi1D at every lag
     k_f = 2 * np.pi / period
-    e1 = bao_k_edges(k_f, np.pi / (period / n_pix), 3.0 / u, n_log=4)
+    e1 = set_k_edges(k_f, k_1=3.5 * k_f, k_2=3.0 / u, k_max=np.pi / (period / n_pix), n_log=4)
     pts = [c for c in pl.plot_p1d_orders(ens, k_edges=e1)[1][0].lines if c.get_marker() == "o"][0]
     assert np.all(pts.get_xdata() >= e1[0]) and np.all(pts.get_xdata() <= e1[-1])
     old = pl.plot_orders_superimposed(ens, "P", k_edges=e1)[1][0]  # the data drawn: those of the building block
@@ -1033,11 +1067,11 @@ def test_the_symlog_colour_limits_are_symmetric():
 
 
 def _map_inputs(n_cells=16, L=8.0):
-    from skewerjax.summary_stats import bao_k_edges, box_grid, field_statistics, grid_limits
+    from skewerjax.summary_stats import box_grid, field_statistics, grid_limits, set_k_edges
 
     b = ToyBoxes(box_cMpc=L, n_cells=n_cells, n_real=2, r_bao=2.5, sigma_bao=0.5, bao_ratio=1e-4, n_s=-0.4)
     lim = grid_limits(n_cells, L)
-    k = bao_k_edges(lim["k_min"], lim["k_max"], lim["k_max"], k_1=None, dk_factor=1.0)
+    k = set_k_edges(lim["k_min"], k_1=3.5 * lim["k_min"], k_2=lim["k_max"], k_max=lim["k_max"], dk_factor=1.0)
     r = np.arange(0, L / 2 + L / n_cells, L / n_cells)
     grid = box_grid(n_cells, L, k_edges=k, r_edges=r, log=None)
     return b, field_statistics((b.cells(i) for i in range(2)), grid, species="HI", power=b.grf().power, log=None)
@@ -1049,12 +1083,12 @@ def test_the_wedges_of_p():
     [k_min, k_max] shaded; legends inside, on top; a top axis in s/km with its own ticks; marks (BAO maxima, labelled
     lines, the mu = 1 imprints of the pairs at 2 pi n / Delta) inside the drawn range only; the |k| edges checked. The
     (k_perp, k_par) maps draw the rays of the P edges, the (r_perp, r_par) maps keep those of xi."""
-    from skewerjax.summary_stats import bao_k_edges, box_grid, field_statistics, grid_limits, pair_imprint
+    from skewerjax.summary_stats import box_grid, field_statistics, grid_limits, pair_imprint, set_k_edges
 
     b, _ = _map_inputs()
     n, L = 16, 8.0
     lim = grid_limits(n, L)
-    k = bao_k_edges(lim["k_min"], lim["k_max"], lim["k_max"], k_1=None, dk_factor=1.0)
+    k = set_k_edges(lim["k_min"], k_1=3.5 * lim["k_min"], k_2=lim["k_max"], k_max=lim["k_max"], dk_factor=1.0)
     grid = box_grid(n, L, k_edges=k, r_edges=np.arange(0, L / 2 + L / n, L / n), pk_mu_edges=(0.0, 0.4, 1.0), log=None)
     res = field_statistics((b.cells(i) for i in range(2)), grid, species="HI", power=b.grf().power, log=None)
     u = 100.0
@@ -1135,6 +1169,68 @@ def test_the_wedges_of_p():
     assert len([ln for ln in axs[1].lines if ln.get_linestyle() == "-."]) == len(pl.MU_WEDGES) - 2
 
 
+def test_empty_wedge_cells():
+    """The wedges of P and of xi: every point at the bins of the |k| (|r|) edges, one position per bin shared by every
+    wedge (the mode- or separation-weighted mean of the bin: k_iso of P(|k|)); a (wedge, bin) cell with no mode or
+    separation is NaN (measurement, error, expectation, centre); drawn, an empty bin between two computed bins of a wedge is
+    an open marker on the line joining them, and nothing is drawn beyond the first and last computed bins."""
+    from skewerjax.summary_stats import box_grid, field_statistics, grid_limits, set_k_edges, set_r_edges
+
+    b, _ = _map_inputs()
+    n, L = 16, 8.0
+    lim = grid_limits(n, L)
+    k = set_k_edges(lim["k_min"], k_1=3.5 * lim["k_min"], k_2=lim["k_max"], k_max=lim["k_max"], dk_factor=0.5)
+    mu = np.sin(np.linspace(0.0, np.pi / 2, 9))  # narrow wedges near mu = 1: empty cells at small k and r
+    r = set_r_edges(L / n, L / n, L=L, r_1=3 * L / n, r_2=L / 2)
+    grid = box_grid(n, L, k_edges=k, r_edges=r, pk_mu_edges=mu, xi_mu_edges=mu, log=None)
+    res = field_statistics((b.cells(i) for i in range(2)), grid, species="HI", power=b.grf().power, log=None)
+    a = res["axes"]
+    for key, cnt, c in (("P_mu", "n_modes_P_mu", "k_mu"), ("xi_mu", "n_lags_xi_mu", "r_mu")):
+        empty = np.asarray(a[cnt]) == 0
+        assert empty.any() and (~empty).any()
+        for arr in (res[key], res[key + "_err"], res["theory"][key], a[c]):
+            assert np.all(np.isnan(np.asarray(arr)[empty])), "an empty cell is NaN, never a number"
+        assert np.all(np.isfinite(res[key][~empty]))
+    for f, key, cnt, centres in (
+        (pl.plot_pk_mu_wedges, "P_mu", "n_modes_P_mu", a["k_iso"]),
+        (pl.plot_xi_mu_wedges, "xi_mu", "n_lags_xi_mu", None),
+    ):
+        kw = dict(panels=True) if f is pl.plot_pk_mu_wedges else dict(quantity="xi", y_scale="symlog")
+        fig, axs, _ = f(res, **kw)
+        fig.canvas.draw()
+        empty = np.asarray(a[cnt]) == 0
+        n_open = 0
+        for w in range(mu.size - 1):
+            ax = axs[w] if f is pl.plot_pk_mu_wedges else axs[0]
+            mean = [cn.lines[0] for cn in ax.containers][w if ax is axs[0] and f is pl.plot_xi_mu_wedges else 0]
+            xm = np.asarray(mean.get_xdata(), dtype=float)
+            if centres is not None:  # the bins of P(|k|): the k_iso of plot_overflux_3d
+                np.testing.assert_allclose(xm, centres[~empty[w] & (res[key][w] > 0)], rtol=1e-6)
+            comp = np.flatnonzero(~empty[w])
+            inner = np.flatnonzero(empty[w])
+            inner = inner[(inner > comp[0]) & (inner < comp[-1])]
+            opened = [
+                ln
+                for ln in ax.lines
+                if ln.get_marker() == "o" and ln.get_markerfacecolor() == "none" and ln.get_color() == mean.get_color()
+            ]
+            xo = np.concatenate([ln.get_xdata() for ln in opened]) if opened else np.empty(0)
+            assert xo.size == inner.size, f"one open marker per interior empty bin (wedge {w})"
+            if xo.size:  # inside the computed range only, on the line between its neighbours
+                assert np.all((xo > xm.min()) & (xo < xm.max()))
+                n_open += xo.size
+            assert all(ln.get_markerfacecolor() != "none" for ln in [mean]), "computed bins: filled"
+        assert n_open > 0
+        texts = [
+            t.get_text()
+            for lg in fig.legends
+            + [c for ax in np.ravel(axs) for c in ax.get_children() if isinstance(c, matplotlib.legend.Legend)]
+            for t in lg.get_texts()
+        ]
+        assert any("interpolated" in t for t in texts)
+        plt.close(fig)
+
+
 def _physical_ratio(ax):
     ax.figure.canvas.draw()
     bb = ax.get_window_extent()
@@ -1149,7 +1245,7 @@ def test_the_maps_keep_the_physical_aspect_and_the_theme_colormaps():
     a = res["axes"]
     figs, axs, _ = pl.plot_rpar_rperp_maps(res, r_bao=2.5, quantity="xi", color_scale="symlog", kms_per_cMpc=u)
     for fig, ax in zip(figs, axs):
-        ratio = (a["rpar_edges"][-1] - a["rpar_edges"][0]) / (a["rperp_edges"][-1] - a["rperp_edges"][0])
+        ratio = a["rpar_edges"][-1] / a["rperp_edges"][-1]  # the drawn spans, from the origin
         assert ax.get_box_aspect() == pytest.approx(ratio) and _physical_ratio(ax) == pytest.approx(ratio, rel=1e-3)
         cax = fig.axes[1]
         assert cax.get_position().height == pytest.approx(ax.get_position().height), "the colour bar as tall as the panel"
@@ -1558,3 +1654,53 @@ def test_no_matplotlib_colour_map_anywhere_in_the_package():
         for k, line in enumerate(path.read_text().splitlines(), 1):
             bad += [f"{path.relative_to(root)}:{k}: {m}" for m in named.findall(line) if m in builtin or not m.startswith("tol_")]
     assert not bad, "colour maps outside the theme:\n" + "\n".join(bad)
+
+
+def test_axis_mode_strips():
+    """The two axis planes the (k_perp, k_par) map leaves out (``GridStatistics3D``: ``P_kperp0`` per k_par row,
+    ``P_kpar0`` per k_perp bin) equal the FFT's modes there, and the k maps draw them in the strips [0, k_f / 2) with
+    the map's colours (``show_axis_modes``), the dots at (0, k_par) and (k_perp, 0), the corner (0, 0) empty."""
+    import jax
+    from matplotlib.collections import QuadMesh
+
+    from skewerjax.summary_stats import GRID_KEYS, GridStatistics3D, ensemble_mean
+    from skewerjax.summary_stats.binning import native_edges
+
+    n, L = 16, 12.0
+    k_f = 2 * np.pi / L
+    g = PowerLawGRF(A_s=0.02, k_0=2.0, n_s=-1.25, L=(L,) * 3, N=(n,) * 3, los_axis=1)
+    edges = native_edges(k_f, n // 2, start=1)  # one row and one column per mode, from k_f / 2
+    gs = GridStatistics3D(g.shape, g.L, los_axis=1, kpar_edges=edges, kperp_edges=edges)
+    fields = [np.asarray(g.sample(jax.random.PRNGKey(i)), dtype=float) for i in range(3)]
+    one = gs.measure(fields[0])
+    P = gs.dV / gs.N * np.abs(np.fft.fftn(fields[0])) ** 2
+    want = [0.5 * (P[0, m, 0] + P[0, -m, 0]) if m < n // 2 else P[0, m, 0] for m in range(1, n // 2 + 1)]  # +-m: one row
+    np.testing.assert_allclose(one["P_kperp0"], want, rtol=2e-5)
+    a = gs.axes()
+    assert list(a["n_modes_P_kperp0"]) == [2.0] * (n // 2 - 1) + [1.0]
+    np.testing.assert_allclose(a["kpar_kperp0"], k_f * np.arange(1, n // 2 + 1))
+    i = np.fft.fftfreq(n, 1.0 / n)
+    kp = k_f * np.sqrt(i[:, None] ** 2 + i[None, :] ** 2)  # the k_par = 0 plane (k_x, 0, k_z)
+    j = np.digitize(kp, edges) - 1
+    want0 = [P[:, 0, :][(kp > 0) & (j == b)].mean() if np.any((kp > 0) & (j == b)) else np.nan for b in range(edges.size - 1)]
+    np.testing.assert_allclose(one["P_kpar0"], want0, rtol=2e-5)
+    in_bins = (kp > 0) & (j >= 0) & (j < edges.size - 1)  # the k_par = 0 modes inside the k_perp bins (not the corners)
+    assert a["n_modes_P_kpar0"].sum() == in_bins.sum() and a["n_modes_P_kperp0"].sum() == n - 1, "every mode of both planes"
+    res = dict(ensemble_mean([gs.measure(f) for f in fields], GRID_KEYS), axes=a)
+    assert res["P_kperp0_err"].shape == (n // 2,) and res["P_kpar0_each"].shape == (3, n // 2)
+    fig, ax, _ = pl.plot_overflux_kpar_kperp(res, unit="cMpc", show_modes=True)
+    meshes = [c for c in ax.collections if isinstance(c, QuadMesh)]
+    assert len(meshes) == 3, "the map, the k_perp = 0 column, the k_par = 0 row"
+    col, row = meshes[1].get_coordinates(), meshes[2].get_coordinates()
+    np.testing.assert_allclose(col[0, :, 0], [0.0, k_f / 2]) and np.testing.assert_allclose(row[:, 0, 1], [0.0, k_f / 2])
+    np.testing.assert_allclose(np.ma.filled(meshes[1].get_array(), np.nan).ravel(), res["P_kperp0"])
+    np.testing.assert_allclose(np.ma.filled(meshes[2].get_array(), np.nan).ravel(), res["P_kpar0"])
+    assert meshes[1].norm is meshes[0].norm and meshes[1].cmap is meshes[0].cmap, "the map's colours"
+    dots = np.concatenate([np.column_stack(ln.get_data()) for ln in ax.lines if ln.get_marker() == "o"])
+    assert np.sum(dots[:, 0] == 0) == n // 2 and np.sum(dots[:, 1] == 0) == np.isfinite(res["P_kpar0"]).sum()
+    assert not np.any((dots[:, 0] == 0) & (dots[:, 1] == 0)), "the corner (0, 0) stays empty"
+    plt.close(fig)
+    for kw in (dict(show_axis_modes=False), dict(kperp_scale="log", kpar_scale="log")):
+        fig, ax, _ = pl.plot_overflux_kpar_kperp(res, unit="cMpc", **kw)
+        assert len([c for c in ax.collections if isinstance(c, QuadMesh)]) == 1, kw
+        plt.close(fig)

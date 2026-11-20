@@ -173,7 +173,7 @@ def toy_lattice_statistics(
     """The statistics of notebook 10 on a lattice of skewers through realisations ``idx`` of a ``ToyBoxes``, composed of
     the public functions (``toy_tau``; ``ensemble_mean_transmissions``, delta = T / T_bar - 1, ``overflux_check``;
     ``skewer_p1d``, ``skewer_xi1d``, ``lattice_grid`` + ``measure_lattice``; ``decompose_1d`` with ``decompose``; the
-    density at the points, ``skewer_density_statistics``, against ``lattice_density_theory``). |k| bins: ``bao_k_edges``
+    density at the points, ``skewer_density_statistics``, against ``lattice_density_theory``). |k| bins: ``set_k_edges``
     up to the smallest Nyquist frequency of the lattice. Returns dict(tau (n, N_lines, N_sk, n_pix), T (n, N_lines, N_sk,
     n_pix), T_bar and delta (n, N_lines + 1, N_sk, n_pix), check, v, period, dv, a_pix, mean_transmission (N_lines + 1, n_pix),
     resolution, warnings, p1d, xi1d, flux3d, axes3d, grid, flux (None without ``decompose``), and the density entries of
@@ -182,7 +182,6 @@ def toy_lattice_statistics(
     from skewerjax.simulations import LINE_IDS
     from skewerjax.summary_stats import (
         GRID_KEYS,
-        bao_k_edges,
         decompose_1d,
         ensemble_1d,
         ensemble_mean,
@@ -191,6 +190,7 @@ def toy_lattice_statistics(
         lattice_grid,
         measure_lattice,
         overflux_check,
+        set_k_edges,
         skewer_density_statistics,
         skewer_p1d,
         skewer_xi1d,
@@ -207,7 +207,8 @@ def toy_lattice_statistics(
     T_bar = ensemble_mean_transmissions(T, mean, grid=r0["a_pix"])
     delta = np.concatenate([T, T.prod(axis=1, keepdims=True)], axis=1) / T_bar - 1
     d_perp = np.array(stride, dtype=float) * boxes.dx
-    k_edges = bao_k_edges(2 * np.pi / L, float(min(np.pi * n_pix / L, *(np.pi / d_perp))), 3.0 / boxes.sigma_bao)
+    k_f = 2 * np.pi / L
+    k_edges = set_k_edges(k_f, k_1=3.5 * k_f, k_2=3.0 / boxes.sigma_bao, k_max=float(min(np.pi * n_pix / L, *(np.pi / d_perp))))
     gs = lattice_grid(N // sx, N // sz, n_pix, L, d_perp, k_edges=k_edges)
     fields = (*ids, "total")
     p1d, xi1d, f3d = [], [], []

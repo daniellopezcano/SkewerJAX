@@ -3,6 +3,126 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — the k⊥ = 0 and k∥ = 0 modes on the k maps (stem 20261120_1622)
+
+Every existing array is unchanged; two keys are added.
+
+### Added
+- `GridStatistics3D`: `P_kperp0` (n_par,: P of the k⊥ = 0 modes, the transverse mean of δ, μ = 1, per k∥ row of the map)
+  and `P_kpar0` (n_perp,: the k∥ = 0 modes, each skewer's line-of-sight mean, μ = 0, per k⊥ bin), which the map's bins
+  leave out (they start at k_f / 2); in `GRID_KEYS` (so `ensemble_mean` gives `_err`, `_each`; `theory()` and every
+  expectation built on it bin them alike), with `n_modes["P_kperp0"]`, `n_modes["P_kpar0"]` and the centres
+  `kpar_kperp0`, `kperp_kpar0` in `axes()`.
+- `plot_overflux_kpar_kperp`, `plot_kpar_kperp_maps(show_axis_modes=True)`: the two planes in the strips between the axes
+  and the first edges on a linear axis, with the map's colours (`_axis_mode_strips`); with `show_modes`, their dots at
+  (0, k∥) and (k⊥, 0); the corner (0, 0), the box mean, stays empty.
+- Test `test_axis_mode_strips` (the arrays against the FFT's modes, the strips, the dots, the switch).
+
+## Unreleased — maps from the origin, bins in r, one shading rule, empty wedge cells (stem 20261120)
+
+Every P result is unchanged bit for bit. The ξ results change only through the new r bins: they regroup the same
+separations (Σ n ξ over the bins equal to float32 rounding; the r⊥ = 0 column identical), the zero lag (the variance) is
+no longer in the first |r| bin, and the first bins hold one distinct separation each.
+
+### Added
+- `summary_stats.set_r_edges(d_perp, d_los, *, L, r_1, r_2, r_max=L/2, dr_factor=1, n_log=0, merge_empty=True,
+  info=False)`, the counterpart of `set_k_edges`: one bin per distinct separation of the lattice up to r_1 (exact, by
+  integer keys), the zero lag in no bin; steps of dr_factor × max(d_perp, d_los) to r_2; n_log log bins to r_max; empty
+  bins merged into the next; `info`: the ranges and the occupancy (`n_lags` = `GridStatistics3D`'s counts, `n_distinct`,
+  `r_mean`). `set_rperp_edges(d_perp, *, L, ...)`: the r⊥ columns, the first r⊥ = 0 alone.
+- `summary_stats.coverage_limits(L, spacing)` and `GridStatistics3D.limits()`: k_min = 2π/L, k_max = the smallest
+  Nyquist frequency, r_min = the smallest spacing, r_max = L/2, the one rule of every shaded figure.
+- `box_grid(rperp_edges=)` (default `r_edges`, as before).
+- `plot_overflux_kpar_kperp(show_mu=, show_contours=, show_modes=)`, `plot_overflux_rpar_rperp(show_mu=, show_contours=,
+  show_pairs=)`, and the same in `plot_kpar_kperp_maps` / `plot_rpar_rperp_maps`: the dots at the mode- or
+  pair-weighted mean of every cell (`axes` `kperp_map`, `kpar_map`, `rperp_map`, `rpar_map`), under the contours; the r
+  map returns them as `drawn["pairs"]`.
+- Tests: `test_r_edges.py` (5 tests, the occupancy against the grid, the first bins, r_max, no empty bin, the limits),
+  `test_empty_wedge_cells`; the map tests check the origin and the options.
+
+### Changed
+- The maps start at the origin (0, 0) on linear axes (were the first edges: −dv/2 in r∥, k_f/2 in k).
+- `lattice_limits(...)["r_min"]` is the smallest separation min(d_perp, L/n_los) (was the coarser spacing, `dr_iso`,
+  kept as its own key): `plot_overflux_3d` drew points below the shaded r_min, because its first |r| bin [0, max(d⊥, dv/u))
+  held the zero lag and the finer line-of-sight lags (centre 0.58 cMpc against r_min = 1.73 cMpc in notebook 10).
+  `grid_limits` and `lattice_limits` use `coverage_limits` (`grid_limits` bit for bit).
+- `plot_pk_mu_wedges`, `plot_xi_mu_wedges`: the points of every wedge sit at the |k| (|r|) bins, one position per bin by
+  the `x_bin` rule (the mode- or separation-weighted mean of all the bin's modes or separations; was the centre of each
+  (wedge, bin) cell, up to 22 % away); a cell with no mode or separation (NaN) between two computed bins is an open marker
+  on the line, at the ends of a wedge nothing.
+- Notebooks 10, 11, 08, 09: the r bins by `set_r_edges` / `set_rperp_edges` (every option written), the maps with their
+  options written (10, 11: the dots on the overflux maps), the ξ wedges shaded with the limits of the lattice
+  (`LIM_B = GRID_B.limits()` in 10); 10's BAO height of the density on its own r bins.
+
+## Unreleased — notebooks 17 and 18, the binning of large lattices (stem 20261119)
+
+`binned_mean` gives the same results on every grid whose chunks x bins fit `_BIN_BLOCK` (2^24 entries); on larger
+grids it now takes longer chunks instead of holding chunks x bins partial sums. The (r_par, r_perp) map of the 256^2
+TNG50-2 lattice (256 x 3961 x 256, 2.5e5 bins) needed 249 GB and failed; it now takes 45 s for the bins and 7 s per 3D
+statistic, with about 16 values of a bin per chunk.
+
+### Added
+- `utils.plotting`: `plot_p1d_lattices` (P1D of the total order by order, `decompose_1d` per lattice: one panel per
+  order with every lattice and a residual row against the largest in percent; the native modes, as
+  `plot_p1d_orders`; `quantity` "P" / "kP_pi", `k_scale`, `y_scale` "symlog" / "linear" / "log", `residual` "relative"
+  / "max", `residual_scale` "symlog" / "linear", `total` (default True); `reference`: a measured P1D on the total
+  panel, e.g. `P1D_DESI_DR1`, converted to the panel's quantity), `plot_pk_mu_wedges_lattices` (every lattice per wedge, each panel with its residual row; symlog
+  residuals, linear within +-1 %).
+- `SkewerDataset.sources(n)`: the levels of the nested lattices an n x n lattice is read from, and their batch files.
+- `flux_statistics(log=)`: one line per step with its time; `flux_statistics_steps` (for a progress bar).
+- Notebook `18_TNG_skewers_convergence`: P1D and the P(k, μ) wedges of the stored lattices `N_MIN` … `N_MAX` with their
+  residuals, a progress bar and the time of every step.
+- Tests: `test_the_lattice_figures_with_residuals`, `test_binned_mean_in_blocks`, `sources` in `test_doubling_reuses_every_skewer`.
+
+### Changed
+- `summary_stats.bao_k_edges(k_f, k_max, k_w, k_1=None, ...)` is replaced by `set_k_edges(k_f, k_1=, k_2=, k_max=, ...)`:
+  the three ranges are set by hand (k_1 no longer defaults to 3.5 k_f; k_2 is no longer derived from k_w by rounding
+  to whole steps: the last step of dk ends exactly at k_2, absorbing 0.6-1.4 dk). With k_2 = k_max (notebooks 10 B,
+  11, 18) the old rounding could leave k_2 a fraction of a step below k_max and squeeze `n_log` slivers into it; those
+  are gone. Every call in the tests and notebooks 08-11 and 18 updated.
+- P1D figures are drawn on the native DFT modes k_m = 2 pi m / v_per, m = 1 .. N_pix / 2, one point per mode (the mean
+  over the realisations, std(ddof=1) / sqrt(n) as its error; k = 0 left out): `k_edges=None` now means no rebinning
+  in `plot_p1d_reference` (it rebinned onto the DESI spacing), `plot_p1d_orders`, `plot_p1d_terms`,
+  `plot_orders_superimposed`, `plot_terms_by_order` (they rebinned in `hybrid_k_edges`; `n_lin`, `n_log` removed) and
+  `plot_p1d_lattices`; `k_edges` stays as an opt-in. Small markers and thin lines beyond 200 modes. The reference
+  drawing of `plot_p1d_reference` is `_draw_p1d_reference`, shared with `plot_p1d_lattices`. `lattice_convergence`
+  and `binned_p1d`: `k_edges_1d` / `k_edges` optional, default the native modes. Notebooks 10, 11 and 18: no
+  `K_EDGES_1D` (the 3D bins unchanged); notebook 18 draws DESI DR1 on the total panel (`SHOW_DESI`).
+- Notebook 17 is a minimal loading check: one dataset, one lattice (`N_PER_AXIS`, default 16), where it comes from,
+  shapes, positions and nesting bit for bit, one skewer. Its statistics and convergence moved to notebook 18; the
+  store defaults to `/home/STORAGE/SKEWERS_SkewerJAX` in both.
+- `scripts/production/extract_skewers.py`: `--out` may be under `/home/STORAGE`; only the repository and the
+  simulation's own folder are refused.
+
+## Unreleased — the skewer store: resumable extraction, nested lattices, notebook 17 (stem 20261118_1844)
+
+No result changes: the τ of a stored skewer is notebook 11's for the same skewer and options (max |ΔF| ≤ 8.5e-5 in
+float32, ≤ 4.3e-7 in float64, on 16 TNG50-4 skewers per axis; the streaming route keeps n, T and v in float32 and τ is stored as
+float32); every existing call is unchanged (the new options default to the previous behaviour).
+
+### Added
+- `simulations.skewer_store`: datasets `<root>/<sim>/snap_<NNN>/axis_<a>/<hash>/` (config.json, batches of skewers as
+  HDF5 files written atomically, one record per run); the hash of every option that changes τ; nested N × N lattices
+  (N a power of two) indexed on a finest lattice N_ref, so doubling N reuses every stored skewer; the index rebuilt by
+  scanning; a lock per dataset; `SkewerDataset`, `StoredSkewers`, `load_skewers`, `list_datasets`, `select_datasets`,
+  `format_datasets`, `lattice_indices`.
+- `simulations.skewer_extraction`: the presets `MODES` ("default": notebook 11's frame with the package's pieces and
+  integration; "matched": fake_spectra's scheme), `dataset_options` (every option resolved to a value), `compute_skewers`
+  (the streaming route, one batch per tile), `extract` (the lattices in increasing order, the missing skewers only, in
+  passes that fit the memory, progress and ETA, the run's record: timings, resolution checks, devices, git commit,
+  versions), `plan`, `pass_size`, `pass_memory`.
+- `scripts/production/extract_skewers.py`: the command line (argparse, or a YAML/JSON file; `--set KEY=VALUE` for any
+  option, `--dry-run`, `--device cpu|gpu`); resumable; SIGTERM and SIGHUP stop it like Ctrl-C.
+- `summary_stats.convergence`: `flux_statistics` (notebook 11's chain for one lattice), `lattice_convergence` (every
+  lattice against the largest; `p1d_k_max`), `binned_p1d`.
+- `utils.plotting`: `plot_p1d_convergence`, `plot_wedge_convergence`, `plot_convergence_summary`, `lattice_colors`;
+  `plot_toy_skewer(n=None)` draws the flux rows only.
+- `stream.tiles_optical_depth(line_frame=, resolution_tolerance=, on_tile=)`.
+- Notebook `17_TNG_skewers`: the store, the flux figures of 11 on the largest stored lattice, and the convergence of
+  P1D and of the P and ξ wedges with the number of skewers. `docs/skewer_store.md`; README and `docs/usage.md` sections.
+- Tests: `tests/simulations/test_skewer_store.py` (toy boxes in a temporary directory; TNG50-4 under `tng`),
+  `tests/summary_stats/test_convergence.py`.
+
 ## Unreleased — μ wedges of the power spectrum, separate μ bins for ξ and P (stem 20261118)
 
 The ξ wedges, the maps and the isotropic statistics are unchanged bit for bit (notebooks 08–11 compared before and

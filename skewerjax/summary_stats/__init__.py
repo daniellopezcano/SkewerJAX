@@ -25,18 +25,22 @@ From arrays, geometry and ``core.Cells`` only: imports ``skewerjax.core`` at mos
   lattice from P(k) (``skewer_density_statistics``, ``lattice_density_theory``);
 * ``stats_3d``: P3D and xi3D of the overflux on a grid of skewers, by term and order (``OverfluxStatistics3D``);
 * ``grid3d``: P and xi of a periodic 3D field on its grid, isotropic, in the (par, perp) plane and in wedges of mu, with
-  exact expectations and covariance (``GridStatistics3D``, ``MU_WEDGES``);
+  exact expectations and covariance (``GridStatistics3D``, ``MU_WEDGES``), and the full-coverage limits of every figure
+  that shades them (``coverage_limits``, ``GridStatistics3D.limits``);
 * ``theory``: the mean of xi over the box, the term of the k = 0 mode (``integral_constraint``), and the positions of the
   BAO maxima in k (``bao_maxima``), and the Fourier imprint of the separation of two lines (``pair_imprint``);
 * ``fourier``, ``binning``: the shared conventions (lag axes, the Wiener-Khinchin pair) and binning (bin indices, jitted
-  bin means, bin edges (``bao_k_edges``, ``native_edges``, ``full_coverage``), the mean over realisations
+  bin means, bin edges (``set_k_edges``, ``set_r_edges``, ``set_rperp_edges``, ``native_edges``, ``full_coverage``), the mean over realisations
   ``ensemble_mean``);
 * ``contaminants``: the P1D metal-contamination models (McDonald et al.; Ma et al.) and their fits.
+* ``convergence``: notebook 11's statistics of one lattice of skewers from tau (``flux_statistics``) and their
+  convergence with the number of skewers against the finest lattice (``lattice_convergence``, ``binned_p1d``; notebook 18).
 """
 
 from skewerjax.summary_stats import (
     binning,
     contaminants,
+    convergence,
     density,
     field_stats,
     fourier,
@@ -51,7 +55,6 @@ from skewerjax.summary_stats import (
 )
 from skewerjax.summary_stats.binning import (
     X_BIN_MODES,
-    bao_k_edges,
     bin_centres,
     binned_mean,
     ensemble_mean,
@@ -59,8 +62,12 @@ from skewerjax.summary_stats.binning import (
     hybrid_k_edges,
     native_edges,
     occupied_edges,
+    set_k_edges,
+    set_r_edges,
+    set_rperp_edges,
 )
 from skewerjax.summary_stats.contaminants import fit_ma_model_profiled, fit_mcdonald_a, ma_factor, mcdonald_factor
+from skewerjax.summary_stats.convergence import binned_p1d, flux_statistics, flux_statistics_steps, lattice_convergence
 from skewerjax.summary_stats.density import lattice_density_theory, skewer_density_statistics
 from skewerjax.summary_stats.field_stats import (
     bao_height,
@@ -74,7 +81,7 @@ from skewerjax.summary_stats.field_stats import (
     xi_subset_offsets,
 )
 from skewerjax.summary_stats.fourier import lag_axis, xi3d_from_power, xi_from_power
-from skewerjax.summary_stats.grid3d import GRID_KEYS, MU_WEDGES, GridStatistics3D
+from skewerjax.summary_stats.grid3d import GRID_KEYS, MU_WEDGES, GridStatistics3D, coverage_limits
 from skewerjax.summary_stats.lattice import (
     lattice_grid,
     lattice_limits,
@@ -156,7 +163,10 @@ __all__ = [
     "GRID_KEYS",
     "MU_WEDGES",
     "hybrid_k_edges",
-    "bao_k_edges",
+    "set_k_edges",
+    "set_r_edges",
+    "set_rperp_edges",
+    "coverage_limits",
     "bin_centres",
     "X_BIN_MODES",
     "native_edges",
@@ -172,4 +182,8 @@ __all__ = [
     "ma_factor",
     "fit_mcdonald_a",
     "fit_ma_model_profiled",
+    "flux_statistics",
+    "lattice_convergence",
+    "binned_p1d",
+    "flux_statistics_steps",
 ]

@@ -584,3 +584,31 @@ def test_the_line_cross_term_C_is_resolved_in_any_precision():
     delta = np.concatenate([T32, T32.prod(0, keepdims=True)])[None] / Tb - 1.0
     chk = overflux_check(delta, Tb, "global")
     assert abs(chk["C"] - C64) < 1e-3 * abs(C64) and chk["C_error"] < 1e-3 * abs(C64)
+
+
+def test_binned_mean_in_blocks(monkeypatch):
+    """binned_mean holds at most _BIN_BLOCK partial sums (chunks x bins): with fewer, longer chunks it gives the result
+    of the chunks of _BIN_CHUNK to rounding, and the float64 sums of numpy, for scalar and trailing-axis values (the
+    memory and time bound of 256^2 TNG50 lattices: chunks of 4096 would make ~1.6e10 partial sums per call)."""
+    from skewerjax.summary_stats import binning
+
+    rng = np.random.default_rng(5)
+    M, nb = 100_003, 37
+    idx = rng.integers(-1, nb, M)
+    for shape in ((M,), (M, 3)):
+        v = rng.normal(1.0, 0.3, shape).astype(np.float32)
+        w = rng.uniform(0.5, 1.5, shape).astype(np.float32)
+        ok = idx >= 0
+        wf = np.where(ok.reshape((-1,) + (1,) * (v.ndim - 1)), w, 0.0).astype(np.float64)
+        W_ref = np.stack([wf[idx == b].sum(0) for b in range(nb)])
+        S_ref = np.stack([(wf * v)[idx == b].sum(0) for b in range(nb)])
+        one = [np.asarray(x) for x in binning.binned_mean(jnp.asarray(v), jnp.asarray(idx), jnp.asarray(w), nb)]
+        monkeypatch.setattr(binning, "_BIN_BLOCK", 3 * nb * int(np.prod(shape[1:])))  # 3 chunks of ~33,000 (not 25 of 4096)
+        jax.clear_caches()
+        many = [np.asarray(x) for x in binning.binned_mean(jnp.asarray(v), jnp.asarray(idx), jnp.asarray(w), nb)]
+        monkeypatch.undo()
+        jax.clear_caches()
+        tol = 1e-12 if v.dtype == np.float64 and jax.config.jax_enable_x64 else 2e-6
+        np.testing.assert_allclose(many[1], W_ref, rtol=tol)
+        np.testing.assert_allclose(many[0], S_ref / W_ref, rtol=tol)
+        np.testing.assert_allclose(many[0], one[0], rtol=tol)

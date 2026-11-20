@@ -12,11 +12,11 @@ import pytest
 from skewerjax.simulations import ToyBoxes
 from skewerjax.summary_stats import (
     GRID_KEYS,
-    bao_k_edges,
     ensemble_mean,
     lattice_density_theory,
     lattice_grid,
     on_points,
+    set_k_edges,
     skewer_density_statistics,
 )
 from skewerjax.summary_stats.density import _lattice_power
@@ -31,7 +31,8 @@ def _grid(b, stride, n_los):
     """``lattice_grid`` of the lattice with ``stride`` and n_los points along y, |k| up to its smallest Nyquist frequency."""
     L = float(b.box_cMpc)
     d_perp = np.array(stride, dtype=float) * b.dx
-    k_edges = bao_k_edges(2 * np.pi / L, float(min(np.pi * n_los / L, *(np.pi / d_perp))), 3.0 / b.sigma_bao)
+    k_f = 2 * np.pi / L
+    k_edges = set_k_edges(k_f, k_1=3.5 * k_f, k_2=3.0 / b.sigma_bao, k_max=float(min(np.pi * n_los / L, *(np.pi / d_perp))))
     return lattice_grid(b.n_cells // stride[0], b.n_cells // stride[1], n_los, L, d_perp, k_edges=k_edges)
 
 

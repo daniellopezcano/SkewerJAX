@@ -22,7 +22,7 @@ from cycler import cycler
 from matplotlib.legend_handler import HandlerBase
 from matplotlib.patheffects import AbstractPathEffect
 
-from skewerjax.summary_stats.binning import bin_centres, bin_index, hybrid_k_edges
+from skewerjax.summary_stats.binning import bin_centres, bin_index, hybrid_k_edges  # noqa: F401 (hybrid_k_edges: re-exported)
 from skewerjax.summary_stats.grid3d import MU_WEDGES  # noqa: F401 (MU_WEDGES: re-exported)
 from skewerjax.summary_stats.orders import ZERO_ORDER_KEY
 from skewerjax.summary_stats.theory import integral_constraint, pair_imprint
@@ -630,15 +630,13 @@ def _labels_1d(unit: str) -> dict:
     )
 
 
-def _display_axis(ens, kind: str, max_lag, n_lin: int, n_log: int, lag_bin: int, k_edges=None):
-    """The display bins of P1D (``k_edges`` if given, e.g. ``summary_stats.bao_k_edges`` along the line of sight; else
-    one mode per bin for the first ``n_lin`` modes, then ``n_log`` log bins; k = 0 left out) or xi1D (lags 0 .. max_lag
-    in bins of ``lag_bin`` pixels; 1: every lag): (x, edges)."""
+def _display_axis(ens, kind: str, max_lag, lag_bin: int, k_edges=None):
+    """The display bins of P1D (``k_edges`` if given, e.g. ``summary_stats.set_k_edges`` along the line of sight; else
+    None: the native modes, ``_display_binned``) or xi1D (lags 0 .. max_lag in bins of ``lag_bin`` pixels; 1: every
+    lag): (x, edges)."""
     if kind == "P":
         k = np.asarray(ens["k"])
-        if k_edges is not None:
-            return k, np.asarray(k_edges, dtype=float)
-        return k, hybrid_k_edges(k[1], k[-1] * 1.0001, n_lin=n_lin, n_log=n_log)
+        return k, None if k_edges is None else np.asarray(k_edges, dtype=float)
     lags = np.abs(np.asarray(ens["lags"]))  # |lag|: the symmetric curves, and the lag v_per / 2 stored at -v_per / 2
     d = float(lags[-1] - lags[-2])
     top = 0.5 * (lags.size * d) if max_lag is None else float(max_lag)
@@ -665,6 +663,31 @@ def _binned(x, each, edges, *, per_box: bool = False, x_bin: str = "weighted"):
     return xc[keep], b.mean(0)[..., keep], err[..., keep]
 
 
+def _native_modes(k, each, *, per_box: bool = False):
+    """As ``_binned`` on the native DFT modes, one point per mode k_m = 2 pi m / v_per, m = 1 .. N_pix / 2 (k = 0, the
+    mean, left out; no averaging): (k, mean over the realisations, std(ddof=1) / sqrt(n_real)) and, with ``per_box``,
+    every realisation (n_real, ..., n_modes)."""
+    k = np.asarray(k, dtype=float)
+    keep = k > 0
+    b = np.asarray(each)[..., keep]
+    n = b.shape[0]
+    err = b.std(0, ddof=1) / np.sqrt(n) if n > 1 else np.full(b.shape[1:], np.nan)
+    if per_box:
+        return k[keep], b.mean(0), err, b
+    return k[keep], b.mean(0), err
+
+
+def _display_binned(x, each, edges, *, per_box: bool = False, x_bin: str = "weighted"):
+    """``_binned`` in ``edges``, or with ``edges`` None the native modes (``_native_modes``: P1D's default)."""
+    if edges is None:
+        return _native_modes(x, each, per_box=per_box)
+    return _binned(x, each, edges, per_box=per_box, x_bin=x_bin)
+
+
+_DENSE_MODES = 200  # more points than this on a P1D panel (the native modes up to pi / dv): smaller markers, thinner lines
+_MS_DENSE = 2.0
+
+
 EACH_LABEL = "each box ({n})"  # the legend of the faint lines of every realisation ({n}: their number); e.g. notebook 11:
 # "each line of sight ({n}, not independent)"
 
@@ -677,13 +700,16 @@ def _each_label(each_label, n: int) -> str:
 def _with_errors(ax, x, y, e, color, kind: str, label=None, each=None, marker: str = "o", **kw):
     """The mean with its error as points (``marker``) with error bars, joined by a thin line of the same colour, above
     every realisation ``each`` (n, N) as a thin faint line and above the order totals; smaller points for xi (dense
-    lags)."""
+    lags) and for P on more than ``_DENSE_MODES`` modes (the native modes)."""
     if each is not None:
         for yy in each:
             ax.plot(x, yy, color=color, **_EACH)
     e = None if np.all(~np.isfinite(e)) else e
     size = dict(ms=_MS_SMALL, capsize=2.5, elinewidth=1.6) if kind == "P" else dict(ms=3.5, capsize=1.5, elinewidth=1.2)
-    ax.errorbar(x, y, e, color=color, fmt=marker + "-", lw=1.0, label=label, zorder=5, **size, **kw)
+    lw = 1.0
+    if kind == "P" and np.size(x) > _DENSE_MODES:
+        size, lw = dict(ms=_MS_DENSE, capsize=0.0, elinewidth=0.6), 0.6
+    ax.errorbar(x, y, e, color=color, fmt=marker + "-", lw=lw, label=label, zorder=5, **size, **kw)
 
 
 def _symlog_decades(ax, linthresh: float):
@@ -709,8 +735,6 @@ def plot_orders_superimposed(
     max_lag=None,
     delta_v_list=None,
     linthresh=None,
-    n_lin: int = 16,
-    n_log: int = 30,
     lag_bin: int = 4,
     k_edges=None,
     x_bin: str = "weighted",
@@ -730,9 +754,9 @@ def plot_orders_superimposed(
 
     stats : ``summary_stats.ensemble_1d`` of many realisations (the mean, with the error of the mean: points with error
     bars, joined by thin lines; every realisation faint with ``each``) or one ``OverfluxStatistics1D``. The total and
-    the sum of the orders, the reference the orders add up to, are lines. P: symlog y against log k, binned for display
-    in ``k_edges`` (e.g. ``bao_k_edges`` of the line of sight; default one mode per bin for the first ``n_lin`` modes,
-    then ``n_log`` log bins); xi: linear, lags 0 .. max_lag (default half the period) in bins of ``lag_bin`` pixels
+    the sum of the orders, the reference the orders add up to, are lines. P: symlog y against log k, on the native
+    modes k_m = 2 pi m / v_per, m = 1 .. N_pix / 2 (default, no rebinning; small points beyond ``_DENSE_MODES``), or
+    binned for display in ``k_edges`` (opt-in, e.g. ``set_k_edges`` of the line of sight); xi: linear, lags 0 .. max_lag (default half the period) in bins of ``lag_bin`` pixels
     (1: every lag). x_bin : where each bin is drawn ("weighted" default: the mean of its modes or lags; "linear", "log";
     ``summary_stats.bin_centres``). delta_v_list : line offsets [the unit of the lags] of the lines ``line_ids`` (default
     the first lines of ``simulations.LINE_IDS``): for xi, solid lines in the pairs' colours at every separation folded into
@@ -745,9 +769,9 @@ def plot_orders_superimposed(
         raise ValueError(f"kind must be 'P' or 'xi', got {kind!r}.")
     _check_option("k_scale", k_scale, ("log", "linear"))
     ens = _as_ensemble(stats)
-    x, edges = _display_axis(ens, kind, max_lag, n_lin, n_log, lag_bin, k_edges)
-    xc, tot, tot_e = _binned(x, ens[f"{kind}_total_each"], edges, x_bin=x_bin)
-    _, orders, orders_e, orders_b = _binned(x, ens[f"{kind}_order_each"], edges, per_box=True, x_bin=x_bin)
+    x, edges = _display_axis(ens, kind, max_lag, lag_bin, k_edges)
+    xc, tot, tot_e = _display_binned(x, ens[f"{kind}_total_each"], edges, x_bin=x_bin)
+    _, orders, orders_e, orders_b = _display_binned(x, ens[f"{kind}_order_each"], edges, per_box=True, x_bin=x_bin)
     show_each = each and orders_b.shape[0] > 1
     scale = float(np.max(np.abs(tot))) or 1.0
     wt = _xi1d_weight(xc, kind, quantity, kms_per_cMpc)
@@ -779,7 +803,8 @@ def plot_orders_superimposed(
     ax0.plot(xc, orders.sum(0), lw=1.5, ls="--", color=PALETTE["red"], label=r"$\sum$ orders", zorder=4)
     total_sum = np.asarray(ens[f"{kind}_order"]).sum(0)
     full = np.asarray(ens[f"{kind}_total"])
-    sel = (x > 0) & (x <= edges[-1]) if kind == "P" else (x >= 0) & (x <= edges[-1])
+    top = x[-1] if edges is None else edges[-1]
+    sel = (x > 0) & (x <= top) if kind == "P" else (x >= 0) & (x <= top)
     ax1.plot(x[sel], ((total_sum - full) / scale)[sel], lw=1.2, color=PALETTE["red"])
     ax1.axhline(0.0, color=FG, lw=1.0, ls=":")
     lab = _labels_1d(unit)
@@ -956,8 +981,6 @@ def plot_terms_by_order(
     orders=None,
     max_lag=None,
     linthresh=None,
-    n_lin: int = 16,
-    n_log: int = 30,
     lag_bin: int = 4,
     k_edges=None,
     x_bin: str = "weighted",
@@ -981,8 +1004,8 @@ def plot_terms_by_order(
     entry), each on its own scale (P: symmetric log, linear
     within 1 % of the panel's order total); the terms (A, B) and (B, A) are drawn as one curve "A–B" (their sum, real), the order total thick. stats :
     ``summary_stats.ensemble_1d`` (mean and error of the mean: points with error bars joined by thin lines; every
-    realisation faint with ``each``) or one ``OverfluxStatistics1D``. P: symlog y against log k (display bins as
-    ``plot_orders_superimposed``: ``k_edges``, or ``n_lin``, ``n_log``); xi: linear, lags 0 .. max_lag in bins of
+    realisation faint with ``each``) or one ``OverfluxStatistics1D``. P: symlog y against log k (as
+    ``plot_orders_superimposed``: the native modes, or the display bins ``k_edges``); xi: linear, lags 0 .. max_lag in bins of
     ``lag_bin`` pixels; ``x_bin``: where each bin is drawn (``plot_orders_superimposed``). ``axs``: draw into these axes (one per order); ``legend``: "inside" each panel (default), "below"
     it or on its "right"; ``unit``: "km/s" or "cMpc" (the axis labels, ``_labels_1d``); ``k_scale``: "log" or "linear".
     With N lines an order holds many terms (N = 4: up to 28): ``max_terms`` (default 6; None: all) keeps the largest of
@@ -995,7 +1018,7 @@ def plot_terms_by_order(
         raise ValueError(f"kind must be 'P' or 'xi', got {kind!r}.")
     _check_option("k_scale", k_scale, ("log", "linear"))
     ens = _as_ensemble(stats)
-    x, edges = _display_axis(ens, kind, max_lag, n_lin, n_log, lag_bin, k_edges)
+    x, edges = _display_axis(ens, kind, max_lag, lag_bin, k_edges)
     pairs = [tuple(p) for p in np.asarray(ens["pairs"])]
     keys = list(dict.fromkeys(a for a, _ in pairs))  # the term keys in their order (order-0 term first)
     po = np.asarray(ens["pair_orders"])
@@ -1004,7 +1027,7 @@ def plot_terms_by_order(
     for i, (a, b) in enumerate(pairs):
         key = tuple(sorted((a, b), key=keys.index))
         groups.setdefault(int(po[i]), {}).setdefault(key, []).append(i)
-    xc, by_order, by_order_e = _binned(x, ens[f"{kind}_order_each"], edges, x_bin=x_bin)
+    xc, by_order, by_order_e = _display_binned(x, ens[f"{kind}_order_each"], edges, x_bin=x_bin)
     scale = float(np.max(np.abs(by_order))) or 1.0
     wt = _xi1d_weight(xc, kind, quantity, kms_per_cMpc)
     if orders is None:  # those drawn (P: k > 0, so not the order-0 term); an order that vanishes is rounding (eps)
@@ -1018,7 +1041,7 @@ def plot_terms_by_order(
     for ax, n in zip(axs, orders):
         curves = []
         for key, idx in groups.get(n, {}).items():
-            _, y, e, b = _binned(x, terms_each[:, idx].sum(1), edges, per_box=True, x_bin=x_bin)
+            _, y, e, b = _display_binned(x, terms_each[:, idx].sum(1), edges, per_box=True, x_bin=x_bin)
             if np.max(np.abs(y)) > 1e-12 * scale:
                 curves.append((key, idx, y, e, b))
         if wanted is not None:
@@ -1043,7 +1066,7 @@ def plot_terms_by_order(
             )
         if rest:
             idx = [j for c in rest for j in c[1]]
-            _, y, e = _binned(x, terms_each[:, idx].sum(1), edges, x_bin=x_bin)
+            _, y, e = _display_binned(x, terms_each[:, idx].sum(1), edges, x_bin=x_bin)
             ax.plot(xc, wt * y, color=PALETTE["grey"], ls="--", lw=2.0, zorder=4, label=f"other terms ({len(rest)})")
         ax.plot(xc, wt * by_order[n], color=FG, lw=3.0, alpha=0.6, label=rf"$\mathcal{{O}}({n})$ total", zorder=1)
         if kind == "P":
@@ -1126,8 +1149,9 @@ def plot_p1d_orders(
 ):
     """P1D of a composite overflux split by order |A| + |B| (``plot_orders_superimposed``, kind "P"; notebook 10, D5):
     every order on one panel (symmetric-log y, ``linthresh``), the total and the sum of the orders, and (sum - total) /
-    max |total| below. stats : ``summary_stats.ensemble_1d`` (or one ``OverfluxStatistics1D``); k_edges : the display
-    bins (e.g. ``bao_k_edges`` along the line of sight); k_limits : (k_min, k_max) = (2 pi / v_per, pi / dv), the range
+    max |total| below. stats : ``summary_stats.ensemble_1d`` (or one ``OverfluxStatistics1D``); k_edges : None (default:
+    the native modes k_m = 2 pi m / v_per, one point per mode, k = 0 left out) or display bins (opt-in, e.g.
+    ``set_k_edges`` along the line of sight); k_limits : (k_min, k_max) = (2 pi / v_per, pi / dv), the range
     drawn, shaded outside; x_bin : where each bin is drawn; each : every realisation faint; k_scale : "log" or
     "linear"; kms_per_cMpc : the reference top axis in the other unit (``_comoving_1d``); unit : "km/s" or "cMpc";
     each_label : the legend of the faint realisations (``EACH_LABEL``). delta_v_list : the offsets [km/s] of the lines
@@ -1362,9 +1386,10 @@ def plot_toy_skewer(
     points_per_cell: int | None = None,
     zoom_cells: float = 2.0,
     zoom_pixels: int = 12,
-    figsize=(22, 24),
+    figsize=None,
 ):
-    """One skewer of a toy box or of a simulation, from the gas to the overflux (notebooks 10 and 11, C1). Five rows:
+    """One skewer of a toy box or of a simulation, from the gas to the overflux (notebooks 10 and 11, C1). Five rows
+    (three, (c)-(e), with ``n=None``: the flux alone, e.g. from the skewer store of notebook 17, which keeps no density):
 
     (a) n of each species against the comoving position y along the skewer (the cell values, as steps); (b) the
     overdensities n / <n> - 1 (<.> along this skewer); (c) the transmission T = exp(-tau) of each line and the total
@@ -1380,20 +1405,24 @@ def plot_toy_skewer(
     from y = L / 2, or ``zoom_pixels`` pixels from the middle of the axis), marked on the panel.
 
     L : box side [cMpc]; n : {species: (N,)} the cells along y, centred on j L / N (or the values at the N points of a
-    simulation skewer, each the mean over its dual segment, the end point dropped: notebook 11); v : (N_pix,) the Lya
+    simulation skewer, each the mean over its dual segment, the end point dropped: notebook 11), or None (no gas rows);
+    figsize : default (22, 24) with the gas, (22, 15) without; v : (N_pix,) the Lya
     axis [km/s]; tau : (n_lines, N_pix) on it, of the lines ``line_ids`` (default the first n_lines of
     ``simulations.LINE_IDS``; the first is the reference). Any number of species and lines, each in its style
-    (``line_style``) and named after the line table (``line_names``, ``species_name``). Returns (fig, axs (5,), info
+    (``line_style``) and named after the line table (``line_names``, ``species_name``). Returns (fig, axs (5,) or (3,), info
     {"points": "panel" | "inset" | None, "pixels": "panel" | "inset"}).
     """
     from skewerjax.simulations.toy_boxes import LINE_IDS
 
-    sp = list(n)
-    N = len(n[sp[0]])
+    rows = [0, 1, 2, 3, 4] if n is not None else [2, 3, 4]
+    sp = list(n) if n is not None else []
+    N = len(n[sp[0]]) if n is not None else 1
     dx = L / N
     edges = (np.arange(N + 2) - 0.5) * dx  # cell j centred on j dx, and cell 0 again at the far end (periodic)
     wrap = lambda a: np.append(a, a[0])
-    fig, axs = plt.subplots(5, 1, figsize=figsize, layout="constrained")
+    figsize = figsize or ((22, 24) if n is not None else (22, 15))
+    fig, axs_rows = plt.subplots(len(rows), 1, figsize=figsize, layout="constrained")
+    axs = dict(zip(rows, axs_rows))
     v = np.asarray(v)
     F = np.exp(-np.asarray(tau))
     Ft = F.prod(0)
@@ -1429,15 +1458,15 @@ def plot_toy_skewer(
     draws = [gas(0), gas(1), flux(2), flux(3), flux(4)]
     pos = "position along the skewer, y [cMpc]"
     v_end = float(v[-1] + 0.5 * (v[1] - v[0]))
-    for i, (ylab, xlab) in enumerate(
-        (
-            (r"$n\ [\mathrm{cm^{-3}}]$", pos),
-            (r"$\delta = n/\langle n\rangle - 1$", pos),
-            (LABELS["transmission"], LABELS["v_ref"]),
-            (r"mean transmission $\bar T$", LABELS["v_ref"]),
-            (r"$\delta = T/\bar T - 1$", LABELS["v_ref"]),
-        )
-    ):
+    labels = (
+        (r"$n\ [\mathrm{cm^{-3}}]$", pos),
+        (r"$\delta = n/\langle n\rangle - 1$", pos),
+        (LABELS["transmission"], LABELS["v_ref"]),
+        (r"mean transmission $\bar T$", LABELS["v_ref"]),
+        (r"$\delta = T/\bar T - 1$", LABELS["v_ref"]),
+    )
+    for i in rows:
+        ylab, xlab = labels[i]
         draws[i](axs[i])
         axs[i].set(ylabel=ylab, xlabel=xlab)
         axs[i].set_xlim(0, L if xlab == pos else v_end)
@@ -1447,12 +1476,14 @@ def plot_toy_skewer(
             ncol=3 if len(line_ids) < 3 else 2,
             loc="center right" if i == 3 else "upper right",
         )
-    axs[0].set_yscale("log")
+    if n is not None:
+        axs[0].set_yscale("log")
     for i in (1, 4):
-        axs[i].axhline(0, color=DIM, lw=0.8)
+        if i in axs:
+            axs[i].axhline(0, color=DIM, lw=0.8)
     fig.canvas.draw()  # the axes positions, for the spacing of the grid lines
     info = {"points": None}
-    if points_per_cell:
+    if points_per_cell and n is not None:
         y_pts = np.arange(N * int(points_per_cell) + 1) * dx / int(points_per_cell)
         w0 = 0.5 * L
         for i in (0, 1):
@@ -1463,7 +1494,7 @@ def plot_toy_skewer(
     w0 = float(v[v.size // 2]) - 0.5 * dv
     for i in (2, 3, 4):
         info["pixels"] = _grid_or_inset(axs[i], v, draws[i], (w0, w0 + zoom_pixels * dv), label="pixel centres")
-    return fig, axs, info
+    return fig, np.array([axs[i] for i in rows]), info
 
 
 # --------------------------------------------------------------------------- shared labels, sizes and the dependency graph
@@ -4117,6 +4148,18 @@ def mu_colors(n: int) -> list:
 
 _EACH = dict(lw=0.8, alpha=0.12)  # one realisation, faint, in the background
 _MEAN = dict(fmt="o-", lw=1.0, ms=7, capsize=4, elinewidth=2.2, capthick=2.0, mew=1.5, zorder=6)  # the mean and its error, joined
+
+
+def _shown(x, err):
+    """The bins drawn as means: a finite value with a positive error, or with no error at all (NaN: one realisation,
+    ``binning.ensemble_mean``); a zero error is still left out."""
+    return np.isfinite(x) & ~(err <= 0)
+
+
+def _yerr(err):
+    """The error bars of ``errorbar``: None when no error is finite (one realisation: the points without bars)."""
+    err = np.asarray(err, dtype=float)
+    return np.where(np.isfinite(err), err, 0.0) if np.isfinite(err).any() else None
 _MS_SMALL = 4.5  # the small markers of several series on one panel (shape and colour tell them apart; notebook 10, D3, D4)
 _BAND = dict(color=PALETTE["green"], alpha=0.28)  # the uncertainty band of a measured iso-contour
 _LEGEND_08 = FONT_MIN["legend"] + 2  # the custom legends of the wedge figures
@@ -4800,11 +4843,52 @@ def _contours(ax, x, y, M, levels, fmt, **kw):
     return ci
 
 
-def _map_legend_entries(*, expected: bool, measured: bool, n_sigma: float, empty: str | None, sym: str):
+# the cell positions of a map: small, neutral, under the contours
+_DOTS = dict(ls="none", marker="o", ms=2.6, mew=0, color=FG, alpha=0.55, zorder=1.5)
+
+
+def _cell_dots(ax, x, y, ok) -> dict:
+    """A small neutral dot (``_DOTS``) at (x, y) of every cell of a map where ``ok`` (the mode- or pair-weighted mean
+    position of the cell, where its value is computed), under the contours and the rays. Returns dict(x, y) of the dots."""
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    keep = np.asarray(ok, dtype=bool) & np.isfinite(x) & np.isfinite(y)
+    ax.plot(x[keep], y[keep], **_DOTS)
+    return dict(x=x[keep], y=y[keep])
+
+
+def _axis_mode_strips(ax, src, a, eq, ep, ys, colormap, norm, *, column: bool, row: bool, dots: bool) -> dict:
+    """The two axis planes of P that the map's bins leave out (``GridStatistics3D``: ``P_kperp0``, ``P_kpar0``), drawn in
+    the strips between the axes and the first edges, with the map's ``colormap`` and ``norm``: the column [0, eq[0]) holds
+    k_perp = 0 (the transverse mean of delta, mu = 1) per k_par row, the row [0, ep[0]) holds k_par = 0 (each skewer's
+    line-of-sight mean, mu = 0) per k_perp bin; the corner (0, 0), the box mean, stays empty. ``dots``: one at (0, k_par)
+    and at (mode-weighted k_perp, 0) of every strip cell with modes (``_cell_dots``). ``src``: the dict drawn (the
+    measurement or the expectation); a missing key draws nothing. Returns dict(column, row) of the values drawn."""
+    out = {}
+    for key, on in (("P_kperp0", column), ("P_kpar0", row)):
+        if not on or key not in src:
+            continue
+        v = np.asarray(src[key], dtype=float)
+        v = np.where(np.isfinite(v) & (v > 0), v, np.nan)
+        if key == "P_kperp0":
+            ax.pcolormesh([0.0, eq[0]], ys * ep, np.ma.masked_invalid(v[:, None]), cmap=colormap, norm=norm, shading="flat")
+            if dots:
+                y = np.asarray(a.get("kpar_kperp0", a["kpar"]), dtype=float)
+                _cell_dots(ax, np.zeros_like(y), ys * y, np.isfinite(v))
+            out["column"] = v
+        else:
+            ax.pcolormesh(eq, [0.0, ys * ep[0]], np.ma.masked_invalid(v[None, :]), cmap=colormap, norm=norm, shading="flat")
+            if dots:
+                x = np.asarray(a.get("kperp_kpar0", a["kperp"]), dtype=float)
+                _cell_dots(ax, x, np.zeros_like(x), np.isfinite(v))
+            out["row"] = v
+    return out
+
+
+def _map_legend_entries(*, expected: bool, measured: bool, n_sigma: float, empty: str | None, sym: str, dots: str | None = None):
     """The entries of the legend of a map (``plot_kpar_kperp_maps``, ``plot_rpar_rperp_maps``), (handles, labels): "expected
     iso-contours" (dashed), one entry for the measured contours with their band (the line over the shaded patch,
-    ``HandlerTuple``, in ``_pair_key``), and the empty bins only when the drawn range holds one (``empty``: their label, or
-    None)."""
+    ``HandlerTuple``, in ``_pair_key``), the empty bins only when the drawn range holds one (``empty``: their label, or
+    None), and the dots of the cell positions (``dots``: their label, or None)."""
     h, lab = [], []
     if expected:
         h.append(mpl.lines.Line2D([], [], color=FG, ls="--", lw=1.4))
@@ -4815,6 +4899,9 @@ def _map_legend_entries(*, expected: bool, measured: bool, n_sigma: float, empty
     if empty:
         h.append(mpl.patches.Patch(facecolor=mpl.colors.to_rgba(DIM, 0.3)))
         lab.append(empty)
+    if dots:
+        h.append(mpl.lines.Line2D([], [], **{**_DOTS, "ms": 6, "alpha": 0.8}))
+        lab.append(dots)
     return h, lab
 
 
@@ -4834,6 +4921,10 @@ def plot_kpar_kperp_maps(
     k_marks=None,
     kms_per_cMpc: float | None = None,
     mu_edges=None,
+    show_mu: bool = True,
+    show_contours: bool = True,
+    show_modes: bool = False,
+    show_axis_modes: bool = True,
     figsize=(14, 12.5),
 ):
     """P(k_perp, k_par) of many realisations on the grid's own modes (notebook 08, A3), as two figures with exactly the
@@ -4848,9 +4939,11 @@ def plot_kpar_kperp_maps(
     (``res["limits"]``). ``kms_per_cMpc``: reference axes in s/km (e.g. the boxes' aH; None: none). The wedges of the P
     wedges (``mu_edges``, default those of the measurement, ``axes["pk_mu_edges"]``) as white rays (``_mu_rays``). The legend
     (``_map_legend_entries``): the expected contours, the measured contours with their band, and the empty bins when there are
-    some. res : ``summary_stats.field_statistics``; without an expectation (a simulation, notebook 09) the measured
-    figure only, on the measurement's colour scale. Returns (figs (2,): expected, measured, or (1,): measured; axs;
-    chi2/dof of (measured - expected) / error per bin, or None)."""
+    some. ``show_mu``, ``show_contours``, ``show_modes`` (the dots at the mode-weighted mean (k_perp, k_par) of every
+    cell), ``show_axis_modes`` (the k_perp = 0 column and the k_par = 0 row): ``plot_overflux_kpar_kperp``'s, in both figures; on linear axes both start at the origin. res :
+    ``summary_stats.field_statistics``; without an expectation (a simulation, notebook 09) the measured figure only, on the
+    measurement's colour scale. Returns (figs (2,): expected, measured, or (1,): measured; axs; chi2/dof of (measured -
+    expected) / error per bin, or None)."""
     has_th = "theory" in res
     Pm = res["P_map"]
     Pth = res["theory"]["P_map"] if has_th else Pm
@@ -4876,6 +4969,10 @@ def plot_kpar_kperp_maps(
             show=show,
             norm=norm,
             legend=True,
+            show_mu=show_mu,
+            show_contours=show_contours,
+            show_modes=show_modes,
+            show_axis_modes=show_axis_modes,
             figsize=figsize,
         )
         for show in (("expected", "measured") if has_th else ("measured",))
@@ -5021,6 +5118,9 @@ def plot_rpar_rperp_maps(
     linscale: float = 1.0,
     cmap=None,
     kms_per_cMpc: float | None = None,
+    show_mu: bool = True,
+    show_contours: bool = True,
+    show_pairs: bool = False,
     figsize=(14, 12.5),
 ):
     """r^2 xi(r_perp, r_par) (``quantity="r2xi"``) or xi (``"xi"``) of many realisations on the grid's own separations
@@ -5032,7 +5132,9 @@ def plot_rpar_rperp_maps(
     wedges of mu as white rays with coloured sectors (``mu_edges``, default those of the measurement); ``r_bao``: the
     circle in the BAO style, labelled. Rows: one per separation of the grid along the line of sight, r_par = j dx; columns: the
     r_perp bins ``rperp_edges`` (checked against the measurement). ``kms_per_cMpc``: reference axes in km/s (None: none).
-    The legend (``_map_legend_entries``). res : ``summary_stats.field_statistics``; without an expectation (a simulation,
+    The legend (``_map_legend_entries``). ``show_mu``, ``show_contours``, ``show_pairs`` (the dots at the pair-weighted
+    mean (r_perp, r_par) of every cell): ``plot_overflux_rpar_rperp``'s, in both figures, which start at the origin.
+    res : ``summary_stats.field_statistics``; without an expectation (a simulation,
     notebook 09) the measured figure only, on the measurement's colour scale; ``r_bao`` beyond L / 2: the arcs of its
     periodic images (``plot_overflux_rpar_rperp``). Returns (figs (2,): expected, measured, or (1,); axs; chi2/dof of
     (measured - expected) / error of xi per bin, or None)."""
@@ -5068,6 +5170,9 @@ def plot_rpar_rperp_maps(
             show=show,
             norm=norm,
             legend=True,
+            show_mu=show_mu,
+            show_contours=show_contours,
+            show_pairs=show_pairs,
             figsize=figsize,
         )
         for show in (("expected", "measured") if has_th else ("measured",))
@@ -5082,6 +5187,47 @@ def _wedge_labels(mu) -> list:
     mu = np.asarray(mu, dtype=float)
     d = next((d for d in (2, 3) if np.all(np.diff(np.round(mu, d)) > 0)), 4)
     return [rf"${lo:.{d}f} < \mu < {hi:.{d}f}$" for lo, hi in zip(mu[:-1], mu[1:])]
+
+
+def _wedge_x(edges, x_bin: str, counts, centres) -> np.ndarray:
+    """Where the bins of the mu wedges are drawn, one position per bin shared by every wedge (the points of all the wedges
+    sit at the bins of ``edges``): the ``x_bin`` rule of the other figures (``summary_stats.bin_centres``) on the mean of
+    ``centres`` (n_mu, n_bins: the mode- or separation-weighted mean |k| or |r| of every cell) over every wedge, weighted
+    by ``counts`` (its modes or separations): the weighted centre of all the modes (k > 0) or separations (r > 0) of the
+    bin, the k_iso of ``plot_overflux_3d`` when the bins are those of P(|k|). A bin empty in every wedge: its middle."""
+    n = np.nan_to_num(np.asarray(counts, dtype=float))
+    c = np.where(n > 0, np.nan_to_num(np.asarray(centres, dtype=float)), 0.0)
+    tot = n.sum(0)
+    w = np.where(tot > 0, (c * n).sum(0) / np.where(tot > 0, tot, 1.0), bin_centres(edges, "linear"))
+    return bin_centres(edges, x_bin, w)
+
+
+def _empty_cells(axes: dict, key: str, values) -> np.ndarray:
+    """The cells (n_mu, n_bins) of the wedges that hold no mode or separation (``axes[key]`` = 0), whose values are NaN;
+    without the counts, the non-finite values."""
+    n = axes.get(key)
+    return (np.asarray(n) == 0) if n is not None else ~np.isfinite(np.asarray(values, dtype=float))
+
+
+def _open_gaps(ax, x, y, computed, empty, color, *, ms: float = 6, zorder: float = 6.5) -> np.ndarray:
+    """Open (unfilled) markers at the empty bins between two computed ones of one wedge (``empty``, inside the range of
+    ``computed``), on the straight line drawn between their computed neighbours: interpolated in the coordinates of the
+    axes' scales (log, symlog or linear), so the line passes through each marker; no marker beyond the first and last
+    computed bins (no extrapolation). Call after the scales are set. Returns the indices of the bins marked."""
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    comp = np.flatnonzero(np.asarray(computed, dtype=bool))
+    if comp.size < 2:
+        return np.empty(0, dtype=int)
+    gap = np.flatnonzero(np.asarray(empty, dtype=bool))
+    gap = gap[(gap > comp[0]) & (gap < comp[-1])]
+    if gap.size == 0:
+        return gap
+    tr = ax.transScale  # the scales of both axes, before the limits: straight lines on the page are straight here
+    pts = tr.transform(np.column_stack([x[comp], y[comp]]))
+    xg = tr.transform(np.column_stack([x[gap], np.full(gap.size, y[comp][0])]))[:, 0]
+    yv = tr.inverted().transform(np.column_stack([xg, np.interp(xg, pts[:, 0], pts[:, 1])]))[:, 1]
+    ax.plot(x[gap], yv, ls="none", marker="o", ms=ms, color=color, mfc="none", mec=color, mew=1.5, zorder=zorder)
+    return gap
 
 
 _UNITS = {  # the r and k labels of the 3D statistics: comoving (the fields, and every isotropic quantity) or velocity
@@ -5345,7 +5491,9 @@ def plot_xi_mu_wedges(
     r_edges : the |r| bins of the wedges: a wedge is the average over the separations with |r| in a bin and mu in the
     wedge (default those of the measurement, ``res["axes"]["r_mu_edges"]``; checked against them, ``_check_edges``).
     limits : dict(r_min, r_max) [cMpc], default ``res.get("limits")`` (``field_statistics``): the axis shaded outside, with
-    the limits written inside the grey bands, exactly as panel (b) of ``plot_isotropic_recovery``; none: no shading.
+    the limits written inside the grey bands, exactly as panel (b) of ``plot_isotropic_recovery`` and the xi panel of
+    ``plot_overflux_3d`` (the same values: ``summary_stats.coverage_limits`` of the grid or lattice that bins the
+    statistics, ``GridStatistics3D.limits()``, ``lattice_limits``, ``grid_limits``); none: no shading.
 
     Only line-of-sight (r_perp = 0, mu = 1) scales are drawn, as vertical lines through every panel, each folded into
     [0, box / 2] (``los_scales``), in the styles of ``scale_style``: r_bao, the BAO scale, one labelled line (grey, dotted; for
@@ -5358,8 +5506,13 @@ def plot_xi_mu_wedges(
     |r_BAO + Delta_ij| (dashed) and |r_BAO - Delta_ij| (dotted); a compact legend below the figure names them. ``box``: the
     period of the line of sight [cMpc], default twice the last |r| edge. unit : "cMpc" or "km/s" (the
     axis labels); kms_per_cMpc : a secondary top axis in the other unit (``comoving_axis`` / ``velocity_axis``).
-    x_bin : where each bin is drawn ("weighted" default: the separation-weighted |r| of the bin in the wedge, "linear",
-    "log"; ``summary_stats.bin_centres``). y_scale : "linear" or "symlog" (``linthresh``, ``linthresh_frac``, ``linscale``: ``_y_scale``).
+    x_bin : where each bin is drawn, one position per |r| bin shared by every wedge (the points of all the wedges sit
+    at the bins of ``r_edges``; ``_wedge_x``): "weighted" (default: the separation-weighted mean |r| of all the separations
+    of the bin, r > 0), "linear", "log" (``summary_stats.bin_centres``); r^2 xi is weighted at the separation-weighted
+    |r| of each cell (``axes["r_mu"]``). A cell that holds no separation (``axes["n_lags_xi_mu"]`` = 0, e.g. a wedge
+    narrower than the angles between the few separations of a bin at small r) is NaN: between two computed bins of its
+    wedge it is drawn as an open marker on the line joining them (interpolated, ``_open_gaps``), at either end it is not
+    drawn (no extrapolation). y_scale : "linear" or "symlog" (``linthresh``, ``linthresh_frac``, ``linscale``: ``_y_scale``).
     each_label : the legend of the faint realisations ("{n}": their number). Returns (fig, axs
     (2,) with an expectation, (1,) without, chi2/dof per wedge against the expectation (diagonal), or None)."""
     _check_option("quantity", quantity, tuple(_MAP_QUANTITY))
@@ -5368,7 +5521,8 @@ def plot_xi_mu_wedges(
     a = res["axes"]
     _check_edges(a, "r_mu_edges", r_edges, "plot_xi_mu_wedges")
     mu, r = a["mu_edges"], a["r_mu"]
-    rx = np.broadcast_to(bin_centres(a["r_mu_edges"], x_bin, r), r.shape)  # where the bins are drawn
+    rx = np.broadcast_to(_wedge_x(a["r_mu_edges"], x_bin, a.get("n_lags_xi_mu", np.isfinite(r)), r), r.shape)  # shared
+    empty = _empty_cells(a, "n_lags_xi_mu", res["xi_mu"])  # the cells without a separation: NaN
     X, Xe = res["xi_mu"], res["xi_mu_err"]
     each = res.get("xi_mu_each")
     theory = "theory" in res
@@ -5386,20 +5540,22 @@ def plot_xi_mu_wedges(
         fig, ax = plt.subplots(figsize=figsize or (12, 9), layout="constrained")
         axs = np.array([ax])
     out = [] if theory else None
+    gaps = []  # the interior empty bins of every wedge, drawn once the scales are set
     for w in range(nm):
-        top = np.isfinite(X[w]) & (Xe[w] > 0)
+        top = _shown(X[w], Xe[w])
         if theory:
             top &= np.isfinite(Xth[w])
             x, wt = rx[w][top], weight(r[w][top] ** 2)
-            pull = (X[w][top] - Xth[w][top]) / Xe[w][top]
-            out.append(float(np.mean(pull**2)))
+            pull = (X[w][top] - Xth[w][top]) / Xe[w][top]  # NaN without errors (one realisation): no pull drawn
+            out.append(float(np.nanmean(pull**2)) if np.isfinite(pull).any() else np.nan)
             axs[0].plot(x, wt * Xth[w][top], color=cols[w], ls="--", lw=2.0, zorder=7)
             axs[1].errorbar(x + off[w], pull, np.ones_like(pull), color=cols[w], **dict(_MEAN, ms=6))
         xt, wt = rx[w][top], weight(r[w][top] ** 2)  # drawn at x_bin, weighted at the separation-weighted |r|
         if each is not None:
             for y in each[:, w]:
                 axs[0].plot(xt + off[w], wt * y[top], color=cols[w], **_EACH)
-        axs[0].errorbar(xt + off[w], wt * X[w][top], wt * Xe[w][top], color=cols[w], **dict(_MEAN, ms=6))
+        axs[0].errorbar(xt + off[w], wt * X[w][top], _yerr(wt * Xe[w][top]), color=cols[w], **dict(_MEAN, ms=6))
+        gaps.append((axs[0], rx[w] + off[w], weight(r[w] ** 2) * X[w], top, empty[w], cols[w]))
     grey = PALETTE["grey"]
     styles = [mpl.lines.Line2D([], [], color=grey, marker="o", ms=6, lw=1.0, label="measured")]
     if theory:
@@ -5409,8 +5565,8 @@ def plot_xi_mu_wedges(
         axs[1].axhspan(-2, 2, color=DIM, alpha=0.15, lw=0)
     if each is not None:
         styles.append(mpl.lines.Line2D([], [], color=grey, lw=1.2, alpha=0.5, label=each_label.format(n=len(each))))
-    wr = weight(r**2)
-    y = [(wr * (X - Xe)).ravel(), (wr * (X + Xe)).ravel()] + ([(wr * Xth).ravel()] if theory else [])
+    wr, Xe0 = weight(r**2), np.where(np.isfinite(Xe), Xe, 0.0)  # the limits: the means alone where there is no error
+    y = [(wr * (X - Xe0)).ravel(), (wr * (X + Xe0)).ravel()] + ([(wr * Xth).ravel()] if theory else [])
     yy = np.concatenate(y)
     if each is not None and y_scale == "linear":  # the limits of the means and their errors
         lo, hi = float(np.nanmin(yy)), float(np.nanmax(yy))
@@ -5424,6 +5580,12 @@ def plot_xi_mu_wedges(
     if lim:  # outside the full-coverage range: as panel (b) of plot_isotropic_recovery
         for i, ax in enumerate(axs):
             _shade_outside(ax, lim["r_min"], lim["r_max"], labels=None if i else _limit_labels("r", lim["r_min"], lim["r_max"]))
+    if sum(_open_gaps(*g).size for g in gaps):  # the empty bins inside each wedge's range: open markers on its line
+        styles.append(
+            mpl.lines.Line2D(
+                [], [], color=grey, marker="o", ms=6, mfc="none", mew=1.5, ls="none", label="no separation (interpolated)"
+            )
+        )
     for i, ax in enumerate(axs):
         _bao_mark(ax, r_bao, L, labels=i == 0)
         _mark_lines(ax, r_marks, labels=i == 0)
@@ -5507,8 +5669,13 @@ def plot_pk_mu_wedges(
     wedge (``mu_colors``, the colour of the same wedge index in the xi wedges and in the sectors of the maps), every
     realisation as a faint line, the mean with the error of the mean as points joined by thin lines. A wedge is the
     average of P over the modes with |k| in a bin of the |k| edges of the wedges and mu in the wedge
-    (``axes["pk_mu_edges"]``, half-open, the last closed; ``GridStatistics3D``), drawn at the mode-averaged |k| of the
-    cell (``axes["k_mu"]``, ``x_bin="weighted"``; "linear", "log": ``summary_stats.bin_centres``). With an expectation
+    (``axes["pk_mu_edges"]``, half-open, the last closed; ``GridStatistics3D``). The points of every wedge sit at the
+    bins of the |k| edges, one position per bin shared by all the wedges, by the ``x_bin`` rule of the other P figures
+    (``_wedge_x``: "weighted", the mode-weighted mean |k| of all the modes of the bin, ``plot_overflux_3d``'s k_iso;
+    "linear", "log": ``summary_stats.bin_centres``); k P is weighted at the mode-averaged |k| of each cell
+    (``axes["k_mu"]``). A cell that holds no mode (``axes["n_modes_P_mu"]`` = 0) is NaN: between two computed bins of its
+    wedge it is drawn as an open marker on the line joining them (interpolated, ``_open_gaps``), at either end of the
+    wedge it is not drawn (no extrapolation). With an expectation
     (``res["theory"]``: ``field_statistics``, or the density of ``skewer_density_statistics`` with its
     ``lattice_density_theory``): the expectation of each wedge, P averaged over exactly the modes of each cell, as a
     dashed line in the wedge's colour and, below, (measured - expected) / error; without (the overflux on the lattice, a
@@ -5519,7 +5686,8 @@ def plot_pk_mu_wedges(
     ``measure_lattice``'s ensemble or of ``density3d`` with its axes); k [1/cMpc], P [cMpc^3]. k_edges : the |k| bins of the
     wedges, checked against those of the measurement (``axes["k_mu_edges"]``, ``_check_edges``). limits : dict(k_min,
     k_max) [1/cMpc], default ``res.get("limits")``: the axis shaded outside, the limits written inside the grey bands, as
-    the other P figures (``plot_isotropic_recovery``); none: no shading. k_scale : "linear" (default) or "log"; y_scale : "log"
+    the other P figures (``plot_isotropic_recovery``, ``plot_overflux_3d``; ``summary_stats.coverage_limits`` of the grid
+    or lattice); none: no shading. k_scale : "linear" (default) or "log"; y_scale : "log"
     (default for P), "linear" (default for kP) or "symlog" (``linthresh``, ``linthresh_frac``, ``linscale``: ``_y_scale``).
 
     Marks, vertical lines through every panel, only those within the drawn k range (``scale_style``): bao_k, the BAO
@@ -5547,7 +5715,8 @@ def plot_pk_mu_wedges(
     a = res["axes"]
     _check_edges(a, "k_mu_edges", k_edges, "plot_pk_mu_wedges")
     mu, k = a["pk_mu_edges"], a["k_mu"]
-    kx = np.broadcast_to(bin_centres(a["k_mu_edges"], x_bin, k), k.shape)  # where the bins are drawn
+    kx = np.broadcast_to(_wedge_x(a["k_mu_edges"], x_bin, a.get("n_modes_P_mu", np.isfinite(k)), k), k.shape)  # shared
+    empty = _empty_cells(a, "n_modes_P_mu", res["P_mu"])  # the cells without a mode: NaN
     X, Xe = res["P_mu"], res["P_mu_err"]
     each = res.get("P_mu_each")
     theory = "theory" in res
@@ -5558,7 +5727,7 @@ def plot_pk_mu_wedges(
     weight, ylabel = _PK_QUANTITY[quantity]
     if panels:
         fig, axs = plt.subplots(
-            nm, 1, figsize=figsize or (11, 1.2 + 2.1 * nm), sharex=True, sharey=True, squeeze=False, layout="constrained"
+            nm, 1, figsize=figsize or (11, 1.2 + 5.1 * nm), sharex=True, sharey=True, squeeze=False, layout="constrained"
         )
         axs = axs[:, 0]
         main, pulls, bottom = list(axs), [], [axs[-1]]
@@ -5577,14 +5746,15 @@ def plot_pk_mu_wedges(
     mains = list(dict.fromkeys(main))
     out = [] if theory else None
     yv = [[] for _ in range(nm)]
+    gaps = []  # the interior empty bins of every wedge, drawn once the scales are set
     for w in range(nm):
-        top = np.isfinite(X[w]) & (Xe[w] > 0) & np.isfinite(k[w])
+        top = _shown(X[w], Xe[w]) & np.isfinite(k[w])
         if y_scale == "log":
             top &= X[w] > 0
         if theory:
             top &= np.isfinite(Xth[w])
-            pull = (X[w][top] - Xth[w][top]) / Xe[w][top]
-            out.append(float(np.mean(pull**2)) if pull.size else np.nan)
+            pull = (X[w][top] - Xth[w][top]) / Xe[w][top]  # NaN without errors (one realisation): no pull drawn
+            out.append(float(np.nanmean(pull**2)) if np.isfinite(pull).any() else np.nan)
             main[w].plot(kx[w][top], weight(k[w][top]) * Xth[w][top], color=cols[w], ls="--", lw=2.0, zorder=7)
             if pulls:
                 pulls[w].errorbar(kx[w][top] * off[w], pull, np.ones_like(pull), color=cols[w], **dict(_MEAN, ms=6))
@@ -5593,8 +5763,10 @@ def plot_pk_mu_wedges(
         if each is not None:
             for y in each[:, w]:
                 main[w].plot(xt * off[w], wt * y[top], color=cols[w], **_EACH)
-        main[w].errorbar(xt * off[w], wt * X[w][top], wt * Xe[w][top], color=cols[w], **dict(_MEAN, ms=6))
-        yv[w] += [wt * (X[w][top] - Xe[w][top]), wt * (X[w][top] + Xe[w][top])]
+        main[w].errorbar(xt * off[w], wt * X[w][top], _yerr(wt * Xe[w][top]), color=cols[w], **dict(_MEAN, ms=6))
+        gaps.append((main[w], kx[w] * off[w], weight(k[w]) * X[w], top, empty[w], cols[w]))
+        e0 = np.where(np.isfinite(Xe[w][top]), Xe[w][top], 0.0)  # the limits: the means alone where there is no error
+        yv[w] += [wt * (X[w][top] - e0), wt * (X[w][top] + e0)]
     grey = PALETTE["grey"]
     styles = [mpl.lines.Line2D([], [], color=grey, marker="o", ms=6, lw=1.0, label="measured")]
     if theory:
@@ -5646,6 +5818,11 @@ def plot_pk_mu_wedges(
                 labels=_limit_labels("k", lim["k_min"], lim["k_max"]) if ax is first else None,
             )
             ax.set_xscale(k_scale)
+    n_gap = sum(_open_gaps(*g).size for g in gaps)  # the empty bins inside each wedge's range: open markers on its line
+    if n_gap:
+        styles.append(
+            mpl.lines.Line2D([], [], color=grey, marker="o", ms=6, mfc="none", mew=1.5, ls="none", label="no mode (interpolated)")
+        )
     n_bao = 0
     for ax in every:  # the marks, inside the drawn range only
         n = _bao_lines(ax, bao_k, label=None)
@@ -5727,7 +5904,10 @@ def plot_overflux_3d(
     ``measure_lattice`` and ``lattice_grid(...).axes()``, or ``skewer_density_statistics``'s ``density3d`` and ``density_axes3d``; k [1/cMpc], r [cMpc]); the last field is the total. names :
     {field: legend label} (default ``field_names``). each : the boxes drawn faint, "all" (every field), "total" (the total only) or None.
     kms_per_cMpc : top axes in s/km and km/s for reference (``velocity_axis``). limits : dict(k_min, k_max, r_min,
-    r_max) [1/cMpc], [cMpc]: shaded outside, the limits written inside the grey bands. theory : the exact expectation
+    r_max) [1/cMpc], [cMpc]: shaded outside, the limits written inside the grey bands; give those of the lattice that
+    bins the points, ``summary_stats.coverage_limits`` (``lattice_limits``, ``GridStatistics3D.limits()``): k_min = 2 pi /
+    L, k_max = the smallest Nyquist frequency, r_min = the smallest non-zero separation (the smaller of d_perp and the
+    line-of-sight spacing), r_max = L / 2, so that with the bins of ``binning.set_r_edges`` no point lies below r_min. theory : the exact expectation
     (``GRID_KEYS`` dict, e.g. ``lattice_density_theory``) as a dashed ``FG`` line, or one reference per field ({field:
     dict with "P_iso", "xi_iso" in the same bins}, e.g. the full-box density through a mesh, ``field_statistics``) as
     dashed lines in the fields' colours; ``theory_label`` its legend. each_label : the legend of the faint realisations
@@ -5937,6 +6117,9 @@ def plot_overflux_rpar_rperp(
     show: str = "measured",
     norm=None,
     legend: bool = False,
+    show_mu: bool = True,
+    show_contours: bool = True,
+    show_pairs: bool = False,
     figsize=(14, 12.5),
 ):
     """r^2 xi(r_perp, r_par) (``quantity="r2xi"``) or xi (``"xi"``) of one overflux on the exact lattice of skewers
@@ -5962,7 +6145,15 @@ def plot_overflux_rpar_rperp(
     against them, ``_check_edges``), up to L / 2; with bins of the skewer spacing from 0, the first holds the pairs on the
     same skewer. r^2 [cMpc^2] and mu combine both axes in comoving units, r^2 at the separation-weighted centre of each
     cell. res : the ``ensemble_mean`` of ``measure_lattice`` of one field (or one entry of ``density3d``) with
-    ``res["axes"]`` = the bins of its ``lattice_grid`` (``density_axes3d``).
+    ``res["axes"]`` = the bins of its ``lattice_grid`` (``density_axes3d``). The panel starts at the origin, (r_perp,
+    r_par) = (0, 0) (the first row, centred on r_par = 0, half shown), and ends at the last r_perp edge and the top of the
+    last row (half the period).
+
+    Options of what is drawn: ``show_mu`` (default True) the rays and sectors of the wedges; ``show_contours`` (default
+    True) the iso-contours (measured with their band, expected); ``show_pairs`` (default False) a small neutral dot in
+    every cell at the pair-weighted mean (r_perp, r_par) of its separations, where its value is computed
+    (``axes["rperp_map"]``, ``axes["rpar_map"]``: r_par is the row's own separation j dv, r_perp the mean over the pairs
+    of the column), under the contours.
 
     Curves, every line-of-sight separation folded with the period ``box`` [cMpc] (default: twice the last row, L), so
     each curve is the set of arcs of the periodic images with n_perp = 0 (rings about (0, n L), clipped to the domain;
@@ -5976,7 +6167,8 @@ def plot_overflux_rpar_rperp(
     those with the reference line (default), "all", or a list of pairs). One legend, inside the panel at the top right in one
     column, names the pairs in their colours. Without ``delta_v`` (the density): the ring alone. Returns (fig, ax, drawn {"ring", "spots" [dict(pair, r_perp, r_par)],
     "echoes" {pair text: dict(r_perp, plus, minus)}, and for the first pair "spot", "echo +", "echo -": dict(r_perp,
-    r_par)} of the curves and diamonds drawn, r_par in the units of the y axis)."""
+    r_par)} of the curves and diamonds drawn, r_par in the units of the y axis; with ``show_pairs``, "pairs": dict(x, y)
+    the dots)."""
     _check_option("quantity", quantity, tuple(_MAP_QUANTITY))
     _check_option("unit", unit, ("km/s", "cMpc"))
     _check_option("show", show, ("measured", "expected"))
@@ -6004,17 +6196,22 @@ def plot_overflux_rpar_rperp(
         extend = "min" if float(np.min(finite)) < norm.vmin else "neither"
         levels = _three_levels(norm.vmin, norm.vmax) if levels is None else np.sort(np.asarray(levels, dtype=float))
     margins = dict(top=0.95, right=1.15) if u is not None else {}
-    fig, ax, cax = _map_figure(figsize, float(ep[-1] - ep[0]) / float(eq[-1] - eq[0]), **margins)  # comoving spans: equal lengths
+    x0 = min(0.0, float(eq[0]))  # the panel starts at the origin
+    fig, ax, cax = _map_figure(figsize, float(ep[-1]) / float(eq[-1] - x0), **margins)  # comoving spans: equal lengths
     im = ax.pcolormesh(eq, ys * ep, np.ma.masked_invalid(M), cmap=cmap or CMAPS["diverging"], norm=norm, shading="flat")
-    if show == "measured":
+    drawn = {}
+    if show_pairs:  # where the value of every cell is computed: the pair-weighted mean (r_perp, r_par)
+        drawn["pairs"] = _cell_dots(ax, a["rperp_map"], ys * np.asarray(a["rpar_map"]), np.isfinite(X))
+    if show_contours and show == "measured":
         _contour_band(ax, rcq, ys * rcp, M, w * Xe, levels, n_sigma)
         _contours(ax, rcq, ys * rcp, M, levels, _fmt_r2xi, colors=PALETTE["green"], linewidths=1.8)
-    if theory is not None:
+    if show_contours and theory is not None:
         _contours(ax, rcq, ys * rcp, w * theory["xi_map"], levels, _fmt_r2xi, colors=FG, linewidths=1.4, linestyles="--")
     r_max = min(float(rcp[-1]), float(eq[-1]))  # the last row is centred on half the box
-    _mu_rays(ax, a["mu_edges"] if mu_edges is None else mu_edges, r_max, y_scale=ys)
-    drawn = {}
-    _native_map_axes(ax, u, "r", eq[-1], ys * ep[-1], y_min=ys * ep[0], unit=unit)
+    if show_mu:
+        _mu_rays(ax, a["mu_edges"] if mu_edges is None else mu_edges, r_max, y_scale=ys)
+    _native_map_axes(ax, u, "r", eq[-1], ys * ep[-1], y_min=0.0, unit=unit)
+    ax.set_xlim(x0, eq[-1])
     if r_bao is not None:
         c = echo_curves(r_bao, 0.0, L)
         _map_curve(ax, c["r_perp"], ys * c["ring"], **scale_style("bao"))
@@ -6060,11 +6257,16 @@ def plot_overflux_rpar_rperp(
     if legend:
         empty = bool(np.any(np.all(~np.isfinite(X), axis=0)))
         entries = _map_legend_entries(
-            expected=theory is not None,
-            measured=show == "measured",
+            expected=show_contours and theory is not None,
+            measured=show_contours and show == "measured",
             n_sigma=n_sigma,
             empty=r"no separation in the $r_\perp$ bin" if empty else None,
             sym=sym,
+            dots="pair-weighted mean of each cell" if show_pairs else None,
+        )
+    elif show_pairs:  # the dots are named even without the legend of the contours
+        entries = _map_legend_entries(
+            expected=False, measured=False, n_sigma=n_sigma, empty=None, sym=sym, dots="pair-weighted mean of each cell"
         )
     if delta_v is not None:
         _pair_key(ax, prs, loc="upper right", marker="D", extra=entries or ())
@@ -6091,6 +6293,10 @@ def plot_overflux_kpar_kperp(
     show: str = "measured",
     norm=None,
     legend: bool = False,
+    show_mu: bool = True,
+    show_contours: bool = True,
+    show_modes: bool = False,
+    show_axis_modes: bool = True,
     figsize=(14, 12.5),
 ):
     """P(k_perp, k_par) of one overflux on the exact lattice of skewers (notebook 10, D2), or of the density at the
@@ -6117,8 +6323,19 @@ def plot_overflux_kpar_kperp(
     1 .. n_los / 2, each centred on it, shown up to ``kpar_max`` [cMpc^-1] (default all; e.g. the transverse Nyquist
     frequency for the fine lattice of the density points); columns: the k_perp bins, ``kperp_edges`` (default those of
     the measurement; checked against them, ``_check_edges``). res : the ``ensemble_mean`` of ``measure_lattice`` of one field (or one entry of ``density3d``) with
-    ``res["axes"]`` = the bins of its ``lattice_grid`` (``density_axes3d``). Returns (fig, ax, chi2/dof of (measured - expected) / error
-    per bin with ``theory``, else None)."""
+    ``res["axes"]`` = the bins of its ``lattice_grid`` (``density_axes3d``). On linear axes the panel starts at the
+    origin, (k_perp, k_par) = (0, 0), and the strips below the first edges (k_f / 2) hold the modes no bin of the map
+    takes (``show_axis_modes``, default True; ``_axis_mode_strips``, the map's colours): **the left column is the
+    transverse mean of delta (k_perp = 0, mu = 1) per k_par row, the bottom row each skewer's line-of-sight mean (k_par
+    = 0, mu = 0) per k_perp bin; these modes are in the mu wedges**; the corner (0, 0), the box mean, stays empty. A
+    logarithmic axis starts at its first edge (no strip on it).
+
+    Options of what is drawn: ``show_mu`` (default True) the rays (and sectors) of the wedges; ``show_contours`` (default
+    True) the iso-P contours (measured with their band, expected); ``show_modes`` (default False) a small neutral dot in
+    every cell that holds modes, at the mode-weighted mean (k_perp, k_par) of its modes, where its value is computed
+    (``axes["kperp_map"]``, ``axes["kpar_map"]``: k_par is the row's single mode, k_perp the mean over the column's
+    modes), under the contours; with the strips, also at (0, k_par) and at (mode-weighted k_perp, 0). Returns (fig, ax, chi2/dof of (measured - expected) / error per bin with ``theory``, else
+    None)."""
     _check_option("kpar_scale", kpar_scale, ("log", "linear"))
     _check_option("kperp_scale", kperp_scale, ("log", "linear"))
     _check_option("unit", unit, ("km/s", "cMpc"))
@@ -6146,27 +6363,38 @@ def plot_overflux_kpar_kperp(
     kcp, kcq = a["kpar"], a["kperp"]
     y_top = ep[-1] if kpar_max is None else min(float(ep[-1]), float(kpar_max))
     linear = kpar_scale == "linear" and kperp_scale == "linear"
+    x0 = 0.0 if kperp_scale == "linear" else float(eq[0])  # the panel starts at the origin on a linear axis
+    y0 = 0.0 if kpar_scale == "linear" else float(ep[0])
     margins = dict(top=0.95, right=1.15) if u is not None else {}
-    fig, ax, cax = _map_figure(figsize, float(y_top - ep[0]) / float(eq[-1] - eq[0]) if linear else 1.0, **margins)
+    fig, ax, cax = _map_figure(figsize, float(y_top - y0) / float(eq[-1] - x0) if linear else 1.0, **margins)
     ax.set_facecolor(mpl.colors.to_rgba(DIM, 0.3))  # the cells without a mode
     Z = np.where(good, Pm, np.nan) if show == "measured" else np.where(okr, Pth, np.nan)
     im = ax.pcolormesh(eq, ys * ep, np.ma.masked_invalid(Z), cmap=cmap_, norm=norm, shading="flat")
-    if show == "measured":
+    if show_axis_modes:  # k_perp = 0 and k_par = 0, in the strips of a linear axis
+        src = res if show == "measured" else theory
+        _axis_mode_strips(
+            ax, src, a, eq, ep, ys, cmap_, norm, column=kperp_scale == "linear", row=kpar_scale == "linear", dots=show_modes
+        )
+    if show_modes:  # where the value of every cell is computed: the mode-weighted mean (k_perp, k_par)
+        rows = (a["kpar"] <= y_top)[:, None]
+        _cell_dots(ax, a["kperp_map"], ys * np.asarray(a["kpar_map"]), np.isfinite(Pm) & rows)
+    if show_contours and show == "measured":
         _contour_band(ax, kcq, ys * kcp, np.where(good, Pm, np.nan), Pe, levels, n_sigma)
         _contours(ax, kcq, ys * kcp, np.where(good, Pm, np.nan), levels, _fmt_r2xi, colors=PALETTE["green"], linewidths=1.8)
-    if Pth is not None:
+    if show_contours and Pth is not None:
         _contours(ax, kcq, ys * kcp, np.where(okr, Pth, np.nan), levels, _fmt_r2xi, colors=FG, linewidths=1.4, linestyles="--")
     if unit == "km/s" or u is None:
-        _native_map_axes(ax, u, "k", eq[-1], ys * ep[-1], y_min=ys * ep[0], unit=unit)
+        _native_map_axes(ax, u, "k", eq[-1], ys * ep[-1], y_min=ys * y0, unit=unit)
     else:
         ax.set(xlabel=r"$k_\perp$ [cMpc$^{-1}$]", ylabel=r"$k_\parallel$ (line of sight) [cMpc$^{-1}$]")
         _secondary(ax, (lambda k: k / u, lambda k: k * u), "top", r"$k_\perp$ [s km$^{-1}$]")
         _secondary(ax, (lambda k: k / u, lambda k: k * u), "right", r"$k_\parallel$ [s km$^{-1}$]")
-    ax.set(xscale=kperp_scale, yscale=kpar_scale, xlim=(eq[0], eq[-1]), ylim=(ys * ep[0], ys * y_top))
-    _mu_rays(
-        ax, a["pk_mu_edges"] if mu_edges is None else mu_edges, (eq[-1], y_top), y_scale=ys, kind="k", log=not linear
-    )  # the wedges of P, to the edges of the drawn map
-    ax.set(xlim=(eq[0], eq[-1]), ylim=(ys * ep[0], ys * y_top))
+    ax.set(xscale=kperp_scale, yscale=kpar_scale, xlim=(x0, eq[-1]), ylim=(ys * y0, ys * y_top))
+    if show_mu:
+        _mu_rays(
+            ax, a["pk_mu_edges"] if mu_edges is None else mu_edges, (eq[-1], y_top), y_scale=ys, kind="k", log=not linear
+        )  # the wedges of P, to the edges of the drawn map
+    ax.set(xlim=(x0, eq[-1]), ylim=(ys * y0, ys * y_top))
     for c in ax.child_axes:  # the reference axes: a few ticks (their numbers are long)
         (c.xaxis if c.get_xlabel() else c.yaxis).set_major_locator(mpl.ticker.MaxNLocator(4))
     _mark_lines(ax, {k: v for k, v in (k_marks or {}).items() if eq[0] <= v <= eq[-1]}, color=FG)
@@ -6176,13 +6404,19 @@ def plot_overflux_kpar_kperp(
         drawn = (a["kperp"] >= lo) & (a["kperp"] <= hi)
         empty = bool(np.any(np.all(~np.isfinite(Pm), axis=0)[drawn]))
         entries = _map_legend_entries(
-            expected=Pth is not None,
-            measured=show == "measured",
+            expected=show_contours and Pth is not None,
+            measured=show_contours and show == "measured",
             n_sigma=n_sigma,
             empty=r"no mode in the $k_\perp$ bin" if empty else None,
             sym="$P$",
+            dots="mode-weighted mean of each cell" if show_modes else None,
         )
         _pair_key(ax, [], loc="upper right", extra=entries)
+    elif show_modes:  # the dots are named even without the legend of the contours
+        dots = _map_legend_entries(
+            expected=False, measured=False, n_sigma=n_sigma, empty=None, sym="$P$", dots="mode-weighted mean of each cell"
+        )
+        _pair_key(ax, [], loc="upper right", extra=dots)
     if Pth is None:
         return fig, ax, None
     pull = (Pm - Pth)[okr] / Pe[okr]
@@ -6191,8 +6425,58 @@ def plot_overflux_kpar_kperp(
 
 def _binned_ensemble(k, each, edges, *, per_box: bool = False, x_bin: str = "weighted"):
     """Mean over the realisations of the means of ``each`` (n, N_k) in the bins of k: (centres, mean, error of the mean)
-    and, with ``per_box``, the binned values of every realisation (n, n_bins)."""
-    return _binned(np.asarray(k, dtype=float), np.asarray(each), np.asarray(edges, dtype=float), per_box=per_box, x_bin=x_bin)
+    and, with ``per_box``, the binned values of every realisation (n, n_bins); ``edges`` None: the native modes k > 0
+    (``_native_modes``)."""
+    edges = None if edges is None else np.asarray(edges, dtype=float)
+    return _display_binned(np.asarray(k, dtype=float), np.asarray(each), edges, per_box=per_box, x_bin=x_bin)
+
+
+def _draw_p1d_reference(ax, reference: dict, *, kms_per_cMpc=None, unit: str = "km/s", quantity: str = "kP_pi", cbar_ax=None):
+    """A reference P1D (``utils.reference_data``: dict(k [s/km], kP_pi = k P / pi, label), with its error bars where it
+    has ``kP_pi_err``) on ``ax``: one measurement as small grey squares; several, {z: measurement}
+    (``reference_data.P1D_DESI_DR1``), every redshift alike, small squares joined by a thin line, one colour per z from
+    ``CMAPS["line"]``, with a compact colour key that names the reference once (beside ``cbar_ax``, default ``ax``).
+    unit : the k of the axis, "km/s" or "cMpc" (k -> u k, u = ``kms_per_cMpc``); quantity : "kP_pi" (dimensionless) or
+    "P" (P = pi kP_pi / k, in the units of 1 / k; the errors alike). Returns the drawn artist of one measurement (with
+    its label, for a legend), None for several."""
+    _check_option("unit", unit, ("km/s", "cMpc"))
+    _check_option("quantity", quantity, ("kP_pi", "P"))
+    if unit == "cMpc" and kms_per_cMpc is None:
+        raise ValueError("unit='cMpc' needs kms_per_cMpc (u) to draw the reference.")
+    ku = float(kms_per_cMpc) if unit == "cMpc" else 1.0  # reference k [s/km] -> the units of the axis
+
+    def on_axis(rf, y):
+        k = ku * np.asarray(rf["k"], dtype=float)
+        y = np.asarray(y, dtype=float)
+        return k, y if quantity == "kP_pi" else np.pi * y / k
+
+    if "k" not in reference:  # {z: measurement}
+        by_z = reference
+        z_all = np.array(sorted(by_z), dtype=float)
+        cmap = plt.get_cmap(CMAPS["line"])
+        mid = 0.5 * (z_all[1:] + z_all[:-1])
+        bounds = np.concatenate([[2 * z_all[0] - mid[0]], mid, [2 * z_all[-1] - mid[-1]]])
+        z_norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+        for zz, rf in by_z.items():
+            ax.plot(*on_axis(rf, rf["kP_pi"]), "s-", ms=3.2, mew=0, lw=0.7, color=cmap(z_norm(zz)), zorder=3)
+        name = by_z[sorted(by_z)[0]]["label"].rsplit(",", 1)[0]
+        ax.figure.colorbar(
+            mpl.cm.ScalarMappable(z_norm, cmap),
+            ax=ax if cbar_ax is None else cbar_ax,
+            ticks=z_all,
+            spacing="proportional",
+            shrink=0.75,
+            pad=0.02,
+            aspect=30,
+            label=f"$z$: {name}",
+        )
+        return None
+    k_ref, y_ref = on_axis(reference, reference["kP_pi"])
+    ref_style = dict(color=ENTITY_COLORS["reference"], ms=_MS_SMALL, mec=FG, mew=0.6, label=reference["label"], zorder=7)
+    if reference.get("kP_pi_err") is None:
+        return ax.plot(k_ref, y_ref, "s", **ref_style)[0]
+    _, e_ref = on_axis(reference, reference["kP_pi_err"])
+    return ax.errorbar(k_ref, y_ref, e_ref, fmt="s", capsize=2, elinewidth=1.0, ecolor=FG, **ref_style)
 
 
 def plot_p1d_reference(
@@ -6218,18 +6502,18 @@ def plot_p1d_reference(
 ):
     """k P1D(k) / pi against k, linear k and logarithmic P, the convention of Fig. 1 of the reference (Chaves-Montero et
     al., DESI DR1 P1D; notebook 10, D4): the P1D of each overflux of the toy boxes (the ``ensemble_mean`` of ``skewer_p1d``, k in
-    s/km, ``unit="km/s"``) or of each density along the skewers (``skewer_density_statistics``'s ``density_p1d``, k in cMpc^-1, ``unit="cMpc"``), binned
-    in k: every box faint (``each``), the mean over the boxes with the error of the mean as small points joined by thin
+    s/km, ``unit="km/s"``) or of each density along the skewers (``skewer_density_statistics``'s ``density_p1d``, k in cMpc^-1, ``unit="cMpc"``), on
+    its native modes k_m = 2 pi m / v_per (one point per mode, k = 0 left out; or in the opt-in bins ``k_edges``): every box faint (``each``), the mean over the boxes with the error of the mean as small points joined by thin
     lines (one colour and one marker shape per field, open after the first; the total ``FG``); with ``p1d["theory"]``
     (the exact expectation on the lattice, ``lattice_density_theory(p1d=True)``), a dashed line. The reference
     measurement (``utils.reference_data``: dict(k [s/km], kP_pi, label), with its error bars where it has
-    ``kP_pi_err``) as small grey squares; k P / pi is dimensionless, so with ``unit="cMpc"`` only its k becomes u k
+    ``kP_pi_err``) as small grey squares (``_draw_p1d_reference``); k P / pi is dimensionless, so with ``unit="cMpc"`` only its k becomes u k
     [cMpc^-1]. The legend inside the panel; ``each_label`` the legend of the faint realisations (``EACH_LABEL``).
 
     fields : the rows of ``p1d["p1d"]`` (default the first lines of ``simulations.LINE_IDS``, as many as the rows but
     one, and "total"); names : {field: legend label} (default ``field_names``); k_max : the right end of the k axis, in the units of the axis (default 1.6 times the largest reference k);
-    k_edges : the k bins, in the units of the axis (default linear bins of the reference's spacing from half the first
-    mode); k_limits : (k_min, k_max) of the line of sight (2 pi / v_per and pi / dv), shaded outside and labelled inside
+    k_edges : None (default: the native modes, no rebinning) or the k bins, in the units of the axis (opt-in); the
+    mean over the boxes per mode or bin, with std(ddof=1) / sqrt(n) as its error; k_limits : (k_min, k_max) of the line of sight (2 pi / v_per and pi / dv), shaded outside and labelled inside
     the grey bands; x_bin : where each bin is drawn ("weighted" default: the mean of its modes; "linear", "log";
     ``summary_stats.bin_centres``); kms_per_cMpc : u, the one reference top axis, in the other unit (``comoving_axis`` /
     ``velocity_axis``; needed for ``unit="cMpc"``). No title.
@@ -6251,26 +6535,19 @@ def plot_p1d_reference(
     names = {**field_names(fields), **(names or {})}
     ku = float(kms_per_cMpc) if unit == "cMpc" else 1.0  # reference k [s/km] -> the units of the axis
     by_z = None if "k" in reference else reference
-    if by_z is not None:
-        z_all = np.array(sorted(by_z), dtype=float)
-        reference = by_z[sorted(by_z)[0]]
-    k_ref, y_ref = ku * np.asarray(reference["k"]), np.asarray(reference["kP_pi"])
     k_max = float(k_max or 1.6 * max(ku * np.max(rf["k"]) for rf in (by_z or {0: reference}).values()))
     k = np.asarray(p1d["k"])
-    if k_edges is None:
-        step = float(np.median(np.diff(k_ref)))
-        edges = np.arange(0.5 * k[1], k_max + step, step)
-    else:
-        edges = np.asarray(k_edges, dtype=float)
     fig, ax = plt.subplots(figsize=figsize, layout="constrained")
     for j, f in enumerate(fields):
-        kc, m, e, b = _binned_ensemble(k, np.asarray(p1d["p1d_each"])[:, j], edges, per_box=True, x_bin=x_bin)
+        kc, m, e, b = _binned_ensemble(k, np.asarray(p1d["p1d_each"])[:, j], k_edges, per_box=True, x_bin=x_bin)
         st = line_style("total" if f == fields[-1] else f, j)
         c = st["color"]
         if each:
             for y in b:
                 ax.plot(kc, kc * y / np.pi, color=c, **_EACH)
         style = dict(_MEAN, ms=_MS_SMALL, mew=1.3, capsize=3, fmt=st["marker"] + "-", mfc=c if j == 0 else "none", zorder=6 + j)
+        if kc.size > _DENSE_MODES:  # the native modes: small points, thin lines
+            style.update(ms=_MS_DENSE, mew=0.8, capsize=0, lw=0.6, elinewidth=0.6)
         ax.errorbar(kc, kc * m / np.pi, kc * e / np.pi, color=c, label=names.get(f, f), **style)
     if p1d.get("theory") is not None:
         sel = (k > 0) & (k <= k_max)
@@ -6285,32 +6562,7 @@ def plot_p1d_reference(
         )
     if each:
         ax.plot([], [], color=DIM, lw=1.2, alpha=0.5, label=_each_label(each_label, np.shape(p1d["p1d_each"])[0]))
-    if by_z is not None:
-        cmap = plt.get_cmap(CMAPS["line"])
-        mid = 0.5 * (z_all[1:] + z_all[:-1])
-        bounds = np.concatenate([[2 * z_all[0] - mid[0]], mid, [2 * z_all[-1] - mid[-1]]])
-        z_norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
-        for zz, rf in by_z.items():
-            ax.plot(ku * np.asarray(rf["k"]), rf["kP_pi"], "s-", ms=3.2, mew=0, lw=0.7, color=cmap(z_norm(zz)), zorder=3)
-        name = reference["label"].rsplit(",", 1)[0]
-        fig.colorbar(
-            mpl.cm.ScalarMappable(z_norm, cmap),
-            ax=ax,
-            ticks=z_all,
-            spacing="proportional",
-            shrink=0.75,
-            pad=0.02,
-            aspect=30,
-            label=f"$z$: {name}",
-        )
-    else:  # one measurement
-        ref_style = dict(color=ENTITY_COLORS["reference"], ms=_MS_SMALL, mec=FG, mew=0.6, label=reference["label"], zorder=7)
-        if reference.get("kP_pi_err") is None:
-            ax.plot(k_ref, y_ref, "s", **ref_style)
-        else:
-            ax.errorbar(
-                k_ref, y_ref, np.asarray(reference["kP_pi_err"]), fmt="s", capsize=2, elinewidth=1.0, ecolor=FG, **ref_style
-            )
+    _draw_p1d_reference(ax, reference, kms_per_cMpc=kms_per_cMpc, unit=unit)
     ax.set(
         xlim=(0.0, k_max),
         yscale="log",
@@ -8467,3 +8719,623 @@ def plot_memory_knobs(rows: list, *, reference: str, figsize=(22, 7.5)):
     axs[1].set_title("GPU", loc="left")
     add_panel_letters(axs)
     return fig, axs
+
+
+# --------------------------------------------------------------------------- convergence with the number of skewers (notebooks 17, 18)
+def lattice_colors(ns) -> dict:
+    """{N: colour} of the lattices of a convergence figure, the same in every panel: Tol's line map (``CMAPS["line"]``)
+    sampled evenly in log2 N over [0.3, 1] (the lightest part left out: it fades on white), the coarsest light, the
+    finest dark (in the paper style)."""
+    ns = sorted(int(n) for n in ns)
+    _register_tol_cmaps()
+    cmap = plt.get_cmap(CMAPS["line"])
+    x = np.linspace(0.3, 1.0, len(ns)) if len(ns) > 1 else [0.7]
+    return {n: mpl.colors.to_hex(cmap(v)) for n, v in zip(ns, x)}
+
+
+def _lattice_style(n: int, ns) -> dict:
+    """The colour (``lattice_colors``) and the marker of the lattice N (never colour alone)."""
+    order = sorted(int(m) for m in ns)
+    return dict(color=lattice_colors(order)[int(n)], marker=_MARKER_CYCLE[order.index(int(n)) % len(_MARKER_CYCLE)])
+
+
+RATIO_LOG_LIMITS = (1e-2, 1e2)  # the widest y range of the ratios of a power on a log axis (``_ratio_limits``)
+
+
+def _ratio_limits(values) -> tuple:
+    """The y range of ratios of a power on a log axis: the finite positive values with a margin, within
+    ``RATIO_LOG_LIMITS`` (a ratio beyond it, e.g. the auto-power of a weak metal line in a lattice that misses its rare
+    strong absorbers, lies outside the axis)."""
+    v = np.concatenate([np.ravel(np.asarray(x, dtype=float)) for x in values] + [np.array([1.0])])
+    v = v[np.isfinite(v) & (v > 0)]
+    lo, hi = RATIO_LOG_LIMITS
+    return max(lo, float(v.min()) / 1.3), min(hi, float(v.max()) * 1.3)
+
+
+def _ratio_log_ticks(ax) -> None:
+    """Ticks of a log axis of ratios at 1, 2, 5 times the powers of ten, labelled as plain numbers (0.5, 1, 2)."""
+    ax.yaxis.set_major_locator(mpl.ticker.LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
+    ax.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda y, _: f"{y:g}"))
+    ax.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
+
+
+def _ratio_panel(ax, x, ratios: dict, rel_err, ns, *, ms: float = 6.0):
+    """The ratios {N: (n_bins,)} of one panel against x, every N but the reference in its style, joined, and the relative
+    error of the reference as a grey band about 1 (its lower edge floored at 0.1 on a log axis)."""
+    x = np.asarray(x, dtype=float)
+    e = np.asarray(rel_err, dtype=float)
+    ok = np.isfinite(e) & np.isfinite(x)
+    if ok.any():
+        lo = np.maximum(1 - e[ok], 0.1) if ax.get_yscale() == "log" else 1 - e[ok]
+        ax.fill_between(x[ok], lo, 1 + e[ok], color=PALETTE["grey"], alpha=0.3, lw=0, zorder=1)
+    ax.axhline(1.0, color=FG, lw=1.0, zorder=2)
+    for n in ns:
+        r = np.asarray(ratios[n], dtype=float)
+        m = np.isfinite(r) & np.isfinite(x) & ((r > 0) if ax.get_yscale() == "log" else True)
+        if m.any():
+            st = _lattice_style(n, ns)
+            ax.plot(x[m], r[m], color=st["color"], marker=st["marker"], ms=ms, lw=1.6, zorder=4)
+
+
+def _lattice_legend(fig, ns, n_max: int, *, band: str, ncol: int | None = None, extra=()):
+    """The legend of the lattices (below the figure), of the band of the reference's error and of ``extra`` handles."""
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    handles = [
+        Line2D([], [], lw=1.6, ms=8, **_lattice_style(n, ns), label=rf"$N_{{\rm SK}} = {n}$ ({n * n:,} per line of sight)")
+        for n in ns
+    ]
+    handles += [Patch(color=PALETTE["grey"], alpha=0.3, label=band), *extra]
+    _legend(fig, handles=handles, loc="outside lower center", ncol=ncol or min(len(handles), 4), fontsize=FONT_MIN["legend"])
+
+
+def _band_label(n_max: int) -> str:
+    return rf"relative error of the mean at $N_{{\rm SK}} = {n_max}$"
+
+
+def plot_p1d_convergence(conv: dict, *, names=None, title=None, y_limits=None, y_scale: str = "log", figsize=None):
+    """P1D of every line and of the total of each lattice over that of the largest (``summary_stats.lattice_convergence``),
+    one panel per field: x = k [s/km] (the bins of the convergence, log), y = P1D_N / P1D_max (``y_scale`` "log" by
+    default, within ``RATIO_LOG_LIMITS``), every N in its colour and marker (``lattice_colors``), the error of the mean
+    of the largest lattice over its value as a grey band about 1, and the end of the range of the summary
+    (``p1d_k_max``), if any, as a dash-dot line. Returns (fig, axs)."""
+    from matplotlib.lines import Line2D
+
+    fields = list(conv["fields"])
+    names = names or field_names(fields)
+    ns = [n for n in conv["n"] if n != conv["n_max"]]
+    p = conv["p1d"]
+    k_max = conv.get("p1d_k_max")
+    fig, axs = plt.subplots(1, len(fields), figsize=figsize or (22, 7.5), sharey=True, layout="constrained", squeeze=False)
+    axs = axs[0]
+    for j, (ax, f) in enumerate(zip(axs, fields)):
+        ax.set_yscale(y_scale)
+        _ratio_panel(ax, p["k"], {n: p["ratio"][n][j] for n in ns}, p["ref_err"][j] / np.abs(p["ref"][j]), ns)
+        ax.set_xscale("log")
+        ax.set(xlabel=LABELS["k"], title=names[f])
+        if k_max is not None:
+            ax.axvline(k_max, color=DIM, **_MARK, zorder=3)
+    if y_limits is not None:
+        axs[0].set_ylim(*y_limits)
+    elif y_scale == "log":
+        axs[0].set_ylim(*_ratio_limits([p["ratio"][n] for n in ns]))
+    if y_scale == "log":
+        _ratio_log_ticks(axs[0])
+    axs[0].set_ylabel(rf"$P_{{\rm 1D}}(N_{{\rm SK}}) / P_{{\rm 1D}}(N_{{\rm SK}} = {conv['n_max']})$")
+    extra = [] if k_max is None else [Line2D([], [], color=DIM, **_MARK, label=f"end of the summary's range, {k_max:.3g} s/km")]
+    _lattice_legend(fig, ns, conv["n_max"], band=_band_label(conv["n_max"]), extra=extra)
+    if title:
+        fig.suptitle(title, fontsize=FONT_MIN["title"])
+    return fig, axs
+
+
+def plot_wedge_convergence(
+    conv: dict,
+    quantity: str = "P_mu",
+    *,
+    field: str = "total",
+    mu_edges,
+    ncols: int = 4,
+    title=None,
+    y_limits=None,
+    y_scale: str | None = None,
+    x_scale: str = "linear",
+    figsize=None,
+):
+    """P(k, mu) (``quantity="P_mu"``) or xi(r, mu) (``"xi_mu"``) of each lattice over that of the largest, one panel per
+    wedge of ``mu_edges`` (the edges of the statistic): x = |k| [cMpc^-1] or |r| [cMpc] (the centres of the largest
+    lattice's bins), every N in its colour and marker, the relative error of the largest lattice as a grey band about 1.
+    ``y_scale``: default "log" for P (a ratio of powers, within ``RATIO_LOG_LIMITS``), "linear" for xi (which changes
+    sign). The bins a lattice does not cover (beyond its Nyquist frequency, no pairs) and, for xi, those where |xi_max|
+    is within ``xi_sigma`` errors of 0 (``lattice_convergence``'s mask) are not drawn. Returns (fig, axs (n_wedges,))."""
+    _check_option("quantity", quantity, ("P_mu", "xi_mu"))
+    y_scale = y_scale or ("log" if quantity == "P_mu" else "linear")
+    c = conv[quantity][field]
+    ns = [n for n in conv["n"] if n != conv["n_max"]]
+    nw = c["ref"].shape[0]
+    nr = -(-nw // ncols)
+    fig, axs = plt.subplots(
+        nr, ncols, figsize=figsize or (22, 1.2 + 4.2 * nr), sharex=True, sharey=True, layout="constrained", squeeze=False
+    )
+    labs = _wedge_labels(mu_edges)
+    colors = mu_colors(nw)
+    for w, ax in enumerate(axs.ravel()):
+        if w >= nw:
+            ax.set_visible(False)
+            continue
+        ax.set_yscale(y_scale)
+        rel = np.where(c["mask"][w], c["ref_err"][w] / np.abs(c["ref"][w]), np.nan)
+        _ratio_panel(ax, c["x"][w], {n: c["ratio"][n][w] for n in ns}, rel, ns, ms=5.0)
+        box = dict(facecolor=BG, edgecolor=colors[w], lw=1.5, pad=3)
+        ax.text(
+            0.97,
+            0.94,
+            labs[w],
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=FONT_MIN["annotation"],
+            color=colors[w],
+            bbox=box,
+        )
+        ax.set_xscale(x_scale)
+    if y_limits is not None:
+        axs[0, 0].set_ylim(*y_limits)
+    elif y_scale == "log":
+        axs[0, 0].set_ylim(*_ratio_limits([c["ratio"][n] for n in ns]))
+    if y_scale == "log":
+        _ratio_log_ticks(axs[0, 0])
+    sym = "P" if quantity == "P_mu" else r"\xi"
+    for ax in axs[-1]:
+        ax.set_xlabel(_UNITS["cMpc"]["k" if quantity == "P_mu" else "r"])
+    for ax in axs[:, 0]:
+        ax.set_ylabel(rf"${sym}(N_{{\rm SK}}) / {sym}(N_{{\rm SK}} = {conv['n_max']})$")
+    _lattice_legend(fig, ns, conv["n_max"], band=_band_label(conv["n_max"]))
+    if title:
+        fig.suptitle(title, fontsize=FONT_MIN["title"])
+    return fig, axs.ravel()[:nw]
+
+
+CONVERGENCE_STAT_STYLES = {"P1D": dict(ls="-"), "P(k, mu)": dict(ls="--"), "xi(r, mu)": dict(ls=":")}  # line style = statistic
+
+
+def plot_convergence_summary(conv: dict, *, names=None, title=None, figsize=None):
+    """The largest |ratio - 1| of every statistic over its bins against the number of skewers per axis N
+    (``lattice_convergence``'s summary), log-log: the statistic by its line style (P1D solid, the wedges of P dashed, of
+    xi dotted, ``CONVERGENCE_STAT_STYLES``), the field by its colour and marker (``line_style``: Lya blue circles, the
+    total black stars, ...; the first fields drawn larger, so that curves on top of each other stay visible); the median
+    relative error of the largest lattice's estimate of each statistic as a thin horizontal line of the same colour and
+    style: below it a lattice is converged within the precision of the reference. Returns (fig, ax)."""
+    from matplotlib.lines import Line2D
+
+    s = conv["summary"]
+    names = names or field_names(conv["fields"])
+    fig, ax = plt.subplots(figsize=figsize or FIGSIZES["tall"], layout="constrained")
+    order = list(conv["fields"])
+    for key, d in s.items():
+        kind, field = key.rsplit(" ", 1)
+        st = CONVERGENCE_STAT_STYLES[kind]
+        fs = line_style(field, order.index(field))
+        col = fs["color"]
+        n = np.asarray(d["n"])[:-1]  # the largest is the reference
+        dev = np.asarray(d["deviation"], dtype=float)[:-1]
+        ok = np.isfinite(dev) & (dev > 0)
+        ms = 13 - 2.5 * order.index(field)  # the first field the largest marker
+        ax.plot(n[ok], dev[ok], color=col, ls=st["ls"], marker=fs["marker"], ms=ms, lw=2.0, zorder=4 + order.index(field))
+        if np.isfinite(d["ref_err"]):
+            ax.axhline(d["ref_err"], color=col, ls=st["ls"], lw=1.2, alpha=0.8, zorder=2)
+    ax.set_xscale("log", base=2)
+    ax.set_yscale("log")
+    ax.set_xticks(conv["n"][:-1])
+    ax.get_xaxis().set_major_formatter(mpl.ticker.ScalarFormatter())
+    ax.set(
+        xlabel=r"skewers per transverse axis $N_{\rm SK}$",
+        ylabel=rf"max $|X(N_{{\rm SK}})/X(N_{{\rm SK}} = {conv['n_max']}) - 1|$",
+    )
+    kinds = [k for k in CONVERGENCE_STAT_STYLES if any(x.startswith(k + " ") for x in s)]
+    lab = {"P1D": r"$P_{\rm 1D}$", "P(k, mu)": r"$P(k, \mu)$ wedges", "xi(r, mu)": r"$\xi(r, \mu)$ wedges"}
+    h = [Line2D([], [], color=FG, lw=2.0, **CONVERGENCE_STAT_STYLES[k], label=lab[k]) for k in kinds]
+    fields = list(dict.fromkeys(x.rsplit(" ", 1)[1] for x in s))
+    for f in fields:
+        fs = line_style(f, order.index(f))
+        h.append(Line2D([], [], color=fs["color"], marker=fs["marker"], ms=10, ls="none", label=names[f]))
+    h.append(
+        Line2D([], [], color=DIM, lw=1.2, label=rf"thin lines: the median relative error at $N_{{\rm SK}} = {conv['n_max']}$")
+    )
+    _legend(fig, handles=h, loc="outside lower center", ncol=3, fontsize=FONT_MIN["legend"])
+    if title:
+        ax.set_title(title, loc="left")
+    return fig, ax
+
+
+# --------------------------------------------------------------------------- lattices with residual rows (notebook 18)
+RESIDUAL_PERCENT_LINTHRESH = 1.0  # [%]: the residual rows of the lattice figures are linear within +-1 %, logarithmic beyond
+RESIDUAL_PERCENT_MAX = 300.0  # [%]: the widest residual axis (a coarse lattice can be off by orders of magnitude)
+
+
+def _percent_residual_axis(ax, limit: float, tolerances=(1.0,), scale: str = "symlog") -> None:
+    """A residual row in percent: ``scale`` "symlog" (linear within ``RESIDUAL_PERCENT_LINTHRESH``, ticks at the
+    decades) or "linear", symmetric limits, a line at 0 and dotted lines at +-each of ``tolerances`` [%]."""
+    _check_option("residual_scale", scale, ("symlog", "linear"))
+    if scale == "symlog":
+        ax.set_yscale("symlog", linthresh=RESIDUAL_PERCENT_LINTHRESH, linscale=1.0)
+    ax.set_ylim(-limit, limit)
+    ax.axhline(0.0, color=FG, lw=1.0, zorder=2)
+    for t in tolerances:
+        for s in (-1, 1):
+            ax.axhline(s * t, color=DIM, ls=":", lw=1.2, zorder=2)
+    if scale == "linear":
+        ax.yaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=5, symmetric=True))
+        ax.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda y, _: f"{y:+g}" if y else "0"))
+        return
+    ticks = [0.0] + [s * 10.0**e for e in range(0, 4) if 10.0**e <= limit for s in (-1, 1)]
+    ax.set_yticks(sorted(ticks))
+    ax.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda y, _: f"{y:+g}" if y else "0"))
+    ax.yaxis.set_minor_locator(mpl.ticker.NullLocator())
+
+
+def _percent_limit(values, limit=None, scale: str = "symlog") -> float:
+    """The half range of a residual row [%]: ``limit``, or from the finite |values| with a margin, between 5 % and
+    ``RESIDUAL_PERCENT_MAX``: their largest on a symlog row, their 90th percentile on a linear one (the few outliers of
+    the coarsest lattices drawn beyond the edge, so that the per-cent level stays readable)."""
+    if limit is not None:
+        return float(limit)
+    v = np.concatenate([np.ravel(np.asarray(x, dtype=float)) for x in values] + [np.zeros(1)])
+    v = np.abs(v[np.isfinite(v)])
+    top = v.max() if scale == "symlog" else np.percentile(v, 90)
+    return float(np.clip(1.3 * top, 5.0, RESIDUAL_PERCENT_MAX))
+
+
+def _lattice_main_and_residual(main, res, x, ref, ref_err, ratios, ns, n_max, *, weight=None, ms=5.0):
+    """One main panel (every lattice's statistic, ``ratio x ref`` times ``weight``, the reference with its error band)
+    and its residual row (100 (ratio - 1) [%], the reference's relative error as a grey band about 0). Returns the
+    residuals drawn {N: (n_bins,)}."""
+    x = np.asarray(x, dtype=float)
+    w = np.ones_like(x) if weight is None else np.asarray(weight, dtype=float)
+    R, E = np.asarray(ref, dtype=float), np.asarray(ref_err, dtype=float)
+    ok = np.isfinite(x) & np.isfinite(R) & np.isfinite(E) & (R > 0)
+    if ok.any():
+        st = _lattice_style(n_max, ns)
+        main.fill_between(
+            x[ok],
+            np.maximum(w[ok] * (R[ok] - E[ok]), 1e-300),
+            w[ok] * (R[ok] + E[ok]),
+            color=st["color"],
+            alpha=0.25,
+            lw=0,
+            zorder=1,
+        )
+        rel = 100.0 * E[ok] / R[ok]
+        res.fill_between(x[ok], -rel, rel, color=PALETTE["grey"], alpha=0.35, lw=0, zorder=1)
+    out = {}
+    for n in ns:
+        r = np.asarray(ratios[n], dtype=float)
+        y = w * r * R
+        m = np.isfinite(y) & np.isfinite(x) & (y > 0)
+        st = _lattice_style(n, ns)
+        lw, z = (2.4, 6) if n == n_max else (1.5, 4)
+        if m.any():
+            main.plot(x[m], y[m], color=st["color"], marker=st["marker"], ms=ms, lw=lw, zorder=z)
+        if n != n_max:
+            d = 100.0 * (r - 1.0)
+            mr = np.isfinite(d) & np.isfinite(x)
+            if mr.any():
+                res.plot(x[mr], d[mr], color=st["color"], marker=st["marker"], ms=ms, lw=1.5, zorder=4)
+            out[n] = np.where(mr, d, np.nan)
+    return out
+
+
+def _lattice_residual_legend(fig, ns, n_max: int, tolerances=(1.0,), extra=(), *, ref_band=True, res_band=True, ref_bars=False):
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    h = [
+        Line2D(
+            [],
+            [],
+            lw=2.4 if n == n_max else 1.5,
+            ms=8,
+            **_lattice_style(n, ns),
+            label=rf"$N_{{\rm SK}} = {n}$ ({n * n:,} per line of sight)" + (" (reference)" if n == n_max else ""),
+        )
+        for n in ns
+    ]
+    if ref_band:
+        h.append(
+            Patch(color=_lattice_style(n_max, ns)["color"], alpha=0.25, label=rf"error of the mean at $N_{{\rm SK}} = {n_max}$")
+        )
+    if ref_bars:
+        h.append(
+            Line2D(
+                [],
+                [],
+                color=DIM,
+                marker="|",
+                ms=12,
+                ls="none",
+                label=rf"error bars: error of the mean at $N_{{\rm SK}} = {n_max}$",
+            )
+        )
+    if res_band:
+        h.append(Patch(color=PALETTE["grey"], alpha=0.35, label="residuals: its relative error"))
+    if tolerances:
+        h.append(Line2D([], [], color=DIM, ls=":", lw=1.2, label="residuals: " + ", ".join(rf"$\pm{t:g}\%$" for t in tolerances)))
+    _legend(fig, handles=[*h, *extra], loc="outside lower center", ncol=4, fontsize=FONT_MIN["legend"])
+
+
+def _p1d_order_panels(ens, k_edges, x_bin: str, orders):
+    """The orders drawn (``orders``, default those with a non-zero contribution, as ``plot_p1d_terms``: order 0 lives at
+    k = 0 only, and order 1, <delta_A> = 0, is zero to rounding) and the P1D of every order of one ensemble on the native
+    modes (``k_edges`` None) or in the bins ``k_edges`` (``_display_binned``, as ``plot_p1d_orders``): (orders, k,
+    mean (n_orders, n_k), error, total, its error)."""
+    k = np.asarray(ens["k"], dtype=float)
+    edges = None if k_edges is None else np.asarray(k_edges, dtype=float)
+    kc, P, Pe = _display_binned(k, ens["P_order_each"], edges, x_bin=x_bin)
+    _, T, Te = _display_binned(k, ens["P_total_each"], edges, x_bin=x_bin)
+    if orders is None:
+        from skewerjax.config import eps
+
+        o = np.abs(np.asarray(ens["P_order"]))[:, 1:]
+        orders = [n for n in range(1, o.shape[0]) if o[n].max() > max(1e-12, eps()) * o.max()]
+    return list(orders), kc, P, Pe, T, Te
+
+
+def plot_p1d_lattices(
+    orders_by_n: dict,
+    *,
+    orders=None,
+    total: bool = True,
+    k_edges=None,
+    k_limits=None,
+    x_bin: str = "weighted",
+    k_scale: str = "log",
+    y_scale: str = "symlog",
+    linthresh=None,
+    quantity: str = "P",
+    residual: str = "relative",
+    residual_limit=None,
+    residual_scale: str = "symlog",
+    tolerances=(1.0,),
+    kms_per_cMpc: float | None = None,
+    reference=None,
+    ncols: int | None = None,
+    title=None,
+    figsize=None,
+):
+    """P1D of the total overflux order by order (|A| + |B|, ``summary_stats.decompose_1d``) for every lattice of
+    skewers, one panel per order with its residual against the largest lattice below (``plot_p1d_orders`` as the
+    template: the native modes by default, or the same opt-in display bins, ``_display_binned``).
+
+    orders_by_n : {N: ``summary_stats.ensemble_1d`` of the lattice N x N} (every line of sight of the lattice; the same
+    pixels for every N); orders : the orders drawn (default those with a non-zero contribution: ``plot_p1d_terms``'s
+    rule); total : one more panel, the last, for the total (the sum of the orders; default True); k_edges : None (default:
+    the native modes k_m = 2 pi m / v_per, one point per mode, k = 0 left out) or display bins [s/km] (opt-in, e.g.
+    ``set_k_edges`` along the line of sight); k_limits : (2 pi / v_per, pi / dv), shaded outside
+    (``_k_range``); x_bin : where each bin is drawn ("weighted": the mean k of its modes); k_scale : "log" or "linear";
+    y_scale : the main panels, "symlog" (default, ``linthresh`` default 1e-3 of the panel's largest |value|: the cross
+    orders change sign), "linear" or "log" (the positive values only); quantity : "P" (P1D [km/s]) or "kP_pi" (k P1D /
+    pi); kms_per_cMpc : a top axis in cMpc^-1 on the first row (``_comoving_1d``); reference : a measured P1D drawn on
+    the total panel only, as ``plot_p1d_reference`` draws it (``_draw_p1d_reference``: one measurement, grey squares, or
+    {z: measurement}, e.g. ``reference_data.P1D_DESI_DR1``, one colour per z with a colour key; converted to
+    ``quantity``; needs ``total``); ncols : panels per row (default all
+    in one row up to 4).
+
+    Above: every lattice N in its colour and marker (``lattice_colors``), joined, the largest (the reference) thicker
+    with the error of the mean over the lines of sight as error bars. Below: the residual against the largest,
+    ``residual`` "relative": 100 (P_N - P_max) / |P_max| [%] (a cross order is noisy near its zeros), or "max": 100 (P_N -
+    P_max) / max |P_max| of the panel; ``residual_scale`` "symlog" (default, linear within +-1 %; the same range in
+    every residual row) or "linear" (each row its own range, from its 90th percentile, so that a cross order's spikes do
+    not flatten the others); ``residual_limit`` [%] fixes the range of every row (else ``_percent_limit``); dotted lines
+    at +-``tolerances`` [%]. Returns (fig, axs (n_panels, 2): main,
+    residual; residuals {order (or "total"): {N: (n_bins,) [%]}}, the k centres)."""
+    _check_option("quantity", quantity, ("P", "kP_pi"))
+    _check_option("k_scale", k_scale, ("log", "linear"))
+    _check_option("y_scale", y_scale, ("symlog", "linear", "log"))
+    _check_option("residual", residual, ("relative", "max"))
+    if reference is not None and not total:
+        raise ValueError("reference is drawn on the total panel: it needs total=True.")
+    ns = sorted(int(n) for n in orders_by_n)
+    n_max = ns[-1]
+    binned = {n: _p1d_order_panels(orders_by_n[n], k_edges, x_bin, orders) for n in ns}
+    orders = binned[n_max][0]
+    kc = binned[n_max][1]
+    if any(b[1].shape != kc.shape for b in binned.values()):
+        raise ValueError("every lattice must have the same pixels (the P1D bins differ).")
+    wt = kc / np.pi if quantity == "kP_pi" else np.ones_like(kc)
+    panels = [(o, rf"order {o}: $\mathcal{{O}}({o})$") for o in orders] + ([("total", "total")] if total else [])
+
+    def values(n, key):  # (mean, error) of one panel of the lattice N, weighted
+        _, _, P, Pe, T, Te = binned[n]
+        return (wt * T, wt * Te) if key == "total" else (wt * P[key], wt * Pe[key])
+
+    nc = ncols or min(len(panels), 4)
+    nr = -(-len(panels) // nc)
+    fig = plt.figure(figsize=figsize or (6.4 * nc, 1.3 + 7.8 * nr), layout="constrained")
+    outer = fig.add_gridspec(nr, nc)
+    axs = np.empty((len(panels), 2), dtype=object)
+    resid = {}
+    dense = kc.size > _DENSE_MODES  # the native modes up to pi / dv: small markers, thin lines
+    ms_n, ms_ref, lw_n, lw_ref = (_MS_DENSE, _MS_DENSE + 0.5, 0.6, 1.0) if dense else (5, 6, 1.5, 2.4)
+    ref_handle = None
+    for p, (key, name) in enumerate(panels):
+        r_, c_ = divmod(p, nc)
+        sub = outer[r_, c_].subgridspec(2, 1, height_ratios=(2.3, 1.0), hspace=0.0)
+        main = fig.add_subplot(sub[0], sharex=axs[0, 0] if p else None)
+        share = residual_scale == "symlog" and p > 0  # symlog: one range for every row; linear: each its own
+        res = fig.add_subplot(sub[1], sharex=main, sharey=axs[0, 1] if share else None)
+        axs[p] = main, res
+        R, E = values(n_max, key)
+        norm = np.abs(R) if residual == "relative" else np.full_like(R, np.nanmax(np.abs(R)))
+        resid[key] = {}
+        for n in ns:
+            st = _lattice_style(n, ns)
+            y, e = values(n, key)
+            ok = np.isfinite(y) & ((y > 0) if y_scale == "log" else True)
+            if n == n_max:
+                main.errorbar(
+                    kc[ok],
+                    y[ok],
+                    e[ok],
+                    color=st["color"],
+                    marker=st["marker"],
+                    ms=ms_ref,
+                    lw=lw_ref,
+                    capsize=0.0 if dense else 2.5,
+                    elinewidth=0.6 if dense else 1.4,
+                    zorder=6,
+                )
+                continue
+            main.plot(kc[ok], y[ok], color=st["color"], marker=st["marker"], ms=ms_n, lw=lw_n, zorder=4)
+            d = np.where(norm > 0, 100.0 * (y - R) / np.where(norm > 0, norm, 1.0), np.nan)
+            m = np.isfinite(d)
+            res.plot(kc[m], d[m], color=st["color"], marker=st["marker"], ms=ms_n, lw=lw_n, zorder=4)
+            resid[key][n] = d
+        if key == "total" and reference is not None:  # the measurement, on the total panel only
+            ref_handle = _draw_p1d_reference(main, reference, quantity=quantity, cbar_ax=[main, res])
+        main.set_xscale(k_scale)
+        if y_scale == "symlog":
+            top = float(np.nanmax(np.abs(R))) or 1.0
+            _symlog_decades(main, 1e-3 * top if linthresh is None else linthresh)
+            main.axhline(0.0, color=DIM, lw=0.8)
+        else:
+            main.set_yscale(y_scale)
+        main.text(
+            0.97,
+            0.94,
+            name,
+            transform=main.transAxes,
+            ha="right",
+            va="top",
+            fontsize=FONT_MIN["annotation"] + 2,
+            bbox=dict(facecolor=BG, edgecolor=DIM, lw=1.2, pad=3),
+            zorder=10,
+        )
+        main.tick_params(labelbottom=False)
+        if c_ == 0:
+            main.set_ylabel(r"$k\,P_{\rm 1D}(k)/\pi$" if quantity == "kP_pi" else LABELS["P1D"])
+            res.set_ylabel(
+                rf"$(P - P_{{{n_max}}}) / |P_{{{n_max}}}|$ [%]"
+                if residual == "relative"
+                else rf"$(P - P_{{{n_max}}}) / \max|P_{{{n_max}}}|$ [%]"
+            )
+        else:
+            if residual_scale == "symlog":
+                res.tick_params(labelleft=False)
+        if r_ == nr - 1 or p + nc >= len(panels):
+            res.set_xlabel(LABELS["k"])
+        else:
+            res.tick_params(labelbottom=False)
+        if r_ == 0:
+            _comoving_1d(main, "P", kms_per_cMpc)
+    _k_range(axs.ravel(), k_limits, k_scale, labels=False)
+    _k_range(axs[:1, 0], k_limits, k_scale)  # the names of the limits on the first panel only
+    if residual_scale == "symlog":  # one range for every residual row
+        lim = _percent_limit([d for v in resid.values() for d in v.values()], residual_limit, residual_scale)
+        _percent_residual_axis(axs[0, 1], lim, tolerances, residual_scale)
+        for a in axs[1:, 1]:
+            a.axhline(0.0, color=FG, lw=1.0, zorder=2)
+            for t in tolerances:
+                for s in (-1, 1):
+                    a.axhline(s * t, color=DIM, ls=":", lw=1.2, zorder=2)
+    else:  # linear: each row its own range (a cross order's spikes would flatten the others)
+        for (key, _), a in zip(panels, axs[:, 1]):
+            lim = _percent_limit(list(resid[key].values()), residual_limit, residual_scale)
+            _percent_residual_axis(a, lim, tolerances, residual_scale)
+    extra = () if ref_handle is None else (ref_handle,)  # the measurement of the total panel
+    _lattice_residual_legend(fig, ns, n_max, tolerances, extra=extra, ref_band=False, res_band=False, ref_bars=True)
+    if title:
+        fig.suptitle(title, fontsize=FONT_MIN["title"])
+    return fig, axs, resid, kc
+
+
+def plot_pk_mu_wedges_lattices(
+    conv: dict,
+    *,
+    field: str = "total",
+    mu_edges,
+    ncols: int = 4,
+    quantity: str = "P",
+    bao_k=None,
+    k_scale: str = "linear",
+    residual_limit=None,
+    residual_scale: str = "symlog",
+    tolerances=(1.0,),
+    title=None,
+    figsize=None,
+):
+    """P(k, mu) of every lattice (``summary_stats.lattice_convergence``, ``field``) in the wedges of ``mu_edges``, one
+    panel per wedge (``ncols`` columns, wedge 0 first, the wedge named in its colour, ``mu_colors``), each with its
+    residual against the largest lattice below it: above, P (``quantity="P"``, log) or k P (``"kP"``) against |k|
+    [cMpc^-1] at the centres of the largest lattice's bins, every N in its colour and marker, the largest thicker with its
+    error of the mean as a band (a lattice of N skewers per axis stops at its Nyquist frequency pi N / L); below,
+    100 (P_N / P_max - 1) [%] on a symlog axis (linear within +-1 %; ``residual_scale="linear"``: linear), the relative
+    error of the largest lattice as a grey band, dotted lines at +-``tolerances`` [%]. The same k axis in every column, the same y range in every main and in
+    every residual row. ``bao_k``: the BAO maxima [cMpc^-1] as grey dotted lines. Returns (fig, axs (n_wedges, 2): main,
+    residual; residuals {wedge: {N: (n_bins,) [%]}})."""
+    _check_option("quantity", quantity, ("P", "kP"))
+    c = conv["P_mu"][field]
+    ns, n_max = list(conv["n"]), conv["n_max"]
+    nw = c["ref"].shape[0]
+    nr = -(-nw // ncols)
+    fig = plt.figure(figsize=figsize or (22, 1.5 + 5.6 * nr), layout="constrained")
+    outer = fig.add_gridspec(nr, ncols)
+    labs, colors = _wedge_labels(mu_edges), mu_colors(nw)
+    axs = np.empty((nw, 2), dtype=object)
+    resid = {}
+    for w in range(nw):
+        r_, c_ = divmod(w, ncols)
+        sub = outer[r_, c_].subgridspec(2, 1, height_ratios=(2.0, 1.0), hspace=0.0)
+        main = fig.add_subplot(sub[0], sharex=axs[0, 0] if w else None, sharey=axs[0, 0] if w else None)
+        res = fig.add_subplot(sub[1], sharex=main, sharey=axs[0, 1] if w else None)
+        axs[w] = main, res
+        main.set_xscale(k_scale)
+        main.set_yscale("log" if quantity == "P" else "linear")
+        x = np.asarray(c["x"][w], dtype=float)
+        wt = x if quantity == "kP" else None
+        resid[w] = _lattice_main_and_residual(
+            main, res, x, c["ref"][w], c["ref_err"][w], {n: c["ratio"][n][w] for n in ns}, ns, n_max, weight=wt, ms=4.0
+        )
+        main.text(
+            0.97,
+            0.94,
+            labs[w],
+            transform=main.transAxes,
+            ha="right",
+            va="top",
+            fontsize=FONT_MIN["annotation"],
+            color=colors[w],
+            bbox=dict(facecolor=BG, edgecolor=colors[w], lw=1.5, pad=3),
+            zorder=10,
+        )
+        main.tick_params(labelbottom=False)
+        if bao_k is not None:
+            for kb in np.atleast_1d(bao_k):
+                for a in (main, res):
+                    a.axvline(kb, color=PALETTE["grey"], ls=":", lw=1.6, zorder=0)
+        if c_:
+            main.tick_params(labelleft=False)
+            res.tick_params(labelleft=False)
+        else:
+            main.set_ylabel(_PK_QUANTITY[quantity][1])
+            res.set_ylabel(rf"$P / P({n_max}) - 1$ [%]")
+        if r_ == nr - 1 or w + ncols >= nw:
+            res.set_xlabel(_UNITS["cMpc"]["k"])
+        else:
+            res.tick_params(labelbottom=False)
+    lim = _percent_limit([r for d in resid.values() for r in d.values()], residual_limit, residual_scale)
+    _percent_residual_axis(axs[0, 1], lim, tolerances, residual_scale)
+    for w in range(1, nw):
+        a = axs[w, 1]
+        a.axhline(0.0, color=FG, lw=1.0, zorder=2)
+        for t in tolerances:
+            for s in (-1, 1):
+                a.axhline(s * t, color=DIM, ls=":", lw=1.2, zorder=2)
+    xr = np.asarray(c["x"], dtype=float)
+    xr = xr[np.isfinite(xr)]
+    if xr.size and k_scale == "linear":
+        axs[0, 0].set_xlim(0.0, 1.03 * xr.max())
+    _lattice_residual_legend(fig, ns, n_max, tolerances)
+    if title:
+        fig.suptitle(title, fontsize=FONT_MIN["title"])
+    return fig, axs, resid

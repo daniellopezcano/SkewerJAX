@@ -1,6 +1,6 @@
 """P and xi of the density of gas cells through a mesh (``summary_stats.field_stats``), with an expectation P(k):
 ``grid_power`` = ``PowerLawGRF.power_grid`` bit for bit; ``grid_limits``, ``box_grid`` (the map rows on the grid's own
-modes and separations, every bin beyond the full-coverage limits cut) and the |k| bins of ``bao_k_edges``;
+modes and separations, every bin beyond the full-coverage limits cut) and the |k| bins of ``set_k_edges``;
 ``field_statistics`` over an iterable of ``core.Cells`` (streamed, recomputed identically), with the expectation, the
 expectation without the BAO bump and the exact covariance of xi; ``xi_chi2``, ``xi_subset_offsets``; ``bao_height``."""
 
@@ -11,11 +11,11 @@ from skewerjax.simulations import ToyBoxes
 from skewerjax.summary_stats import (
     GridStatistics3D,
     bao_height,
-    bao_k_edges,
     box_grid,
     field_statistics,
     grid_limits,
     grid_power,
+    set_k_edges,
     xi_chi2,
     xi_subset_offsets,
 )
@@ -41,27 +41,33 @@ def test_grid_power_is_the_spectrum_on_the_modes():
 
 
 def test_bins_of_the_fields():
-    """``bao_k_edges``: one bin per mode up to k_1, steps of dk_factor k_f (default 1/4) up to k_2 (where the log bins
-    start), n_log log bins to k_max; ``grid_limits``; ``box_grid``: the map rows on the grid's own modes and separations,
+    """``set_k_edges``: one bin per mode up to k_1, steps of dk_factor k_f (default 1/4) up to k_2, set by hand (where
+    the log bins start; the last step ends exactly there), n_log log bins to k_max; ``grid_limits``; ``box_grid``: the map rows on the grid's own modes and separations,
     every bin beyond the full-coverage limits cut; ``field_statistics`` with them."""
     k_f = 1.0
-    e, inf = bao_k_edges(k_f, 100.0, 20.1, info=True)
-    np.testing.assert_allclose(e[:4], [0.5, 1.5, 2.5, 3.5]) and inf["k_1"] == 3.5
-    assert inf["k_2"] == 20.0 and inf["n_mode"] == 3 and inf["n_step"] == (20.0 - 3.5) / 0.25 and inf["n_log"] == 12
-    assert inf["dk"] == 0.25
+    e, inf = set_k_edges(k_f, k_1=3.5, k_2=20.0, k_max=100.0, info=True)
+    np.testing.assert_allclose(e[:4], [0.5, 1.5, 2.5, 3.5])
+    assert inf["k_1"] == 3.5 and inf["k_2"] == 20.0 and inf["n_mode"] == 3 and inf["n_log"] == 12 and inf["dk"] == 0.25
+    assert inf["n_step"] == (20.0 - 3.5) / 0.25
     q = e[3 : 4 + inf["n_step"]]
-    np.testing.assert_allclose(np.diff(q), 0.25) and q[-1] == 20.0  # the quarter bins end where the log bins start
+    np.testing.assert_allclose(np.diff(q), 0.25)
+    assert q[-1] == 20.0  # the quarter bins end where the log bins start
     np.testing.assert_allclose(e[-13:], np.geomspace(20.0, 100.0, 13))
-    e2, inf2 = bao_k_edges(k_f, 100.0, 20.1, k_1=6.0, n_log=5, info=True)
+    e1, inf1 = set_k_edges(k_f, k_1=3.5, k_2=20.1, k_max=100.0, info=True)  # k_2 kept as given: the last step 0.35
+    assert inf1["k_2"] == 20.1 and 20.1 in e1 and np.isclose(np.diff(e1[3 : 4 + inf1["n_step"]])[-1], 0.35)
+    e2, inf2 = set_k_edges(k_f, k_1=6.0, k_2=20.0, k_max=100.0, n_log=5, info=True)
     assert inf2["k_1"] == 5.5 and inf2["n_mode"] == 5 and inf2["n_log"] == 5 and e2[-1] == 100.0
-    e3, inf3 = bao_k_edges(k_f, 10.0, 20.0, info=True)  # the wiggles run past k_max: quarter bins to k_max, no log bins
+    e3, inf3 = set_k_edges(k_f, k_1=3.5, k_2=20.0, k_max=10.0, info=True)  # k_2 past k_max: quarter bins to k_max, no log
     assert inf3["n_log"] == 0 and e3[-1] == 10.0 and inf3["k_2"] == 10.0
-    np.testing.assert_array_equal(bao_k_edges(k_f, 100.0, 20.1, dk_factor=0.25), e)
-    e4, inf4 = bao_k_edges(k_f, 100.0, 20.1, dk_factor=0.5, info=True)
+    e5, inf5 = set_k_edges(k_f, k_1=3.5, k_2=3.5, k_max=100.0, n_log=4, info=True)  # k_2 = k_1: no steps
+    assert inf5["n_step"] == 0 and inf5["k_2"] == 3.5 and inf5["n_log"] == 4 and np.all(np.diff(e5) > 0)
+    e4, inf4 = set_k_edges(k_f, k_1=3.5, k_2=20.0, k_max=100.0, dk_factor=0.5, info=True)
+    kf2 = 2 * np.pi / 110.7  # k_1 = 3.5 k_f is kept whatever the rounding of 3.5 k_f / k_f
+    assert set_k_edges(kf2, k_1=3.5 * kf2, k_2=1.0, k_max=2.0, info=True)[1]["n_mode"] == 3
     assert inf4["k_2"] == 20.0 and inf4["n_step"] == (20.0 - 3.5) / 0.5 and inf4["dk"] == 0.5
     np.testing.assert_allclose(np.diff(e4[3 : 4 + inf4["n_step"]]), 0.5)
     with pytest.raises(ValueError, match="dk_factor"):
-        bao_k_edges(k_f, 100.0, 20.1, dk_factor=0.0)
+        set_k_edges(k_f, k_1=3.5, k_2=20.0, k_max=100.0, dk_factor=0.0)
     b = BOXES
     lim = grid_limits(b.n_cells, b.box_cMpc)
     assert lim == dict(k_min=2 * np.pi / b.box_cMpc, k_max=np.pi / b.dx, r_min=b.dx, r_max=b.box_cMpc / 2)
@@ -74,7 +80,7 @@ def test_bins_of_the_fields():
         log=logs.append,
     )
     assert len(logs) == 2 and gs.k_edges[-1] <= lim["k_max"] and gs.r_edges[-1] <= lim["r_max"] * (1 + 1e-12)
-    k_edges = bao_k_edges(lim["k_min"], lim["k_max"], 3.0 / b.sigma_bao)
+    k_edges = set_k_edges(lim["k_min"], k_1=3.5 * lim["k_min"], k_2=3.0 / b.sigma_bao, k_max=lim["k_max"])
     r_edges = np.arange(0, b.box_cMpc / 2 + b.dx, b.dx)
     res, _ = _stats(b, k_edges, r_edges)
     a = res["axes"]
@@ -92,7 +98,7 @@ def test_field_statistics_and_the_chi2_of_xi():
     ``xi_subset_offsets`` from its result; without ``power``, the measurement alone."""
     b = BOXES
     lim = grid_limits(b.n_cells, b.box_cMpc)
-    k_edges, r_edges = bao_k_edges(lim["k_min"], lim["k_max"], 3.0), np.arange(0, b.box_cMpc / 2 + b.dx, b.dx)
+    k_edges, r_edges = set_k_edges(lim["k_min"], k_1=3.5 * lim["k_min"], k_2=3.0, k_max=lim["k_max"]), np.arange(0, b.box_cMpc / 2 + b.dx, b.dx)
     res, gs = _stats(b, k_edges, r_edges)
     assert res["n_real"] == 3 and np.all(res["min_one_plus_delta"] > 0) and res["limits"] == lim
     want = [(1 + b.delta(i).min()) / (1 + b.delta(i).mean()) for i in range(3)]  # n / n_bar, n_bar the mean of the cells

@@ -15,6 +15,9 @@ vectors of a bin, in three ways each:
 
 * isotropic: |k| or |r|;
 * the plane (k_par, k_perp) or (r_par, r_perp), with k_par = |k_los| and k_perp = |k| across the line of sight;
+* the two axis planes of P, which the plane's bins leave out (its k_perp and k_par bins start at k_f / 2): k_perp = 0
+  (the transverse mean of delta, mu = 1), one value per k_par row (``P_kperp0``), and k_par = 0 (the line-of-sight mean
+  of each skewer, mu = 0), one value per k_perp bin (``P_kpar0``); both are also in the isotropic bins and the wedges;
 * wedges of mu (|k| or |r| in each interval of mu = k_par / |k| or r_par / r): the wedges of P and of xi have their own
   edges (``pk_mu_edges``, ``xi_mu_edges``; both ``MU_WEDGES`` by default). mu lies in [0, 1], k_par = |k_los| and
   r_par = |r_los| along ``los_axis``; k = 0 and r = 0 belong to no wedge. The bins are half-open, [mu_i, mu_{i+1}), the
@@ -44,7 +47,7 @@ from skewerjax.summary_stats.binning import bin_index, binned_mean, hybrid_k_edg
 from skewerjax.summary_stats.mesh import PAINT_CHUNK, fourier_mesh, lattice_only
 
 MU_WEDGES = (0.0, 0.5, 0.8, 0.95, 1.0)  # mu = r_par / r: the wedges of DESI DR2 Lya BAO (arXiv:2503.14739, Fig. 3)
-GRID_KEYS = ("P_iso", "P_map", "P_mu", "xi_iso", "xi_map", "xi_mu")
+GRID_KEYS = ("P_iso", "P_map", "P_mu", "xi_iso", "xi_map", "xi_mu", "P_kperp0", "P_kpar0")
 
 
 def _rfft_weights(n_last: int) -> np.ndarray:
@@ -62,6 +65,24 @@ def _mu_edges(edges, name: str) -> np.ndarray:
     if e.ndim != 1 or e.size < 2 or np.any(np.diff(e) <= 0) or e[0] < 0 or e[-1] > 1:
         raise ValueError(f"{name} must be at least two increasing edges in [0, 1], got {edges!r}.")
     return e
+
+
+def coverage_limits(L, spacing) -> dict:
+    """The full-coverage limits of a periodic lattice or grid of side(s) ``L`` [cMpc] and node spacing(s) ``spacing`` (one
+    per axis, or one for all) [cMpc], the one rule of every figure that shades them (``GridStatistics3D.limits``,
+    ``lattice.lattice_limits``, ``field_stats.grid_limits``), in [1/cMpc] and [cMpc]:
+
+    * k_min = 2 pi / max(L), the fundamental mode, the smallest non-zero |k| of the lattice;
+    * k_max = min(pi / spacing), the smallest Nyquist frequency: inside the sphere |k| <= k_max every direction is
+      available, beyond it only some;
+    * r_min = min(spacing), the smallest non-zero separation the lattice resolves (on a lattice of skewers the smaller of
+      the skewer spacing and the line-of-sight spacing, a pixel dv / u or a point);
+    * r_max = min(L) / 2: |r| <= L / 2 holds every direction of the minimum-image separations."""
+    L = np.broadcast_to(np.asarray(L, dtype=float), (3,))
+    d = np.broadcast_to(np.asarray(spacing, dtype=float), (3,))
+    return dict(
+        k_min=float(2 * np.pi / L.max()), k_max=float(np.min(np.pi / d)), r_min=float(d.min()), r_max=float(0.5 * L.min())
+    )
 
 
 def _flat2(i, j, n_j):
@@ -90,7 +111,8 @@ class GridStatistics3D:
     Attributes after construction: the bin centres (mode- or separation-weighted means) ``k_iso`` (n_k,), ``kpar``,
     ``kperp`` (the centres of the map's rows and columns: the weighted mean of k_par over the modes of each row, of
     k_perp over those of each column; the middle of an empty one), ``kpar_map``, ``kperp_map`` (the centre of every cell
-    of the map), ``k_mu`` (n_mu, n_kmu); ``r_iso``, ``rpar``, ``rperp``, ``rpar_map``, ``rperp_map``, ``r_mu`` alike
+    of the map), ``k_mu`` (n_mu, n_kmu), ``kpar_kperp0`` (n_par,: the k_par of the k_perp = 0 modes of every row) and
+    ``kperp_kpar0`` (n_perp,: the mean k_perp of the k_par = 0 modes of every column; NaN where none); ``r_iso``, ``rpar``, ``rperp``, ``rpar_map``, ``rperp_map``, ``r_mu`` alike
     (e.g. a column [0, dr) of r_perp on a lattice of spacing dr holds r_perp = 0 only: its centre is 0); the counts ``n_modes`` / ``n_lags`` per binning (dicts keyed like ``GRID_KEYS``, the half-space weighted
     number of modes for P, the number of separation vectors for xi).
     """
@@ -152,8 +174,21 @@ class GridStatistics3D:
             "map": np.where(live, _flat2(bin_index(kpar, self.kpar_edges), bin_index(kperp, self.kperp_edges), nperp), -1),
             "mu": np.where(live, _flat2(bin_index(mu_k, self.pk_mu_edges), bin_index(kmod, self.k_mu_edges), nkm), -1),
         }
+        # the axis planes the map leaves out: k_perp = 0 (per row of kpar_edges) and k_par = 0 (per kperp bin)
+        full = tuple(len(a) for a in axes)
+        tr = [i for i in range(3) if i != self.los_axis]
+        on_los = np.broadcast_to((kv[tr[0]] == 0) & (kv[tr[1]] == 0), full).ravel() & live
+        on_perp = np.broadcast_to(kv[self.los_axis] == 0, full).ravel() & live
+        idx_k["kperp0"] = np.where(on_los, bin_index(kpar, self.kpar_edges), -1)
+        idx_k["kpar0"] = np.where(on_perp, bin_index(kperp, self.kperp_edges), -1)
         self._nb = {"iso": self.k_edges.size - 1, "map": npar * nperp, "mu": n_mu_pk * nkm}
-        self._shape_k = {"iso": (self._nb["iso"],), "map": (npar, nperp), "mu": (n_mu_pk, nkm)}
+        self._shape_k = {
+            "iso": (self._nb["iso"],),
+            "map": (npar, nperp),
+            "mu": (n_mu_pk, nkm),
+            "kperp0": (npar,),
+            "kpar0": (nperp,),
+        }
         self._idx_k = {b: jnp.asarray(i.astype(np.int32)) for b, i in idx_k.items()}
 
         # ---- separations (the full lag grid, minimum image): |r|, r_par, r_perp, mu
@@ -215,6 +250,8 @@ class GridStatistics3D:
             kperp, self._idx_k["map"], self._w_modes, self._shape_k["map"], self.kperp_edges, 1
         )
         self.k_mu, n_kmu = centres(kmod, self._idx_k["mu"], self._w_modes, self._shape_k["mu"])
+        self.kpar_kperp0, n_kperp0 = centres(kpar, self._idx_k["kperp0"], self._w_modes, self._shape_k["kperp0"])
+        self.kperp_kpar0, n_kpar0 = centres(kperp, self._idx_k["kpar0"], self._w_modes, self._shape_k["kpar0"])
         self.r_iso, c_iso = centres(rmod, self._idx_r["iso"], self._ones, self._shape_r["iso"])
         self.rpar, self.rpar_map = axis_centres(rpar, self._idx_r["map"], self._ones, self._shape_r["map"], self.rpar_edges, 0)
         self.rperp, self.rperp_map = axis_centres(
@@ -222,7 +259,7 @@ class GridStatistics3D:
         )
         _, c_map = centres(rmod, self._idx_r["map"], self._ones, self._shape_r["map"])
         self.r_mu, c_mu = centres(rmod, self._idx_r["mu"], self._ones, self._shape_r["mu"])
-        self.n_modes = {"P_iso": n_iso, "P_map": n_map, "P_mu": n_kmu}
+        self.n_modes = {"P_iso": n_iso, "P_map": n_map, "P_mu": n_kmu, "P_kperp0": n_kperp0, "P_kpar0": n_kpar0}
         self.n_lags = {"xi_iso": c_iso, "xi_map": c_map, "xi_mu": c_mu}
 
     # ------------------------------------------------------------------ binning
@@ -234,6 +271,9 @@ class GridStatistics3D:
             xi_b, _ = binned_mean(xi_lags, self._idx_r[b], self._ones, int(np.prod(self._shape_r[b])))
             out["P_" + b] = np.asarray(P_b).reshape(self._shape_k[b])
             out["xi_" + b] = np.asarray(xi_b).reshape(self._shape_r[b])
+        for b in ("kperp0", "kpar0"):  # the axis planes of P (no xi counterpart)
+            P_b, _ = binned_mean(P_modes, self._idx_k[b], self._w_modes, self._shape_k[b][0])
+            out["P_" + b] = np.asarray(P_b)
         if self.multipoles:
             n = self._ell_inv.shape[0]
             v = np.stack([np.asarray(binned_mean(L * xi_lags, self._idx_ell, self._ones, n)[0]) for L in self._leg])
@@ -341,6 +381,11 @@ class GridStatistics3D:
         mult = np.broadcast_to(_rfft_weights(self.shape[-1]), self._rfft_shape)
         return float(np.sqrt(2.0 * np.sum(mult * w_k**2 * P**2)) / self.V)
 
+    def limits(self) -> dict:
+        """The full-coverage limits of this grid (``coverage_limits``: k_min, k_max, r_min, r_max), from the lattice that
+        bins its statistics: the figures shade outside them."""
+        return coverage_limits(self.L, self.dx)
+
     @property
     def _rfft_shape(self) -> tuple:
         return self.shape[:-1] + (self.shape[-1] // 2 + 1,)
@@ -357,6 +402,8 @@ class GridStatistics3D:
             "kpar_map",
             "kperp_map",
             "k_mu",
+            "kpar_kperp0",
+            "kperp_kpar0",
             "r_iso",
             "rpar",
             "rperp",
