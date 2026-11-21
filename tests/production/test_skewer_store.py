@@ -1,4 +1,4 @@
-"""The skewer store (``simulations.skewer_store``) and the extraction into it (``simulations.skewer_extraction``):
+"""The skewer store (``scripts/production/skewer_store.py``) and the extraction into it (``skewer_extraction.py``):
 the lattices nest; doubling N recomputes nothing already stored and leaves the coarser lattice bit for bit; an interrupted
 batch leaves no corrupt file and is redone; another option is another dataset; tau and the metadata round-trip. Everything
 is written to a temporary directory. The toy tests compute tau on a toy box (``ToyBoxes``) through
@@ -11,12 +11,12 @@ import types
 
 import numpy as np
 import pytest
+import skewer_extraction as se  # scripts/production, on sys.path by conftest.py
+import skewer_store as ss
 
 from skewerjax.config import get_precision
 from skewerjax.core import LineBundle, SkewerBundle, compute_optical_depth, lattice_columns
 from skewerjax.simulations import ToyBoxes
-from skewerjax.simulations import skewer_extraction as se
-from skewerjax.simulations import skewer_store as ss
 from skewerjax.utils.paths import snapshot_dir
 
 from helpers import raises, tol

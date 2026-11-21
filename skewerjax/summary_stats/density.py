@@ -1,4 +1,4 @@
-"""The density sampled along a lattice of periodic skewers (notebook 10, Part B), from arrays and geometry only: its 3D
+"""The density sampled along a lattice of periodic skewers (notebook 10, Part C), from arrays and geometry only: its 3D
 statistics through the estimator of the overflux on the lattice of the points (``lattice.lattice_grid``), its 1D
 statistics along the skewers, and the exact expectation of both on that lattice from the spectrum of the field, passed
 as a callable P(k).
@@ -155,7 +155,7 @@ def skewer_density_statistics(columns, points_per_cell: int, grid: GridStatistic
     (``on_points``: the end point dropped, spacing dx / points_per_cell, every cell holding points_per_cell points),
     against its global mean over every point of every skewer of every realisation, delta_X = n_X / <n_X> - 1, through
     the 3D estimator of the overflux on the lattice of the points (``grid``: ``lattice_grid`` with n_los = n_cells
-    points_per_cell) and the 1D statistics along the skewers (notebook 10, Part B). Arrays and geometry only.
+    points_per_cell) and the 1D statistics along the skewers (notebook 10, Part C). Arrays and geometry only.
 
     columns : [{species: (n_x, n_cells, n_z)}] per realisation, one or more species (their order: the terms "1", "2", ...
         and the fields (species_1, species_2, ..., "total")), the number densities of the cells the lattice of skewers crosses

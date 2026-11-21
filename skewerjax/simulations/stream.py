@@ -640,7 +640,7 @@ def tiles_optical_depth(
     engines : {name: list of devices} to compute every tile on several device sets from the same host work (e.g. the
     CPU and the GPU entries of a benchmark); default {"tau": [device]}; prep_workers : host threads preparing the next
     tiles while the devices compute (``pipeline``); on_tile : optional callable(k, skewers, {name: tau of the tile
-    (N_lines, n, N_v)}, row) called after each tile, in tile order (e.g. to write it to disk: ``skewer_extraction``).
+    (N_lines, n, N_v)}, row) called after each tile, in tile order (e.g. to write it to disk: ``scripts/production/skewer_extraction.py``).
 
     Returns ({name: tau (N_lines, N_sk, N_v) host array of the working dtype (``dtype``, or the package's precision:
     float32 by default)}, info with the per-tile stage times): n_tiles, t0 (the perf_counter origin) and rows, one per

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Compute skewers through a TNG snapshot and store them (the skewer store: ``docs/skewer_store.md``).
+"""Compute skewers through a TNG snapshot and store them (the skewer store: ``STORE.md``; runs and sweeps: ``run_production.py``).
 
 The skewers of nested N x N lattices (x_i = i L / N on the two transverse axes, N a power of two) along one axis of the
 box, by notebook 11's pipeline on the streaming route (one pass over the snapshot for the skewers not stored yet, then
@@ -12,8 +12,8 @@ recomputed, so rerunning the same command resumes an interrupted run.
     python scripts/production/extract_skewers.py --config my_run.yaml --dry-run
 
 Every option (the command line overrides the ``--config`` file, YAML or JSON, whose keys are the long option names with
-``_``, e.g. ``n_per_axis: [2, 4]``, ``set: {voigt: ExoJAX}``): see ``--help``. The heavy logic is
-``skewerjax.simulations.skewer_extraction`` and ``skewer_store``. Inputs: the snapshot (read only). Outputs: ``--out``
+``_``, e.g. ``n_per_axis: [2, 4]``, ``set: {voigt: ExoJAX}``): see ``--help``. The heavy logic is in the sibling
+modules ``skewer_extraction`` and ``skewer_store`` (this directory). Inputs: the snapshot (read only). Outputs: ``--out``
 only (never inside the repository nor inside the simulation's folder): ``<out>/<sim>/snap_<NNN>/axis_<a>/<hash>/``.
 """
 
@@ -51,6 +51,12 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--n-per-axis", type=int, nargs="+", help="the lattices N x N (powers of two), run in increasing order")
     ap.add_argument("--spacing-kms", type=float, default=1.0, help="the target pixel width [km/s] (N_pix = int(span / spacing))")
     ap.add_argument("--n-pix", type=int, help="the number of pixels over the period instead of --spacing-kms")
+    ap.add_argument(
+        "--points-kms",
+        type=float,
+        help="the spacing of the sampling points [km/s]: the dual segments of --set pieces=segments, the a(s) table of "
+        "--set frame=exact; no effect on the default crossings in the snapshot frame (skewer_extraction's docstring)",
+    )
     ap.add_argument(
         "--lines", nargs="+", default=["HI-LyA", "SiIII-1206"], help="the line ids (core.lines; the first the reference)"
     )
@@ -150,9 +156,10 @@ def main(argv=None) -> int:
 
     config.configure_devices(n_cpu_devices=2, platforms="cuda,cpu" if a.device == "gpu" else "cpu")
     config.set_precision(a.precision)
+    import skewer_extraction as se  # the sibling modules (this directory is sys.path[0] when run as a script)
+    import skewer_store as ss
+
     from skewerjax.simulations import ArepoHDF5Reader
-    from skewerjax.simulations import skewer_extraction as se
-    from skewerjax.simulations import skewer_store as ss
     from skewerjax.utils.paths import DATA_DIR
 
     devices = config.devices(a.device)
@@ -176,6 +183,7 @@ def main(argv=None) -> int:
         line_ids=a.lines,
         precision=a.precision,
         n_ref=a.n_ref,
+        points_kms=a.points_kms,
     )
     budget = a.memory_fraction * se.memory_available()
     n_lines, n_pix = len(a.lines), opts["pixels"]["n_pix"]

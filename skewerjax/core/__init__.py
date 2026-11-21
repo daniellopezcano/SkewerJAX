@@ -59,7 +59,7 @@ from skewerjax.core.optical_depth import (
     resolution_report,
     wrap_to_ref_line,
 )
-from skewerjax.core.selection import select_cells
+from skewerjax.core.selection import VORONOI_FACTOR, select_cells  # VORONOI_FACTOR: the reach k h_c of a Voronoi cell
 from skewerjax.core.skewers import (
     SkewerBundle,
     axis_aligned_skewer_points,
@@ -79,7 +79,12 @@ from skewerjax.core.spectral import (
     local_wavelength_from_observed_A,
     velocities_in_line_frames,
 )
-from skewerjax.core.tau_engine import LineContributions, per_cell_line_tau, windowed_line_tau
+from skewerjax.core.tau_engine import (  # WING_TOLERANCE: the default of compute_optical_depth's wing_tolerance
+    WING_TOLERANCE,
+    LineContributions,
+    per_cell_line_tau,
+    windowed_line_tau,
+)
 from skewerjax.core.voigt import gaussian, log10_voigt, lorentzian, voigt_convolution, voigt_exojax, voigt_scipy
 from skewerjax.core.voigt_integral import harris_cumulative, harris_mean
 

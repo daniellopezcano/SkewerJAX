@@ -10,6 +10,10 @@ variable.
   ``scripts/benchmarks/benchmark_scaling.py``) and the summary of ``benchmark_fake_spectra.py``
   (``fake_spectra_benchmark.json``: every record, the machine, the snapshots and the launches; no notebook reads it since
   notebook 15 was removed); ``$SKEWERJAX_BENCHMARK_RESULTS``, default ``benchmarks/results`` in the repository.
+* ``PRODUCTION_DIR``: the default output of the production runs (``scripts/production/run_production.py``: one folder per
+  sweep, one per run); ``$SKEWERJAX_PRODUCTION``, default ``~/skewerjax_production``, outside the repository.
+* ``PRODUCTION_SCRIPTS_DIR``: ``scripts/production`` of the repository, where the skewer store's reader lives (not part of
+  the package): notebooks 17 and 18 put it on ``sys.path`` to import ``skewer_store``.
 """
 
 from __future__ import annotations
@@ -21,6 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("SKEWERJAX_DATA", "/home/STORAGE"))
 BENCHMARK_RAW_DIR = Path(os.environ.get("SKEWERJAX_BENCHMARK_RAW", REPO_ROOT / "benchmarks" / "raw"))
 BENCHMARK_RECORDS_DIR = Path(os.environ.get("SKEWERJAX_BENCHMARK_RESULTS", REPO_ROOT / "benchmarks" / "results"))
+PRODUCTION_DIR = Path(os.environ.get("SKEWERJAX_PRODUCTION", Path.home() / "skewerjax_production")).expanduser()
+PRODUCTION_SCRIPTS_DIR = REPO_ROOT / "scripts" / "production"
 
 
 def snapshot_dir(simulation: str = "TNG50-4") -> Path:

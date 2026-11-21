@@ -24,6 +24,10 @@ From arrays, geometry and ``core.Cells`` only: imports ``skewerjax.core`` at mos
 * ``density``: the density along a lattice of skewers through the same 3D estimator, and its exact expectation on that
   lattice from P(k) (``skewer_density_statistics``, ``lattice_density_theory``);
 * ``stats_3d``: P3D and xi3D of the overflux on a grid of skewers, by term and order (``OverfluxStatistics3D``);
+* ``decomposition``: the decomposition of the 3D and 1D statistics of the total overflux on the lattice of skewers into
+  the pairs of subset fields F_A, any number of lines, by order, by pair, the split of order 2 and the 𝒞 terms, with the
+  bins of ``measure_lattice`` (``decompose``, ``decompose_fields``, ``ensemble_decomposition``, ``decomposition_memory``,
+  ``notes_orders``, ``wedge_sum_rule``; ``docs/decomposition.md``);
 * ``grid3d``: P and xi of a periodic 3D field on its grid, isotropic, in the (par, perp) plane and in wedges of mu, with
   exact expectations and covariance (``GridStatistics3D``, ``MU_WEDGES``), and the full-coverage limits of every figure
   that shades them (``coverage_limits``, ``GridStatistics3D.limits``);
@@ -41,6 +45,7 @@ from skewerjax.summary_stats import (
     binning,
     contaminants,
     convergence,
+    decomposition,
     density,
     field_stats,
     fourier,
@@ -68,6 +73,14 @@ from skewerjax.summary_stats.binning import (
 )
 from skewerjax.summary_stats.contaminants import fit_ma_model_profiled, fit_mcdonald_a, ma_factor, mcdonald_factor
 from skewerjax.summary_stats.convergence import binned_p1d, flux_statistics, flux_statistics_steps, lattice_convergence
+from skewerjax.summary_stats.decomposition import (
+    decompose,
+    decompose_fields,
+    decomposition_memory,
+    ensemble_decomposition,
+    notes_orders,
+    wedge_sum_rule,
+)
 from skewerjax.summary_stats.density import lattice_density_theory, skewer_density_statistics
 from skewerjax.summary_stats.field_stats import (
     bao_height,
@@ -130,6 +143,12 @@ __all__ = [
     "p1d_from_tau",
     "decompose_1d",
     "ensemble_1d",
+    "decompose",
+    "decompose_fields",
+    "ensemble_decomposition",
+    "decomposition_memory",
+    "notes_orders",
+    "wedge_sum_rule",
     "skewer_p1d",
     "skewer_xi1d",
     "lattice_grid",

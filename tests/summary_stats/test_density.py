@@ -4,7 +4,7 @@ comoving units) applied to the overdensity sampled on the lattice recovers its e
 interpolated linearly between the cells), BAO peak included; that expectation is the aliasing sum of the input
 spectrum; ``on_points`` puts p points in every cell; and ``skewer_density_statistics`` (two species and their sum,
 against their global mean) measures the same field through the same estimator, against the same expectation scaled by
-``density_scale`` (notebook 10, Part B)."""
+``density_scale`` (notebook 10, Part C)."""
 
 import numpy as np
 import pytest

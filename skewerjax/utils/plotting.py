@@ -621,7 +621,7 @@ def _as_ensemble(stats):
 
 def _labels_1d(unit: str) -> dict:
     """The axis labels of the 1D statistics along the line of sight: in velocity units (``unit="km/s"``, the overflux,
-    ``LABELS``) or in comoving units (``"cMpc"``, the density along the skewers, notebook 10, Part B)."""
+    ``LABELS``) or in comoving units (``"cMpc"``, the density along the skewers, notebook 10, Part C)."""
     _check_option("unit", unit, ("km/s", "cMpc"))
     if unit == "km/s":
         return dict(P=LABELS["P1D"], k=LABELS["k"], lag=LABELS["lag"])
@@ -1388,7 +1388,7 @@ def plot_toy_skewer(
     zoom_pixels: int = 12,
     figsize=None,
 ):
-    """One skewer of a toy box or of a simulation, from the gas to the overflux (notebooks 10 and 11, C1). Five rows
+    """One skewer of a toy box or of a simulation, from the gas to the overflux (notebooks 10 and 11, B1). Five rows
     (three, (c)-(e), with ``n=None``: the flux alone, e.g. from the skewer store of notebook 17, which keeps no density):
 
     (a) n of each species against the comoving position y along the skewer (the cell values, as steps); (b) the
@@ -4397,7 +4397,7 @@ def plot_skewer_slice(
     spacing: float | None = None,
     figsize=(12, 10.5),
 ):
-    """Where the skewers run (notebook 10, C1): the number density of ``species`` in the plane of the cell layer
+    """Where the skewers run (notebook 10, B1): the number density of ``species`` in the plane of the cell layer
     ``z_index`` of the third axis (as panel (a1) of ``plot_toy_fields``; ``cmap``, default ``CMAPS["density"]``), a plane
     that contains the line of sight (y) and the row of skewers with i_z = z_index; those skewers as thin black lines
     along y, each with ``n_arrows`` tiny arrows along its tangent (+y, the direction of the photons' path), and the
@@ -5860,6 +5860,590 @@ def plot_pk_mu_wedges(
     return fig, axs, out
 
 
+# --------------------------------------------------------------------------- the mu wedges by order and term (notebooks 10, 11, F)
+_WEDGE_KIND = {  # the wedges of P and xi: the reduction of a decomposition record and the keys of GridStatistics3D.axes()
+    "P": dict(R="P_mu", mu="pk_mu_edges", x="k_mu", edges="k_mu_edges", counts="n_modes_P_mu", y=r"$P(k, \mu)$ [cMpc$^3$]"),
+    "xi": dict(R="xi_mu", mu="mu_edges", x="r_mu", edges="r_mu_edges", counts="n_lags_xi_mu", y=r"$\xi(r, \mu)$"),
+}
+
+
+def _wedge_setup(dec, kind: str, axes, edges, wedges, x_bin: str, name: str):
+    """The wedges of ``kind`` ("P" or "xi") of a decomposition record: (spec, axes, mu edges, x of every bin (n_bins,),
+    the wedges drawn). The bins are those of the measurement (``_check_edges``), drawn at the ``x_bin`` rule of the other
+    wedge figures (``_wedge_x``, one position per bin shared by every wedge)."""
+    _check_option("kind", kind, tuple(_WEDGE_KIND))
+    spec = _WEDGE_KIND[kind]
+    a = dec.get("axes") if axes is None else axes
+    if a is None:
+        raise ValueError(f"{name} needs the bins of the grid: axes=GRID.axes() (or the record's 'axes').")
+    _check_edges(a, spec["edges"], edges, name)
+    if f"{spec['R']}_order" not in dec and f"{spec['R']}_pair" not in dec:
+        raise ValueError(f"{name}: the record has no {spec['R']!r} terms (decompose with that reduction).")
+    mu, x = np.asarray(a[spec["mu"]], dtype=float), np.asarray(a[spec["x"]], dtype=float)
+    xpos = _wedge_x(a[spec["edges"]], x_bin, a.get(spec["counts"], np.isfinite(x)), x)
+    nm = mu.size - 1
+    ws = list(range(nm)) if wedges is None else [int(w) for w in wedges]
+    if not ws or min(ws) < 0 or max(ws) >= nm:
+        raise ValueError(f"{name}: wedges must be indices in 0 .. {nm - 1}, got {wedges!r}.")
+    return spec, a, mu, xpos, ws
+
+
+def _wedge_grid(n_w: int, ncols: int, n_blocks: int, residual: bool, figsize):
+    """The panels of a wedge figure: ``n_blocks`` blocks (one per order, or one) of the ``n_w`` wedges wrapped in
+    ``ncols`` columns, each wedge with a residual panel below it (``residual``). Shared x everywhere, shared y within a
+    block (the residuals share theirs); tick labels on the left column and the bottom row only. Returns (fig, main
+    (n_blocks, n_w), residual (n_w,) or None, ncols)."""
+    ncols = max(1, min(int(ncols), n_w))
+    nr = -(-n_w // ncols)  # rows of wedges per block
+    per = ((4.2, 1.5) if residual else (4.3,)) if nr * n_blocks > 1 else ((5.2, 1.6) if residual else (5.2,))
+    ratios = list(per) * (nr * n_blocks)
+    fig = plt.figure(figsize=figsize or (22, 1.6 + sum(ratios)), layout="constrained")
+    gs = fig.add_gridspec(len(ratios), ncols, height_ratios=ratios)
+    main = np.empty((n_blocks, n_w), dtype=object)
+    res = np.empty(n_w, dtype=object) if residual else None
+    for b in range(n_blocks):
+        for w in range(n_w):
+            r, c = divmod(w, ncols)
+            row = (b * nr + r) * len(per)
+            main[b, w] = fig.add_subplot(gs[row, c])
+            if residual:
+                res[w] = fig.add_subplot(gs[row + 1, c])
+    every = [ax for ax in main.ravel()] + ([] if res is None else list(res))
+    for ax in every[1:]:
+        ax.sharex(every[0])
+    for b in range(n_blocks):
+        for ax in main[b, 1:]:
+            ax.sharey(main[b, 0])
+    if residual:
+        for ax in res[1:]:
+            ax.sharey(res[0])
+    last_row = {}  # the lowest panel of every column carries the x tick labels
+    for w in range(n_w):
+        last_row[w % ncols] = res[w] if residual else main[-1, w]
+    for ax in every:
+        ax._wedge_bottom = any(ax is v for v in last_row.values())  # the x label goes there (_wedge_frame)
+        ax.tick_params(labelleft=ax.get_subplotspec().colspan.start == 0, labelbottom=ax._wedge_bottom)
+    return fig, main, res, ncols
+
+
+def _wedge_symlog(ax, linthresh: float):
+    """``_symlog_decades`` with the zero tick tested exactly (``ten_power_formatter`` takes |y| < 1e-8 for 0, the decade
+    ticks of xi of order 4 among them)."""
+    _symlog_decades(ax, linthresh)
+
+    def fmt(y, pos):
+        if y == 0.0:
+            return "0"
+        e = int(np.round(np.log10(abs(y))))
+        return rf"${'-' if y < 0 else ''}10^{{{e}}}$" if np.isclose(abs(y), 10.0**e, rtol=1e-6, atol=0.0) else ""
+
+    ax.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(fmt))
+
+
+def _wedge_tag(ax, text: str, color):
+    """The name of a wedge inside its panel (upper right), framed in the wedge's colour (``mu_colors``)."""
+    ax.text(
+        0.985,
+        0.965,
+        text,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=FONT_MIN["legend"] + 1,
+        color=FG,
+        zorder=LEGEND_ZORDER,
+        bbox=dict(boxstyle="round,pad=0.25", facecolor=BG, edgecolor=color, lw=2.5),
+    )
+
+
+def _wedge_frame(
+    fig, axs, kind: str, spec, a, mu, ws, *, limits, delta_v, line_ids, box, n_harmonics, kms_per_cMpc, x_scale, cols, top_axis
+):
+    """What every wedge figure by order or term shares, once the curves and the y scales are drawn: the x scale, the
+    full-coverage shading (unlabelled), the wedge names, the marks of the pairs (P: the
+    line-of-sight imprint k = 2 pi n / Delta_ij, ``_imprint_lines``; xi: the spot Delta_ij, both on mu = 1, as
+    ``plot_pk_mu_wedges`` and ``plot_xi_mu_wedges``), the velocity axis above the top row (``top_axis``) and the x labels. Returns the
+    legend handles of the marks."""
+    every = list(axs)
+    first = every[0]
+    for ax in every:
+        ax.set_xscale(x_scale)
+    lim = limits
+    if lim:
+        lo, hi = (lim["k_min"], lim["k_max"]) if kind == "P" else (lim["r_min"], lim["r_max"])
+        for ax in every:
+            _shade_outside(ax, lo, hi, log=x_scale == "log")  # no labels: the limits of D3, too narrow to write in here
+            ax.set_xscale(x_scale)
+    labels = _wedge_labels(mu)
+    n_main = len(ws)
+    for j, w in enumerate(ws):
+        _wedge_tag(every[j], labels[w], cols[w])
+    handles = []
+    if delta_v is not None:
+        if kms_per_cMpc is None:
+            raise ValueError("delta_v needs kms_per_cMpc (u) to convert the separations to cMpc.")
+        L = (
+            (2.0 * np.pi / float(a["kpar"][0]) if kind == "P" else 2.0 * float(a["r_mu_edges"][-1]))
+            if box is None
+            else float(box)
+        )
+        ids, offs = _pair_inputs(delta_v, line_ids)
+        prs = [p for p in line_pairs(ids, offs / float(kms_per_cMpc), L) if p["fold"] > 0]
+        if kind == "P":
+            _imprint_lines(every, prs, "p1d", n_harmonics=n_harmonics)
+            text = r"pair imprint, $\mu = 1$: $k = 2\pi n/\Delta_{ij}$"
+        else:
+            x0, x1 = sorted(first.get_xlim())
+            for p in prs:
+                if x0 <= p["fold"] <= x1:
+                    for ax in every:
+                        ax.axvline(p["fold"], zorder=2, **scale_style("spot", p["color"]))
+            text = r"pair spot, $\mu = 1$: $r = \Delta_{ij}$"
+        if prs:
+            handles.append(mpl.lines.Line2D([], [], label=text, **scale_style("spot")))
+            handles += [mpl.lines.Line2D([], [], color=p["color"], lw=3.0, label=p["text"]) for p in prs]
+    if kms_per_cMpc is not None and top_axis:  # above the top row of the first block
+        ncols = sum(1 for ax in every[:n_main] if ax.get_subplotspec().rowspan.start == 0)
+        for ax in every[:ncols]:
+            velocity_axis(ax, kms_per_cMpc, "k" if kind == "P" else "r")
+    xl = _units("cMpc")["k" if kind == "P" else "r"]
+    for ax in every:
+        if getattr(ax, "_wedge_bottom", False):
+            ax.set_xlabel(xl)
+    return handles
+
+
+def _wedge_legend(fig, handles, pair_from: int):
+    """The legend of a wedge figure below its panels (kept in the layout), the names of the pairs in their colours
+    (``handles[pair_from:]``)."""
+    leg = _legend(fig, handles=handles, loc="outside lower center", ncol=min(len(handles), 5), fontsize=FONT_MIN["legend"] + 1)
+    for t, h in zip(leg.get_texts()[pair_from:], handles[pair_from:]):
+        if h.get_linestyle() == "-" and h.get_linewidth() == 3.0:
+            t.set_color(h.get_color())
+    return leg
+
+
+def _mu_wedge_orders(
+    dec,
+    kind: str,
+    *,
+    axes=None,
+    edges=None,
+    wedges=None,
+    ncols: int = 4,
+    limits=None,
+    delta_v=None,
+    line_ids=None,
+    box=None,
+    n_harmonics=None,
+    kms_per_cMpc=None,
+    x_bin: str = "weighted",
+    x_scale: str = "linear",
+    linthresh=None,
+    top_axis: bool = False,
+    name: str = "",
+    figsize=None,
+):
+    """The figure of ``plot_pk_mu_orders`` and ``plot_xi_mu_orders`` (kind "P" or "xi")."""
+    from skewerjax.summary_stats.decomposition import wedge_sum_rule
+
+    spec, a, mu, xpos, ws = _wedge_setup(dec, kind, axes, edges, wedges, x_bin, name)
+    R = spec["R"]
+    if f"{R}_order" not in dec or f"{R}_total" not in dec:
+        raise ValueError(f"{name}: the record needs {R}_order and {R}_total (decompose with a total, group 'order' or 'both').")
+    O = np.asarray(dec[f"{R}_order"], dtype=float)
+    Oe = np.asarray(dec.get(f"{R}_order_err", np.full(O.shape, np.nan)), dtype=float)
+    T = np.asarray(dec[f"{R}_total"], dtype=float)
+    S = O.sum(0)
+    cols = mu_colors(mu.size - 1)
+    scale_all = float(np.nanmax(np.abs(T[ws]))) or 1.0
+    shown = [n for n in range(O.shape[0]) if np.nanmax(np.abs(O[n][ws])) > 1e-12 * scale_all]
+    fig, main, res, nc = _wedge_grid(len(ws), ncols, 1, True, figsize)
+    main = main[0]
+    for j, w in enumerate(ws):
+        ax, rx = main[j], res[j]
+        ok = np.isfinite(T[w]) & np.isfinite(xpos)  # the cells with a mode or a separation
+        x = xpos[ok]
+        for n in shown:
+            c, mk = ORDER_COLORS[n % len(ORDER_COLORS)], ORDER_MARKERS[n % len(ORDER_MARKERS)]
+            _with_errors(ax, x, O[n, w][ok], Oe[n, w][ok], c, kind, marker=mk, mfc=c if n < len(ORDER_COLORS) else "none")
+        ax.plot(x, T[w][ok], lw=3.0, color=FG, alpha=0.6, zorder=3)
+        ax.plot(x, S[w][ok], lw=1.5, ls="--", color=PALETTE["red"], zorder=4)
+        ax.axhline(0.0, color=DIM, lw=0.8)
+        sc = max(float(np.nanmax(np.abs(T[w]))), float(np.nanmax(np.abs(O[:, w])))) or 1.0
+        rx.plot(x, (S[w] - T[w])[ok] / sc, lw=1.2, color=PALETTE["red"])
+        rx.axhline(0.0, color=FG, lw=1.0, ls=":")
+    _wedge_symlog(main[0], 1e-4 * scale_all if linthresh is None else linthresh)  # ticks at 0 and the decades above
+    for j, ax in enumerate(main):
+        if ax.get_subplotspec().colspan.start == 0:
+            ax.set_ylabel(spec["y"] + ", symlog")
+            res[j].set_ylabel(r"$\Delta / \max|{\rm tot}|$")
+    marks = _wedge_frame(
+        fig,
+        list(main) + list(res),
+        kind,
+        spec,
+        a,
+        mu,
+        ws,
+        limits=limits,
+        delta_v=delta_v,
+        line_ids=line_ids,
+        box=box,
+        n_harmonics=n_harmonics,
+        kms_per_cMpc=kms_per_cMpc,
+        x_scale=x_scale,
+        cols=cols,
+        top_axis=top_axis,
+    )
+    ms = _MS_SMALL if kind == "P" else 3.5
+    handles = [
+        mpl.lines.Line2D(
+            [],
+            [],
+            color=ORDER_COLORS[n % len(ORDER_COLORS)],
+            marker=ORDER_MARKERS[n % len(ORDER_MARKERS)],
+            mfc=ORDER_COLORS[n % len(ORDER_COLORS)] if n < len(ORDER_COLORS) else "none",
+            ms=ms + 2,
+            lw=1.0,
+            label=rf"$\mathcal{{O}}({n})$",
+        )
+        for n in shown
+    ]
+    handles += [
+        mpl.lines.Line2D([], [], lw=3.0, color=FG, alpha=0.6, label="total"),
+        mpl.lines.Line2D([], [], lw=1.5, ls="--", color=PALETTE["red"], label=r"$\sum$ orders"),
+    ]
+    _wedge_legend(fig, handles + marks, len(handles))
+    rule = wedge_sum_rule(dec, R, "order")
+    return fig, main, dict(residual=res, sum_rule=rule[ws], wedges=np.asarray(ws), orders=np.asarray(shown))
+
+
+def _mu_wedge_terms(
+    dec,
+    kind: str,
+    *,
+    orders=None,
+    max_terms: int | None = 6,
+    terms=None,
+    axes=None,
+    edges=None,
+    wedges=None,
+    ncols: int = 4,
+    limits=None,
+    delta_v=None,
+    line_ids=None,
+    box=None,
+    n_harmonics=None,
+    kms_per_cMpc=None,
+    x_bin: str = "weighted",
+    x_scale: str = "linear",
+    linthresh=None,
+    top_axis: bool = False,
+    name: str = "",
+    figsize=None,
+):
+    """The figure of ``plot_pk_mu_terms`` and ``plot_xi_mu_terms`` (kind "P" or "xi")."""
+    from skewerjax.config import eps
+
+    spec, a, mu, xpos, ws = _wedge_setup(dec, kind, axes, edges, wedges, x_bin, name)
+    R = spec["R"]
+    if f"{R}_pair" not in dec:
+        raise ValueError(f"{name}: the record needs the pairs, {R}_pair (decompose with group 'pair' or 'both').")
+    Pp = np.asarray(dec[f"{R}_pair"], dtype=float)  # (n_pairs, n_mu, n_bins)
+    Ppe = np.asarray(dec.get(f"{R}_pair_err", np.full(Pp.shape, np.nan)), dtype=float)
+    pairs = [tuple(p) for p in np.asarray(dec["pairs"])]
+    po = np.asarray(dec["pair_orders"])
+    n_ord = int(po.max()) + 1
+    by_order = np.stack([Pp[po == n].sum(0) for n in range(n_ord)])
+    scale = float(np.nanmax(np.abs(by_order[:, ws]))) or 1.0
+    if orders is None:  # those with a non-zero contribution, without order 0 (as plot_p1d_terms); zero to rounding: left out
+        orders = [n for n in range(1, n_ord) if np.nanmax(np.abs(by_order[n][ws])) > max(1e-12, eps()) * scale]
+    orders = [int(n) for n in orders]
+    cols = mu_colors(mu.size - 1)
+    fig, main, _, nc = _wedge_grid(len(ws), ncols, len(orders), False, figsize)
+    wanted = None if terms is None else {t.replace(ZERO_ORDER_KEY, r"$\mathcal{C}$") for t in terms}
+    drawn = {}
+    for b, n in enumerate(orders):
+        idx = [int(i) for i in np.flatnonzero(po == n)]  # every term, in the order of the pairs: a term that vanishes (the
+        # 𝒞 terms of a constant 𝒞, which live at k = 0) keeps its place, its colour and a flat line
+        if wanted is not None:
+            show = [i for i in idx if _pair_label(pairs[i]) in wanted]
+        else:
+            ranked = sorted(idx, key=lambda i: -float(np.nanmax(np.abs(Pp[i][ws]))))
+            show = ranked if max_terms is None else ranked[: int(max_terms)]
+        show = [i for i in idx if i in show]  # the colours in the order of the pairs (as plot_terms_by_order)
+        rest = [i for i in idx if i not in show]
+        drawn[n] = [_pair_label(pairs[i]) for i in show]
+        handles = []
+        for j, w in enumerate(ws):
+            ax = main[b, j]
+            ok = np.isfinite(by_order[n, w]) & np.isfinite(xpos)
+            x = xpos[ok]
+            for k, i in enumerate(show):
+                c = PALETTE_CYCLE[k % len(PALETTE_CYCLE)]
+                mk = _MARKER_CYCLE[(k // len(PALETTE_CYCLE)) % len(_MARKER_CYCLE)]
+                _with_errors(ax, x, Pp[i, w][ok], Ppe[i, w][ok], c, kind, marker=mk)
+                if j == 0:
+                    handles.append(mpl.lines.Line2D([], [], color=c, marker=mk, ms=6, lw=1.0, label=_pair_label(pairs[i])))
+            if rest:
+                ax.plot(x, Pp[rest, w].sum(0)[ok], color=PALETTE["grey"], ls="--", lw=2.0, zorder=4)
+            ax.plot(x, by_order[n, w][ok], color=FG, lw=3.0, alpha=0.6, zorder=1)
+            ax.axhline(0.0, color=DIM, lw=0.8)
+        if rest:
+            handles.append(mpl.lines.Line2D([], [], color=PALETTE["grey"], ls="--", lw=2.0, label=f"other terms ({len(rest)})"))
+        handles.insert(0, mpl.lines.Line2D([], [], color=FG, lw=3.0, alpha=0.6, label=rf"$\mathcal{{O}}({n})$ total"))
+        top = float(np.nanmax(np.abs(by_order[n][ws]))) or 1.0
+        _wedge_symlog(main[b, 0], 1e-3 * top if linthresh is None else linthresh)
+        for ax in main[b]:
+            if ax.get_subplotspec().colspan.start == 0:
+                ax.set_ylabel(spec["y"] + ", symlog")
+        right = main[b, min(nc, len(ws)) - 1]  # the legend of the order, right of the first row of its block
+        leg = _legend(right, handles=handles, loc="upper left", bbox_to_anchor=(1.03, 1.0), fontsize=FONT_MIN["legend"])
+        if b == 0 and line_ids is not None:
+            key = ", ".join(f"{j + 1} = {nm}" for j, nm in enumerate(line_names(line_ids)))
+            leg.set_title("lines: " + key, prop=dict(size=FONT_MIN["legend"]))
+    marks = _wedge_frame(
+        fig,
+        list(main.ravel()),
+        kind,
+        spec,
+        a,
+        mu,
+        ws,
+        limits=limits,
+        delta_v=delta_v,
+        line_ids=line_ids,
+        box=box,
+        n_harmonics=n_harmonics,
+        kms_per_cMpc=kms_per_cMpc,
+        x_scale=x_scale,
+        cols=cols,
+        top_axis=top_axis,
+    )
+    for b in range(1, len(orders)):  # every block names its wedges
+        for j, w in enumerate(ws):
+            _wedge_tag(main[b, j], _wedge_labels(mu)[w], cols[w])
+    if marks:
+        _wedge_legend(fig, marks, 1)
+    return fig, main, dict(orders=np.asarray(orders), terms=drawn, wedges=np.asarray(ws))
+
+
+def plot_pk_mu_orders(
+    dec,
+    *,
+    axes=None,
+    k_edges=None,
+    wedges=None,
+    ncols: int = 4,
+    limits=None,
+    delta_v=None,
+    line_ids=None,
+    box=None,
+    n_harmonics=None,
+    kms_per_cMpc=None,
+    top_axis: bool = False,
+    x_bin: str = "weighted",
+    k_scale: str = "linear",
+    linthresh=None,
+    figsize=None,
+):
+    """P(k, mu) of the total overflux in the mu wedges, split by order |A| + |B| (``summary_stats.decompose`` and its wedge
+    reduction "P_mu": the bins, mu edges and limits of ``measure_lattice`` / ``GridStatistics3D``): the analogue of
+    ``plot_p1d_orders`` for the 3D statistics (notebooks 10 and 11, F1).
+
+    One panel per mu wedge (wrapped in ``ncols`` columns; shared axes; each named by its mu range, framed in the wedge's
+    colour, ``mu_colors``), with every order in the colours and markers of ``plot_p1d_orders`` (``ORDER_COLORS``,
+    ``ORDER_MARKERS``: the mean with its error of the mean, joined), the total (thick grey) and the sum of the orders (red
+    dashed); below each wedge, (sum - total) / max(|total|, |orders|) in that wedge (rounding only). The y axis is a
+    symmetric log (the orders change sign), linear within 1e-4 of the largest |total| (``linthresh``), ticks at 0 and
+    the decades. An order that vanishes everywhere (to 1e-12 of the total) is not drawn; a cell without a mode (NaN) is
+    skipped. The legend below the panels.
+
+    dec : an ``ensemble_decomposition`` (or one record) with ``P_mu_order``, ``P_mu_total`` (``group`` "order" or
+    "both"); axes : the bins of the grid (``GRID.axes()``; default ``dec["axes"]``); k_edges : checked against them;
+    wedges : the indices of the wedges drawn (default all); limits : dict(k_min, k_max) [1/cMpc], the full-coverage range
+    (``lattice_limits``), shaded outside (no labels: those of D3); delta_v, line_ids [km/s, with ``kms_per_cMpc`` = u]:
+    the line-of-sight imprint of every pair, k = 2 pi n / Delta_ij (``n_harmonics``), as ``plot_pk_mu_wedges``; box : the
+    period of the line of sight [cMpc]; top_axis : a velocity axis above the top row (``kms_per_cMpc``); x_bin : where
+    each bin is drawn (``_wedge_x``); k_scale : "linear" (default) or "log".
+
+    Returns (fig, axs (n_wedges,) the main panels, dict(residual (n_wedges,) axes, sum_rule (n_wedges,):
+    ``wedge_sum_rule``, wedges, orders drawn))."""
+    _check_option("k_scale", k_scale, ("log", "linear"))
+    return _mu_wedge_orders(
+        dec,
+        "P",
+        axes=axes,
+        edges=k_edges,
+        wedges=wedges,
+        ncols=ncols,
+        limits=limits,
+        delta_v=delta_v,
+        line_ids=line_ids,
+        box=box,
+        n_harmonics=n_harmonics,
+        kms_per_cMpc=kms_per_cMpc,
+        top_axis=top_axis,
+        x_bin=x_bin,
+        x_scale=k_scale,
+        linthresh=linthresh,
+        name="plot_pk_mu_orders",
+        figsize=figsize,
+    )
+
+
+def plot_xi_mu_orders(
+    dec,
+    *,
+    axes=None,
+    r_edges=None,
+    wedges=None,
+    ncols: int = 4,
+    limits=None,
+    delta_v=None,
+    line_ids=None,
+    box=None,
+    kms_per_cMpc=None,
+    top_axis: bool = False,
+    x_bin: str = "weighted",
+    linthresh=None,
+    figsize=None,
+):
+    """xi(r, mu) of the total overflux in the mu wedges, split by order (the wedge reduction "xi_mu" of
+    ``summary_stats.decompose``): the analogue of ``plot_xi1d_orders`` for the 3D statistics (notebooks 10 and 11, F1),
+    with the layout and options of ``plot_pk_mu_orders``. limits : dict(r_min, r_max) [cMpc]; delta_v : the
+    line-of-sight spot of every pair, r = Delta_ij folded into [0, L / 2], as ``plot_xi_mu_wedges``. Returns as
+    ``plot_pk_mu_orders``."""
+    return _mu_wedge_orders(
+        dec,
+        "xi",
+        axes=axes,
+        edges=r_edges,
+        wedges=wedges,
+        ncols=ncols,
+        limits=limits,
+        delta_v=delta_v,
+        line_ids=line_ids,
+        box=box,
+        kms_per_cMpc=kms_per_cMpc,
+        top_axis=top_axis,
+        x_bin=x_bin,
+        linthresh=linthresh,
+        name="plot_xi_mu_orders",
+        figsize=figsize,
+    )
+
+
+def plot_pk_mu_terms(
+    dec,
+    *,
+    orders=None,
+    max_terms: int | None = 6,
+    terms=None,
+    axes=None,
+    k_edges=None,
+    wedges=None,
+    ncols: int = 4,
+    limits=None,
+    delta_v=None,
+    line_ids=None,
+    box=None,
+    n_harmonics=None,
+    kms_per_cMpc=None,
+    top_axis: bool = False,
+    x_bin: str = "weighted",
+    k_scale: str = "linear",
+    linthresh=None,
+    figsize=None,
+):
+    """P(k, mu) of the total overflux in the mu wedges, each order term by term (``summary_stats.decompose`` with the
+    pairs, ``group`` "pair" or "both"): the analogue of ``plot_p1d_terms`` for the 3D statistics (notebooks 10 and 11, F2).
+
+    One block of panels per order (default every order with a non-zero contribution, without order 0, as
+    ``plot_p1d_terms``; ``orders`` selects), one panel per mu wedge in each block (wrapped in ``ncols`` columns; shared x,
+    y shared within a block; each named by its mu range). The terms of an order are the symmetric pair sums A–B of the
+    record (real), in the colours and markers of ``plot_terms_by_order`` (``PALETTE_CYCLE`` in the order of the pairs; the
+    largest ``max_terms`` of the order over the wedges drawn, or the labels ``terms``, e.g. "1–2", "𝒞–12"; the others
+    summed, grey dashed; a term that vanishes keeps its colour, drawn flat at 0), on the order's total (thick). With two lines order 2 holds the autos 1–1, 2–2, the cross 1–2
+    and 𝒞–12; the cross oscillates as cos(k_par Delta_12) = cos(k mu Delta_12), so its period in |k| changes from wedge to
+    wedge. Symmetric-log y per block, linear within 1e-3 of the order's largest |total| (``linthresh``). The legend of
+    each order right of its first row (``line_ids``: the numbering of the lines, as ``plot_p1d_terms``), the marks below.
+    Other options as ``plot_pk_mu_orders``. Returns (fig, axs (n_orders, n_wedges), dict(orders, terms {order: labels
+    drawn}, wedges))."""
+    _check_option("k_scale", k_scale, ("log", "linear"))
+    return _mu_wedge_terms(
+        dec,
+        "P",
+        orders=orders,
+        max_terms=max_terms,
+        terms=terms,
+        axes=axes,
+        edges=k_edges,
+        wedges=wedges,
+        ncols=ncols,
+        limits=limits,
+        delta_v=delta_v,
+        line_ids=line_ids,
+        box=box,
+        n_harmonics=n_harmonics,
+        kms_per_cMpc=kms_per_cMpc,
+        top_axis=top_axis,
+        x_bin=x_bin,
+        x_scale=k_scale,
+        linthresh=linthresh,
+        name="plot_pk_mu_terms",
+        figsize=figsize,
+    )
+
+
+def plot_xi_mu_terms(
+    dec,
+    *,
+    orders=None,
+    max_terms: int | None = 6,
+    terms=None,
+    axes=None,
+    r_edges=None,
+    wedges=None,
+    ncols: int = 4,
+    limits=None,
+    delta_v=None,
+    line_ids=None,
+    box=None,
+    kms_per_cMpc=None,
+    top_axis: bool = False,
+    x_bin: str = "weighted",
+    linthresh=None,
+    figsize=None,
+):
+    """xi(r, mu) of the total overflux in the mu wedges, each order term by term: the analogue of ``plot_xi1d_terms`` for
+    the 3D statistics (notebooks 10 and 11, F2), with the layout and options of ``plot_pk_mu_terms`` and the marks of
+    ``plot_xi_mu_orders`` (the cross term of a line offset by Delta peaks at r_par = Delta, r_perp = 0: in the wedge
+    nearest mu = 1). Returns as ``plot_pk_mu_terms``."""
+    return _mu_wedge_terms(
+        dec,
+        "xi",
+        orders=orders,
+        max_terms=max_terms,
+        terms=terms,
+        axes=axes,
+        edges=r_edges,
+        wedges=wedges,
+        ncols=ncols,
+        limits=limits,
+        delta_v=delta_v,
+        line_ids=line_ids,
+        box=box,
+        kms_per_cMpc=kms_per_cMpc,
+        top_axis=top_axis,
+        x_bin=x_bin,
+        linthresh=linthresh,
+        name="plot_xi_mu_terms",
+        figsize=figsize,
+    )
+
+
 def plot_overflux_3d(
     flux3d: dict,
     axes: dict,
@@ -6017,7 +6601,7 @@ def plot_overflux_3d(
 
 
 def _native_map_axes(ax, u: float, kind: str, x_max: float, y_max: float, y_min: float = 0.0, unit: str = "km/s"):
-    """The axes of the (perp, par) maps of the overflux and of the density (notebook 10, D2 and B1): perpendicular across
+    """The axes of the (perp, par) maps of the overflux and of the density (notebook 10, D2 and C1): perpendicular across
     in comoving units, parallel upwards in its native unit (``unit``: "km/s" for the overflux, "cMpc" for the density
     along the skewers), the origin at the bottom-left corner (equal comoving lengths: the box of ``_map_figure``), and the
     reference axes in km/s through u: the perpendicular on top, and the parallel on the right in the other unit. kind "r": cMpc and km/s;
@@ -6123,7 +6707,7 @@ def plot_overflux_rpar_rperp(
     figsize=(14, 12.5),
 ):
     """r^2 xi(r_perp, r_par) (``quantity="r2xi"``) or xi (``"xi"``) of one overflux on the exact lattice of skewers
-    (notebook 10, D2), or of the density at the points of the skewers (B1, ``unit="cMpc"``): the measured panel of
+    (notebook 10, D2), or of the density at the points of the skewers (C1, ``unit="cMpc"``): the measured panel of
     ``plot_rpar_rperp_maps``, with its options: a diverging colour scale centred on 0 (``cmap``, default
     ``CMAPS["diverging"]``; ``color_scale`` "linear" or "symlog" with ``linthresh``, ``linthresh_frac``, ``linscale``:
     ``_map_scale``: symmetric limits), contours at ``levels`` (default three) in green with the band where
@@ -6300,7 +6884,7 @@ def plot_overflux_kpar_kperp(
     figsize=(14, 12.5),
 ):
     """P(k_perp, k_par) of one overflux on the exact lattice of skewers (notebook 10, D2), or of the density at the
-    points of the skewers (B1, ``unit="cMpc"``): the measured panel of ``plot_kpar_kperp_maps``, derived from it as
+    points of the skewers (C1, ``unit="cMpc"``): the measured panel of ``plot_kpar_kperp_maps``, derived from it as
     ``plot_overflux_rpar_rperp`` from ``plot_rpar_rperp_maps``, with its options: P (not k P) on a logarithmic colour
     scale (``cmap``, default ``CMAPS["diverging"]``; the limits of the expectation with ``theory``, else of the
     measurement), iso-P contours at ``levels`` (default three, ``_three_levels``) in green with the band where the

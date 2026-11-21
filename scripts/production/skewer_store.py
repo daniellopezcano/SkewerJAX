@@ -1,6 +1,7 @@
 """A store of skewers on disk: the optical depth of nested lattices of axis-aligned skewers through a snapshot, kept
-for convergence tests (``docs/skewer_store.md``; written by ``skewer_extraction`` and
-``scripts/production/extract_skewers.py``, read by notebook 17).
+for convergence tests and production runs (``STORE.md``; written by ``skewer_extraction``, ``extract_skewers.py`` and
+``run_production.py``, read by notebooks 17 and 18). Production code, outside the package; it needs NumPy and h5py only
+(not skewerjax), so a store is readable without the package.
 
 **Layout.** One dataset per (simulation, snapshot, axis, options)::
 
@@ -507,6 +508,39 @@ def select_datasets(root, sim: str, snap: int, config_or_hash=None, axes=(1, 2, 
     top = min(r["n_max"] for r in sel)
     ns = [2**k for k in range(int(np.log2(top)) + 1)] if top else []
     return dict(hash=best, axes=tuple(r["axis"] for r in sel), n_values=ns, n_max=top, rows=sel)
+
+
+def load_run(run_dir, n_per_axis: int | None = None) -> StoredSkewers:
+    """The skewers of a run folder of ``run_production.py`` (``<out>/<sweep>/<run>/``): its ``run.json`` names the dataset
+    of its store (``run["dataset"]``: root, sim, snap, axis, hash, n_per_axis); ``n_per_axis`` default the run's lattice
+    (any coarser power of two is a subset of it). A ValueError if the run is not finished."""
+    run_dir = Path(run_dir).expanduser()
+    rec = json.loads((run_dir / "run.json").read_text())
+    if rec.get("status") != "done" or "dataset" not in rec:
+        raise ValueError(f"{run_dir}: the run is not finished (status {rec.get('status')!r}).")
+    d = rec["dataset"]
+    n = int(d["n_per_axis"] if n_per_axis is None else n_per_axis)
+    return load_skewers(run_dir / d["root"], d["sim"], d["snap"], d["axis"], d["hash"], n)
+
+
+def list_runs(sweep_dir) -> list:
+    """The runs of a sweep folder (its ``index.json``, else the ``run.json`` of every sub-folder): rows of name, status,
+    path, the run's configuration and dataset."""
+    sweep_dir = Path(sweep_dir).expanduser()
+    rows = []
+    for p in sorted(sweep_dir.glob("*/run.json")):
+        rec = json.loads(p.read_text())
+        rows.append(
+            dict(
+                name=rec.get("name", p.parent.name),
+                status=rec.get("status"),
+                path=str(p.parent),
+                config=rec.get("config"),
+                dataset=rec.get("dataset"),
+                shared_from=rec.get("shared_from"),
+            )
+        )
+    return rows
 
 
 def format_datasets(rows) -> str:

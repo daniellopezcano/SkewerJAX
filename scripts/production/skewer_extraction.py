@@ -1,6 +1,7 @@
 """Filling the skewer store: the options of a dataset, written out in full, and the resumable computation of the
-skewers of nested lattices missing from it (``skewer_store``; ``scripts/production/extract_skewers.py``;
-``docs/skewer_store.md``).
+skewers of nested lattices missing from it (``skewer_store``; ``extract_skewers.py``, ``run_production.py``;
+``STORE.md``). Production code, outside the package: it composes the public API of ``skewerjax.core``,
+``skewerjax.simulations`` and ``skewerjax.config`` only.
 
 **Options** (``dataset_options``): a preset (``MODES``: "default", "matched") with any option overridden, resolved to
 values (no None standing for "the package's default", no "snapshot" standing for a number), so that the hash of the
@@ -13,6 +14,16 @@ dataset names what was computed whatever the package's defaults become. The pres
 * "matched": fake_spectra's scheme as in ``comparison.scaling.mode_options`` (its gas physics, the top-hat chords of
   weight 1/8, the midpoint profile, ``pixel_average``, ``tautail`` 1e-7, a_eff and (aH)_ref of the snapshot, its
   constants), on the same frame and axes as "default".
+
+**The sampling points** (``points_kms``, the spacing of points along a skewer in km/s of Hubble flow). The default
+pieces, the exact cell crossings with the integrated profile, have no sampling points: in the snapshot frame nothing
+depends on a spacing, and in the exact frame (``frame="exact"``) only the table of a(s) does (``stream.box_skewers``'s
+``frame_spacing``, default 0.05 cMpc; ``options["tau"]["frame_spacing_cMpc"]`` = points_kms / u when given). With
+``pieces="segments"`` the cells are deposited into the dual segments of points every ``points_kms`` (``cell_pieces``
+with ``deposition="voronoi_segments"``, the gather route ``select_cells_near_paths``; ``compute_skewers_sampled``),
+usually with ``profile="midpoint"``: then the spacing sets the pieces and the accuracy (benchmark block C2,
+``benchmarks/results/scaling/C2.json``). Both keys enter the options (and the hash) only when they apply, so the
+datasets of the other configurations keep their hashes.
 
 **Computation** (``compute_skewers``): the streaming route of ``simulations.stream`` on the requested skewers only: one
 pass over the snapshot (the cells within reach, the gas physics on those), then the tiles, each tile written to the
@@ -33,13 +44,13 @@ import uuid
 from pathlib import Path
 
 import numpy as np
+import skewer_store as ss  # the sibling module of scripts/production (the directory is on sys.path: run_production.py, conftest)
 
-from skewerjax.core.selection import VORONOI_FACTOR
-from skewerjax.simulations import skewer_store as ss
+from skewerjax.core import VORONOI_FACTOR
 
 # The gas physics of the presets (``gas_to_cells``): SkewerJAX's and fake_spectra's. The same values as
-# ``comparison.scaling.DEFAULT_CELLS`` and ``comparison.benchmark.MATCHED_CELLS`` (simulations does not import comparison:
-# tests/test_import_graph.py; tests/simulations/test_skewer_store.py checks that they agree).
+# ``comparison.scaling.DEFAULT_CELLS`` and ``comparison.benchmark.MATCHED_CELLS`` (kept here as they were when this module
+# was in ``simulations``, which does not import comparison; tests/production/test_skewer_store.py checks that they agree).
 DEFAULT_CELLS = dict(
     mass_unit="amu", T_constants="codata", x_HI_model="stored_sf", cloudy_density="hydrogen", cloudy_interpolation="linear"
 )
@@ -51,7 +62,7 @@ MATCHED_CELLS = dict(
     cloudy_interpolation="cubic",
 )
 FRAMES = ("snapshot", "exact")
-PIECES = ("crossings", "chords")
+PIECES = ("crossings", "chords", "segments")  # segments: the dual segments of sampling points (``compute_skewers_sampled``)
 
 MODES = {
     "default": dict(
@@ -146,8 +157,8 @@ def mode_options(mode: str, overrides: dict | None = None) -> dict:
 def _frame_span(header, frame: str, hubble_flow: str, aH_ref) -> float:
     """The velocity span of one box along a skewer [km/s]: the period of ``velocity_period=True`` and the length of the
     pixel axis (snapshot frame: (aH)_snap L; the exact frame: ``core.absorbers.velocity_span`` of the box-mode frame)."""
-    from skewerjax.core.absorbers import SnapshotFrame, velocity_span
-    from skewerjax.simulations.stream import box_skewers
+    from skewerjax.core import SnapshotFrame, velocity_span
+    from skewerjax.simulations import box_skewers
 
     L = header.box_cMpc
     if frame == "snapshot":
@@ -167,6 +178,7 @@ def dataset_options(
     line_ids=LINE_IDS,
     precision: str = "float32",
     n_ref: int = ss.N_REF,
+    points_kms: float | None = None,
 ) -> dict:
     """The options of a dataset (``config["options"]``, hashed), resolved to values from the snapshot's ``header``:
 
@@ -174,8 +186,11 @@ def dataset_options(
     dv = span / n_pix, as fake_spectra's grid; or ``n_pix`` itself; the centres (i + 1/2) dv, the period = n_pix dv =
     the span of one box); lines (the ids, the first the reference); physics (``gas_to_cells``); pieces; tau (every
     option of ``tiles_optical_depth`` / ``compute_optical_depth``: velocity_period True -> the span, a_eff and aH_ref
-    "snapshot" -> the snapshot's a and aH, wing_tolerance None -> ``core.tau_engine.WING_TOLERANCE``); precision."""
-    from skewerjax.core.tau_engine import WING_TOLERANCE
+    "snapshot" -> the snapshot's a and aH, wing_tolerance None -> ``core.WING_TOLERANCE``); precision. ``points_kms``:
+    the spacing of the sampling points [km/s] (module docstring): required with ``pieces="segments"``
+    (``pieces["points_kms"]``), the a(s) table in the exact frame (``tau["frame_spacing_cMpc"]``); elsewhere it has no
+    effect and is not part of the options."""
+    from skewerjax.core import WING_TOLERANCE
 
     o = mode_options(mode, overrides)
     if precision not in ("float32", "float64"):
@@ -214,6 +229,15 @@ def dataset_options(
         wing_tolerance=float(WING_TOLERANCE if o["wing_tolerance"] is None else o["wing_tolerance"]),
         velocity_period=vp,
     )
+    pieces = dict(pieces=o["pieces"], chord_weight=None if o["chord_weight"] is None else float(o["chord_weight"]))
+    if points_kms is not None and not float(points_kms) > 0:
+        raise ValueError(f"points_kms must be > 0, got {points_kms}.")
+    if o["pieces"] == "segments":
+        if points_kms is None:
+            raise ValueError("pieces='segments' needs points_kms (the spacing of the sampling points).")
+        pieces["points_kms"] = float(points_kms)
+    if o["frame"] == "exact" and points_kms is not None:
+        tau["frame_spacing_cMpc"] = float(points_kms) / aH
     return dict(
         lattice=dict(n_ref=int(n_ref), offset=0.0, order="a-major (i_a outer), (a, b) the transverse axes in increasing order"),
         pixels=dict(
@@ -225,7 +249,7 @@ def dataset_options(
         ),
         lines=dict(line_ids=ids, ref_line_id=ids[0]),
         physics=dict(o["physics"]),
-        pieces=dict(pieces=o["pieces"], chord_weight=None if o["chord_weight"] is None else float(o["chord_weight"])),
+        pieces=pieces,
         tau=tau,
         precision=precision,
     )
@@ -273,10 +297,9 @@ def compute_skewers(
     the snapshot, then the tiles of about ``tile_size`` skewers; ``on_pass(info)`` when the pass is over (its timings
     and memory), ``on_batch(indices_of_tile, tau (n_lines, n, N_pix), row)`` after each tile (``tiles_optical_depth``'s
     row: timings, resolution). Returns (tau (n_lines, m, N_pix), info with the pass's and the tiles' timings)."""
+    from skewerjax import simulations as st
     from skewerjax.config import get_precision
-    from skewerjax.core import LineBundle
-    from skewerjax.core.absorbers import SnapshotFrame
-    from skewerjax.simulations import stream as st
+    from skewerjax.core import LineBundle, SnapshotFrame
 
     o, s = config["options"], config["simulation"]
     if get_precision() != o["precision"]:
@@ -289,8 +312,9 @@ def compute_skewers(
     lines = LineBundle(list(o["lines"]["line_ids"]), ref_line_id=o["lines"]["ref_line_id"])
     t0 = time.perf_counter()
     cofm = ss.lattice_positions(idx, s["axis"], L, o["lattice"]["n_ref"])
-    paths, exact = st.box_skewers(cofm, s["axis"], L, H.cosmology(), H.a)
     t = o["tau"]
+    fs = {"frame_spacing": t["frame_spacing_cMpc"]} if t.get("frame_spacing_cMpc") is not None else {}
+    paths, exact = st.box_skewers(cofm, s["axis"], L, H.cosmology(), H.a, **fs)
     frame = SnapshotFrame(H.a, H.velfac_kms_per_cMpc, path_length=np.full(len(paths), L)) if t["frame"] == "snapshot" else exact
     tile_of = st.tile_skewers(paths, tile_size)
     store, pinfo = st.stream_cells(reader, paths, tile_of, list(lines.species_keys), {"run": o["physics"]}, threads=threads)
@@ -341,6 +365,116 @@ def compute_skewers(
     info["tiles_s"] = float(time.perf_counter() - t1)
     del store, tinfo
     return taus["tau"], info
+
+
+def compute_skewers_sampled(
+    reader,
+    config: dict,
+    indices,
+    *,
+    tile_size: int = 1024,
+    devices=None,
+    threads: int | None = None,
+    on_batch=None,
+    on_pass=None,
+    resolution_tolerance: float | None = RESOLUTION_TOLERANCE,
+) -> tuple:
+    """tau of the skewers ``indices`` (m, 2) of a ``pieces="segments"`` dataset (module docstring), with the interface of
+    ``compute_skewers``: the points of every skewer every ``points_kms`` (``SkewerBundle.axis_aligned``), the cells within
+    reach of them (``select_cells_near_paths``, one read of the snapshot) and their gas (``gas_to_cells``), then per tile
+    of ``tile_size`` skewers the dual-segment pieces (``cell_pieces``, ``deposition="voronoi_segments"``, in the
+    dataset's frame) and tau (``compute_optical_depth`` with every option of the dataset). The route of benchmark block
+    C2 (``comparison.scaling.run_c2``) with the options of the store."""
+    from skewerjax.config import get_precision
+    from skewerjax.core import LineBundle, SkewerBundle, SnapshotFrame, cell_pieces, compute_optical_depth
+    from skewerjax.simulations import gas_to_cells, select_cells_near_paths
+
+    o, s = config["options"], config["simulation"]
+    if get_precision() != o["precision"]:
+        raise RuntimeError(
+            f"the dataset is {o['precision']}, the package runs in {get_precision()} (skewerjax.config.set_precision)."
+        )
+    if o["pieces"]["pieces"] != "segments":
+        raise ValueError("compute_skewers_sampled computes pieces='segments' datasets only (compute_skewers the others).")
+    H = reader.header
+    L, aH = float(H.box_cMpc), float(H.velfac_kms_per_cMpc)
+    idx = np.asarray(indices, dtype=np.int64).reshape(-1, 2)
+    lines = LineBundle(list(o["lines"]["line_ids"]), ref_line_id=o["lines"]["ref_line_id"])
+    t = o["tau"]
+    ds_cMpc = float(o["pieces"]["points_kms"]) / aH
+    t0 = time.perf_counter()
+    cofm = ss.lattice_positions(idx, s["axis"], L, o["lattice"]["n_ref"])
+    bundle = lambda c: SkewerBundle.axis_aligned(c, s["axis"], L, ds_cMpc, H.cosmology(), a_ref=H.a)  # noqa: E731
+    points = bundle(cofm).host["points"]
+    gas = select_cells_near_paths(reader, points, mode="voronoi", workers=threads or -1)
+    cells = gas_to_cells(gas, list(lines.species_keys), **o["physics"])
+    n_cells = int(np.asarray(cells.positions).shape[0]) if hasattr(cells, "positions") else -1
+    del gas
+    t1 = time.perf_counter()
+    n_tiles = -(-len(idx) // int(tile_size))
+    info = dict(
+        n_skewers=int(idx.shape[0]),
+        n_tiles=int(n_tiles),
+        n_cells_within_reach=n_cells,
+        store_GB=0.0,
+        pass_s=float(t1 - t0),
+        pass_stages={"select_and_physics": float(t1 - t0)},
+        points_per_skewer=int(points.shape[1]),
+    )
+    if on_pass is not None:
+        on_pass(dict(info))
+    p = o["pixels"]
+    v = (np.arange(p["n_pix"]) + 0.5) * p["dv_kms"]
+    out = []
+    for k in range(n_tiles):
+        sk = slice(k * int(tile_size), min((k + 1) * int(tile_size), len(idx)))
+        tg = time.perf_counter()
+        if t["frame"] == "snapshot":
+            m = sk.stop - sk.start
+            frame = SnapshotFrame(H.a, aH, path_length=np.full(m, L))
+            pieces = cell_pieces(cells, lines, points=points[sk], frame=frame, deposition="voronoi_segments", a_data=H.a)
+        else:
+            pieces = cell_pieces(cells, lines, skewer_bundle=bundle(cofm[sk]), deposition="voronoi_segments", a_data=H.a)
+        tp = time.perf_counter()
+        tau, tinfo = compute_optical_depth(
+            pieces,
+            v,
+            lines,
+            line_frame=t["line_frame"],
+            velocity_period=t["velocity_period"] or False,
+            voigt=t["voigt"],
+            detuning=t["detuning"],
+            profile_integration=t["profile"],
+            wing_tolerance=t["wing_tolerance"],
+            resolution_tolerance=resolution_tolerance,
+            devices=list(devices) if devices else None,
+            a_eff=t["a_eff"],
+            hubble_flow=t["hubble_flow"],
+            aH_ref=t["aH_ref"],
+            b_constants=t["b_constants"],
+            pixel_average=t["pixel_average"],
+            tautail=t["tautail"],
+            chord_weight=o["pieces"]["chord_weight"],
+            return_info=True,
+        )
+        tau = np.asarray(tau)
+        row = dict(
+            resolution=tinfo.get("resolution"),
+            geometry_s=float(tp - tg),
+            contributions_s=0.0,
+            tau_s={"tau": float(time.perf_counter() - tp)},
+        )
+        if on_batch is not None:
+            on_batch(idx[sk], tau, row)
+        out.append(tau)
+    info["tiles_s"] = float(time.perf_counter() - t1)
+    return np.concatenate(out, axis=1), info
+
+
+def compute_for(config: dict):
+    """The function that computes a pass of the dataset ``config``: ``compute_skewers_sampled`` for
+    ``pieces="segments"``, ``compute_skewers`` (the streaming route) otherwise."""
+    return compute_skewers_sampled if config["options"]["pieces"]["pieces"] == "segments" else compute_skewers
 
 
 # --------------------------------------------------------------------------- planning
@@ -456,17 +590,18 @@ def extract(
     compute=None,
 ) -> dict:
     """Fill the lattices ``n_list`` of ``dataset`` (module docstring) and return the run's record (also written to
-    ``runs/``). ``compute``: the function computing a pass (default ``compute_skewers``; the tests count its calls).
+    ``runs/``). ``compute``: the function computing a pass (default ``compute_for(dataset.config)``: ``compute_skewers``,
+    or ``compute_skewers_sampled`` for ``pieces="segments"``; the tests count its calls).
 
     For each N, increasing: the skewers not stored are split into passes of at most ``skewers_per_pass`` (default
     ``pass_size``: the memory model within ``memory_budget``), neighbouring skewers together (squares of the plane,
     ``stream.tile_skewers``); every tile of a pass is written as one batch as soon as it is computed. The log gives the
     progress and the ETA after every batch."""
+    from skewerjax import simulations as st
     from skewerjax.config import get_precision
-    from skewerjax.core import crossings as cx
-    from skewerjax.simulations import stream as st
+    from skewerjax.core import StraightPaths
 
-    compute = compute_skewers if compute is None else compute
+    compute = compute_for(dataset.config) if compute is None else compute
     cfg = dataset.config
     o = cfg["options"]
     n_ref = dataset.n_ref
@@ -521,7 +656,7 @@ def extract(
                 )
                 cofm = ss.lattice_positions(miss, dataset.axis, L, n_ref)
                 ax = dataset.axis - 1
-                paths = cx.StraightPaths(cofm, np.eye(3)[np.full(len(miss), ax)], np.full(len(miss), L), L, ax)
+                paths = StraightPaths(cofm, np.eye(3)[np.full(len(miss), ax)], np.full(len(miss), L), L, ax)
                 group = st.tile_skewers(paths, per) if per < len(miss) else np.zeros(len(miss), np.int32)
                 n_groups = int(group.max()) + 1
                 est = pass_memory(int(np.bincount(group).max()), cfg["snapshot"]["n_gas"], n_lines, n_pix, o["precision"])

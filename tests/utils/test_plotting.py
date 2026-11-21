@@ -1704,3 +1704,63 @@ def test_axis_mode_strips():
         fig, ax, _ = pl.plot_overflux_kpar_kperp(res, unit="cMpc", **kw)
         assert len([c for c in ax.collections if isinstance(c, QuadMesh)]) == 1, kw
         plt.close(fig)
+
+
+def _wedge_decomposition():
+    """A decomposition of two lines (Si III-like offset copy) on a small lattice, with the wedges of P and xi."""
+    from skewerjax.summary_stats import decompose, ensemble_decomposition, lattice_grid
+
+    nx, nl, L, dv = 6, 24, 60.0, 10.0
+    grid = lattice_grid(
+        nx,
+        nx,
+        nl,
+        L,
+        L / nx,
+        k_edges=np.linspace(2 * np.pi / L, np.pi * nx / L, 5),
+        pk_mu_edges=np.sin(np.linspace(0, np.pi / 2, 7)),
+        xi_mu_edges=(0.0, 0.5, 0.8, 0.95, 1.0),
+    )
+    recs = []
+    for s in (0, 1):
+        g = np.random.default_rng(s).normal(size=(nx, nx, nl))
+        tau = np.stack([(0.6 / (j + 1)) * np.exp(0.4 * np.roll(g, 3 * j, axis=-1)).reshape(nx * nx, nl) for j in range(2)])
+        recs.append(decompose(tau, dv, grid=grid, group="both", reductions=("P_mu", "xi_mu")))
+    return ensemble_decomposition(recs), grid, nl * dv / L
+
+
+def test_the_wedges_by_order_and_term():
+    """``plot_pk_mu_orders`` / ``plot_xi_mu_orders``: one panel per wedge (wrapped in ``ncols``), the orders in the colours
+    of the 1D figures (``ORDER_COLORS``), the total and the sum, a residual panel under each wedge at rounding level, the
+    per-wedge sum rule returned; ``plot_pk_mu_terms`` / ``plot_xi_mu_terms``: one block per order, the terms in the
+    colours of ``plot_terms_by_order`` (order 2 of two lines: 𝒞–12, 1–1, 1–2, 2–2); the fonts above the floor; the edges
+    checked; a record without the pairs refused for the terms."""
+    dec, grid, u = _wedge_decomposition()
+    ax3, lim = grid.axes(), grid.limits()
+    common = dict(axes=ax3, limits=lim, delta_v=np.array([0.0, 30.0]), line_ids=("HI-LyA", "SiIII-1206"), kms_per_cMpc=u)
+    fig, axs, info = pl.plot_pk_mu_orders(dec, k_edges=ax3["k_mu_edges"], ncols=3, **common)
+    assert axs.shape == (6,) and info["residual"].shape == (6,) and info["sum_rule"].shape == (6,)
+    assert np.all(info["sum_rule"] < 5e-6) and pl.check_fonts(fig) == []
+    assert axs[0].get_subplotspec().get_gridspec().ncols == 3
+    colours = {mpl_c for ln in axs[0].get_lines() for mpl_c in [matplotlib.colors.to_hex(ln.get_color())]}
+    assert {matplotlib.colors.to_hex(pl.ORDER_COLORS[n]) for n in info["orders"]} <= colours
+    res = np.concatenate([ln.get_ydata() for ln in info["residual"][0].get_lines() if len(ln.get_ydata()) > 2])
+    assert np.nanmax(np.abs(res)) < 5e-6  # (sum - total) / max: rounding only
+    fig, axs, info = pl.plot_xi_mu_orders(dec, wedges=[1, 3], **common)
+    assert axs.shape == (2,) and info["wedges"].tolist() == [1, 3] and pl.check_fonts(fig) == []
+    fig, axs, info = pl.plot_pk_mu_terms(dec, orders=(2,), ncols=3, **common)
+    assert axs.shape == (1, 6) and info["terms"][2] == ["$\\mathcal{C}$–12", "1–1", "1–2", "2–2"]
+    leg = axs[0, 2].get_legend()  # the legend of the order, right of its first row: the total, then the terms
+    assert [t.get_text() for t in leg.get_texts()] == ["$\\mathcal{O}(2)$ total", "$\\mathcal{C}$–12", "1–1", "1–2", "2–2"]
+    assert [matplotlib.colors.to_hex(h.get_color()) for h in leg.legend_handles[1:]] == [
+        matplotlib.colors.to_hex(c) for c in pl.PALETTE_CYCLE[:4]
+    ]
+    assert pl.check_fonts(fig) == []
+    fig, axs, info = pl.plot_xi_mu_terms(dec, **common)
+    assert axs.shape == (len(info["orders"]), 4) and 2 in info["orders"] and pl.check_fonts(fig) == []
+    with pytest.raises(ValueError, match="measured with other"):
+        pl.plot_pk_mu_orders(dec, axes=ax3, k_edges=ax3["k_mu_edges"][:-1])
+    with pytest.raises(ValueError, match="needs the pairs"):
+        pl.plot_xi_mu_terms({k: v for k, v in dec.items() if "_pair" not in k}, axes=ax3)
+    with pytest.raises(ValueError, match="wedges must be"):
+        pl.plot_xi_mu_orders(dec, axes=ax3, wedges=[7])

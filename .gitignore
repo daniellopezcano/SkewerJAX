@@ -36,6 +36,9 @@ jax_cache/
 *.xla_dump/
 xla_dump/
 figures_output/
+# production outputs (scripts/production/run_production.py; default ~/skewerjax_production, outside the repository: the
+# launcher refuses any folder of the repository that git does not ignore)
+skewerjax_production/
 
 # --- benchmarks: the raw per-run records are local; the summary in benchmarks/results/ is committed
 benchmarks/raw/

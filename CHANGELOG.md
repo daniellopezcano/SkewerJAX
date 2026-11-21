@@ -3,6 +3,98 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — production runs out of the package: scripts/production, sweeps and four resolution checks (stem 20261121_1222)
+
+Nothing the engine computes changes: the store and extraction modules move unchanged (the existing dataset `cd782fdb19`
+keeps its hash; its skewers read back bit for bit).
+
+### Moved
+- `skewerjax/simulations/skewer_store.py` → `scripts/production/skewer_store.py`; `skewerjax/simulations/skewer_extraction.py`
+  → `scripts/production/skewer_extraction.py` (sibling imports; the package's public API only); `docs/skewer_store.md` →
+  `scripts/production/STORE.md`; `tests/simulations/test_skewer_store.py` → `tests/production/test_skewer_store.py`.
+- `skewerjax.simulations` no longer exports `SkewerDataset`, `StoredSkewers`, `load_skewers`, `list_datasets`,
+  `select_datasets`, `format_datasets`: notebooks 17 and 18 import them from `scripts/production` through
+  `utils.paths.PRODUCTION_SCRIPTS_DIR`.
+
+### Added
+- `scripts/production/run_production.py` (launcher: `--run`, `--sweep`, `--dry-run`, `--status`, `--force`, `--only`,
+  `--set`, `--reserve-gb`, `--no-share`), `production_runs.py` (`RunConfig`, run folders with `run.json`, states, sharing by
+  hard links, the child process), `production_sweeps.py` (`points`, `pixels`, `skewers`, `simulations`, `smoke`, `all`),
+  `production_estimates.py` (disk, time and memory from `benchmarks/results`), `README.md`.
+- `skewer_extraction`: `pieces="segments"` (the dual segments of sampling points with the midpoint profile, the route of
+  benchmark block C2: `compute_skewers_sampled`), `points_kms` (also the a(s) table of the exact frame,
+  `frame_spacing_cMpc`), `compute_for`; both keys enter the options only where they act. `skewer_store.load_run`,
+  `list_runs`. `extract_skewers.py --points-kms`.
+- `skewerjax.core` exports `VORONOI_FACTOR` and `WING_TOLERANCE`; `utils.paths.PRODUCTION_DIR` (`$SKEWERJAX_PRODUCTION`,
+  default `~/skewerjax_production`) and `PRODUCTION_SCRIPTS_DIR`.
+- Tests: `tests/production/` (`conftest.py`; `test_production_runs.py`: 5 fast + 1 `slow`/`tng`).
+
+### Changed
+- `tests/summary_stats/test_convergence.py` builds its nested rows with `core.lattice_columns` (no store import).
+- Docs: `docs/usage.md`, README (the production section, the layout, the generated tree), `tests/README.md`.
+
+## Unreleased — the μ wedges by order and term; notebook 10's Parts B and C swapped (stem 20261121)
+
+Every existing statistic and figure is unchanged: the additions are new functions; the notebooks only reorder and relabel
+sections and add Part F.
+
+### Added
+- `summary_stats.wedge_sum_rule(record, "P_mu" | "xi_mu", group=None)` (`decomposition`, with `WEDGE_REDUCTIONS`): the sum
+  rule of a decomposition wedge by wedge, max |Σ terms − total| / max(|total|, |terms|) in each wedge (the largest over the
+  realisations of an `ensemble_decomposition`).
+- `utils.plotting`: `plot_pk_mu_orders`, `plot_xi_mu_orders` (P(k, μ) and ξ(r, μ) of the total by order: one panel per
+  wedge, wrapped in `ncols` columns, the orders in the colours of the 1D figures, the total and the sum, a residual panel
+  under each wedge, the per-wedge sum rule returned) and `plot_pk_mu_terms`, `plot_xi_mu_terms` (one block per order, one
+  panel per wedge, the terms in the colours of `plot_terms_by_order`, a vanishing term keeping its colour); symmetric-log
+  y axes with ticks at 0 and the decades; the μ = 1 marks of the pairs as `plot_pk_mu_wedges` / `plot_xi_mu_wedges`.
+- Notebooks 10, 11: Part F, the wedges of D3 by order (F1) and term by term (F2), with the per-wedge checks printed.
+- Tests: `test_decomposition::test_the_wedge_sum_rule` (L = 2, 3; by order and by pair; the ensemble),
+  `test_plotting::test_the_wedges_by_order_and_term`.
+
+### Changed
+- Notebook 10: Parts B and C swapped: B is now the transmission and overflux (one skewer, B1), C the statistics of the
+  density on the skewers (C1, C2); every reference renumbered (the overview, Parts D and E, a print label "Part C bins").
+  Notebook 11: its Part C (transmission and overflux) relabelled B, as in 10 (no reordering: 11 has no density part).
+- References to these sections in docstrings (`density`, `plotting`), tests and `docs/usage.md` renumbered; README:
+  the notebook rows and the generated module tree.
+
+## Unreleased — the general decomposition of the total overflux statistics, 3D and 1D (stem 20261120_1838)
+
+Every existing statistic is unchanged (P1D, ξ1D, P3D, ξ3D, maps, wedges, `decompose_1d`): the only change to an existing
+function is an optional key filter of `GridStatistics3D._bin`, whose default path runs the same operations.
+
+### Added
+- `summary_stats.decomposition` (`docs/decomposition.md`): the exact decomposition of the two-point statistics of the total
+  overflux of any number of lines L into pairs of subset fields, F_∅ = −𝒞/(1 + 𝒞), F_A = δ_A/(1 + 𝒞), δ_tot = Σ_A F_A, by
+  bilinearity of every estimator: `decompose(tau, dv, T_bar, *, grid, mean, labels, group, reductions, dtype)` (from τ, through
+  `DeltaFieldBuilder`), `decompose_fields(delta_lines, C, grid, dv, *, labels, total, group, reductions)`,
+  `ensemble_decomposition(records)`, `notes_orders(record, R)`, `decomposition_memory(grid, n_lines, group)`, `subset_terms`,
+  `C_rows`, `O2_ROWS`.
+  - Reductions: every `GRID_KEYS` on the bins of `measure_lattice` (the `GridStatistics3D` of `lattice_grid`, k = 0 dropped),
+    and P1D = L⊥⁻² Σ_{k⊥} P3D, ξ1D = ξ3D(r⊥ = 0) (the commuting diagram of the notes, Eq. Pk3D_diagram; k = 0 kept, as
+    `stats_1d`), in km/s and s/km.
+  - Groupings: by order |A| + |B| (`_order`), by unordered pair with the symmetric sums 2 Re P_AB and ξ_AB + ξ_BA (`_pair`),
+    order 2 split into autos, crosses and its 𝒞 term (`_o2`, Eq. Xi2_autos_crosses), the 𝒞 terms CC, CS1 … CSL
+    (`_C`, Eq. xi1D_general_L_step1); the antisymmetric parts along the line of sight (`P1D_imag`, `xi1D_anti`).
+  - Checks: `sum_rule` per reduction against the total by the existing estimators; `diagram_xi1D`; `MemoryError` beyond the
+    available memory.
+  - Cost: 2^L forward rfftn; each term reduced as it is formed (an order through G_m = Σ_{|A|=m} F_A: 3L + 4 terms with
+    `group="order"`), one irfftn per term only if ξ in 3D is asked; no 2^L × 2^L array of 3D spectra.
+- `GridStatistics3D._bin(P_modes, xi_lags, keys=None)`: bin only the keys asked (either input may be None then).
+- Tests: `tests/summary_stats/test_decomposition.py` (21: the sum rule for every reduction, L = 1–4, `mean` "global" and
+  "redshift", by order and by pair; the commuting diagram term by term; the recovery of `decompose_1d`'s orders and
+  totals ("redshift", "global", "skewer"); the symmetries and the phase e^{ik∥Δ₀} of an offset line in 1D and in the
+  (k∥, k⊥) map; L = 1; the 𝒞 terms; the memory guard; the ensemble).
+
+### Changed
+- Notebooks 10 and 11: the decomposition (D5, D6) is now **Part E** (E1 by order, E2 term by term), with a short
+  introduction; the overview and every reference updated (notebook 18's three references to 11's D5 now E1). The calls,
+  figures and printed numbers are those of before.
+
+### Fixed
+- Notebook 10, E1 (was D5): the comparison of ξ1D with D1's `skewer_xi1d` sliced 152 against 151 lags for the odd
+  N_PIX = 303 and raised; the slice `[: N_PIX - N_PIX // 2]` holds for both parities (the same line in 11).
+
 ## Unreleased — the k⊥ = 0 and k∥ = 0 modes on the k maps (stem 20261120_1622)
 
 Every existing array is unchanged; two keys are added.

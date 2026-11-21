@@ -11,7 +11,7 @@ import matplotlib.collections
 import matplotlib.pyplot as plt
 import numpy as np
 
-from skewerjax.simulations import skewer_store as ss
+from skewerjax.core import lattice_columns
 from skewerjax.summary_stats import (
     GRID_KEYS,
     ensemble_mean,
@@ -60,7 +60,8 @@ def _edges():
 
 
 def _subset(tau, n):
-    rows = ss._keys(ss.lattice_indices(n, N_MAX), N_MAX)  # (i_a, i_b) on the 8 lattice -> row i_a 8 + i_b
+    idx = lattice_columns(n, (1, 1)) * (N_MAX // n)  # the n x n lattice nested in the 8 x 8 one, (i_a, i_b) a-major
+    rows = idx[:, 0] * N_MAX + idx[:, 1]  # -> the row i_a 8 + i_b of the 8 x 8 lattice
     return tau[:, :, rows]
 
 
@@ -70,7 +71,7 @@ def test_flux_statistics_is_notebook_11s_chain():
     grid = _grid(N_MAX, edges)
     a_pix = np.full(N_PIX, 0.25)
     s = flux_statistics(tau, DV, grid, line_ids=LINE_IDS, a_pix=a_pix, keep_delta=True)
-    T = np.exp(-tau)  # notebook 11, Part C and D1, call by call
+    T = np.exp(-tau)  # notebook 11, Part B and D1, call by call
     T_bar = ensemble_mean_transmissions(T, mean="redshift", grid=a_pix)
     delta = np.concatenate([T, T.prod(axis=1, keepdims=True)], axis=1) / T_bar - 1
     assert np.array_equal(s["delta"], delta) and s["fields"] == (*LINE_IDS, "total")

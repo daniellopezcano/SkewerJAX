@@ -263,18 +263,26 @@ class GridStatistics3D:
         self.n_lags = {"xi_iso": c_iso, "xi_map": c_map, "xi_mu": c_mu}
 
     # ------------------------------------------------------------------ binning
-    def _bin(self, P_modes, xi_lags) -> dict:
-        P_modes, xi_lags = jnp.ravel(P_modes), jnp.ravel(xi_lags)
+    def _bin(self, P_modes, xi_lags, keys=None) -> dict:
+        """Bin P on the rfft modes and xi on the lag grid into every ``GRID_KEYS`` (and "xi_ell" with ``multipoles``), or
+        only into ``keys`` (``P_modes`` or ``xi_lags`` may then be None if no key of theirs is asked;
+        ``summary_stats.decomposition`` bins its terms this way)."""
+        want = (lambda key: True) if keys is None else (lambda key: key in keys)
+        P_modes = None if P_modes is None else jnp.ravel(P_modes)
+        xi_lags = None if xi_lags is None else jnp.ravel(xi_lags)
         out = {}
         for b in ("iso", "map", "mu"):
-            P_b, _ = binned_mean(P_modes, self._idx_k[b], self._w_modes, int(np.prod(self._shape_k[b])))
-            xi_b, _ = binned_mean(xi_lags, self._idx_r[b], self._ones, int(np.prod(self._shape_r[b])))
-            out["P_" + b] = np.asarray(P_b).reshape(self._shape_k[b])
-            out["xi_" + b] = np.asarray(xi_b).reshape(self._shape_r[b])
+            if want("P_" + b):
+                P_b, _ = binned_mean(P_modes, self._idx_k[b], self._w_modes, int(np.prod(self._shape_k[b])))
+                out["P_" + b] = np.asarray(P_b).reshape(self._shape_k[b])
+            if want("xi_" + b):
+                xi_b, _ = binned_mean(xi_lags, self._idx_r[b], self._ones, int(np.prod(self._shape_r[b])))
+                out["xi_" + b] = np.asarray(xi_b).reshape(self._shape_r[b])
         for b in ("kperp0", "kpar0"):  # the axis planes of P (no xi counterpart)
-            P_b, _ = binned_mean(P_modes, self._idx_k[b], self._w_modes, self._shape_k[b][0])
-            out["P_" + b] = np.asarray(P_b)
-        if self.multipoles:
+            if want("P_" + b):
+                P_b, _ = binned_mean(P_modes, self._idx_k[b], self._w_modes, self._shape_k[b][0])
+                out["P_" + b] = np.asarray(P_b)
+        if self.multipoles and want("xi_ell"):
             n = self._ell_inv.shape[0]
             v = np.stack([np.asarray(binned_mean(L * xi_lags, self._idx_ell, self._ones, n)[0]) for L in self._leg])
             out["xi_ell"] = np.einsum("bij,jb->ib", self._ell_inv, np.nan_to_num(v))

@@ -1,11 +1,13 @@
 # The skewer store
 
 A store of skewers on disk for convergence tests and long production runs: the optical depth τ of every line along
-nested N × N lattices of skewers through a snapshot, computed by `scripts/production/extract_skewers.py` (from a
-terminal, resumable) and read by `skewerjax.simulations.load_skewers` (notebook 17; the statistics and their convergence: notebook 18). Doubling the number of skewers per
+nested N × N lattices of skewers through a snapshot, computed by `scripts/production/extract_skewers.py` (one store,
+from a terminal, resumable) or by `run_production.py` (runs and sweeps, one store per run folder: `README.md`), and read
+by `load_skewers` (notebook 17; the statistics and their convergence: notebook 18). Doubling the number of skewers per
 axis reuses every skewer already computed; another simulation, snapshot, axis, pixel width or option is another dataset
-of the same tree. The code: `skewerjax/simulations/skewer_store.py` (layout, identity, reading) and
-`skewerjax/simulations/skewer_extraction.py` (options, computation, runs).
+of the same tree. The code, in this directory (production code, outside the package): `skewer_store.py` (layout,
+identity, reading; NumPy and h5py only, so a store is readable without SkewerJAX) and `skewer_extraction.py` (options,
+computation, runs).
 
 ## 1. Layout
 
@@ -167,7 +169,10 @@ skewers, those stored and those to compute, the disk needed and free, and the pa
 ## 5. Reading
 
 ```python
-from skewerjax.simulations import format_datasets, list_datasets, load_skewers, select_datasets
+import sys
+from skewerjax.utils.paths import PRODUCTION_SCRIPTS_DIR   # scripts/production: the reader is not part of the package
+sys.path.insert(0, str(PRODUCTION_SCRIPTS_DIR))           # (or the path of this directory, without SkewerJAX)
+from skewer_store import format_datasets, list_datasets, load_run, load_skewers, select_datasets
 
 rows = list_datasets("~/skewer_store")          # one row per dataset: sim, snap, axis, hash, preset, n_pix, n_stored, n_max
 print(format_datasets(rows))
@@ -176,6 +181,7 @@ st = load_skewers("~/skewer_store", "TNG50-2", 25, 2, sel["hash"], 128)
 st.tau            # (n_lines, 128^2, N_pix) float32, the skewers a-major (st.columns: (i_a, i_b) on the 128 lattice)
 st.v, st.dv, st.period, st.u, st.L, st.line_ids, st.positions, st.config
 F = np.exp(-st.tau)
+st = load_run("~/skewerjax_production/pixels/dv_2kms")   # a run folder of run_production.py (its run.json names the dataset)
 ```
 
 `load_skewers(root, sim, snap, axis, config_or_hash, n_per_axis)` takes the hash, a unique prefix of it, or a config;
@@ -186,7 +192,7 @@ lattice_grid(...), line_ids=...)`, and their convergence `summary_stats.lattice_
 
 ## 6. Checks
 
-- `tests/simulations/test_skewer_store.py` (float32 and float64; temporary directories only): the lattices nest; N = 2
+- `tests/production/test_skewer_store.py` (float32 and float64; temporary directories only): the lattices nest; N = 2
   then 4 computes the 12 new skewers only, and the N = 2 lattice loaded afterwards is bit for bit the earlier one; an
   interrupted run and a batch interrupted before its rename leave no corrupt file and are redone; a corrupt batch is
   ignored and recomputed; one writer at a time; another option, pixel width or N_ref is another dataset, another axis

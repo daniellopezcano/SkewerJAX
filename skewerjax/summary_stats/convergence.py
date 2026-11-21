@@ -1,5 +1,5 @@
 """The statistics of the overflux on nested lattices of skewers and their convergence with the number of skewers
-(notebook 18; the lattices of ``simulations.skewer_store``).
+(notebook 18; the nested lattices of the skewer store of ``scripts/production``).
 
 ``flux_statistics`` is notebook 11's chain for one lattice, from the optical depth of an ensemble (the lines of sight
 x, y, z): T = e^-tau, its mean T_bar (``ensemble_mean_transmissions``), the overflux delta = T / T_bar - 1 of every line
