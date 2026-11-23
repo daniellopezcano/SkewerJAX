@@ -9987,161 +9987,480 @@ def _run_limit(values, linthresh: float) -> float:
     return float(10.0 ** np.ceil(np.log10(1.2 * top)))
 
 
-def _run_legend(fig, styles, ref, labels=None, extra=()):
-    hs = [
-        mpl.lines.Line2D([], [], color=st["color"], marker=st["marker"], lw=st["lw"], ms=7, label=(labels or {}).get(n, n))
-        for n, st in styles.items()
-        if n is not None
-    ]
-    hs.append(mpl.patches.Patch(color=PALETTE["grey"], alpha=0.25, label=rf"$\pm{RUN_TOLERANCES[1]:g}\%$"))
-    hs.append(mpl.lines.Line2D([], [], color=DIM, ls=":", lw=1.2, label=", ".join(rf"$\pm{t:g}\%$" for t in RUN_TOLERANCES if t != RUN_TOLERANCES[1])))
-    fig.legend(handles=[*hs, *extra], loc="outside lower center", ncol=min(len(hs) + len(extra), 6), fontsize=FONT_MIN["legend"])
+TERM_ORDERS = ("total", "order 2", "order 3", "order 4")  # the quantities of plot_runs_*_orders: orders 0 and 1 vanish
+# at k != 0 when C is the same at every pixel (one snapshot): F_{} is a constant, its power is at k = 0 alone
 
 
-def plot_runs_p1d(
+def term_label(q: str, line_ids=None) -> str:
+    """The legend label of a quantity of the decomposition (``summary_stats.run_statistics(terms_grid=)``): "total",
+    "order n" (O(n)), and the pairs of order 2, "A|B": "Lyα auto", "Lyα × Si III cross", "𝒞 × (Lyα Si III)"."""
+    from skewerjax.summary_stats.orders import ZERO_ORDER_KEY
+
+    if q == "total":
+        return "total"
+    if q.startswith("order "):
+        return rf"order {q.split()[1]}, $\mathcal{{O}}({q.split()[1]})$"
+    a, b = q.split("|")
+    ids = list(line_ids) if line_ids is not None else sorted({x for x in (a + "+" + b).split("+") if x != ZERO_ORDER_KEY})
+    nm = field_names(ids, ids)
+
+    def name(x):
+        return r"$\mathcal{C}$" if x == ZERO_ORDER_KEY else " ".join(nm.get(p, p) for p in x.split("+"))
+
+    if a == b:
+        return f"{name(a)} auto"
+    return f"{name(a)} × {name(b)} cross" if ZERO_ORDER_KEY not in (a, b) else f"{name(a)} × ({name(b)})"
+
+
+def order2_terms(comparisons: dict) -> list:
+    """The order-2 pairs of single lines of the comparisons (the autos, then the crosses): the terms of the figures."""
+    from skewerjax.summary_stats.orders import ZERO_ORDER_KEY
+
+    first = next(iter(comparisons.values()))["terms"]["names"]
+    pairs = [q for q in first if "|" in q and ZERO_ORDER_KEY not in q and "+" not in q]
+    return [q for q in pairs if q.split("|")[0] == q.split("|")[1]] + [q for q in pairs if q.split("|")[0] != q.split("|")[1]]
+
+
+def _runs_residual_axis(ax, lim: float, linthresh: float) -> None:
+    """The residual row of a sweep [%]: symmetric-log (linear within ``linthresh``), limits +-``lim``, a zero line; labels
+    at 0, +-``lim`` and one decade between (+-``linthresh`` when it is one decade below ``lim``), so that no two
+    labels of the thin row overlap; unlabelled ticks at the other decades."""
+    ax.set_yscale("symlog", linthresh=linthresh, linscale=0.8)
+    ax.set_ylim(-lim, lim)
+    dec = [linthresh * 10.0**i for i in range(int(round(np.log10(lim / linthresh))) + 1)]
+    lab = [dec[-1]] + ([dec[(len(dec) - 1) // 2]] if len(dec) >= 4 else [dec[0]] if len(dec) == 2 else [])
+    major = sorted([0.0] + [s * d for d in lab for s in (-1, 1)])
+    ax.set_yticks(major)
+    ax.set_yticks(sorted(s * d for d in dec if d not in lab for s in (-1, 1)), minor=True)
+    ax.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda y, _: f"{y:+g}" if y else "0"))
+    ax.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
+    ax.axhline(0.0, color=FG, lw=1.0, zorder=2)
+
+
+def _runs_limit(values, linthresh: float) -> float:
+    """The residual limit: the decade above the largest |residual| (at least 10 ``linthresh``), on the ``linthresh`` decades."""
+    v = np.concatenate([np.ravel(np.abs(np.asarray(x, dtype=float))) for x in values] + [np.zeros(1)])
+    v = v[np.isfinite(v)]
+    top = max(v.max() if v.size else 0.0, 10 * linthresh)
+    return float(linthresh * 10.0 ** np.ceil(np.log10(1.05 * top / linthresh)))
+
+
+def _runs_quantity(main, res, entries, styles, ref, *, x_key="k", weight=None, per_run_ref=False, ms=4.5, w=None):
+    """One panel of a sweep and its residual row: the reference (thick and light underneath, its jackknife error a faint
+    band), every run (its style), and below, 100 diff [%] of every run (filled markers: relative to |ref|; open: to the
+    local envelope, ``normalised_difference``) on the reference's error (grey band). entries: [(run, the comparison of
+    this quantity)], each on its own bins (P1D: the modes a run shares with the reference, up to its Nyquist frequency);
+    the reference and its band are drawn from the run that covers the most bins. weight: y = weight(x) * value (k / pi
+    for P1D); w: the wedge (None for P1D); per_run_ref: every run has its own reference, drawn dashed in its colour.
+    Returns (the residuals, the main values, sign_changing)."""
+
+    def sl(a):
+        a = np.asarray(a, dtype=float)
+        return a if w is None else a[w]
+
+    def wt(x, y):
+        return y if weight is None else weight(x) * y
+
+    full = max(entries, key=lambda e: int(np.sum(np.isfinite(sl(e[1]["diff"])))))[1]
+    x = sl(full[x_key])
+    resid, mains = [], []
+    if not per_run_ref:
+        st = styles[ref]
+        R, E = wt(x, sl(full["ref"])), np.abs(wt(x, sl(full["ref_err"])))
+        ok = np.isfinite(R) & np.isfinite(x)
+        lo = (R - E) if full["sign_changing"] else np.where(R - E > 0, R - E, R / 3)  # a log axis: no band through 0
+        main.fill_between(x[ok], lo[ok], (R + E)[ok], color=st["color"], alpha=0.15, lw=0, zorder=1)
+        main.plot(
+            x[ok], R[ok], color=st["color"], lw=MODE_STYLES["reference"]["lw"], alpha=0.45, zorder=2, solid_capstyle="round"
+        )
+        mains.append(R[ok])
+    band = 100 * sl(full["band"])
+    okb = np.isfinite(band) & np.isfinite(x)
+    res.fill_between(x[okb], -band[okb], band[okb], color=PALETTE["grey"], alpha=0.35, lw=0, zorder=1)
+    for name, c in entries:
+        s_ = styles[name]
+        xe = sl(c[x_key])
+        y = wt(xe, sl(c["run"]))
+        m = np.isfinite(y) & np.isfinite(xe)
+        main.plot(xe[m], y[m], color=s_["color"], marker=s_["marker"], ms=ms, lw=min(s_["lw"], 2.2), zorder=4)
+        mains.append(y[m])
+        if per_run_ref:
+            Rr = wt(xe, sl(c["ref"]))
+            main.plot(xe[m], Rr[m], color=s_["color"], ls="--", lw=1.8, zorder=3)
+        d = 100 * sl(c["diff"])
+        env = np.asarray(c["envelope"]) if w is None else np.asarray(c["envelope"])[w]
+        md = np.isfinite(d) & np.isfinite(xe)
+        res.plot(xe[md], d[md], color=s_["color"], lw=min(s_["lw"], 2.0), zorder=4)
+        for sel, fc in ((md & ~env, s_["color"]), (md & env, "none")):
+            res.plot(xe[sel], d[sel], ls="none", marker=s_["marker"], ms=ms, color=s_["color"], mfc=fc, zorder=5)
+        resid.append(d[md])
+    return resid, mains, bool(full["sign_changing"])
+
+
+def _runs_main_scale(ax, values, sign_changing: bool):
+    """The y axis of a main panel: log for a positive quantity; for one that changes sign, symmetric-log, linear below
+    the 10th percentile of its |values| (at least 1e-6 of the largest: the decay of an oscillating term stays visible)."""
+    v = np.concatenate([np.ravel(np.asarray(x, dtype=float)) for x in values] + [np.zeros(0)])
+    v = v[np.isfinite(v)]
+    if sign_changing:
+        a = np.abs(v[v != 0])
+        top = float(a.max()) if a.size else 1.0
+        lt = max(float(np.percentile(a, 10)), 1e-6 * top) if a.size else 1.0
+        lt = 10.0 ** np.floor(np.log10(lt))
+        ax.set_yscale("symlog", linthresh=lt, linscale=0.5)
+        ax.set_ylim(-1.5 * top, 1.5 * top)
+        exps = np.arange(np.log10(lt) + 1, np.floor(np.log10(top)) + 1)
+        step = max(1, -(-exps.size // 3))  # at most three decades labelled on each side
+        lab = exps[::-1][::step]
+        ax.set_yticks(sorted([0.0] + [sg * 10.0**e for e in lab for sg in (1, -1)]))
+        ax.set_yticks(sorted(sg * 10.0**e for e in exps if e not in lab for sg in (1, -1)), minor=True)
+        ax.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(ten_power_formatter))
+        ax.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
+    elif v.size and np.all(v > 0):
+        ax.set_yscale("log")
+
+
+def _runs_legend(fig, styles, names, ref, labels, *, per_run_ref=False, envelope=False, ref_note=None, extra_ref=None):
+    """The legend of a sweep figure, below its panels: every run (the reference thick and light), the reference's error,
+    and what the open markers mean."""
+    hs = []
+    for n in names:
+        st = styles[n]
+        if n == ref and not per_run_ref:
+            hs.append(
+                mpl.lines.Line2D(
+                    [],
+                    [],
+                    color=st["color"],
+                    lw=MODE_STYLES["reference"]["lw"],
+                    alpha=0.45,
+                    label=f"{(labels or {}).get(n, n)} (reference)",
+                )
+            )
+        elif n != ref:
+            hs.append(
+                mpl.lines.Line2D(
+                    [], [], color=st["color"], marker=st["marker"], lw=min(st["lw"], 2.2), ms=7, label=(labels or {}).get(n, n)
+                )
+            )
+    if per_run_ref or extra_ref:
+        hs.append(mpl.lines.Line2D([], [], color=DIM, ls="--", lw=1.8, label=extra_ref or ref_note or "its own reference"))
+    hs.append(mpl.patches.Patch(color=PALETTE["grey"], alpha=0.35, label="reference's jackknife error"))
+    if envelope:
+        hs.append(
+            mpl.lines.Line2D(
+                [], [], color=DIM, marker="o", mfc="none", ls="none", ms=7, label=r"open: $\Delta$ / local envelope of $|$ref$|$"
+            )
+        )
+    return _legend(fig, handles=hs, loc="outside lower center", ncol=min(len(hs), 4), fontsize=FONT_MIN["legend"] + 1)
+
+
+def _runs_p1d_figure(
+    comparisons,
+    styles,
+    ref,
+    quantities,
+    *,
+    total_comparisons,
+    line_ids,
+    labels,
+    k_limits,
+    k_mark,
+    linthresh,
+    ncols,
+    titles,
+    ref_note,
+    title,
+    figsize,
+):
+    qs = list(quantities)
+    nc = max(1, min(int(ncols), len(qs)))
+    nr = -(-len(qs) // nc)
+    fig = plt.figure(figsize=figsize or (22, 1.6 + 6.6 * nr), layout="constrained")
+    gs = fig.add_gridspec(2 * nr, nc, height_ratios=[3.0, 1.25] * nr)
+    main, res = np.empty(len(qs), dtype=object), np.empty(len(qs), dtype=object)
+    allres, any_env = [], False
+    for i, q in enumerate(qs):
+        r, c = divmod(i, nc)
+        main[i] = fig.add_subplot(gs[2 * r, c])
+        res[i] = fig.add_subplot(gs[2 * r + 1, c], sharex=main[i])
+        src = total_comparisons if (q == "total" and total_comparisons is not None) else comparisons
+        entries = [(n, cm["terms"]["p1d"][q]) for n, cm in src.items() if q in cm["terms"]["p1d"]]
+        d, vals, sign = _runs_quantity(
+            main[i], res[i], entries, styles, ref, weight=lambda k: k / np.pi, per_run_ref=src is total_comparisons
+        )
+        allres.append(np.concatenate(d) if d else np.zeros(0))
+        any_env |= any(np.any(c["envelope"]) for _, c in entries)
+        main[i].set_xscale("log")
+        _runs_main_scale(main[i], vals, sign)
+        main[i].tick_params(labelbottom=False)
+        t = (titles or {}).get(q, term_label(q, line_ids))
+        main[i].set_title(t, fontsize=FONT_MIN["title"])
+        if k_limits is not None:
+            for a in (main[i], res[i]):
+                _shade_outside(a, *k_limits, log=True)
+        if k_mark is not None:
+            for a in (main[i], res[i]):
+                a.axvline(k_mark, color=PALETTE["grey"], ls="--", lw=1.5, zorder=0)
+        res[i].set_xlabel(LABELS["k"] if r == nr - 1 or i + nc >= len(qs) else "")
+        if c == 0:
+            main[i].set_ylabel(LABELS["kP"] + (", symlog" if sign else ""))
+            res[i].set_ylabel(r"$\Delta/|{\rm ref}|$ [%]")
+        res[i]._sign = sign
+    for i in range(len(qs)):  # each quantity its own limits: the orders differ by decades
+        _runs_residual_axis(res[i], _runs_limit(allres[i], linthresh), linthresh)
+        if res[i]._sign and res[i].get_subplotspec().colspan.start == 0:
+            res[i].set_ylabel(r"$\Delta/|{\rm ref}|$, $\Delta/{\rm env}$ [%]")
+    names = list(dict.fromkeys([ref, *comparisons]))
+    note = ref_note if (total_comparisons is not None and "total" in qs) else None
+    _runs_legend(fig, styles, names, ref, labels, envelope=any_env, extra_ref=note)
+    if title:
+        fig.suptitle(title, fontsize=FONT_MIN["title"] + 2)
+    return fig, main, res
+
+
+def plot_runs_p1d_orders(
     comparisons: dict,
     styles: dict,
     ref: str,
     *,
-    fields=None,
-    field_labels=None,
+    quantities=TERM_ORDERS,
+    total_comparisons=None,
+    total_ref_label: str = "each run's own reference (total)",
+    line_ids=None,
     labels=None,
     k_limits=None,
+    k_mark=None,
     linthresh: float = 0.01,
-    residual_limit=None,
-    ref_per_run: bool = False,
+    ncols: int = 2,
+    titles=None,
     title=None,
     figsize=None,
 ):
-    """P1D of every run of a sweep against its reference (notebooks 18-21): one column per field (default every field of
-    the comparisons). Above, k P1D / pi of the reference (thick, its jackknife error as a band) and of every run, in the
-    display bins of ``summary_stats.compare_runs(k_edges_1d=)``; below, 100 (P_run / P_ref - 1) [%] with its jackknife
-    error bars, on a symlog axis linear within ``linthresh`` [%], the band +-0.5 % and dotted lines at 0.1 and 1 %.
-    comparisons : {run: ``compare_runs`` against ``ref``}; styles : ``run_styles``; k_limits : (k_min, k_max) [s/km],
-    shaded outside; ref_per_run : every comparison has its own reference (e.g. a finer run averaged over each run's
-    pixels), drawn dashed in the run's colour instead of one thick reference. Returns (fig, axs (2, n_fields))."""
-    first = next(iter(comparisons.values()))
-    fields = list(fields or first["fields"])
-    names = field_labels or {f: f for f in fields}
-    fig = plt.figure(figsize=figsize or (22, 10), layout="constrained")
-    gs = fig.add_gridspec(2, len(fields), height_ratios=(1.6, 1.0), hspace=0.0)
-    axs = np.empty((2, len(fields)), dtype=object)
-    allres = []
-    for c, f in enumerate(fields):
-        main = fig.add_subplot(gs[0, c])
-        res = fig.add_subplot(gs[1, c], sharex=main)
-        axs[:, c] = main, res
-        j = list(first["fields"]).index(f)
-        k = np.asarray(first["p1d"]["k"])
-        R, E = first["p1d"]["ref"][j], first["p1d"]["ref_err"][j]
-        st = styles[ref]
-        if not ref_per_run:
-            main.fill_between(k, k * np.maximum(R - E, 0.3 * R) / np.pi, k * (R + E) / np.pi, color=st["color"], alpha=0.2, lw=0, zorder=1)
-            main.plot(k, k * R / np.pi, color=st["color"], lw=st["lw"] + 1, zorder=3)
-        for name, cmp_ in comparisons.items():
-            s_ = styles[name]
-            kk = np.asarray(cmp_["p1d"]["k"])
-            main.plot(kk, kk * cmp_["p1d"]["run"][j] / np.pi, color=s_["color"], marker=s_["marker"], ms=4, lw=s_["lw"], zorder=4)
-            if ref_per_run:
-                main.plot(kk, kk * cmp_["p1d"]["ref"][j] / np.pi, color=s_["color"], ls="--", lw=s_["lw"], zorder=3)
-            d, e = 100 * cmp_["p1d"]["rel"][j], 100 * cmp_["p1d"]["err"][j]
-            allres.append(d)
-            res.errorbar(kk, d, yerr=e, color=s_["color"], marker=s_["marker"], ms=4, lw=s_["lw"], capsize=0, zorder=4)
-        main.set_xscale("log")
-        main.set_yscale("log")
-        main.tick_params(labelbottom=False)
-        main.set_title(names.get(f, f), fontsize=FONT_MIN["title"])
-        if k_limits is not None:
-            for a in (main, res):
-                _shade_outside(a, *k_limits, log=True)
-        res.set_xlabel(LABELS["k"])
-        if c == 0:
-            main.set_ylabel(LABELS["kP"])
-            res.set_ylabel(r"$P_{\rm run}/P_{\rm ref} - 1$ [%]")
-    lim = _run_limit(allres, linthresh) if residual_limit is None else float(residual_limit)
-    for c in range(len(fields)):
-        _run_residual_axis(axs[1, c], lim, linthresh)
-    extra = [mpl.lines.Line2D([], [], color=DIM, ls="--", lw=1.8, label="its reference")] if ref_per_run else []
-    _run_legend(fig, {n: styles[n] for n in ([] if ref_per_run else [ref]) + list(comparisons)}, ref, labels, extra)
-    if title:
-        fig.suptitle(title, fontsize=FONT_MIN["title"])
-    return fig, axs
+    """P1D of every run of a sweep against its reference, order by order (notebooks 18-21, D1): one panel per quantity
+    of the decomposition (default the total and the orders 2, 3, 4: orders 0 and 1 vanish at k != 0 for a mean shared
+    by every pixel), ``ncols`` columns, each with its residual row below (shared k axis).
+
+    Above, k P1D / pi [-] of the reference (thick and light underneath, its jackknife error a faint band) and of every run
+    (``run_styles``), in the display bins of ``compare_runs(k_edges_1d=)``; log y, or symmetric-log for a quantity that
+    changes sign. Below, 100 Delta / |ref| [%] of every run (``normalised_difference``: relative; for a quantity that
+    changes sign, open markers where |ref| < 1% of its maximum, normalised there by the local envelope of |ref|), on the
+    reference's jackknife error (grey band), symmetric-log within ``linthresh`` [%]. A bin a run does not cover (beyond
+    its Nyquist frequency) is not drawn.
+
+    comparisons : {run: ``compare_runs`` against ``ref`` with the decomposition of both (``run_statistics(terms_grid=)``)};
+    styles : ``run_styles``; total_comparisons : optional {run: ``compare_runs`` against a reference of its own} for the
+    total panel (notebook 19: the finest run averaged over each coarse pixel), drawn dashed in the run's colour, named
+    ``total_ref_label`` in the legend; line_ids : the names of the terms; k_limits : (k_min, k_max) [s/km], shaded outside; k_mark : a k [s/km] marked
+    dashed (e.g. the largest k of DESI DR1); titles : {quantity: panel title}; title : the figure's (a takeaway).
+    Returns (fig, main axes (n_q,), residual axes (n_q,))."""
+    return _runs_p1d_figure(
+        comparisons,
+        styles,
+        ref,
+        quantities,
+        total_comparisons=total_comparisons,
+        line_ids=line_ids,
+        labels=labels,
+        k_limits=k_limits,
+        k_mark=k_mark,
+        linthresh=linthresh,
+        ncols=ncols,
+        titles=titles,
+        ref_note=total_ref_label,
+        title=title,
+        figsize=figsize,
+    )
 
 
-def plot_runs_wedges(
+def plot_runs_p1d_terms(
     comparisons: dict,
     styles: dict,
     ref: str,
     *,
-    field: str = "total",
+    terms=None,
+    line_ids=None,
     labels=None,
+    k_limits=None,
+    k_mark=None,
     linthresh: float = 0.01,
-    residual_limit=None,
-    ref_per_run: bool = False,
+    ncols: int = 3,
+    titles=None,
     title=None,
     figsize=None,
 ):
-    """P(k, mu) of ``field`` of every run of a sweep against its reference (notebooks 18-21), one column per wedge (the
-    wedge named in its colour, ``mu_colors``): above, P(k, mu) [cMpc^3] of the reference (its jackknife error as a band)
-    and of every run at the reference's bin centres; below, 100 (P_run / P_ref - 1) [%] with jackknife error bars, the
-    residual axis of ``plot_runs_p1d``. A run of fewer skewers stops at its Nyquist frequency. ``ref_per_run``: as in
-    ``plot_runs_p1d``. Returns (fig, axs (2, n_wedges))."""
-    first = next(iter(comparisons.values()))
-    c0 = first["P_mu"][field]
-    edges = first["pk_mu_edges"]
-    nw = c0["ref"].shape[0]
-    labs, colors = _wedge_labels(edges), mu_colors(nw)
-    fig = plt.figure(figsize=figsize or (22, 10), layout="constrained")
-    gs = fig.add_gridspec(2, nw, height_ratios=(1.6, 1.0), hspace=0.0)
-    axs = np.empty((2, nw), dtype=object)
-    allres = []
-    for w in range(nw):
-        main = fig.add_subplot(gs[0, w], sharey=axs[0, 0] if w else None)
-        res = fig.add_subplot(gs[1, w], sharex=main)
-        axs[:, w] = main, res
-        k = np.asarray(c0["k"][w], dtype=float)
-        R, E = np.asarray(c0["ref"][w], dtype=float), np.asarray(c0["ref_err"][w], dtype=float)
-        ok = np.isfinite(k) & np.isfinite(R) & (R > 0)
-        st = styles[ref]
-        if not ref_per_run:
-            main.fill_between(k[ok], np.maximum(R[ok] - E[ok], 0.3 * R[ok]), R[ok] + E[ok], color=st["color"], alpha=0.2, lw=0, zorder=1)
-            main.plot(k[ok], R[ok], color=st["color"], lw=st["lw"] + 1, zorder=3)
-        for name, cmp_ in comparisons.items():
-            s_ = styles[name]
-            P = cmp_["P_mu"][field]
-            y, d, e = np.asarray(P["run"][w], dtype=float), 100 * P["rel"][w], 100 * P["err"][w]
-            m = ok & np.isfinite(y) & (y > 0)
-            main.plot(k[m], y[m], color=s_["color"], marker=s_["marker"], ms=5, lw=s_["lw"], zorder=4)
-            if ref_per_run:
-                Rr = np.asarray(P["ref"][w], dtype=float)
-                main.plot(k[m], Rr[m], color=s_["color"], ls="--", lw=s_["lw"], zorder=3)
-            mr = np.isfinite(d) & np.isfinite(k)
-            allres.append(d[mr])
-            res.errorbar(k[mr], d[mr], yerr=e[mr], color=s_["color"], marker=s_["marker"], ms=5, lw=s_["lw"], capsize=0, zorder=4)
-        if ok.any():  # a wedge with no bin (a tiny lattice) stays linear: an empty log axis cannot be drawn
-            main.set_xscale("log")
-            main.set_yscale("log")
-        main.tick_params(labelbottom=False)
-        main.text(0.97, 0.94, labs[w], transform=main.transAxes, ha="right", va="top", fontsize=FONT_MIN["annotation"],
-                  color=colors[w], bbox=dict(facecolor=BG, edgecolor=colors[w], lw=1.5, pad=3), zorder=10)
-        res.set_xlabel(_UNITS["cMpc"]["k"])
-        if ok.any():
-            _plain_log_ticks(res.xaxis)
-        if w == 0:
-            main.set_ylabel(_PK_QUANTITY["P"][1])
-            res.set_ylabel(r"$P_{\rm run}/P_{\rm ref} - 1$ [%]")
-        else:
-            main.tick_params(labelleft=False)
-    lim = _run_limit(allres, linthresh) if residual_limit is None else float(residual_limit)
-    for w in range(nw):
-        _run_residual_axis(axs[1, w], lim, linthresh)
-        if w:
-            axs[1, w].tick_params(labelleft=False)
-    extra = [mpl.lines.Line2D([], [], color=DIM, ls="--", lw=1.8, label="its reference")] if ref_per_run else []
-    _run_legend(fig, {n: styles[n] for n in ([] if ref_per_run else [ref]) + list(comparisons)}, ref, labels, extra)
-    if title:
-        fig.suptitle(title, fontsize=FONT_MIN["title"])
-    return fig, axs
+    """P1D of every run of a sweep against its reference, term by term within order 2 (notebooks 18-21, D2): one panel
+    per term (default ``order2_terms``: the auto of every line, then the crosses, e.g. Lyα auto, Si III auto, Lyα × Si III
+    cross; the 𝒞 term, zero at k != 0, left out), each with its residual row; the panels and options of
+    ``plot_runs_p1d_orders``. Returns (fig, main axes (n_terms,), residual axes (n_terms,))."""
+    terms = list(terms) if terms is not None else order2_terms(comparisons)
+    return _runs_p1d_figure(
+        comparisons,
+        styles,
+        ref,
+        terms,
+        total_comparisons=None,
+        line_ids=line_ids,
+        labels=labels,
+        k_limits=k_limits,
+        k_mark=k_mark,
+        linthresh=linthresh,
+        ncols=ncols,
+        titles=titles,
+        ref_note=None,
+        title=title,
+        figsize=figsize,
+    )
+
+
+def _runs_wedge_figure(
+    comparisons,
+    styles,
+    ref,
+    q,
+    *,
+    per_run_ref,
+    line_ids,
+    labels,
+    wedges,
+    ncols,
+    linthresh,
+    k_scale,
+    title,
+    figsize,
+    ref_note=None,
+):
+    first = next(iter(comparisons.values()))["terms"]
+    edges = np.asarray(first["pk_mu_edges"], dtype=float)
+    nm = edges.size - 1
+    ws = list(range(nm)) if wedges is None else [int(w) for w in wedges]
+    fig, main, res, nc = _wedge_grid(len(ws), ncols, 1, True, figsize)
+    main = main[0]
+    cols, labs = mu_colors(nm), _wedge_labels(edges)
+    entries = [(n, cm["terms"]["P_mu"][q]) for n, cm in comparisons.items() if q in cm["terms"]["P_mu"]]
+    allres, allv, sign, any_env = [], [], False, any(np.any(c["envelope"][ws]) for _, c in entries)
+    for j, w in enumerate(ws):
+        d, v, sign = _runs_quantity(main[j], res[j], entries, styles, ref, per_run_ref=per_run_ref, ms=4.0, w=w)
+        allres += d
+        allv += v
+        _wedge_tag(main[j], labs[w], cols[w])
+    for ax in list(main) + list(res):
+        ax.set_xscale(k_scale)
+        if getattr(ax, "_wedge_bottom", False):
+            ax.set_xlabel(_UNITS["cMpc"]["k"])
+    if k_scale == "log":
+        _plain_log_ticks(res[-1].xaxis)
+    _runs_main_scale(main[0], allv, sign)
+    lim = _runs_limit(allres, linthresh)
+    _runs_residual_axis(res[0], lim, linthresh)
+    for j in range(len(ws)):
+        if main[j].get_subplotspec().colspan.start == 0:
+            main[j].set_ylabel(_PK_QUANTITY["P"][1] + (", symlog" if sign else ""))
+            res[j].set_ylabel(
+                r"$\Delta/|{\rm ref}|$" + (r", $/{\rm env}$" if sign else "") + " [%]", fontsize=FONT_MIN["label"] - 2
+            )
+    names = list(dict.fromkeys([ref, *comparisons]))
+    _runs_legend(fig, styles, names, ref, labels, per_run_ref=per_run_ref, envelope=any_env, ref_note=ref_note)
+    fig.suptitle(
+        title or f"{term_label(q, line_ids)}: $P(k, \\mu)$ of every run against the reference", fontsize=FONT_MIN["title"] + 2
+    )
+    return fig, main, res
+
+
+def plot_runs_pk_mu_orders(
+    comparisons: dict,
+    styles: dict,
+    ref: str,
+    *,
+    quantities=TERM_ORDERS,
+    total_comparisons=None,
+    total_ref_label: str = "each run's own reference",
+    line_ids=None,
+    labels=None,
+    wedges=None,
+    ncols: int = 4,
+    linthresh: float = 0.01,
+    k_scale: str = "log",
+    titles=None,
+    figsize=None,
+) -> list:
+    """P(k, mu) of every run of a sweep against its reference, order by order, in the mu wedges of the decomposition
+    (notebooks 18-21, E1; the 16 wedges even in angle of notebook 11): one figure per quantity (default the total and the
+    orders 2, 3, 4), the wedges in the grid of ``plot_pk_mu_orders`` (``ncols`` columns, shared axes, each named by its mu
+    range in its colour, ``mu_colors``), and in each wedge, above, P [cMpc^3] of the reference (thick and light
+    underneath, its jackknife error a faint band) and of every run on the reference's |k| bins (log y, or symmetric-log
+    for a quantity that changes sign), below, the residual of ``plot_runs_p1d_orders`` on the reference's error. A run of
+    fewer skewers stops at its Nyquist frequency, and an empty cell is not drawn.
+
+    comparisons, styles, total_comparisons (the total figure only), total_ref_label, labels : as
+    ``plot_runs_p1d_orders``; wedges : the
+    indices drawn (default all); k_scale : "log" (default) or "linear"; titles : {quantity: the figure's title (a
+    takeaway)}. Returns [(fig, main axes (n_wedges,), residual axes (n_wedges,))], one per quantity."""
+    _check_option("k_scale", k_scale, ("log", "linear"))
+    out = []
+    for q in quantities:
+        per = q == "total" and total_comparisons is not None
+        out.append(
+            _runs_wedge_figure(
+                total_comparisons if per else comparisons,
+                styles,
+                ref,
+                q,
+                per_run_ref=per,
+                line_ids=line_ids,
+                labels=labels,
+                wedges=wedges,
+                ncols=ncols,
+                linthresh=linthresh,
+                k_scale=k_scale,
+                title=(titles or {}).get(q),
+                figsize=figsize,
+                ref_note=total_ref_label,
+            )
+        )
+    return out
+
+
+def plot_runs_pk_mu_terms(
+    comparisons: dict,
+    styles: dict,
+    ref: str,
+    *,
+    terms=None,
+    line_ids=None,
+    labels=None,
+    wedges=None,
+    ncols: int = 4,
+    linthresh: float = 0.01,
+    k_scale: str = "log",
+    titles=None,
+    figsize=None,
+) -> list:
+    """P(k, mu) of every run of a sweep against its reference, term by term within order 2 (notebooks 18-21, E2): one
+    figure per term (default ``order2_terms``: the autos and the crosses of the lines), in the layout and with the options
+    of ``plot_runs_pk_mu_orders``. The cross term oscillates as cos(k mu Delta) and changes sign: symmetric-log y, and
+    its residual normalised by the local envelope near its zeros (open markers). Returns [(fig, main axes, residual
+    axes)], one per term."""
+    _check_option("k_scale", k_scale, ("log", "linear"))
+    terms = list(terms) if terms is not None else order2_terms(comparisons)
+    return [
+        _runs_wedge_figure(
+            comparisons,
+            styles,
+            ref,
+            q,
+            per_run_ref=False,
+            line_ids=line_ids,
+            labels=labels,
+            wedges=wedges,
+            ncols=ncols,
+            linthresh=linthresh,
+            k_scale=k_scale,
+            title=(titles or {}).get(q),
+            figsize=figsize,
+        )
+        for q in terms
+    ]
 
 
 def plot_runs_mean_flux(comparisons: dict, styles: dict, ref: str, *, field_labels=None, labels=None, linthresh: float = 0.01, title=None, figsize=None):

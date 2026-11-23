@@ -3,6 +3,41 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — notebooks 18–21: the resolution sweeps order by order and term by term (stem 20261123)
+
+Nothing the engine computes changes; Parts C and F of notebooks 18–21 (the mean transmission, the k_max tables) are
+unchanged.
+
+### Added
+- `summary_stats.convergence`: `run_statistics(terms_grid=, decompose=True, memory=)` also decomposes a run: P1D and P(k, μ)
+  of the total, of every order 0 … 2L and of every pair of order 2 (the autos, the crosses, the 𝒞 term), each with its
+  delete-one-block jackknife samples (`out["terms"]`), with the subset fields of `decomposition` (F_∅ = −𝒞/(1 + 𝒞),
+  F_A = δ_A/(1 + 𝒞)); streamed (`_streamed_terms`): per chunk of skewers the fields and their transform along the line of
+  sight in float64 (P1D of every pair, as `skewer_p1d`), then per slab of k∥ the 2D transform across the lattice of each
+  field and of its B jackknife copies, the pair products binned in float64 (a numba kernel); 512² × 3949 pixels, two
+  lines: 275 s and 37 GB. Checks per run: the sum of the orders against the total (P1D ≲ 2e-9, P(k, μ) ≲ 3e-7 in float32
+  transmissions), the total against `p1d` and the four wedges of `P_mu` (≲ 1e-15, ≲ 4e-7). `compare_runs` compares the
+  decompositions of both runs (`terms`); `normalised_difference` (the difference relative to |ref|, or to the local
+  envelope of |ref| near the zeros of a quantity that changes sign); `format_terms_table`.
+- `LatticeWedges(store_index=False)` (no index: the bins of each slab of k∥ from `slab_index(m0, m1)`, in the layout of a
+  transform along the line of sight first; the same bins, centres and counts).
+- `utils.plotting`: `plot_runs_p1d_orders`, `plot_runs_p1d_terms` (one panel per quantity, a residual row under each on
+  the reference's jackknife error; symmetric-log for a quantity that changes sign), `plot_runs_pk_mu_orders`,
+  `plot_runs_pk_mu_terms` (one figure per quantity, the wedges in the grid of `plot_pk_mu_orders`, a residual row under
+  each wedge), `term_label`, `order2_terms`, `TERM_ORDERS`.
+- Tests: `test_convergence` +4 (the decomposition of a run against `decompose_fields`, `LatticeWedges` without index,
+  `normalised_difference`, the four figures).
+
+### Removed
+- `utils.plotting.plot_runs_p1d`, `plot_runs_wedges` (replaced by the four functions above).
+
+### Notebooks
+- 18–21: Parts D and E rewritten: D1 P1D by order (the total, orders 2–4), D2 by order-2 term (the Lyα and Si III autos,
+  the cross), E1 and E2 the same for P(k, μ) in the 16 wedges of notebook 11, one figure per quantity, every run against
+  the highest level of its sweep (18: dx = 0.01 cMpc, 19: 0.1 km/s, 20: 512², 21: TNG50-2), with a reading note per
+  figure. 19: the totals against the 0.1 km/s flux averaged over each coarse pixel, the orders and terms against the
+  0.1 km/s run as it is. 21: the successive P(k, μ) ratios dropped (the P1D steps and q kept).
+
 ## Unreleased — the resolution campaign: four sweeps on TNG50 around one fiducial run, notebooks 18–21 (stem 20261121_1641)
 
 Nothing the engine computes changes; the existing datasets keep their hashes.

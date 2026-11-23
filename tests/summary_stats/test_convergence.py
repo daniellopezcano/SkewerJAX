@@ -2,8 +2,10 @@
 call by call; ``lattice_convergence`` compares every lattice with the largest (ratio 1 for the largest itself, the bins of
 the coarser lattices cut at their Nyquist frequency, xi masked near its zeros, the P1D summary within ``p1d_k_max``);
 the runs of a resolution sweep (notebooks 18-21): ``run_statistics`` and its jackknife, ``compare_runs``, ``k_max_table``,
-``rebin_pixels``, ``block_labels``, ``LatticeWedges`` (``lattice_grid``'s wedges); and the figures respect the style. Synthetic optical depths on an 8 x 8 lattice:
-no data."""
+``rebin_pixels``, ``block_labels``, ``LatticeWedges`` (``lattice_grid``'s wedges, with or without its index); the
+streamed decomposition of a run (``run_statistics(terms_grid=)``: the orders and pairs of ``decompose_fields``, the sum
+rule, the jackknife), ``normalised_difference``; and the figures respect the style. Synthetic optical depths on an 8 x 8
+lattice: no data."""
 
 import matplotlib
 
@@ -29,6 +31,7 @@ from skewerjax.summary_stats import (
     lattice_grid,
     lattice_power,
     measure_lattice,
+    normalised_difference,
     rebin_pixels,
     run_statistics,
     set_k_edges,
@@ -36,6 +39,8 @@ from skewerjax.summary_stats import (
     skewer_xi1d,
 )
 from skewerjax.utils import plotting as pl
+
+from helpers import tol
 
 N_MAX, N_PIX, L, DV = 8, 64, 40.0, 5.0
 LINE_IDS = ("HI-LyA", "SiIII-1206")
@@ -338,15 +343,10 @@ def test_the_sweep_figures():
     styles = pl.run_styles(["r1", "r2", "ref"], fiducial="ref")
     assert styles["ref"]["color"] == pl.FG and styles["r1"]["color"] != styles["r2"]["color"]
     assert pl.run_styles(["a", "b"])["a"] == pl.run_styles(["a", "c"])["a"]  # a rank has one colour in every sweep
-    for fig, _ in (
-        pl.plot_runs_p1d(comps, styles, "ref", title="P1D"),
-        pl.plot_runs_wedges(comps, styles, "ref", title="wedges"),
-        pl.plot_runs_mean_flux(comps, styles, "ref", title="mean flux"),
-        pl.plot_runs_p1d(comps, styles, "ref", ref_per_run=True),
-    ):
-        fig.canvas.draw()
-        assert pl.check_fonts(fig) == []
-        plt.close(fig)
+    fig, _ = pl.plot_runs_mean_flux(comps, styles, "ref", title="mean flux")
+    fig.canvas.draw()
+    assert pl.check_fonts(fig) == []
+    plt.close(fig)
     rows = k_max_table({r: compare_runs(run_statistics(tau * (1 + 0.01 * i), DV, **kw), ref) for i, r in ((1, "r1"), (2, "r2"))})
     fig, axs = pl.plot_k_max_summary(rows, {"r1": 1.0, "r2": 2.0}, xlabel="x", p1d_k_ref=1e-3)
     fig.canvas.draw()
@@ -354,3 +354,127 @@ def test_the_sweep_figures():
     lo, hi = axs[0].get_ylim()
     assert lo < 1e-3 < hi  # the marked k inside the P1D panel's limits
     plt.close(fig)
+
+
+def _terms_setup():
+    """The run of ``_run_setup`` with its decomposition on 4 wedges even in angle (``LatticeWedges`` without its index)."""
+    tau, cols, lab, grid = _run_setup()
+    k = set_k_edges(2 * np.pi / L, k_1=3.5 * 2 * np.pi / L, k_2=np.pi * N_MAX / L, k_max=np.pi * N_MAX / L, dk_factor=0.4)
+    mu = np.sin(np.linspace(0.0, np.pi / 2, 5))
+    w4 = LatticeWedges(N_MAX, N_PIX, L, k_edges=k)
+    wt = LatticeWedges(N_MAX, N_PIX, L, k_edges=k, mu_edges=mu, store_index=False)
+    kw = dict(line_ids=LINE_IDS, labels=lab, grid=w4, terms_grid=wt, a_pix=np.full(N_PIX, 0.25), memory=2**18)
+    return tau, lab, k, mu, wt, kw
+
+
+def test_lattice_wedges_without_their_index():
+    """``store_index=False``: the same bins, centres and mode counts (the modes in the layout of ``slab_index``)."""
+    k = set_k_edges(2 * np.pi / L, k_1=3.5 * 2 * np.pi / L, k_2=np.pi * N_MAX / L, k_max=np.pi * N_MAX / L, dk_factor=0.4)
+    for n_pix in (N_PIX, N_PIX + 1):  # the Nyquist plane along the line of sight, or none
+        a = LatticeWedges(N_MAX, n_pix, L, k_edges=k, mu_edges=(0, 0.3, 0.8, 1))
+        b = LatticeWedges(N_MAX, n_pix, L, k_edges=k, mu_edges=(0, 0.3, 0.8, 1), store_index=False)
+        assert np.array_equal(a.n_modes, b.n_modes) and np.allclose(a.k_mu, b.k_mu, rtol=1e-14, equal_nan=True)
+        try:
+            b.power(np.zeros((N_MAX**2, n_pix)))
+            raise AssertionError
+        except ValueError:
+            pass
+
+
+def test_the_decomposition_of_a_run():
+    """The streamed decomposition of ``run_statistics(terms_grid=)``: the orders and order-2 pairs of
+    ``decompose_fields`` (P1D and the wedges), the sum rule, the total against the existing estimators, its jackknife."""
+    from skewerjax.summary_stats.decomposition import decompose_fields
+
+    tau, lab, k, mu, wt, kw = _terms_setup()
+    st = run_statistics(tau, DV, **kw)
+    t = st["terms"]
+    assert t["names"][:6] == ("total", "order 0", "order 1", "order 2", "order 3", "order 4")
+    assert {"HI-LyA|HI-LyA", "SiIII-1206|SiIII-1206", "HI-LyA|SiIII-1206"} <= set(t["names"])
+    assert t["P_mu"].shape == (len(t["names"]), 4, wt.shape[1]) and t["P_mu_jk"].shape[:2] == (4, len(t["names"]))
+    assert max(t["sum_rule"].values()) < tol(1e-12, 2e-6), t["sum_rule"]
+    assert t["check"]["p1d"] < 1e-12 and t["check"]["P_mu"] < tol(1e-12, 2e-6), t["check"]
+    T = np.exp(-tau)
+    T = np.concatenate([T, T.prod(0, keepdims=True)])
+    Tb = T.mean(axis=(1, 2))
+    C = Tb[-1] / Tb[:2].prod() - 1
+    grid = lattice_grid(N_MAX, N_MAX, N_PIX, L, L / N_MAX, k_edges=k, pk_mu_edges=mu)
+    dec = decompose_fields(
+        T[:2] / Tb[:2, None, None] - 1,
+        C,
+        grid,
+        DV,
+        labels=LINE_IDS,
+        key_joiner="+",
+        total=T[2] / Tb[2] - 1,
+        group="both",
+        reductions=("P_mu", "P1D"),
+    )
+    s3, s1 = np.nanmax(np.abs(dec["P_mu_total"])), np.max(np.abs(dec["P1D_total"]))
+    for o in range(5):
+        i = t["names"].index(f"order {o}")
+        assert np.nanmax(np.abs(t["P_mu"][i] - dec["P_mu_order"][o])) < tol(1e-12, 2e-6) * s3, o
+        assert np.max(np.abs(t["p1d"][i] - dec["P1D_order"][o])) < tol(1e-12, 2e-6) * s1, o
+    pairs = [tuple(p) for p in dec["pairs"]]
+    for q in ("HI-LyA|HI-LyA", "SiIII-1206|SiIII-1206", "HI-LyA|SiIII-1206"):
+        i, j = t["names"].index(q), pairs.index(tuple(q.split("|")))
+        assert np.nanmax(np.abs(t["P_mu"][i] - dec["P_mu_pair"][j])) < tol(1e-12, 2e-6) * s3, q
+    assert np.nanmax(np.abs(t["P_mu"][0] - dec["P_mu_total"])) < tol(1e-12, 2e-6) * s3
+    assert np.max(np.abs(t["p1d"][0] - st["p1d"][-1])) < 1e-12 * s1  # the total: skewer_p1d's
+    keep = lab != 2  # the jackknife: the field with block 2 set to zero
+    w = LatticeWedges(N_MAX, N_PIX, L, k_edges=k, mu_edges=mu)
+    ref = w.power((T[2] / Tb[2] - 1) * keep[:, None]) / keep.mean()
+    assert np.nanmax(np.abs(t["P_mu_jk"][2, 0] - ref)) < tol(1e-12, 2e-6) * np.nanmax(np.abs(ref))
+    assert np.allclose(t["p1d_jk"][:, 0], st["p1d_jk"][:, -1], rtol=1e-12)
+    only = run_statistics(tau, DV, **dict(kw, decompose=False))["terms"]
+    assert only["names"] == ("total",) and np.allclose(only["P_mu"][0], t["P_mu"][0], rtol=1e-12, equal_nan=True)
+    c = compare_runs(run_statistics(tau * 1.01, DV, **kw), st, k_edges_1d=np.geomspace(0.01, 0.6, 8))["terms"]
+    assert c["names"] == t["names"] and c["P_mu"]["total"]["diff"].shape == t["P_mu"][0].shape
+    assert c["P_mu"]["HI-LyA|SiIII-1206"]["sign_changing"] and not c["P_mu"]["total"]["sign_changing"]
+    r = c["p1d"]["total"]
+    assert np.allclose(r["diff"], r["rel"], equal_nan=True)  # a positive quantity: the relative difference
+
+
+def test_normalised_difference():
+    x = np.linspace(0, 6 * np.pi, 61)
+    ref = np.cos(x)[None] * np.array([1.0, 2.0])[:, None]  # two panels
+    run = 1.01 * ref
+    d, band, env, sc = normalised_difference(run, ref, 0.1 * np.abs(ref) + 0.01)
+    assert sc and env.any() and d.shape == ref.shape
+    far = np.abs(ref) > 0.01 * np.abs(ref).max(-1, keepdims=True)
+    assert np.allclose(d[far], 0.01 * np.sign(ref[far]))  # (run - ref) / |ref|
+    assert np.all(np.abs(d) <= 0.0100001) and np.all(np.isfinite(d))  # near the zeros: / the envelope, never beyond
+    d, band, env, sc = normalised_difference(run[:, :5], ref[:, :5], ref[:, :5] * 0 + 0.1)  # cos > 0: one sign
+    assert not sc and not env.any() and np.allclose(d, 0.01)
+    d, _, _, _ = normalised_difference([1.0, np.nan], [2.0, np.nan], [0.1, 0.1])
+    assert np.isnan(d[1]) and d[0] == -0.5
+
+
+def test_the_sweep_figures_by_order_and_term():
+    """The four figures of notebooks 18-21, D and E: one panel (or wedge) per quantity, a residual under each, the
+    fonts of the style; a per-run reference for the total; a run of fewer bins masked."""
+    tau, lab, k, mu, wt, kw = _terms_setup()
+    ref = run_statistics(tau, DV, **kw)
+    k1 = np.geomspace(0.01, 0.6, 8)
+    comps = {f"r{i}": compare_runs(run_statistics(tau * (1 + 0.01 * i), DV, **kw), ref, k_edges_1d=k1) for i in (1, 2)}
+    styles = pl.run_styles(["r1", "r2", "ref"], fiducial="ref")
+    fig, m, r = pl.plot_runs_p1d_orders(
+        comps, styles, "ref", line_ids=LINE_IDS, k_limits=(0.01, 0.6), k_mark=0.05, total_comparisons=comps, title="P1D by order"
+    )
+    assert m.shape == r.shape == (4,) and r[0].get_yscale() == "symlog"
+    figs = [fig]
+    fig, m, r = pl.plot_runs_p1d_terms(comps, styles, "ref", line_ids=LINE_IDS)
+    assert m.shape == (3,) and "cross" in m[2].get_title()
+    figs.append(fig)
+    out = pl.plot_runs_pk_mu_orders(comps, styles, "ref", line_ids=LINE_IDS, total_comparisons=comps)
+    assert len(out) == 4 and all(len(o[1]) == 4 for o in out)
+    figs += [o[0] for o in out]
+    out = pl.plot_runs_pk_mu_terms(comps, styles, "ref", line_ids=LINE_IDS, titles={"HI-LyA|SiIII-1206": "cross"})
+    assert len(out) == 3 and out[2][0].get_suptitle() == "cross"
+    figs += [o[0] for o in out]
+    for fig in figs:
+        fig.canvas.draw()
+        assert pl.check_fonts(fig) == []
+        plt.close(fig)
+    assert pl.order2_terms(comps) == ["HI-LyA|HI-LyA", "SiIII-1206|SiIII-1206", "HI-LyA|SiIII-1206"]
+    assert "auto" in pl.term_label("HI-LyA|HI-LyA") and pl.term_label("total") == "total"

@@ -40,7 +40,9 @@ From arrays, geometry and ``core.Cells`` only: imports ``skewerjax.core`` at mos
 * ``convergence``: notebook 11's statistics of one lattice of skewers from tau (``flux_statistics``) and their
   convergence with the number of skewers against the finest lattice (``lattice_convergence``, ``binned_p1d``); the runs
   of a resolution sweep against its reference with jackknife errors (``run_statistics``, ``compare_runs``,
-  ``k_max_table``, ``rebin_pixels``, ``LatticeWedges``: the wedges of P alone, for 512^2 lattices; notebooks 18-21).
+  ``k_max_table``, ``rebin_pixels``, ``LatticeWedges``: the wedges of P alone, for 512^2 lattices; the decomposition
+  of every run by order and order-2 term, streamed, ``run_statistics(terms_grid=)``, ``normalised_difference``,
+  ``format_terms_table``; notebooks 18-21).
 """
 
 from skewerjax.summary_stats import (
@@ -82,11 +84,13 @@ from skewerjax.summary_stats.convergence import (
     flux_statistics,
     flux_statistics_steps,
     format_k_max_table,
+    format_terms_table,
     jackknife_error,
     k_max_converged,
     k_max_table,
     lattice_convergence,
     lattice_power,
+    normalised_difference,
     rebin_pixels,
     run_statistics,
 )
@@ -225,10 +229,12 @@ __all__ = [
     "k_max_table",
     "k_max_converged",
     "format_k_max_table",
+    "format_terms_table",
     "block_labels",
     "jackknife_error",
     "lattice_power",
     "LatticeWedges",
+    "normalised_difference",
     "rebin_pixels",
     "binned_p1d",
     "flux_statistics_steps",
