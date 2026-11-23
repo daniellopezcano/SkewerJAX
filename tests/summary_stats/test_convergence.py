@@ -1,8 +1,9 @@
-"""The statistics of nested lattices of skewers (``summary_stats.convergence``, notebook 17): ``flux_statistics`` is
-notebook 11's chain call by call; ``lattice_convergence`` compares every lattice with the largest (ratio 1 for the
-largest itself, the bins of the coarser lattices cut at their Nyquist frequency, xi masked near its zeros, the P1D
-summary within ``p1d_k_max``); and the figures of notebook 17 respect the style. Synthetic optical depths on an 8 x 8
-lattice: no data."""
+"""The statistics of lattices of skewers (``summary_stats.convergence``): ``flux_statistics`` is notebook 11's chain
+call by call; ``lattice_convergence`` compares every lattice with the largest (ratio 1 for the largest itself, the bins of
+the coarser lattices cut at their Nyquist frequency, xi masked near its zeros, the P1D summary within ``p1d_k_max``);
+the runs of a resolution sweep (notebooks 18-21): ``run_statistics`` and its jackknife, ``compare_runs``, ``k_max_table``,
+``rebin_pixels``, ``block_labels``, ``LatticeWedges`` (``lattice_grid``'s wedges); and the figures respect the style. Synthetic optical depths on an 8 x 8 lattice:
+no data."""
 
 import matplotlib
 
@@ -14,12 +15,22 @@ import numpy as np
 from skewerjax.core import lattice_columns
 from skewerjax.summary_stats import (
     GRID_KEYS,
+    LatticeWedges,
+    block_labels,
+    compare_runs,
     ensemble_mean,
     ensemble_mean_transmissions,
     flux_statistics,
+    format_k_max_table,
+    jackknife_error,
+    k_max_converged,
+    k_max_table,
     lattice_convergence,
     lattice_grid,
+    lattice_power,
     measure_lattice,
+    rebin_pixels,
+    run_statistics,
     set_k_edges,
     skewer_p1d,
     skewer_xi1d,
@@ -199,4 +210,147 @@ def test_the_lattice_figures_with_residuals():
     assert axs.shape == (2, 2) and axs[0, 1].get_yscale() == "symlog" and set(res) == {0, 1}
     np.testing.assert_allclose(res[1][4], 100 * (c["P_mu"]["total"]["ratio"][4][1] - 1))
     assert pl.check_fonts(fig) == []
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------- the runs of a resolution sweep
+def _run_setup(seed=3):
+    tau = _tau(seed)[0]  # (2 lines, 64 skewers, N_PIX): one line of sight
+    cols = lattice_columns(N_MAX, (1, 1))
+    lab = block_labels(cols, N_MAX, 2)
+    k = set_k_edges(2 * np.pi / L, k_1=3.5 * 2 * np.pi / L, k_2=np.pi * N_MAX / L, k_max=np.pi * N_MAX / L, dk_factor=0.4)
+    grid = lattice_grid(N_MAX, N_MAX, N_PIX, L, L / N_MAX, k_edges=k, pk_mu_edges=(0, 0.5, 1), xi_mu_edges=(0, 0.5, 1))
+    return tau, cols, lab, grid
+
+
+def test_block_labels_and_the_jackknife():
+    cols = lattice_columns(8, (1, 1))
+    lab = block_labels(cols, 8, 2)
+    assert np.bincount(lab).tolist() == [16] * 4  # 2 x 2 squares of 4 x 4 skewers
+    assert set(lab[(cols[:, 0] < 4) & (cols[:, 1] < 4)]) == {0} and set(lab[(cols[:, 0] >= 4) & (cols[:, 1] < 4)]) == {2}
+    lab4 = block_labels(lattice_columns(4, (1, 1)), 4, 2)  # the same regions of the box on a coarser lattice
+    assert np.array_equal(lab4, lab[np.flatnonzero((cols[:, 0] % 2 == 0) & (cols[:, 1] % 2 == 0))])
+    for bad in (1, 3):
+        try:
+            block_labels(cols, 8, bad)
+            raise AssertionError
+        except ValueError:
+            pass
+    x = np.random.default_rng(0).normal(size=(20, 3))
+    jk = np.stack([np.delete(x, i, 0).mean(0) for i in range(20)])
+    assert np.allclose(jackknife_error(jk), x.std(0, ddof=1) / np.sqrt(20))  # the jackknife of a mean: its standard error
+
+
+def test_run_statistics_and_its_jackknife():
+    tau, cols, lab, grid = _run_setup()
+    st = run_statistics(tau, DV, line_ids=LINE_IDS, labels=lab, grid=grid, a_pix=np.full(N_PIX, 0.25))
+    T = np.exp(-tau)
+    T = np.concatenate([T, T.prod(0, keepdims=True)])
+    assert np.allclose(st["mean_flux"], T.mean(axis=(1, 2)))
+    delta = T / T.mean(axis=(1, 2), keepdims=True) - 1
+    k, p = skewer_p1d(delta, DV)
+    assert np.allclose(st["k"], k) and np.allclose(st["p1d"], p, rtol=1e-10)
+    assert np.allclose(st["p1d_jk"][1], skewer_p1d(delta[:, lab != 1], DV)[1], rtol=1e-10)  # block 1 left out
+    full = measure_lattice(delta[2], grid)["P_mu"]
+    assert np.allclose(st["P_mu"]["total"], full, rtol=1e-4, equal_nan=True)  # lattice_power: measure_lattice without xi
+    assert np.allclose(lattice_power(delta[2], grid)["P_mu"], full, rtol=1e-4, equal_nan=True)
+    keep = lab != 3
+    assert np.allclose(
+        st["P_mu_jk"]["total"][3],
+        measure_lattice(delta[2] * keep[:, None], grid)["P_mu"] / keep.mean(),
+        rtol=1e-4,
+        equal_nan=True,
+    )
+    same = run_statistics(transmissions=T, dv=DV, line_ids=LINE_IDS, labels=lab, grid=grid, a_pix=np.full(N_PIX, 0.25))
+    assert np.allclose(same["p1d"], st["p1d"]) and np.allclose(same["mean_flux"], st["mean_flux"])
+
+
+def test_the_wedges_alone_are_lattice_grids_wedges():
+    """``LatticeWedges``: the bins, centres, mode counts and P_mu of ``lattice_grid`` (its other bins left out), and
+    ``run_statistics`` gives the same wedges with either."""
+    tau, cols, lab, grid = _run_setup()
+    k = set_k_edges(2 * np.pi / L, k_1=3.5 * 2 * np.pi / L, k_2=np.pi * N_MAX / L, k_max=np.pi * N_MAX / L, dk_factor=0.4)
+    w = LatticeWedges(N_MAX, N_PIX, L, k_edges=k, mu_edges=(0, 0.5, 1))
+    ax = grid.axes()
+    assert np.array_equal(w.pk_mu_edges, ax["pk_mu_edges"]) and np.array_equal(w.k_mu_edges, grid.k_mu_edges)
+    assert np.allclose(w.n_modes, np.nan_to_num(np.asarray(grid.n_modes["P_mu"])), rtol=1e-6, atol=0)
+    assert np.allclose(w.k_mu, ax["k_mu"], rtol=1e-6, equal_nan=True)
+    T = np.exp(-tau).prod(0)
+    delta = T / T.mean() - 1
+    assert np.allclose(w.power(delta), measure_lattice(delta, grid)["P_mu"], rtol=1e-5, equal_nan=True)
+    kw = dict(line_ids=LINE_IDS, labels=lab, a_pix=np.full(N_PIX, 0.25))
+    a, b = run_statistics(tau, DV, grid=grid, **kw), run_statistics(tau, DV, grid=w, **kw)
+    assert np.allclose(a["P_mu_jk"]["total"], b["P_mu_jk"]["total"], rtol=1e-5, equal_nan=True)
+    assert np.allclose(a["k_mu"], b["k_mu"], rtol=1e-6, equal_nan=True)
+    assert np.array_equal(a["pk_mu_edges"], b["pk_mu_edges"])
+
+
+def test_compare_runs_and_k_max():
+    tau, cols, lab, grid = _run_setup()
+    kw = dict(line_ids=LINE_IDS, labels=lab, grid=grid, a_pix=np.full(N_PIX, 0.25))
+    ref = run_statistics(tau, DV, **kw)
+    same = compare_runs(ref, ref)
+    assert np.all(same["mean_flux"]["rel"] == 0) and np.all(same["p1d"]["rel"] == 0) and np.all(same["mean_flux"]["err"] == 0)
+    run = run_statistics(tau * 1.01, DV, **kw)  # a 1 % deeper absorption: a small, smooth, systematic change
+    c = compare_runs(run, ref)
+    assert np.all(c["mean_flux"]["rel"] < 0) and np.all(np.isfinite(c["p1d"]["rel"])) and c["p1d"]["k"][0] > 0
+    assert c["P_mu"]["total"]["rel"].shape == ref["P_mu"]["total"].shape and np.isfinite(c["P_mu"]["total"]["err"]).any()
+    cb = compare_runs(run, ref, k_edges_1d=np.geomspace(c["p1d"]["k"][0] * 0.99, c["p1d"]["k"][-1] * 1.01, 6))
+    assert cb["p1d"]["rel"].shape[1] <= 5 and np.all(np.diff(cb["p1d"]["k"]) > 0)
+    k = np.array([0.1, 0.2, 0.3, 0.4])
+    assert k_max_converged(k, [0.001, 0.002, 0.02, 0.001], 0.005) == 0.2
+    assert k_max_converged(k, [0.01, 0.0, 0.0, 0.0], 0.005) == 0.0
+    assert np.isinf(k_max_converged(k, [0.0, 0.0, 0.0, 0.0], 0.005))
+    assert k_max_converged(k, [0.0, np.nan, 0.0, 0.0], 0.005) == 0.1  # a bin the run does not cover ends the range
+    assert k_max_converged([np.nan, 0.2, 0.3], [5.0, 0.0, 0.0], 0.005) == np.inf  # a bin without modes is not a bin
+    rows = k_max_table({"r": c}, (0.001, 0.005, 0.01))
+    assert {r["statistic"] for r in rows} >= {"P1D total", "P1D HI-LyA", "P(k, mu) total mu 0.00-0.50"}
+    assert all(set(r["k_max"]) == {0.001, 0.005, 0.01} for r in rows)
+    assert all(r["k_max"][0.001] <= r["k_max"][0.005] <= r["k_max"][0.01] for r in rows)
+    assert "P1D total" in format_k_max_table(rows)
+    try:
+        compare_runs(run, run_statistics(tau, DV, **dict(kw, labels=block_labels(cols, N_MAX, 4))))
+        raise AssertionError
+    except ValueError:
+        pass
+
+
+def test_rebin_pixels():
+    rng = np.random.default_rng(1)
+    F = rng.uniform(size=(2, 5, 100))
+    for n in (100, 50, 33, 7, 1):
+        R = rebin_pixels(F, n)
+        assert R.shape == (2, 5, n) and np.allclose(R.mean(-1), F.mean(-1))  # the mean over the period is kept
+    assert np.allclose(rebin_pixels(F, 100), F) and np.allclose(rebin_pixels(F, 50), F.reshape(2, 5, 50, 2).mean(-1))
+    edges_f, edges_c = np.linspace(0, 1, 101), np.linspace(0, 1, 34)
+    w = np.clip(np.minimum(edges_f[None, 1:], edges_c[1:, None]) - np.maximum(edges_f[None, :-1], edges_c[:-1, None]), 0, None)
+    assert np.allclose(rebin_pixels(F, 33), (F @ w.T) / w.sum(1))  # the overlaps of comparison.scaling.rebin_average
+
+
+def test_the_sweep_figures():
+    tau, cols, lab, grid = _run_setup()
+    kw = dict(line_ids=LINE_IDS, labels=lab, grid=grid, a_pix=np.full(N_PIX, 0.25))
+    ref = run_statistics(tau, DV, **kw)
+    comps = {
+        f"r{i}": compare_runs(run_statistics(tau * (1 + 0.01 * i), DV, **kw), ref, k_edges_1d=np.geomspace(0.01, 0.6, 8))
+        for i in (1, 2)
+    }
+    styles = pl.run_styles(["r1", "r2", "ref"], fiducial="ref")
+    assert styles["ref"]["color"] == pl.FG and styles["r1"]["color"] != styles["r2"]["color"]
+    assert pl.run_styles(["a", "b"])["a"] == pl.run_styles(["a", "c"])["a"]  # a rank has one colour in every sweep
+    for fig, _ in (
+        pl.plot_runs_p1d(comps, styles, "ref", title="P1D"),
+        pl.plot_runs_wedges(comps, styles, "ref", title="wedges"),
+        pl.plot_runs_mean_flux(comps, styles, "ref", title="mean flux"),
+        pl.plot_runs_p1d(comps, styles, "ref", ref_per_run=True),
+    ):
+        fig.canvas.draw()
+        assert pl.check_fonts(fig) == []
+        plt.close(fig)
+    rows = k_max_table({r: compare_runs(run_statistics(tau * (1 + 0.01 * i), DV, **kw), ref) for i, r in ((1, "r1"), (2, "r2"))})
+    fig, axs = pl.plot_k_max_summary(rows, {"r1": 1.0, "r2": 2.0}, xlabel="x", p1d_k_ref=1e-3)
+    fig.canvas.draw()
+    assert pl.check_fonts(fig) == []
+    lo, hi = axs[0].get_ylim()
+    assert lo < 1e-3 < hi  # the marked k inside the P1D panel's limits
     plt.close(fig)

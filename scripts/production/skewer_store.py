@@ -1,6 +1,6 @@
 """A store of skewers on disk: the optical depth of nested lattices of axis-aligned skewers through a snapshot, kept
 for convergence tests and production runs (``STORE.md``; written by ``skewer_extraction``, ``extract_skewers.py`` and
-``run_production.py``, read by notebooks 17 and 18). Production code, outside the package; it needs NumPy and h5py only
+``run_production.py``, read by notebooks 17-21). Production code, outside the package; it needs NumPy and h5py only
 (not skewerjax), so a store is readable without the package.
 
 **Layout.** One dataset per (simulation, snapshot, axis, options)::

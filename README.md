@@ -168,7 +168,7 @@ skewerjax/                    # SkewerJAX: absorption along skewers (tau, F = ex
 ├── summary_stats/            # The summary statistics of the flux: the overflux of each line and of their …
 │   ├── binning.py            # Binning of the two-point statistics: bin indices, jitted weighted bin means, bin …
 │   ├── contaminants.py       # P1D metal-contamination models (McDonald et al. 2006; Ma et al.) and their fits to …
-│   ├── convergence.py        # The statistics of the overflux on nested lattices of skewers and their convergence …
+│   ├── convergence.py        # The statistics of the overflux on lattices of skewers and their convergence: with …
 │   ├── decomposition.py      # The order-by-order decomposition of the two-point statistics of the total …
 │   ├── density.py            # The density sampled along a lattice of periodic skewers (notebook 10, Part C) …
 │   ├── field_stats.py        # P and xi of the density of gas cells in a periodic box, over an ensemble of …
@@ -204,10 +204,10 @@ subpackage.
 | deposition: cells → pieces | `core.absorbers`, `core.deposition` | `cell_pieces`, `voronoi_segments`, `absorber_pieces` | 07, 15 |
 | line profiles: Voigt φ_j(v) per piece | `core.line_profiles` | `line_profiles`, `voigt_widths_GHz` | 06 |
 | optical depth: τ(v), T = e^−τ | `core.optical_depth` | `compute_optical_depth`, `Pieces` | 07, 10, 11, 15 |
-| mean transmission: T̄ = ⟨T⟩ over a set of pixels | `summary_stats.overflux` | `ensemble_mean_transmissions`, `mean_transmissions` | 10, 11, 17 |
-| overflux: δ = T/T̄ − 1, per line and total | `summary_stats.overflux` | `DeltaFieldBuilder`, `overflux_check` | 10, 11, 17 |
-| 1D statistics: P1D, ξ1D (by order and term) | `summary_stats.lattice`, `summary_stats.stats_1d` | `skewer_p1d`, `skewer_xi1d`, `decompose_1d` | 10, 11, 17 |
-| 3D statistics: P3D, ξ3D on the lattice of skewers | `summary_stats.lattice`, `summary_stats.grid3d` | `lattice_grid`, `measure_lattice`, `GridStatistics3D` | 10, 11, 17 |
+| mean transmission: T̄ = ⟨T⟩ over a set of pixels | `summary_stats.overflux` | `ensemble_mean_transmissions`, `mean_transmissions` | 10, 11, 17, 18, 19, 20, 21 |
+| overflux: δ = T/T̄ − 1, per line and total | `summary_stats.overflux` | `DeltaFieldBuilder`, `overflux_check` | 10, 11, 17, 18, 19, 20, 21 |
+| 1D statistics: P1D, ξ1D (by order and term) | `summary_stats.lattice`, `summary_stats.stats_1d` | `skewer_p1d`, `skewer_xi1d`, `decompose_1d` | 10, 11, 17, 18, 19, 20, 21 |
+| 3D statistics: P3D, ξ3D on the lattice of skewers | `summary_stats.lattice`, `summary_stats.grid3d` | `lattice_grid`, `measure_lattice`, `GridStatistics3D` | 10, 11, 17, 18, 19, 20, 21 |
 | field statistics: P, ξ of the cells' density: mesh (MAS + interlacing) | `summary_stats.field_stats`, `summary_stats.mesh` | `field_statistics`, `cell_weights`, `fourier_mesh` | 08, 09, 11 |
 | fake_spectra: external reference | `comparison.benchmark` | `run_fake_spectra` | 12, 13, 14, 15, 16 |
 <!-- END generated:concepts -->
@@ -322,7 +322,10 @@ flowchart LR
 | `15_how_skewerjax_is_fast` | why SkewerJAX is cheap, step by step, the visual companion of `docs/performance.md` (live on TNG50-4, timings from the records): the cost model; one pass over the snapshot (the reach by index arithmetic, what the pass reads, the compact store and the tiles, the pipeline's timeline); the exact crossings (the lower envelope) and the integrated profile against the midpoint rule; the windowed engine (windows, the far wings as one FFT, why not truncate, CPU and GPU); the matched mode (chords, the per-cell walk on escalating windows); fixed shapes; why even the matched mode beats fake_spectra (fake_spectra's code read, CPU utilisation, the gap stage by stage with its causes); the chain of savings |
 | `16_comparison_fake_spectra_memory` | how much memory each code and mode uses, where (host anonymous / file-backed, GPU) and in which stage (kernel `skewerjax-fs`): the protocol, memory timelines at 128² TNG50-2 skewers, the peaks by component, the scaling with the simulation, the number of skewers and the pixel width (fitted models, the extrapolation to 512²), SkewerJAX's memory knobs (tile size, physics configurations, pass threads), the ranked ways to lower it (reads the records of `scripts/benchmarks/benchmark_memory.py`; `RUN = True` re-runs it) |
 | `17_TNG_skewers` | loading one lattice from the skewer store (`scripts/production/`, [`STORE.md`](scripts/production/STORE.md); the reader imported from there): the inputs (store, simulation, snapshot, hash, axis, `N_PER_AXIS`), the levels of the nested lattices it is read from (`SkewerDataset.sources`), checks of the shapes, positions and nesting (bit for bit), one skewer's transmission |
-| `18_TNG_skewers_convergence` | the convergence with the number of skewers of the stored lattices `N_MIN` … `N_MAX` (the reference; 16 for a quick check): P1D per line and total and the 16 P(k, μ) wedges of the total (notebook 10's and 11's bins), each panel with its residual against `N_MAX` in percent, a progress bar with the time of every step, and a table of the percentage levels per lattice |
+| `18_convergence_sampling_points` | the `points` sweep of the resolution campaign (TNG50-2, 128² skewers along y): the sampling points defining the pieces (dual segments, integrated profile, exact frame) at dx = 1, 0.5, 0.1, 0.05, 0.01 cMpc against the fiducial run (the exact crossings) and the finest spacing: the stored skewers read back and paired, the mean transmission, P1D, the four P(k, μ) wedges, each as the relative difference per bin with jackknife errors, and the largest k converged to 0.1, 0.5, 1 % |
+| `19_convergence_pixel_width` | the `pixels` sweep: 10, 5, 1, 0.5, 0.1 km/s against 0.1 km/s, and against the 0.1 km/s transmission averaged over each coarse pixel (`rebin_pixels`), as notebook 18 |
+| `20_convergence_number_of_skewers` | the `skewers` sweep: the nested lattices 32² … 512² of one dataset (bit for bit the stride of the largest) against 512², as notebook 18 |
+| `21_convergence_simulation_resolution` | the `simulations` sweep: TNG50-4, -3, -2 at the same skewer positions against TNG50-2, skewer by skewer and statistic by statistic, and the successive ratios TNG50-3/TNG50-4, TNG50-2/TNG50-3, as notebook 18 |
 
 Every notebook applies one style (`skewerjax.utils.plotting.use_style()`: the white "paper" style by default,
 `use_style("dark")` for the dark one; Paul Tol's colour-blind-safe "bright" colours and colour maps in both, minimum
@@ -410,16 +413,21 @@ the three snapshots, CPU and GPU, threads, host and GPU memory (records of the e
 
 Long runs of skewers (production, convergence and resolution checks) are not part of the package: `scripts/production/`
 is a self-contained tool on the package's public API ([`README.md`](scripts/production/README.md)). `run_production.py`
-runs one configuration, or a named sweep of runs (`points`, `pixels`, `skewers`, `simulations`: the four resolution
-checks, and `all`), one after another, resumably, with a dry run that estimates the disk, time and memory of every run
-from the benchmark records. Each run is a self-describing folder (`run.json`, its log, and the skewers in the skewer
-store's format: nested N × N lattices of τ, [`STORE.md`](scripts/production/STORE.md)), outside the repository;
-identical runs are linked, not recomputed. `skewer_store.load_run` reads a run back; notebook 17 loads one lattice and
-checks it; notebook 18 shows the convergence of P1D and of the P(k, μ) wedges.
+runs one configuration, or a named sweep of runs, one process and one run at a time, resumably, with a dry run that
+estimates the disk, time, memory and passes of every run from the benchmark records (calibrated by the runs as they
+finish), and a memory check before each run. **The resolution campaign** (`--sweep all`): a fiducial run (TNG50-2,
+128² skewers along y, 1 km/s, the exact crossings, the integrated profile, the exact frame, a(s) every 0.05 cMpc) and
+four sweeps around it, `points` (the sampling spacing, dual segments), `pixels`, `skewers` (32² … 512²) and
+`simulations` (TNG50-2, -3, -4). Each run is a self-describing folder (`run.json`, its log) naming a lattice of a
+dataset in the campaign's skewer store (nested N × N lattices of τ, [`STORE.md`](scripts/production/STORE.md)), outside
+the repository: runs on one dataset share it (an identical or coarser lattice computes nothing, a finer one extends it).
+`skewer_store.load_run` reads a run back; notebook 17 loads one lattice and checks it; notebooks 18–21 compare the runs
+of each sweep (`summary_stats.run_statistics`, `compare_runs`, `k_max_table`).
 
 ```bash
-python scripts/production/run_production.py --sweep all --dry-run       # what the four checks would cost
-nohup python scripts/production/run_production.py --sweep all > all.log 2>&1 &   # resumable: rerun to resume
+python scripts/production/run_production.py --sweep all --dry-run       # what the campaign would cost
+setsid nohup python scripts/production/run_production.py --sweep all > campaign.log 2>&1 &   # resumable: rerun to resume
+python scripts/production/run_production.py --sweep all --status        # the state of every run
 ```
 
 ## Repository layout

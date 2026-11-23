@@ -3,6 +3,56 @@
 All notable changes to SkewerJAX. Dates are those of the working sessions; the package version is still 0.0.1
 (no release has been tagged).
 
+## Unreleased — the resolution campaign: four sweeps on TNG50 around one fiducial run, notebooks 18–21 (stem 20261121_1641)
+
+Nothing the engine computes changes; the existing datasets keep their hashes.
+
+### Changed
+- `scripts/production`: the sweeps are redefined around `FIDUCIAL` (TNG50-2 snapshot 25, 128² along y, 1 km/s, the exact
+  crossings, the integrated profile, the exact frame with a(s) every 0.05 cMpc): `fiducial`, `points` (dx = 1, 0.5, 0.1,
+  0.05, 0.01 cMpc, the dual segments `pieces="segments"` with the integrated profile, against the fiducial), `pixels` (10,
+  5, 1, 0.5, 0.1 km/s), `skewers` (32² … 512²), `simulations` (TNG50-2, -3, -4); `smoke` kept; `all` = fiducial,
+  simulations, pixels, points, skewers.
+- Run folders no longer hold their own store: every run is a lattice of a dataset of the campaign's store `<out>/store`
+  (`run.json["dataset"]`: root `../../store`, hash, n). Runs on one dataset share it: an identical or coarser lattice
+  computes nothing (`reuse`), a finer one extends it (`extend`); the hard links (`find_shareable`, `share`, `--no-share`)
+  are gone. An interrupted or failed run resumes from the stored batches; `--force` deletes the run's dataset.
+- The launcher checks MemAvailable before each run (waits while one tile does not fit; the child sizes its passes to the
+  memory available), lists the failed runs at the end and goes on after a failure, calibrates its estimates by the
+  finished runs (median measured / estimated per route, runs of ≥ 1,024 skewers), and prints per run its action, the
+  skewers it computes and its passes, with the free disk and RAM in the dry run.
+- `production_estimates`: the τ stage below 1 km/s as 1 / dv (rough); the sampled route per pass (selection) and per piece,
+  measured on one TNG50-2 tile (rough); `skewer_extraction`: the sampled route's memory model (`sampled_cells`,
+  `pass_memory(points_per_skewer=, n_lattice=)`, `pass_size(...)`), used by `extract` to size its passes; its bytes per
+  selected cell raised to 500 from the campaign's passes at 1 cMpc. No pass exceeds the model's size any more
+  (`bounded_tiles`: the squares of `tile_skewers` held up to twice the planned skewers when an interrupted run left them
+  uneven).
+
+### Added
+- `RunConfig.points_cMpc` (`--points-cMpc`) and `skewer_extraction.dataset_options(points_cMpc=)`: the sampling spacing in
+  cMpc (`pieces["points_cMpc"]` with `pieces="segments"`, `tau["frame_spacing_cMpc"]` in the exact frame); `sampling_cMpc`,
+  `points_per_skewer`; `run.json["sampling"]` (the spacing in cMpc and km/s, what it controls, the route, the nominal and
+  actual pixel width), `run.json["memory"]` (peak RSS), `timings.computed` / `reused`; `RunConfig.route()`,
+  `spacing_text()`; `production_runs.store_root`, `remove_dataset`, `runs_on_dataset`, `peak_rss_GB`.
+- `summary_stats.convergence`: `run_statistics` (one run on one line of sight: the mean transmission, P1D, P(k, μ) and their
+  delete-one-block jackknife samples), `compare_runs` (X_run / X_ref − 1 per bin and its jackknife error), `k_max_converged`,
+  `k_max_table`, `format_k_max_table`, `block_labels`, `jackknife_error`, `lattice_power` (`measure_lattice` without ξ),
+  `rebin_pixels`, `LatticeWedges` (the μ wedges of P alone, with the bins, centres and counts of `lattice_grid`'s P_mu:
+  one int32 index per rfft mode, 2 GB on 512² lattices of 3949 pixels, where `lattice_grid`'s separations alone need
+  ~160 GB; `run_statistics` takes either). `utils.plotting`: `run_styles`, `plot_runs_mean_flux`, `plot_runs_p1d`,
+  `plot_runs_wedges`, `plot_k_max_summary` (`p1d_k_ref`).
+- The campaign itself (2026-11-21/22, `~/skewerjax_production`, 18 GB): 20 runs done, 14 computed, 6 reused; the measured
+  times beside the estimates in `scripts/production/README.md`.
+- Notebooks `18_convergence_sampling_points`, `19_convergence_pixel_width`, `20_convergence_number_of_skewers`,
+  `21_convergence_simulation_resolution` (the four sweeps; replace `18_TNG_skewers_convergence`, removed).
+- Tests: `tests/production` (the campaign's sweeps, memory gate, failures, calibration, the sampling in cMpc; the slow run on
+  TNG50-4 now a lattice, its extension and its reuse; the passes bounded), `tests/summary_stats/test_convergence.py` (+6:
+  `LatticeWedges` against `lattice_grid`).
+
+### Notebooks
+- 17 reads the campaign's fiducial run by default (`STORE` = `PRODUCTION_DIR/store`, the hash of the fiducial's
+  `run.json`, 128²).
+
 ## Unreleased — production runs out of the package: scripts/production, sweeps and four resolution checks (stem 20261121_1222)
 
 Nothing the engine computes changes: the store and extraction modules move unchanged (the existing dataset `cd782fdb19`

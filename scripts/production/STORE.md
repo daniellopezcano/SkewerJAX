@@ -2,8 +2,9 @@
 
 A store of skewers on disk for convergence tests and long production runs: the optical depth τ of every line along
 nested N × N lattices of skewers through a snapshot, computed by `scripts/production/extract_skewers.py` (one store,
-from a terminal, resumable) or by `run_production.py` (runs and sweeps, one store per run folder: `README.md`), and read
-by `load_skewers` (notebook 17; the statistics and their convergence: notebook 18). Doubling the number of skewers per
+from a terminal, resumable) or by `run_production.py` (runs and sweeps, one store `<out>/store` shared by the runs of a
+campaign: `README.md`), and read by `load_skewers` and `load_run` (notebook 17; the statistics of the resolution campaign:
+notebooks 18–21). Doubling the number of skewers per
 axis reuses every skewer already computed; another simulation, snapshot, axis, pixel width or option is another dataset
 of the same tree. The code, in this directory (production code, outside the package): `skewer_store.py` (layout,
 identity, reading; NumPy and h5py only, so a store is readable without SkewerJAX) and `skewer_extraction.py` (options,
@@ -62,7 +63,7 @@ the hash keeps its meaning whatever the defaults of the package become):
 - `precision`: of the computation (τ is stored as float32 in both).
 
 The hash is the first 10 hex digits of the SHA-256 of the canonical JSON of `options`. The location is not in it: the
-three lines of sight of one configuration share their hash (notebook 18 loads them by one hash), and the same options
+three lines of sight of one configuration share their hash (one hash loads them all), and the same options
 on TNG50-4 and TNG50-2 differ only through `n_pix` when the pixel width is the same. A dataset whose `simulation.path`
 changed is accepted with a warning when its header (cells, box, redshift) is the same (the data moved), refused
 otherwise (another simulation under the same name: use another `--sim`). The device, the number of threads, the batch
@@ -188,7 +189,9 @@ st = load_run("~/skewerjax_production/pixels/dv_2kms")   # a run folder of run_p
 it raises a `ValueError` naming the largest complete N when the requested lattice is not complete.
 `SkewerDataset.open(...)` gives the lower level: `index()`, `missing(n)`, `complete(n)`, `largest_complete()`,
 `runs()`. The statistics of notebook 11 from a stored lattice are one call, `summary_stats.flux_statistics(tau, dv,
-lattice_grid(...), line_ids=...)`, and their convergence `summary_stats.lattice_convergence` (notebook 18; `log=` reports each step of `flux_statistics`). `SkewerDataset.sources(n)` lists the levels of the nested lattices an n x n lattice is read from (notebook 17).
+lattice_grid(...), line_ids=...)` (an ensemble of lines of sight), and their convergence `summary_stats.lattice_convergence`
+(`log=` reports each step of `flux_statistics`); on one line of sight, the statistics of a run with jackknife errors and
+its comparison with a reference are `summary_stats.run_statistics` and `compare_runs` (notebooks 18–21). `SkewerDataset.sources(n)` lists the levels of the nested lattices an n x n lattice is read from (notebook 17).
 
 ## 6. Checks
 

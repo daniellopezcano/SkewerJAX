@@ -110,6 +110,15 @@ RESOLUTION_TOLERANCE = 0.25  # the resolution check of compute_optical_depth, re
 PASS_BASE_BYTES = 5.7e9
 PASS_BYTES_PER_CELL = 92.0
 MEMORY_FRACTION = 0.6  # of MemAvailable for one pass
+# Memory model of one pass of the sampled route (``compute_skewers_sampled``: the gather selection, the gas physics of the
+# selected cells held for the pass, the points, one tile's pieces), measured on TNG50-2 (anonymous memory; stem 20261121_1641)
+# (one tile of 1,024 skewers at 0.01 cMpc: 8.6 GB anonymous for 18.8 M cells and 5.3 M points; the memory maps of the
+# snapshot are file-backed, reclaimable, and not counted). The campaign's passes at 1 cMpc took ~500 B per selected cell
+# (MemAvailable fell by ~73 GB for a pass of 1,806 skewers and 143 M cells: the candidate pairs of the long dual
+# segments), so the model uses that bound for every spacing.
+SAMPLED_BASE_BYTES = 4.0e9
+SAMPLED_BYTES_PER_CELL = 500.0
+SAMPLED_BYTES_PER_POINT = 50.0
 VORONOI_REACH_AREA = np.pi * VORONOI_FACTOR**2  # the area within reach of a skewer, in units of h^2 (the reach 2.5 h)
 
 
@@ -179,6 +188,7 @@ def dataset_options(
     precision: str = "float32",
     n_ref: int = ss.N_REF,
     points_kms: float | None = None,
+    points_cMpc: float | None = None,
 ) -> dict:
     """The options of a dataset (``config["options"]``, hashed), resolved to values from the snapshot's ``header``:
 
@@ -186,10 +196,11 @@ def dataset_options(
     dv = span / n_pix, as fake_spectra's grid; or ``n_pix`` itself; the centres (i + 1/2) dv, the period = n_pix dv =
     the span of one box); lines (the ids, the first the reference); physics (``gas_to_cells``); pieces; tau (every
     option of ``tiles_optical_depth`` / ``compute_optical_depth``: velocity_period True -> the span, a_eff and aH_ref
-    "snapshot" -> the snapshot's a and aH, wing_tolerance None -> ``core.WING_TOLERANCE``); precision. ``points_kms``:
-    the spacing of the sampling points [km/s] (module docstring): required with ``pieces="segments"``
-    (``pieces["points_kms"]``), the a(s) table in the exact frame (``tau["frame_spacing_cMpc"]``); elsewhere it has no
-    effect and is not part of the options."""
+    "snapshot" -> the snapshot's a and aH, wing_tolerance None -> ``core.WING_TOLERANCE``); precision. ``points_cMpc``
+    or ``points_kms`` (one of them): the spacing of the sampling points [cMpc], or [km/s] of Hubble flow (module
+    docstring; ds = points_kms / u, u = aH the snapshot's km/s per cMpc): required with ``pieces="segments"``
+    (``pieces["points_kms"]``, and ``pieces["points_cMpc"]`` when given in cMpc), the a(s) table in the exact frame
+    (``tau["frame_spacing_cMpc"]``); elsewhere it has no effect and is not part of the options."""
     from skewerjax.core import WING_TOLERANCE
 
     o = mode_options(mode, overrides)
@@ -230,14 +241,20 @@ def dataset_options(
         velocity_period=vp,
     )
     pieces = dict(pieces=o["pieces"], chord_weight=None if o["chord_weight"] is None else float(o["chord_weight"]))
-    if points_kms is not None and not float(points_kms) > 0:
-        raise ValueError(f"points_kms must be > 0, got {points_kms}.")
+    if points_kms is not None and points_cMpc is not None:
+        raise ValueError("give the sampling spacing by points_cMpc or by points_kms, not both.")
+    for name, x in (("points_kms", points_kms), ("points_cMpc", points_cMpc)):
+        if x is not None and not float(x) > 0:
+            raise ValueError(f"{name} must be > 0, got {x}.")
+    ds_cMpc = float(points_cMpc) if points_cMpc is not None else (None if points_kms is None else float(points_kms) / aH)
     if o["pieces"] == "segments":
-        if points_kms is None:
-            raise ValueError("pieces='segments' needs points_kms (the spacing of the sampling points).")
-        pieces["points_kms"] = float(points_kms)
-    if o["frame"] == "exact" and points_kms is not None:
-        tau["frame_spacing_cMpc"] = float(points_kms) / aH
+        if ds_cMpc is None:
+            raise ValueError("pieces='segments' needs points_cMpc or points_kms (the spacing of the sampling points).")
+        pieces["points_kms"] = float(points_kms) if points_kms is not None else ds_cMpc * aH
+        if points_cMpc is not None:
+            pieces["points_cMpc"] = ds_cMpc  # the spacing as given: it sets the points (points_kms = ds u, recorded)
+    if o["frame"] == "exact" and ds_cMpc is not None:
+        tau["frame_spacing_cMpc"] = ds_cMpc
     return dict(
         lattice=dict(n_ref=int(n_ref), offset=0.0, order="a-major (i_a outer), (a, b) the transverse axes in increasing order"),
         pixels=dict(
@@ -401,7 +418,7 @@ def compute_skewers_sampled(
     idx = np.asarray(indices, dtype=np.int64).reshape(-1, 2)
     lines = LineBundle(list(o["lines"]["line_ids"]), ref_line_id=o["lines"]["ref_line_id"])
     t = o["tau"]
-    ds_cMpc = float(o["pieces"]["points_kms"]) / aH
+    ds_cMpc = sampling_cMpc(o, aH)
     t0 = time.perf_counter()
     cofm = ss.lattice_positions(idx, s["axis"], L, o["lattice"]["n_ref"])
     bundle = lambda c: SkewerBundle.axis_aligned(c, s["axis"], L, ds_cMpc, H.cosmology(), a_ref=H.a)  # noqa: E731
@@ -471,6 +488,15 @@ def compute_skewers_sampled(
     return np.concatenate(out, axis=1), info
 
 
+def sampling_cMpc(options: dict, aH: float) -> float | None:
+    """The spacing of the sampling points of a dataset's ``options`` [cMpc]: ``pieces["points_cMpc"]`` when it was given in
+    cMpc, else ``pieces["points_kms"]`` / aH; None for pieces without sampling points."""
+    p = options["pieces"]
+    if p.get("points_cMpc") is not None:
+        return float(p["points_cMpc"])
+    return None if p.get("points_kms") is None else float(p["points_kms"]) / float(aH)
+
+
 def compute_for(config: dict):
     """The function that computes a pass of the dataset ``config``: ``compute_skewers_sampled`` for
     ``pieces="segments"``, ``compute_skewers`` (the streaming route) otherwise."""
@@ -492,29 +518,93 @@ def memory_available() -> float:
         return 8e9
 
 
-def pass_memory(n_skewers: int, n_gas: int, n_lines: int, n_pix: int, precision: str = "float32") -> float:
-    """The peak memory of one pass over ``n_skewers`` skewers [bytes] by the model of ``PASS_BASE_BYTES``."""
-    cells = min(float(n_gas), n_skewers * VORONOI_REACH_AREA * float(n_gas) ** (1 / 3))
+def sampled_cells(n_skewers: int, n_gas: int, points_per_skewer: int, n_lattice: int | None = None) -> float:
+    """The cells the gather route selects for ``n_skewers`` skewers sampled every L / ``points_per_skewer`` (an upper
+    bound, in units of the mean cell size h = L / n_gas^(1/3)): every cell within r = 2.5 h + ds / 2 of a point
+    (``select_cells_near_paths``), at most the sum of the skewers' cross sections n pi r^2 (no overlap) and at most the
+    square patch of the neighbouring skewers of one pass (side sqrt(n) d + 2 r, d = L / ``n_lattice`` the lattice spacing:
+    the passes group neighbours, ``stream.tile_skewers``), as fractions of the box's cross section L^2."""
+    g = float(n_gas) ** (1 / 3)  # L / h
+    r = VORONOI_FACTOR / g + 0.5 / float(points_per_skewer)  # r / L
+    area = n_skewers * np.pi * r * r
+    if n_lattice:
+        area = min(area, (np.sqrt(n_skewers) / float(n_lattice) + 2 * r) ** 2)
+    return float(n_gas) * min(1.0, area)
+
+
+def pass_memory(
+    n_skewers: int,
+    n_gas: int,
+    n_lines: int,
+    n_pix: int,
+    precision: str = "float32",
+    *,
+    points_per_skewer: int | None = None,
+    n_lattice: int | None = None,
+) -> float:
+    """The peak memory of one pass over ``n_skewers`` skewers [bytes]: the streaming route by the model of
+    ``PASS_BASE_BYTES``; with ``points_per_skewer`` the sampled route (``compute_skewers_sampled``) by the model of
+    ``SAMPLED_BASE_BYTES`` (``sampled_cells``, the points, one tile's pieces)."""
     tau = n_skewers * n_lines * n_pix * (8 if precision == "float64" else 4)
+    if points_per_skewer:
+        cells = sampled_cells(n_skewers, n_gas, points_per_skewer, n_lattice)
+        points = float(n_skewers) * points_per_skewer
+        return SAMPLED_BASE_BYTES + SAMPLED_BYTES_PER_CELL * cells + SAMPLED_BYTES_PER_POINT * points + tau
+    cells = min(float(n_gas), n_skewers * VORONOI_REACH_AREA * float(n_gas) ** (1 / 3))
     return PASS_BASE_BYTES + PASS_BYTES_PER_CELL * cells + tau
 
 
 def pass_size(
-    n_missing: int, n_gas: int, n_lines: int, n_pix: int, precision: str = "float32", budget: float | None = None
+    n_missing: int,
+    n_gas: int,
+    n_lines: int,
+    n_pix: int,
+    precision: str = "float32",
+    budget: float | None = None,
+    *,
+    points_per_skewer: int | None = None,
+    n_lattice: int | None = None,
 ) -> int:
     """The largest number of skewers per pass whose ``pass_memory`` fits ``budget`` (default ``MEMORY_FRACTION`` of
     MemAvailable), at most ``n_missing`` and at least 1."""
     budget = MEMORY_FRACTION * memory_available() if budget is None else float(budget)
+    mem = lambda m: pass_memory(m, n_gas, n_lines, n_pix, precision, points_per_skewer=points_per_skewer, n_lattice=n_lattice)  # noqa: E731
     lo, hi = 1, max(int(n_missing), 1)
-    if pass_memory(hi, n_gas, n_lines, n_pix, precision) <= budget:
+    if mem(hi) <= budget:
         return hi
     while lo < hi:
         mid = (lo + hi + 1) // 2
-        if pass_memory(mid, n_gas, n_lines, n_pix, precision) <= budget:
+        if mem(mid) <= budget:
             lo = mid
         else:
             hi = mid - 1
     return lo
+
+
+def bounded_tiles(paths, per: int) -> np.ndarray:
+    """(N_sk,) the pass of every skewer: the squares of ``stream.tile_skewers`` (neighbours together), a square holding
+    more than ``per`` skewers cut into consecutive chunks of at most ``per`` (strips of the square, the skewers being in
+    lattice order), so that no pass exceeds ``per``. ``tile_skewers`` sizes its grid for skewers spread evenly; the
+    skewers left by an interrupted run are not, and its squares then held up to ~2 x ``per`` (2,688 of a planned 1,626
+    at 1 cMpc: a pass twice the memory budget)."""
+    from skewerjax import simulations as st
+
+    per = max(int(per), 1)
+    group = np.asarray(st.tile_skewers(paths, per), dtype=np.int64)
+    out, nxt = np.empty(len(group), np.int64), 0
+    for g in range(int(group.max()) + 1 if len(group) else 0):
+        idx = np.flatnonzero(group == g)
+        for c in range(0, len(idx), per):
+            out[idx[c : c + per]], nxt = nxt, nxt + 1
+    return out.astype(np.int32)
+
+
+def points_per_skewer(config: dict) -> int | None:
+    """The sampling points per skewer of a ``pieces="segments"`` dataset (L / ds), None for the other pieces."""
+    ds = sampling_cMpc(config["options"], config["snapshot"]["u_kms_per_cMpc"])
+    if config["options"]["pieces"]["pieces"] != "segments" or not ds:
+        return None
+    return int(round(float(config["snapshot"]["box_cMpc"]) / ds))
 
 
 def plan(root, config: dict, n_list) -> dict:
@@ -597,7 +687,6 @@ def extract(
     ``pass_size``: the memory model within ``memory_budget``), neighbouring skewers together (squares of the plane,
     ``stream.tile_skewers``); every tile of a pass is written as one batch as soon as it is computed. The log gives the
     progress and the ETA after every batch."""
-    from skewerjax import simulations as st
     from skewerjax.config import get_precision
     from skewerjax.core import StraightPaths
 
@@ -643,6 +732,7 @@ def extract(
             for n in ns:
                 miss = dataset.missing(n)  # the smaller N of this run are stored by now
                 n_all = n * n
+                model = dict(points_per_skewer=points_per_skewer(cfg), n_lattice=n)  # the route's memory model
                 lat = dict(n=n, skewers=n_all, reused=n_all - len(miss), computed=len(miss), passes=[])
                 rec["lattices"].append(lat)
                 if not len(miss):
@@ -652,14 +742,16 @@ def extract(
                 per = (
                     int(skewers_per_pass)
                     if skewers_per_pass
-                    else pass_size(len(miss), cfg["snapshot"]["n_gas"], n_lines, n_pix, o["precision"], memory_budget)
+                    else pass_size(len(miss), cfg["snapshot"]["n_gas"], n_lines, n_pix, o["precision"], memory_budget, **model)
                 )
                 cofm = ss.lattice_positions(miss, dataset.axis, L, n_ref)
                 ax = dataset.axis - 1
                 paths = StraightPaths(cofm, np.eye(3)[np.full(len(miss), ax)], np.full(len(miss), L), L, ax)
-                group = st.tile_skewers(paths, per) if per < len(miss) else np.zeros(len(miss), np.int32)
+                group = bounded_tiles(paths, per) if per < len(miss) else np.zeros(len(miss), np.int32)
                 n_groups = int(group.max()) + 1
-                est = pass_memory(int(np.bincount(group).max()), cfg["snapshot"]["n_gas"], n_lines, n_pix, o["precision"])
+                est = pass_memory(
+                    int(np.bincount(group).max()), cfg["snapshot"]["n_gas"], n_lines, n_pix, o["precision"], **model
+                )
                 log(
                     f"N = {n}: {n_all} skewers, {n_all - len(miss)} stored (reused), {len(miss)} to compute in {n_groups} pass(es) "
                     f"of <= {int(np.bincount(group).max())} skewers (estimated peak {est / 1e9:.1f} GB of "

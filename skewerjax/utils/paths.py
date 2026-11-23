@@ -13,7 +13,7 @@ variable.
 * ``PRODUCTION_DIR``: the default output of the production runs (``scripts/production/run_production.py``: one folder per
   sweep, one per run); ``$SKEWERJAX_PRODUCTION``, default ``~/skewerjax_production``, outside the repository.
 * ``PRODUCTION_SCRIPTS_DIR``: ``scripts/production`` of the repository, where the skewer store's reader lives (not part of
-  the package): notebooks 17 and 18 put it on ``sys.path`` to import ``skewer_store``.
+  the package): notebooks 17-21 put it on ``sys.path`` to import ``skewer_store``.
 """
 
 from __future__ import annotations

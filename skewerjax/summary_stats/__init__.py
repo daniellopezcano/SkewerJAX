@@ -38,7 +38,9 @@ From arrays, geometry and ``core.Cells`` only: imports ``skewerjax.core`` at mos
   ``ensemble_mean``);
 * ``contaminants``: the P1D metal-contamination models (McDonald et al.; Ma et al.) and their fits.
 * ``convergence``: notebook 11's statistics of one lattice of skewers from tau (``flux_statistics``) and their
-  convergence with the number of skewers against the finest lattice (``lattice_convergence``, ``binned_p1d``; notebook 18).
+  convergence with the number of skewers against the finest lattice (``lattice_convergence``, ``binned_p1d``); the runs
+  of a resolution sweep against its reference with jackknife errors (``run_statistics``, ``compare_runs``,
+  ``k_max_table``, ``rebin_pixels``, ``LatticeWedges``: the wedges of P alone, for 512^2 lattices; notebooks 18-21).
 """
 
 from skewerjax.summary_stats import (
@@ -72,7 +74,22 @@ from skewerjax.summary_stats.binning import (
     set_rperp_edges,
 )
 from skewerjax.summary_stats.contaminants import fit_ma_model_profiled, fit_mcdonald_a, ma_factor, mcdonald_factor
-from skewerjax.summary_stats.convergence import binned_p1d, flux_statistics, flux_statistics_steps, lattice_convergence
+from skewerjax.summary_stats.convergence import (
+    LatticeWedges,
+    binned_p1d,
+    block_labels,
+    compare_runs,
+    flux_statistics,
+    flux_statistics_steps,
+    format_k_max_table,
+    jackknife_error,
+    k_max_converged,
+    k_max_table,
+    lattice_convergence,
+    lattice_power,
+    rebin_pixels,
+    run_statistics,
+)
 from skewerjax.summary_stats.decomposition import (
     decompose,
     decompose_fields,
@@ -203,6 +220,16 @@ __all__ = [
     "fit_ma_model_profiled",
     "flux_statistics",
     "lattice_convergence",
+    "run_statistics",
+    "compare_runs",
+    "k_max_table",
+    "k_max_converged",
+    "format_k_max_table",
+    "block_labels",
+    "jackknife_error",
+    "lattice_power",
+    "LatticeWedges",
+    "rebin_pixels",
     "binned_p1d",
     "flux_statistics_steps",
 ]

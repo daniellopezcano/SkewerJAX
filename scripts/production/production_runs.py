@@ -1,24 +1,32 @@
-"""One production run: its configuration (``RunConfig``), its folder and record (``run.json``), its state, the sharing
-of an identical finished run, and its execution in a child process (``execute``; ``run_production.py``; README.md).
+"""One production run: its configuration (``RunConfig``), its folder and record (``run.json``), its state, and its
+execution in a child process (``execute``; ``run_production.py``; README.md).
 
-**A run folder** (self-describing: readable with h5py and json alone, ``STORE.md``)::
+**The output folder** (self-describing: readable with h5py and json alone, ``STORE.md``)::
 
-    <out>/<sweep>/<run>/
-        run.json     the record: the full configuration, the status, the package version and git commit, the snapshot and
-                     its cosmology, the hardware, the timings, the estimate, the manifest of the files written
-        run.log      the run's output (the child process's stdout and stderr)
-        store/       a skewer store (``skewer_store``) holding the run's one dataset:
-                     store/<sim>/snap_<NNN>/axis_<a>/<hash>/{config.json, skewers/batch_*.h5, runs/run_*.json}
+    <out>/
+        store/                     the campaign's skewer store (``skewer_store``): one dataset per configuration (the hash of
+                                   its resolved options), each holding nested lattices:
+                                   store/<sim>/snap_<NNN>/axis_<a>/<hash>/{config.json, skewers/batch_*.h5, runs/run_*.json}
+        <sweep>/index.json         the sweep's runs, their states, configurations and datasets
+        <sweep>/sweep.log          the launcher's log of the sweep
+        <sweep>/<run>/run.json     the record: the full configuration, the status, the dataset and lattice it reads (``dataset``),
+                                   the sampling and the pixels as computed, the package version and git commit, the snapshot
+                                   and its cosmology, the hardware, the timings and peak memory, the estimate, the manifest
+                                   of the batch files that hold its lattice
+        <sweep>/<run>/run.log      the run's output (the child process's stdout and stderr)
+
+**Runs share datasets.** A run is an n x n lattice of one dataset. Runs whose options resolve to the same dataset (the
+same hash) share it: a run identical to a finished one, or a coarser lattice of a finer one (the lattices are nested,
+``skewer_store``), computes nothing; a finer lattice extends the dataset, computing only the skewers it does not hold
+(``skewer_extraction.extract``). The fiducial run of the resolution campaign is computed once and serves the four sweeps.
 
 **States** (``run_state``): "absent" (no run.json); "running" (status running and its process alive on this host);
 "interrupted" (status running, launched or interrupted, its process gone: killed, power cut); "failed" (an error);
-"damaged" (status done, but a file of the manifest is missing or of another size); "done" (status done, every file of the
-manifest present with its size). Only "done" is skipped by a sweep; "interrupted", "failed" and "damaged" are redone from
-scratch (the folder emptied first), "done" only with ``--force``.
-
-**Sharing.** Two runs with the same ``RunConfig.key()`` (every field that changes what is computed: not the name, the
-threads or the memory fraction) compute the same skewers. A finished run is reused by hard links of its files (no extra
-disk; a copy across file systems), recorded as ``shared_from``.
+"damaged" (status done, but a batch file of the manifest is missing or of another size); "done" (status done, every file
+of the manifest present with its size). Only "done" is skipped by a sweep; "interrupted", "failed" and "damaged" are
+redone: the run's record is reset, and the extraction resumes from the batches already in the store (each batch is
+written atomically, so only the tiles in progress are lost). ``--force`` deletes the run's dataset (every run sharing it
+loses its skewers) and recomputes it.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ import hashlib
 import json
 import os
 import platform
+import resource
 import shutil
 import socket
 import subprocess
@@ -38,7 +47,7 @@ from pathlib import Path
 SCHEMA = "skewerjax-production-run/1"
 RUN_FILE = "run.json"
 LOG_FILE = "run.log"
-STORE_DIR = "store"
+STORE_DIR = "store"  # the campaign's skewer store, <out>/store
 LINE_IDS = ("HI-LyA", "SiIII-1206")
 NOT_IN_KEY = ("name", "threads", "memory_fraction")  # fields that do not change what is computed
 
@@ -51,10 +60,11 @@ class RunConfig:
     sim, sim_path, snap : the simulation's name (its folder under ``skewerjax.utils.paths.DATA_DIR`` unless ``sim_path``)
         and snapshot; lines : the line ids (the first the reference); n : skewers per transverse axis, a power of two (the
         n x n lattice, x_i = i L / n, nested in every finer lattice); axis : the line of sight (1, 2, 3 = x, y, z);
-    dv_kms or n_pix : the pixel grid (target width [km/s], n_pix = int(span / dv); or the number of pixels over the
-        period); points_kms : the spacing of the sampling points [km/s] (``skewer_extraction``'s docstring: the dual
-        segments of ``options={"pieces": "segments"}``, the a(s) table of ``options={"frame": "exact"}``; no effect on
-        the default crossings in the snapshot frame);
+    dv_kms or n_pix : the pixel grid (target width [km/s], n_pix = int(span / dv), dv = span / n_pix: the grid tiles the
+        velocity period exactly; or the number of pixels over the period);
+    points_cMpc or points_kms : the spacing of the sampling points along a skewer [cMpc], or [km/s] of Hubble flow (one of
+        them; ``skewer_extraction``'s docstring): the dual segments of ``options={"pieces": "segments"}`` and the a(s)
+        table of ``options={"frame": "exact"}``; no effect on the crossings in the snapshot frame;
     mode, options : the preset (``skewer_extraction.MODES``: "default", "matched") and overrides of its options
         (e.g. {"profile": "midpoint", "pieces": "segments"}, {"physics.x_HI_model": "stored"});
     precision : "float32" or "float64" (tau stored as float32); device : "cpu" or "gpu" (where the tau sum runs);
@@ -71,6 +81,7 @@ class RunConfig:
     dv_kms: float | None = 1.0
     n_pix: int | None = None
     points_kms: float | None = None
+    points_cMpc: float | None = None
     mode: str = "default"
     options: dict = field(default_factory=dict)
     precision: str = "float32"
@@ -138,30 +149,58 @@ class RunConfig:
         if not self.lines:
             raise ValueError("at least one line is needed.")
         o = se.mode_options(self.mode, self.options)
-        if o["pieces"] == "segments" and self.points_kms is None:
-            raise ValueError("options pieces='segments' needs points_kms (the spacing of the sampling points).")
-        if self.points_kms is not None and not float(self.points_kms) > 0:
-            raise ValueError(f"points_kms must be > 0, got {self.points_kms}.")
+        if self.points_kms is not None and self.points_cMpc is not None:
+            raise ValueError("give the sampling spacing by points_cMpc or by points_kms, not both.")
+        if o["pieces"] == "segments" and self.points_kms is None and self.points_cMpc is None:
+            raise ValueError("options pieces='segments' needs points_cMpc or points_kms (the spacing of the sampling points).")
+        for name in ("points_kms", "points_cMpc"):
+            x = getattr(self, name)
+            if x is not None and not float(x) > 0:
+                raise ValueError(f"{name} must be > 0, got {x}.")
         return self
+
+    def spacing_text(self) -> str | None:
+        """The sampling spacing as given ("0.05 cMpc", "0.25 km/s"), or None."""
+        if self.points_cMpc is not None:
+            return f"{self.points_cMpc:g} cMpc"
+        return None if self.points_kms is None else f"{self.points_kms:g} km/s"
+
+    def route(self) -> str:
+        """The route: "sampled" (``pieces="segments"``: the gather route, ``compute_skewers_sampled``) or "streaming"."""
+        import skewer_extraction as se
+
+        return "sampled" if se.mode_options(self.mode, self.options)["pieces"] == "segments" else "streaming"
 
     def points_effect(self) -> str:
         """What ``points_kms`` controls in this configuration (README, the ``points`` check)."""
         import skewer_extraction as se
 
         o = se.mode_options(self.mode, self.options)
-        if self.points_kms is None:
-            return "no sampling points (the pieces need none)" if o["pieces"] != "segments" else "missing"
+        sp = self.spacing_text()
+        if sp is None:
+            if o["pieces"] == "segments":
+                return "missing"
+            if o["frame"] == "exact":
+                return "the a(s) table of the exact frame at stream.box_skewers' default spacing (0.05 cMpc)"
+            return "no sampling points (the pieces need none)"
         parts = []
         if o["pieces"] == "segments":
-            parts.append(f"the dual segments of points every {self.points_kms:g} km/s ({o['profile']} profile)")
+            parts.append(
+                f"the pieces: the dual segments of points every {sp} (the cells crossed, cut at the midpoints between "
+                f"points; {o['profile']} profile)"
+            )
         if o["frame"] == "exact":
-            parts.append(f"the a(s) table every {self.points_kms:g} km/s (exact frame)")
-        return "; ".join(parts) if parts else "no effect (crossings in the snapshot frame: no sampling points, no a(s))"
+            parts.append(f"the a(s) table of the exact frame every {sp}")
+        if not parts:
+            return "no effect (crossings in the snapshot frame: no sampling points, no a(s))"
+        if o["pieces"] != "segments":
+            parts.append("not the pieces (the exact cell crossings need no sampling points)")
+        return "; ".join(parts)
 
     def summary(self) -> str:
         grid = f"{self.dv_kms:g} km/s" if self.dv_kms is not None else f"{self.n_pix} px"
         opts = ",".join(f"{k}={v}" for k, v in sorted(self.options.items()))
-        pts = f", points {self.points_kms:g} km/s" if self.points_kms is not None else ""
+        pts = f", dx {self.spacing_text()}" if self.spacing_text() else ""
         return (
             f"{self.sim} snap {self.snap}, {self.n}^2 along {'xyz'[int(self.axis) - 1]}, {grid}{pts}, "
             f"{self.mode}{'+' + opts if opts else ''}, {'+'.join(self.lines)}, {self.precision}, {self.device}"
@@ -195,12 +234,34 @@ def write_record(run_dir, rec: dict) -> None:
     os.replace(tmp, run_dir / RUN_FILE)
 
 
-def manifest(run_dir) -> dict:
-    """{relative path: size} of every file of the run's store (the outputs)."""
-    root = Path(run_dir) / STORE_DIR
-    if not root.is_dir():
-        return {}
-    return {str(p.relative_to(run_dir)): p.stat().st_size for p in sorted(root.rglob("*")) if p.is_file() and p.name != ".lock"}
+def store_root(run_dir) -> Path:
+    """The campaign's store of a run folder ``<out>/<sweep>/<run>``: ``<out>/store``."""
+    return Path(run_dir).resolve().parents[1] / STORE_DIR
+
+
+def manifest(run_dir, dataset=None, n: int | None = None) -> dict:
+    """{path relative to the run folder: size} of the batch files that hold the run's n x n lattice in its dataset (the
+    outputs it reads; ``SkewerDataset.sources``). With no ``dataset``, the one named by the run's record."""
+    run_dir = Path(run_dir)
+    if dataset is None:
+        import skewer_store as ss
+
+        rec = read_record(run_dir) or {}
+        d = rec.get("dataset")
+        if not d:
+            return {}
+        try:
+            dataset = ss.SkewerDataset.open(run_dir / d["root"], d["sim"], d["snap"], d["axis"], d["hash"])
+        except (FileNotFoundError, ValueError, OSError):
+            return {}
+        n = int(d["n_per_axis"]) if n is None else n
+    files = sorted({f for row in dataset.sources(int(n)) for f in row["files"]})
+    out = {}
+    for name in files:
+        f = dataset.path / "skewers" / name
+        if f.exists():
+            out[os.path.relpath(f, run_dir)] = f.stat().st_size
+    return out
 
 
 def _pid_alive(pid) -> bool:
@@ -221,8 +282,9 @@ def run_state(run_dir) -> str:
     st = rec.get("status")
     if st == "done":
         files = rec.get("outputs", {}).get("files", {})
-        have = manifest(run_dir)
-        ok = bool(files) and all(have.get(k) == v for k, v in files.items())
+        ok = bool(files) and all(
+            (Path(run_dir) / k).is_file() and (Path(run_dir) / k).stat().st_size == v for k, v in files.items()
+        )
         return "done" if ok else "damaged"
     if st in ("running", "launched"):
         same_host = rec.get("host") in (None, socket.gethostname())
@@ -233,52 +295,42 @@ def run_state(run_dir) -> str:
 
 
 def reset(run_dir, out) -> None:
-    """Empty a run folder before it is redone (only a folder inside ``out`` holding a run record, or empty)."""
+    """Clear a run folder before the run is redone: its record and log (only a folder inside ``out`` holding a run
+    record, or empty). The skewers are in the campaign's store, untouched: the extraction resumes from them."""
     run_dir, out = Path(run_dir).resolve(), Path(out).resolve()
     if out not in run_dir.parents:
-        raise RuntimeError(f"refusing to empty {run_dir}: not inside the output folder {out}.")
+        raise RuntimeError(f"refusing to clear {run_dir}: not inside the output folder {out}.")
     if run_dir.exists():
         if not (run_dir / RUN_FILE).exists() and any(run_dir.iterdir()):
-            raise RuntimeError(f"refusing to empty {run_dir}: it holds files but no {RUN_FILE}.")
+            raise RuntimeError(f"refusing to clear {run_dir}: it holds files but no {RUN_FILE}.")
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True)
 
 
-def find_shareable(out, key: str, exclude=None) -> Path | None:
-    """A finished run under ``out`` (any sweep) with the same key, or None."""
+def remove_dataset(path, out) -> int:
+    """Delete one dataset of the campaign's store (``--force``): only a folder inside ``<out>/store`` holding a
+    config.json. Returns the bytes freed."""
+    path, root = Path(path).resolve(), (Path(out) / STORE_DIR).resolve()
+    if root not in path.parents or not (path / "config.json").is_file():
+        raise RuntimeError(f"refusing to delete {path}: not a dataset of the store {root}.")
+    freed = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+    shutil.rmtree(path)
+    return freed
+
+
+def runs_on_dataset(out, dataset_hash: str) -> list:
+    """The run folders under ``out`` whose record reads the dataset ``dataset_hash``."""
+    hits = []
     for p in sorted(Path(out).glob(f"*/*/{RUN_FILE}")):
-        d = p.parent
-        if exclude is not None and d.resolve() == Path(exclude).resolve():
-            continue
-        rec = read_record(d)
-        if rec and rec.get("key") == key and run_state(d) == "done":
-            return d
-    return None
+        rec = read_record(p.parent) or {}
+        if (rec.get("dataset") or {}).get("hash") == dataset_hash:
+            hits.append(p.parent)
+    return hits
 
 
-def share(src, dst, rec_template: dict) -> dict:
-    """Reuse the finished run ``src`` in the (empty) folder ``dst``: hard links of its store's files (copies across file
-    systems), its record with this run's name, sweep and ``shared_from``. Returns the record written."""
-    src, dst = Path(src), Path(dst)
-    for rel in read_record(src)["outputs"]["files"]:
-        a, b = src / rel, dst / rel
-        b.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.link(a, b)
-        except OSError:
-            shutil.copy2(a, b)
-    rec = dict(read_record(src))
-    rec.update(
-        name=rec_template["name"],
-        sweep=rec_template["sweep"],
-        config=rec_template["config"],
-        shared_from=str(src),
-        shared_at=now(),
-        estimate=rec_template.get("estimate"),
-    )
-    rec["outputs"] = dict(rec["outputs"], files=manifest(dst))
-    write_record(dst, rec)
-    return rec
+def peak_rss_GB() -> float:
+    """The peak resident memory of this process so far [GB] (``ru_maxrss``)."""
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024 / 1e9
 
 
 # --------------------------------------------------------------------------- the environment of a run
@@ -336,10 +388,36 @@ def _log(msg: str) -> None:
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 
+def sampling_record(cfg: RunConfig, opts: dict, u: float) -> dict:
+    """The sampling and pixels of a run as computed (run.json "sampling"): the spacing in both units (u = aH [km/s per cMpc]
+    of the snapshot: 1 km/s = 1 / u cMpc), what it controls, the pixel grid's nominal and actual widths."""
+    ds = opts["tau"].get("frame_spacing_cMpc")
+    if opts["pieces"]["pieces"] == "segments":
+        ds = opts["pieces"].get("points_cMpc", opts["pieces"]["points_kms"] / u)
+    px = opts["pixels"]
+    return dict(
+        points_cMpc=ds,
+        points_kms=None if ds is None else ds * u,
+        given=cfg.spacing_text(),
+        u_kms_per_cMpc=u,
+        cMpc_per_kms=1.0 / u,
+        effect=cfg.points_effect(),
+        route=cfg.route(),
+        pieces=opts["pieces"]["pieces"],
+        profile=opts["tau"]["profile"],
+        frame=opts["tau"]["frame"],
+        dv_nominal_kms=px["spacing_kms"],
+        dv_kms=px["dv_kms"],
+        n_pix=px["n_pix"],
+        period_kms=px["period_kms"],
+    )
+
+
 def execute(run_dir) -> int:
-    """Compute the run of ``run_dir/run.json`` (written by the launcher, status "launched") into ``run_dir/store``, in this
-    process: JAX's platforms and the precision are set before SkewerJAX is imported. Updates the record (status running,
-    then done / failed / interrupted). Returns the exit code."""
+    """Compute the run of ``run_dir/run.json`` (written by the launcher, status "launched") into the campaign's store
+    (``store_root``), in this process: JAX's platforms and the precision are set before SkewerJAX is imported. The lattice
+    of the run is extracted into its dataset (only the skewers the dataset does not hold). Updates the record (status
+    running, then done / failed / interrupted). Returns the exit code."""
     run_dir = Path(run_dir).resolve()
     rec = read_record(run_dir)
     cfg = RunConfig.from_dict(rec["config"])
@@ -374,34 +452,41 @@ def execute(run_dir) -> int:
             precision=cfg.precision,
             n_ref=cfg.n_ref,
             points_kms=cfg.points_kms,
+            points_cMpc=cfg.points_cMpc,
         )
         dcfg = se.dataset_config(reader, cfg.sim, cfg.snap, cfg.axis, opts, preset=cfg.mode)
-        ds = ss.SkewerDataset.create(run_dir / STORE_DIR, dcfg)
+        root = store_root(run_dir)
+        ds = ss.SkewerDataset.create(root, dcfg)
+        stored_before = int(ds.stored(ss.lattice_indices(cfg.n, ds.n_ref)).sum())
         snap = dict(dcfg["snapshot"])
         cosmo = {k: getattr(H, k) for k in ("h", "omega_m", "omega_lambda", "omega_b") if hasattr(H, k)}
         if cfg.sim.upper().startswith("TNG"):
             cosmo = dict(TNG_COSMOLOGY, **cosmo)
         rec.update(
             dataset=dict(
-                root=STORE_DIR,
-                path=str(ds.path.relative_to(run_dir)),
+                root=os.path.relpath(root, run_dir),
+                path=os.path.relpath(ds.path, run_dir),
                 hash=ds.hash,
                 sim=cfg.sim,
                 snap=cfg.snap,
                 axis=cfg.axis,
                 n_per_axis=cfg.n,
                 line_ids=list(cfg.lines),
+                stored_before=stored_before,
             ),
             options=opts,
             snapshot=snap,
             cosmology=cosmo,
+            sampling=sampling_record(cfg, opts, float(H.velfac_kms_per_cMpc)),
             points_effect=cfg.points_effect(),
             software=dict(skewerjax=skewerjax.__version__, versions=se.versions(), git=git_info()),
             hardware=hardware(),
             devices=[str(d) for d in devices],
+            memory=dict(available_at_start_GB=se.memory_available() / 1e9, fraction=cfg.memory_fraction),
         )
         write_record(run_dir, rec)
-        _log(f"run {rec['sweep']}/{rec['name']}: {cfg.summary()}; points: {cfg.points_effect()}")
+        _log(f"run {rec['sweep']}/{rec['name']}: {cfg.summary()}")
+        _log(f"sampling: {cfg.points_effect()}; dataset {ds.hash}: {stored_before} of {cfg.n}^2 skewers stored")
         er = se.extract(
             ds,
             reader,
@@ -417,28 +502,37 @@ def execute(run_dir) -> int:
         if not ds.complete(cfg.n):
             raise RuntimeError(f"the {cfg.n} x {cfg.n} lattice is not complete after the extraction")
         passes = [p for lat in er["lattices"] for p in lat["passes"]]
+        files = manifest(run_dir, ds, cfg.n)
+        wall = time.perf_counter() - t0
         rec.update(
             status="done",
             finished=now(),
-            wall_s=time.perf_counter() - t0,
+            wall_s=wall,
             timings=dict(
-                wall_s=time.perf_counter() - t0,
+                wall_s=wall,
                 extract_s=er.get("wall_s"),
                 pass_s=sum(p.get("pass_s", 0.0) for p in passes),
                 tiles_s=sum(p.get("tiles_s", 0.0) for p in passes),
                 n_passes=len(passes),
                 n_batches=len(er["batches"]),
-                extract_record=str((ds.path / "runs" / f"run_{er['run_id']}.json").relative_to(run_dir)),
+                computed=int(er.get("computed", 0)),
+                reused=cfg.n * cfg.n - int(er.get("computed", 0)),
+                extract_record=os.path.relpath(ds.path / "runs" / f"run_{er['run_id']}.json", run_dir),
             ),
+            memory=dict(rec["memory"], peak_rss_GB=peak_rss_GB(), skewers_per_pass=[p.get("n_skewers") for p in passes]),
             outputs=dict(
-                files=manifest(run_dir),
-                bytes=sum(manifest(run_dir).values()),
+                files=files,
+                bytes=sum(files.values()),
                 n_skewers=cfg.n * cfg.n,
                 n_pix=int(opts["pixels"]["n_pix"]),
             ),
         )
         write_record(run_dir, rec)
-        _log(f"run done in {rec['wall_s']:.1f} s: {rec['outputs']['bytes'] / 1e6:.1f} MB in {len(rec['outputs']['files'])} files")
+        _log(
+            f"run done in {wall:.1f} s: {rec['timings']['computed']} skewers computed, {rec['timings']['reused']} reused; "
+            f"the lattice in {len(files)} batch files ({rec['outputs']['bytes'] / 1e6:.1f} MB); peak RSS "
+            f"{rec['memory']['peak_rss_GB']:.1f} GB"
+        )
         return 0
     except BaseException as e:
         rec.update(
@@ -447,6 +541,7 @@ def execute(run_dir) -> int:
             finished=now(),
             wall_s=time.perf_counter() - t0,
         )
+        rec.setdefault("memory", {})["peak_rss_GB"] = peak_rss_GB()
         write_record(run_dir, rec)
         _log(f"run {rec['status']}: {rec['error']}")
         if isinstance(e, KeyboardInterrupt):

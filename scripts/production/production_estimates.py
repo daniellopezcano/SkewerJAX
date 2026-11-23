@@ -22,14 +22,21 @@ scaling records (cold page cache, float32, the CPU as two JAX devices; notebook 
   extra pass over the snapshot when the memory model splits the run (``skewer_extraction.pass_size``);
 * float64: the tau stage doubled (an assumption, not measured).
 
-The sampled route (``pieces="segments"``, the midpoint profile): the selection and gas physics taken as the pass of the
-streaming route at the same lattice (the gather route reads the snapshot once, as the pass; not measured separately),
-plus twice the tau time per skewer of block C2 (``C2.json``, TNG50-2, 8^2 skewers, float64; the pieces' deposition is not
-in C2's timing and is assumed to cost as much again), interpolated in log(points_kms). A rough estimate.
+Pixels finer than the records (below 1 km/s): the tau stage at 1 km/s times 1 / dv (the evaluations grow as the pixels
+in the windows; rough).
+
+The sampled route (``pieces="segments"``): per pass the gather selection (``SAMPLED_SELECT_S``, one read of the snapshot,
+scaled by the number of cells, plus ``SAMPLED_S_PER_CELL`` per selected cell), plus ``SAMPLED_S_PER_PIECE`` per piece (the
+dual-segment pieces, their contributions and tau; a skewer's pieces ~ its points + its cell crossings); calibrated on
+one tile of TNG50-2. Rough.
+
+Every estimate is calibrated, run after run, by the finished runs of the same route (``run_production.calibration``:
+the median of measured / estimated).
 
 **Peak memory**: ``skewer_extraction.pass_memory`` (5.7 GB + 92 B per cell within reach + the pass's tau), the model that
 splits a run into passes; against notebook 16's measurements it is conservative (TNG50-2: 37 GB modelled / 29.8 GB measured
-at 128^2, 68 / 65.7 GB at 256^2).
+at 128^2, 68 / 65.7 GB at 256^2). The sampled route: ``SAMPLED_BASE_BYTES`` + per selected cell (``sampled_cells``: within
+2.5 h + ds / 2 of a point) + per point.
 """
 
 from __future__ import annotations
@@ -48,6 +55,16 @@ ENTRIES = {
 }
 NBINS_1KMS = {"TNG50-2": 3961, "TNG50-3": 3961, "TNG50-4": 3961}  # pixels of 1 km/s over one box at z = 3 (the records)
 N_GAS = {"TNG50-2": 1205098922, "TNG50-3": 152305397, "TNG50-4": 19250411}  # the records' snapshots (snapshot 25)
+BOX_CMPC = 51.67  # TNG50's box (35 cMpc/h), when no header can be read
+U_KMS_PER_CMPC = 76.6  # aH at z = 3 [km/s per cMpc], when no header can be read
+# The sampled route (``pieces="segments"``), measured on TNG50-2 (stem 20261121_1641): the gather selection reads the
+# snapshot once per pass; the pieces and contributions cost per sampling point
+# (one tile of 1,024 skewers at 0.01 cMpc, 5,168 points per skewer: the selection 83 s for 18.8 M cells, the pieces 31 s,
+# tau 202 s with the compilation): ~27 us per piece, the pieces of a skewer ~ its points + its cell crossings
+SAMPLED_SELECT_S = 85.0  # per pass: the snapshot read and the prefilter
+SAMPLED_S_PER_CELL = 1.0e-6  # per selected cell: the rows read and the gas physics
+SAMPLED_S_PER_PIECE = 27e-6
+SAMPLED_CROSSINGS = 1200.0  # cell crossings per TNG50-2 skewer (C2's pieces at coarse spacing); x (n_gas / TNG50-2)^(1/3)
 
 
 def _records_dir(records_dir=None) -> Path:
@@ -119,7 +136,9 @@ def _dv_ratio(records: dict, entry: str, dv: float) -> float:
     if len(pts) < 2:
         return 1.0
     t1 = _interp(1.0, [p[0] for p in pts], [p[1] for p in pts])
-    return _interp(max(dv, pts[0][0]), [p[0] for p in pts], [p[1] for p in pts]) / t1
+    if dv < pts[0][0]:  # finer than the records: the evaluations grow as the pixels in the windows, ~ 1 / dv (rough)
+        return pts[0][1] / t1 * (pts[0][0] / dv)
+    return _interp(dv, [p[0] for p in pts], [p[1] for p in pts]) / t1
 
 
 def streaming_time(
@@ -145,6 +164,8 @@ def streaming_time(
     jit = base[min(range(len(xs)), key=lambda i: abs(math.log(xs[i]) - math.log(max(n_skewers, 1))))][3]
     tau = tau1 * _dv_ratio(records, entry, dv_kms)
     basis = f"TNG50-2 '{entry}' records at {xs[0]}-{xs[-1]} skewers (log-interpolated), the tau stage scaled to {dv_kms:g} km/s"
+    if dv_kms < 1.0:
+        basis += " (below 1 km/s as 1 / dv: rough)"
     scale = 1.0
     if sim != "TNG50-2":
         own = {p[0]: p[1] for p in _sim_points(records, sim, entry)}
@@ -165,23 +186,24 @@ def streaming_time(
     return dict(total_s=compute + jit, compute_s=compute, tau_s=scale * tau, pass_s=scale * pass_s, jit_s=jit, basis=basis)
 
 
-def sampled_time(n_skewers: int, points_kms: float, *, precision="float32", records=None) -> dict:
-    """The estimated wall time [s] of the sampled route (module docstring): dict(total_s, ..., basis)."""
-    records = load_records() if records is None else records
-    st = streaming_time("TNG50-2", n_skewers, 1.0, records=records)
-    c2 = records.get("C2", {}).get("midpoint", {})
-    pts = sorted((float(k), float(v["tau_s_per_skewer"])) for k, v in c2.items())
-    if pts:
-        per = _interp(points_kms, [p[0] for p in pts], [p[1] for p in pts])
-    else:
-        per = 0.03
-    tau = 2.0 * per * n_skewers  # C2's tau time per skewer, doubled for the deposition (not in C2's timing)
-    compute = st["pass_s"] + tau
+def sampled_time(
+    sim: str, n_skewers: int, points_per_skewer: int, cells_per_pass: float = 0.0, *, precision="float32", records=None
+) -> dict:
+    """The estimated wall time [s] of the sampled route (module docstring): dict(total_s (one pass), compute_s, tau_s,
+    pass_s (the selection of one pass), jit_s, basis). Rough: calibrated on one tile of TNG50-2 (``SAMPLED_*``), then by
+    the finished runs (``run_production.calibration``)."""
+    st = streaming_time(sim, max(n_skewers, 1), 1.0, records=records, precision=precision)
+    ratio = N_GAS.get(sim, N_GAS["TNG50-2"]) / N_GAS["TNG50-2"]
+    sel = ratio * SAMPLED_SELECT_S + SAMPLED_S_PER_CELL * float(cells_per_pass)
+    pieces = points_per_skewer + SAMPLED_CROSSINGS * ratio ** (1 / 3)
+    tau = n_skewers * pieces * SAMPLED_S_PER_PIECE * (2.0 if precision == "float64" else 1.0)
+    compute = sel + tau
     basis = (
-        f"selection ~ the TNG50-2 pass at {n_skewers} skewers ({st['pass_s']:.0f} s, not measured for this route) + "
-        f"2 x C2's tau time per skewer at {points_kms:g} km/s ({per * 1e3:.1f} ms, float64): rough"
+        f"sampled route: per pass the selection ({ratio * SAMPLED_SELECT_S:.0f} s + {SAMPLED_S_PER_CELL * 1e6:.0f} us per selected "
+        f"cell), then {SAMPLED_S_PER_PIECE * 1e6:.0f} us per piece (~{pieces:.0f} per skewer: the points + the crossings); "
+        "calibrated on one 1,024-skewer tile of TNG50-2 at 0.01 cMpc: rough"
     )
-    return dict(total_s=compute + st["jit_s"], compute_s=compute, tau_s=tau, pass_s=st["pass_s"], jit_s=st["jit_s"], basis=basis)
+    return dict(total_s=compute + st["jit_s"], compute_s=compute, tau_s=tau, pass_s=sel, jit_s=st["jit_s"], basis=basis)
 
 
 def disk_bytes(n_skewers: int, n_lines: int, n_pix: int, tile: int) -> float:

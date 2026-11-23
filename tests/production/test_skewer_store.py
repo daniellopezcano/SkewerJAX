@@ -197,6 +197,27 @@ def test_another_option_is_another_dataset(tmp_path):
     assert se.parse_override("tautail=1e-7") == ("tautail", 1e-7)
 
 
+def test_the_sampling_spacing(tmp_path):
+    """points_cMpc (the spacing in cMpc) or points_kms: in the options only where they act, both units recorded."""
+    H = _toy_header()
+    u = float(H.velfac_kms_per_cMpc)
+    opts = lambda ov, **kw: se.dataset_options(H, overrides=ov, spacing_kms=8.0, precision=get_precision(), **kw)  # noqa: E731
+    k = opts({"pieces": "segments"}, points_kms=2.0)
+    assert k["pieces"] == dict(pieces="segments", chord_weight=None, points_kms=2.0)  # the earlier keys: hashes unchanged
+    c = opts({"pieces": "segments", "frame": "exact"}, points_cMpc=0.05)
+    assert c["pieces"]["points_cMpc"] == 0.05 and c["pieces"]["points_kms"] == pytest.approx(0.05 * u)
+    assert c["tau"]["frame_spacing_cMpc"] == 0.05 and c["tau"]["profile"] == "integrated"
+    assert se.sampling_cMpc(c, u) == 0.05 and se.sampling_cMpc(k, u) == pytest.approx(2.0 / u)
+    e = opts({"frame": "exact"}, points_cMpc=0.05)
+    assert "points_kms" not in e["pieces"] and e["tau"]["frame_spacing_cMpc"] == 0.05  # the crossings: the a(s) table only
+    assert opts(None, points_cMpc=0.05) == opts(None)  # the snapshot frame's crossings: no effect, the same dataset
+    assert len({ss.config_hash(o) for o in (k, c, e, opts({"frame": "exact"}, points_cMpc=0.1))}) == 4
+    raises(ValueError, "not both", opts, {"pieces": "segments"}, points_kms=1.0, points_cMpc=0.05)
+    raises(ValueError, "points_cMpc or points_kms", opts, {"pieces": "segments"})
+    cfg = dict(options=c, snapshot=dict(box_cMpc=20.0, u_kms_per_cMpc=u))
+    assert se.points_per_skewer(cfg) == 400 and se.points_per_skewer(dict(cfg, options=e)) is None
+
+
 def test_the_presets_are_the_comparison_modes():
     from skewerjax.comparison import benchmark, scaling
 
